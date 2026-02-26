@@ -1,0 +1,14 @@
+{
+  "name": "reticulum_mobile_emergency_management",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "mobile:dev": "npm --workspace apps/mobile run dev",
+    "mobile:build": "npm --workspace apps/mobile run build",
+    "node-client:build": "npm --workspace packages/node-client run build"
+  }
+}

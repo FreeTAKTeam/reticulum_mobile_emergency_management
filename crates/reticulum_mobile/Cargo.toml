@@ -1,0 +1,15 @@
+[package]
+name = "reticulum_mobile"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+reticulum = { package = "reticulum-rs", git = "https://github.com/FreeTAKTeam/Reticulum-rs" }
+uniffi = "0.28"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
