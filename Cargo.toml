@@ -1,3 +1,6 @@
 [workspace]
 members = ["crates/reticulum_mobile"]
 resolver = "2"
+
+[patch.crates-io]
+reticulum-rs = { git = "https://github.com/FreeTAKTeam/Reticulum-rs" }

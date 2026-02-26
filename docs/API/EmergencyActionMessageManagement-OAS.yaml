@@ -1,0 +1,526 @@
+openapi: 3.0.1
+info:
+  title: EmergencyActionMessageManagement
+  version: '3.0'
+  description: >-
+    OpenAPI definition for the Emergency Management LXMF service and
+    supporting streaming notifications API.
+  contact:
+    name: FreeTAKTeam
+    url: https://github.com/FreeTAKTeam
+    email: FreeTAKTeam@gmail.com
+  license:
+    name: EPL
+paths:
+  /EmergencyActionMessage:
+    post:
+      x-scope: public
+      tags:
+        - EmergencyActionMessage
+      summary: Creates a new EmergencyActionMessage record.
+      description: >-
+        Persists a new emergency action message identified by its callsign.
+      operationId: CreateEmergencyActionMessage
+      requestBody:
+        $ref: '#/components/requestBodies/EmergencyActionMessage'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmergencyActionMessageResponse'
+    get:
+      x-scope: public
+      tags:
+        - EmergencyActionMessage
+      summary: Retrieves a list of all EmergencyActionMessage records.
+      description: >-
+        Returns every stored emergency action message. The list is empty when
+        no records exist.
+      operationId: ListEmergencyActionMessage
+      responses:
+        '200':
+          $ref: '#/components/responses/EmergencyActionMessageCollection'
+    put:
+      x-scope: public
+      tags:
+        - EmergencyActionMessage
+      summary: Updates an existing EmergencyActionMessage record.
+      description: >-
+        Applies updated field values to an existing emergency action message.
+        The request body must include the callsign identifying the record.
+      operationId: PutEmergencyActionMessage
+      requestBody:
+        $ref: '#/components/requestBodies/EmergencyActionMessage'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmergencyActionMessageNullableResponse'
+  /EmergencyActionMessage/{callsign}:
+    parameters:
+      - $ref: '#/components/parameters/EmergencyActionMessageCallsign'
+    get:
+      x-scope: public
+      tags:
+        - EmergencyActionMessage
+      summary: Retrieves a specific EmergencyActionMessage by callsign.
+      description: >-
+        Returns the emergency action message associated with the supplied
+        callsign. When the callsign is unknown, ``null`` is returned.
+      operationId: RetrieveEmergencyActionMessage
+      responses:
+        '200':
+          $ref: '#/components/responses/EmergencyActionMessageNullableResponse'
+    delete:
+      x-scope: public
+      tags:
+        - EmergencyActionMessage
+      summary: Deletes an existing EmergencyActionMessage record.
+      description: >-
+        Removes the emergency action message identified by the provided
+        callsign.
+      operationId: DeleteEmergencyActionMessage
+      responses:
+        '200':
+          $ref: '#/components/responses/DeleteEmergencyActionMessageResponse'
+  /Event:
+    post:
+      x-scope: public
+      tags:
+        - Event
+      summary: Creates a new Event record.
+      description: >-
+        Persists a TAK event identified by its ``uid`` field.
+      operationId: CreateEvent
+      requestBody:
+        $ref: '#/components/requestBodies/Event'
+      responses:
+        '200':
+          $ref: '#/components/responses/EventResponse'
+    get:
+      x-scope: public
+      tags:
+        - Event
+      summary: Retrieves a list of all Event records.
+      description: >-
+        Returns every stored event. The list is empty when no records exist.
+      operationId: ListEvent
+      responses:
+        '200':
+          $ref: '#/components/responses/EventCollection'
+    put:
+      x-scope: public
+      tags:
+        - Event
+      summary: Updates an existing Event record.
+      description: >-
+        Applies updated field values to an existing event. The request body must
+        include the ``uid`` identifying the record.
+      operationId: PutEvent
+      requestBody:
+        $ref: '#/components/requestBodies/Event'
+      responses:
+        '200':
+          $ref: '#/components/responses/EventNullableResponse'
+  /Event/{uid}:
+    parameters:
+      - $ref: '#/components/parameters/EventUID'
+    get:
+      x-scope: public
+      tags:
+        - Event
+      summary: Retrieves a specific Event by UID.
+      description: >-
+        Returns the event associated with the supplied UID. When the UID is
+        unknown, ``null`` is returned.
+      operationId: RetrieveEvent
+      responses:
+        '200':
+          $ref: '#/components/responses/EventNullableResponse'
+    delete:
+      x-scope: public
+      tags:
+        - Event
+      summary: Deletes an existing Event record.
+      description: >-
+        Removes the event identified by the provided UID.
+      operationId: DeleteEvent
+      responses:
+        '200':
+          $ref: '#/components/responses/DeleteEventResponse'
+  /notifications/stream:
+    get:
+      x-scope: public
+      tags:
+        - Notifications
+      summary: Subscribe to EmergencyService notifications.
+      description: >-
+        Establishes a Server-Sent Events (SSE) stream that forwards unsolicited
+        LXMF notifications received by the gateway. Each event data payload is a
+        JSON document containing the notification title, decoded payload when
+        available, and the original payload encoded as Base64.
+      operationId: StreamNotifications
+      responses:
+        '200':
+          description: Stream of notification events in SSE format.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >-
+                  SSE data frames containing JSON-encoded notification
+                  messages.
+components:
+  schemas:
+    EmergencyActionMessage:
+      type: object
+      required:
+        - callsign
+      properties:
+        callsign:
+          type: string
+          description: >-
+            Callsign identifying the group. Use a TAK or HAM callsign.
+        groupName:
+          type: string
+          description: >-
+            Number of people in the group (total number/number capable of
+            defense).
+        commsMethod:
+          type: string
+          description: >-
+            Preferred communications method (mobile phone, FRS, GMRS, MURS,
+            simplex, repeater, etc.). Provide enough detail for recipients to
+            establish contact.
+        medicalStatus:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – Injury or medical condition(s) requiring urgent attention.
+            Yellow – Injury or medical condition(s) where care can be delayed.
+            Green – No injury requiring attention.
+        commsStatus:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – No alternate communications available.
+            Yellow – HT only.
+            Green – Mobile (50 watts) or better.
+            Green+ – Mobile (50 watts or better) plus HF capability.
+        preparednessStatus:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – No sustainment supplies (<24 hrs).
+            Yellow – Limited sustainment supplies (24–72 hrs but <1 week).
+            Green – Adequate sustainment supplies (>1 week).
+        mobilityStatus:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – Unable to move from current location.
+            Yellow – Can move by foot only.
+            Green – Vehicular movement capable.
+        securityCapability:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – No ability to repel threats.
+            Yellow – Limited ability to repel threats.
+            Green – Full capacity to repel threats.
+        securityStatus:
+          $ref: '#/components/schemas/EAMStatus'
+          description: >-
+            Red – Threats imminent.
+            Yellow – No immediate threats but not in a secure area.
+            Green – No immediate threats and currently in a secure area.
+    Detail:
+      type: object
+      properties:
+        emergencyActionMessage:
+          $ref: '#/components/schemas/EmergencyActionMessage'
+          description: >-
+            Embedded emergency action message providing situational context.
+    Point:
+      type: object
+      properties:
+        lat:
+          type: number
+          format: double
+          description: Latitude in decimal degrees.
+        lon:
+          type: number
+          format: double
+          description: Longitude in decimal degrees.
+        ce:
+          type: number
+          format: double
+          description: Circular error value.
+        le:
+          type: number
+          format: double
+          description: Linear error value.
+        hae:
+          type: number
+          format: double
+          description: Height above ellipsoid.
+    Event:
+      type: object
+      required:
+        - uid
+      properties:
+        uid:
+          type: integer
+          description: Unique identifier for the event.
+        how:
+          type: string
+          description: Source of the event data.
+        version:
+          type: integer
+          description: Event version number.
+        time:
+          type: integer
+          description: Timestamp representing the event creation time.
+        type:
+          type: string
+          description: TAK event type value.
+        stale:
+          type: string
+          description: Time after which the event should be considered stale.
+        start:
+          type: string
+          description: Start timestamp for the event.
+        access:
+          type: string
+          description: Access control designation.
+        opex:
+          type: integer
+          description: Operational exercise indicator.
+        qos:
+          type: integer
+          description: Quality of service indicator.
+        detail:
+          $ref: '#/components/schemas/Detail'
+          description: Nested detail payload attached to the event.
+        point:
+          $ref: '#/components/schemas/Point'
+          description: Geographical point associated with the event.
+    DeleteEmergencyActionMessageResult:
+      type: object
+      required:
+        - status
+        - callsign
+      properties:
+        status:
+          type: string
+          description: Outcome of the delete operation.
+          enum:
+            - deleted
+            - not_found
+        callsign:
+          type: string
+          description: Callsign supplied to the delete request.
+    DeleteEventResult:
+      type: object
+      required:
+        - status
+        - uid
+      properties:
+        status:
+          type: string
+          description: Outcome of the delete operation.
+          enum:
+            - deleted
+            - not_found
+        uid:
+          type: integer
+          description: Event UID supplied to the delete request.
+    NotificationMessage:
+      type: object
+      properties:
+        title:
+          type: string
+          description: LXMF command title associated with the notification.
+        payload:
+          description: Decoded payload when available.
+          nullable: true
+        payload_raw:
+          type: string
+          format: byte
+          description: Base64 encoded payload bytes.
+    Error:
+      description: Error
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: integer
+    EAMStatus:
+      type: string
+      description: Enumerated status values shared across EAM fields.
+      enum:
+        - Red
+        - Yellow
+        - Green
+  parameters:
+    EmergencyActionMessageCallsign:
+      name: callsign
+      in: path
+      required: true
+      description: Member callsign identifying the emergency action message.
+      schema:
+        type: string
+    EventUID:
+      name: uid
+      in: path
+      required: true
+      description: Numeric identifier for the event record.
+      schema:
+        type: integer
+  responses:
+    EmergencyActionMessageResponse:
+      description: Emergency action message payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EmergencyActionMessage'
+    EmergencyActionMessageNullableResponse:
+      description: Emergency action message payload or ``null`` when missing.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/EmergencyActionMessage'
+            nullable: true
+    EmergencyActionMessageCollection:
+      description: List of emergency action messages.
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/EmergencyActionMessage'
+    DeleteEmergencyActionMessageResponse:
+      description: Result of deleting an emergency action message.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DeleteEmergencyActionMessageResult'
+    EventResponse:
+      description: Event payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Event'
+    EventNullableResponse:
+      description: Event payload or ``null`` when missing.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Event'
+            nullable: true
+    EventCollection:
+      description: List of events.
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Event'
+    DeleteEventResponse:
+      description: Result of deleting an event.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DeleteEventResult'
+    '200':
+      description: OK
+    '201':
+      description: Added Object
+    '202':
+      description: Accepted
+    '204':
+      description: Deleted
+    '400':
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '401':
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '403':
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '404':
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '405':
+      description: Method Not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '409':
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '500':
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '501':
+      description: Not Implemented
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    '503':
+      description: Service Unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  requestBodies:
+    EmergencyActionMessage:
+      description: >-
+        Emergency Action Message payload capturing a group's status,
+        communication posture, and preparedness details.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EmergencyActionMessage'
+      required: true
+    Event:
+      description: >-
+        Simplified TAK event payload containing optional nested detail and point
+        data.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Event'
+      required: true
+x-uml-relationships:
+  - name: point
+    x-ea-guid: 5013537E-3D0E-41c5-A6A7-B840C55224C2
+    source:
+      schema: '#/components/schemas/Event'
+      multiplicity: 1..1
+      navigability: Unspecified
+    target:
+      schema: '#/components/schemas/Point'
+      multiplicity: 1..1
+      navigability: Navigable

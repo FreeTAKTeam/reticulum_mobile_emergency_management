@@ -1,3 +1,137 @@
 namespace reticulum_mobile {
+  // Simple sanity check that the Rust library can be loaded and invoked.
   string healthcheck();
+};
+
+// Common enums.
+
+enum LogLevel { "Trace", "Debug", "Info", "Warn", "Error" };
+
+enum HubMode { "Disabled", "RchLxmf", "RchHttp" };
+
+enum PeerState { "Connecting", "Connected", "Disconnected" };
+
+enum SendOutcome {
+  "SentDirect",
+  "SentBroadcast",
+  "DroppedMissingDestinationIdentity",
+  "DroppedCiphertextTooLarge",
+  "DroppedEncryptFailed",
+  "DroppedNoRoute"
+};
+
+// Error surface.
+
+[Error]
+enum NodeError {
+  "InvalidConfig",
+  "IoError",
+  "NetworkError",
+  "ReticulumError",
+  "AlreadyRunning",
+  "NotRunning",
+  "Timeout",
+  "InternalError"
+};
+
+// Configuration & status dictionaries.
+
+dictionary NodeConfig {
+  // Friendly node name used for diagnostics.
+  string name;
+
+  // Optional filesystem directory for persistent state (identity, ratchets).
+  // When omitted, an in-memory identity derived from `name` is used.
+  string? storage_dir;
+
+  // TCP client interfaces to join (host:port), e.g. "amsterdam.connect.reticulum.network:4965".
+  sequence<string> tcp_clients;
+
+  // Transport broadcast mode (true enables broadcast for discovery/path requests).
+  boolean broadcast;
+
+  // Periodic announce interval for the app destination.
+  u32 announce_interval_seconds;
+
+  // App capabilities emitted as UTF-8 app_data in announces (comma-separated).
+  string announce_capabilities;
+
+  // Hub directory settings (optional).
+  HubMode hub_mode;
+  string? hub_identity_hash;
+  string? hub_api_base_url;
+  string? hub_api_key;
+  u32 hub_refresh_interval_seconds;
+};
+
+dictionary NodeStatus {
+  boolean running;
+  string name;
+  string identity_hex;
+  string app_destination_hex;
+  string lxmf_destination_hex;
+};
+
+dictionary PeerChange {
+  string destination_hex;
+  PeerState state;
+  string? last_error;
+};
+
+// Event stream from the node to the UI.
+[Enum]
+interface NodeEvent {
+  StatusChanged(NodeStatus status);
+  AnnounceReceived(
+    string destination_hex,
+    string app_data,
+    u8 hops,
+    string interface_hex,
+    u64 received_at_ms
+  );
+  PeerChanged(PeerChange change);
+  PacketReceived(string destination_hex, sequence<u8> bytes);
+  PacketSent(string destination_hex, sequence<u8> bytes, SendOutcome outcome);
+  HubDirectoryUpdated(sequence<string> destinations, u64 received_at_ms);
+  Log(LogLevel level, string message);
+  Error(string code, string message);
+};
+
+interface EventSubscription {
+  NodeEvent? next(u32 timeout_ms);
+  void close();
+};
+
+interface Node {
+  constructor();
+
+  [Throws=NodeError]
+  void start(NodeConfig config);
+  [Throws=NodeError]
+  void stop();
+  [Throws=NodeError]
+  void restart(NodeConfig config);
+
+  NodeStatus get_status();
+
+  [Throws=NodeError]
+  void connect_peer(string destination_hex);
+  [Throws=NodeError]
+  void disconnect_peer(string destination_hex);
+
+  [Throws=NodeError]
+  void send_bytes(string destination_hex, sequence<u8> bytes);
+  [Throws=NodeError]
+  void broadcast_bytes(sequence<u8> bytes);
+
+  [Throws=NodeError]
+  void set_announce_capabilities(string capability_string);
+
+  void set_log_level(LogLevel level);
+
+  EventSubscription subscribe_events();
+
+  // Trigger a one-shot hub directory refresh.
+  [Throws=NodeError]
+  void refresh_hub_directory();
 };

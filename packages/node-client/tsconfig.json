@@ -5,7 +5,9 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "declaration": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

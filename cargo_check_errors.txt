@@ -1,0 +1,455 @@
+﻿cargo :     Checking reticulum_mobile v0.1.0 
+(C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\crates\reticulum_mobile)
+At line:2 char:82
++ ... le_emergency_management; cargo check -p reticulum_mobile 2>&1 | Out-F ...
++                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking re...ticulum_mobile):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+error[E0432]: unresolved imports `node::EventSubscription`, `node::Node`
+ --> crates\reticulum_mobile\src\lib.rs:3:16
+  |
+3 | pub use node::{EventSubscription, Node};
+  |                ^^^^^^^^^^^^^^^^^  ^^^^ no `Node` in `node`
+  |                |
+  |                no `EventSubscription` in `node`
+
+error[E0425]: cannot find type `HubMode` in this scope
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:50:6
+   |
+50 | enum r#HubMode {
+   |      ^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `LogLevel` in this scope
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:65:6
+   |
+65 | enum r#LogLevel {
+   |      ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:86:6
+   |
+86 | enum r#NodeError {
+   |      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeEvent` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:111:6
+    |
+111 | enum r#NodeEvent {
+    |      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeStatus` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:113:19
+    |
+113 |         r#status: r#NodeStatus,
+    |                   ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `PeerChange` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:123:19
+    |
+123 |         r#change: r#PeerChange,
+    |                   ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `SendOutcome` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:132:20
+    |
+132 |         r#outcome: r#SendOutcome,
+    |                    ^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `LogLevel` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:139:18
+    |
+139 |         r#level: r#LogLevel,
+    |                  ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `PeerState` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:154:6
+    |
+154 | enum r#PeerState {
+    |      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `SendOutcome` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:169:6
+    |
+169 | enum r#SendOutcome {
+    |      ^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeConfig` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:191:8
+    |
+191 | struct r#NodeConfig {
+    |        ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `HubMode` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:198:17
+    |
+198 |     r#hub_mode: r#HubMode,
+    |                 ^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeStatus` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:208:8
+    |
+208 | struct r#NodeStatus {
+    |        ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `PeerChange` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:219:8
+    |
+219 | struct r#PeerChange {
+    |        ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `PeerState` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:221:14
+    |
+221 |     r#state: r#PeerState,
+    |              ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeEvent` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:253:32
+    |
+253 |     ) -> ::std::option::Option<r#NodeEvent>
+    |                                ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:278:38
+    |
+278 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:288:38
+    |
+288 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:298:38
+    |
+298 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeStatus` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:307:10
+    |
+307 |     ) -> r#NodeStatus
+    |          ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:316:38
+    |
+316 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeConfig` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:325:19
+    |
+325 |         r#config: r#NodeConfig,
+    |                   ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:326:38
+    |
+326 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:337:38
+    |
+337 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:347:38
+    |
+347 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `LogLevel` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:356:18
+    |
+356 |         r#level: r#LogLevel,
+    |                  ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeConfig` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:366:19
+    |
+366 |         r#config: r#NodeConfig,
+    |                   ^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:367:38
+    |
+367 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `NodeError` in this scope
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:376:38
+    |
+376 |     ) -> ::std::result::Result::<(), r#NodeError>
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0220]: associated type `Disabled` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:51:5
+   |
+51 |     r#Disabled {
+   |     ^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `RchLxmf` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:53:5
+   |
+53 |     r#RchLxmf {
+   |     ^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `RchHttp` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:55:5
+   |
+55 |     r#RchHttp {
+   |     ^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Trace` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:66:5
+   |
+66 |     r#Trace {
+   |     ^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Debug` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:68:5
+   |
+68 |     r#Debug {
+   |     ^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Info` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:70:5
+   |
+70 |     r#Info {
+   |     ^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Warn` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:72:5
+   |
+72 |     r#Warn {
+   |     ^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Error` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:74:5
+   |
+74 |     r#Error {
+   |     ^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `InvalidConfig` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:87:5
+   |
+87 |     r#InvalidConfig {
+   |     ^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `IoError` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:89:5
+   |
+89 |     r#IoError {
+   |     ^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `NetworkError` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:91:5
+   |
+91 |     r#NetworkError {
+   |     ^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `ReticulumError` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:93:5
+   |
+93 |     r#ReticulumError {
+   |     ^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `AlreadyRunning` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:95:5
+   |
+95 |     r#AlreadyRunning {
+   |     ^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `NotRunning` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:97:5
+   |
+97 |     r#NotRunning {
+   |     ^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Timeout` not found for `Self`
+  --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile-
+a22d305bc269b879\out/reticulum_mobile.uniffi.rs:99:5
+   |
+99 |     r#Timeout {
+   |     ^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `InternalError` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:101:5
+    |
+101 |     r#InternalError {
+    |     ^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `StatusChanged` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:112:5
+    |
+112 |     r#StatusChanged {
+    |     ^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `AnnounceReceived` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:115:5
+    |
+115 |     r#AnnounceReceived {
+    |     ^^^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `PeerChanged` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:122:5
+    |
+122 |     r#PeerChanged {
+    |     ^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `PacketReceived` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:125:5
+    |
+125 |     r#PacketReceived {
+    |     ^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `PacketSent` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:129:5
+    |
+129 |     r#PacketSent {
+    |     ^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `HubDirectoryUpdated` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:134:5
+    |
+134 |     r#HubDirectoryUpdated {
+    |     ^^^^^^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Log` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:138:5
+    |
+138 |     r#Log {
+    |     ^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Error` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:142:5
+    |
+142 |     r#Error {
+    |     ^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `Connecting` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:155:5
+    |
+155 |     r#Connecting {
+    |     ^^^^^^^^^^^^ there is a similarly named associated type `Connection` in the trait 
+`hyper_util::client::legacy::connect::sealed::ConnectSvc`
+
+error[E0220]: associated type `Connected` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:157:5
+    |
+157 |     r#Connected {
+    |     ^^^^^^^^^^^ there is a similarly named associated type `Connection` in the trait 
+`hyper_util::client::legacy::connect::sealed::ConnectSvc`
+
+error[E0220]: associated type `Disconnected` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:159:5
+    |
+159 |     r#Disconnected {
+    |     ^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `SentDirect` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:170:5
+    |
+170 |     r#SentDirect {
+    |     ^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `SentBroadcast` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:172:5
+    |
+172 |     r#SentBroadcast {
+    |     ^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `DroppedMissingDestinationIdentity` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:174:5
+    |
+174 |     r#DroppedMissingDestinationIdentity {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `DroppedCiphertextTooLarge` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:176:5
+    |
+176 |     r#DroppedCiphertextTooLarge {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `DroppedEncryptFailed` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:178:5
+    |
+178 |     r#DroppedEncryptFailed {
+    |     ^^^^^^^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+error[E0220]: associated type `DroppedNoRoute` not found for `Self`
+   --> C:\Users\broth\Documents\work\ATAK\src\reticulum_mobile_emergency_management\target\debug\build\reticulum_mobile
+-a22d305bc269b879\out/reticulum_mobile.uniffi.rs:180:5
+    |
+180 |     r#DroppedNoRoute {
+    |     ^^^^^^^^^^^^^^^^ help: `Self` has the following associated type: `FfiType`
+
+Some errors have detailed explanations: E0220, E0425, E0432.
+For more information about an error, try `rustc --explain E0220`.
+error: could not compile `reticulum_mobile` (lib) due to 88 previous errors
