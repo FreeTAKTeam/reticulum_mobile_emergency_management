@@ -310,7 +310,7 @@ export const useMessagesStore = defineStore("messages", () => {
 
       if (message.kind === "snapshot_request") {
         nodeStore
-          .sendJson(event.destinationHex, {
+          .broadcastJson({
             kind: "snapshot_response",
             requestedAt: message.requestedAt,
             messages: snapshotMessages(),

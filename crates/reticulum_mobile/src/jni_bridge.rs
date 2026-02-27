@@ -463,7 +463,6 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
         }
     };
 
-    clear_last_error();
     make_jstring_or_null(&mut env, status_to_json(status))
 }
 
@@ -688,7 +687,6 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_nextEven
         return ptr::null_mut();
     };
 
-    clear_last_error();
     make_jstring_or_null(&mut env, event_to_wire_json(event))
 }
 

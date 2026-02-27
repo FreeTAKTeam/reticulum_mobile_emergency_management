@@ -117,7 +117,7 @@ export interface ReticulumNodeClientFactoryOptions {
 
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: "emergency-ops-mobile",
-  tcpClients: ["amsterdam.connect.reticulum.network:4965"],
+  tcpClients: ["rmap.world:4242"],
   broadcast: true,
   announceIntervalSeconds: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",

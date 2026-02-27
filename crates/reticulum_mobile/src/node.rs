@@ -180,7 +180,7 @@ impl Node {
         })
         .map_err(|_| NodeError::NotRunning {})?;
         resp_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 

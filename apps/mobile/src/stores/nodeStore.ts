@@ -66,6 +66,16 @@ interface UiLogLine {
 
 type PacketListener = (event: PacketReceivedEvent) => void;
 
+function isSpecCompliantAnnouncePeer(peer: DiscoveredPeer): boolean {
+  if (!peer.verifiedCapability) {
+    return false;
+  }
+  if (!peer.sources.includes("announce")) {
+    return false;
+  }
+  return matchesEmergencyCapabilities(peer.appData ?? "");
+}
+
 function nowMs(): number {
   return Date.now();
 }
@@ -262,11 +272,8 @@ export const useNodeStore = defineStore("node", () => {
         status.value = { ...event.status };
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        if (!matchesEmergencyCapabilities(event.appData)) {
-          return;
-        }
-
         const saved = savedByDestination[event.destinationHex];
+        const verifiedCapability = matchesEmergencyCapabilities(event.appData);
         upsertDiscovered(
           event.destinationHex,
           {
@@ -275,7 +282,7 @@ export const useNodeStore = defineStore("node", () => {
             interfaceHex: event.interfaceHex,
             label: saved?.label,
             lastSeenAt: event.receivedAtMs,
-            verifiedCapability: true,
+            verifiedCapability,
           },
           "announce",
         );
@@ -622,7 +629,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   const discoveredPeers = computed(() =>
-    Object.values(discoveredByDestination).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+    Object.values(discoveredByDestination)
+      .filter((peer) => isSpecCompliantAnnouncePeer(peer))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
   const savedPeers = computed(() =>

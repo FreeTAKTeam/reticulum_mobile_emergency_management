@@ -3,13 +3,22 @@ import { computed, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
 import TopServiceCards from "./components/TopServiceCards.vue";
+import { useEventsStore } from "./stores/eventsStore";
+import { useMessagesStore } from "./stores/messagesStore";
 import { useNodeStore } from "./stores/nodeStore";
 
 const nodeStore = useNodeStore();
+const messagesStore = useMessagesStore();
+const eventsStore = useEventsStore();
 const route = useRoute();
 
 onMounted(async () => {
   try {
+    messagesStore.init();
+    messagesStore.initReplication();
+    eventsStore.init();
+    eventsStore.initReplication();
+
     await nodeStore.init();
     await nodeStore.startNode();
   } catch (error: unknown) {

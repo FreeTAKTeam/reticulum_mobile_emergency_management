@@ -262,7 +262,7 @@ export const useEventsStore = defineStore("events", () => {
 
       if (message.kind === "event_snapshot_request") {
         nodeStore
-          .sendJson(event.destinationHex, {
+          .broadcastJson({
             kind: "event_snapshot_response",
             requestedAt: message.requestedAt,
             events: snapshotEvents(),

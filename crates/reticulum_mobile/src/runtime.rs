@@ -13,6 +13,7 @@ use reticulum::destination::{DestinationDesc, DestinationName};
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
+use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport, TransportConfig};
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
@@ -97,6 +98,46 @@ fn send_outcome_to_udl(outcome: RnsSendOutcome) -> SendOutcome {
     }
 }
 
+fn create_transport_data_packet(destination: AddressHash, bytes: &[u8]) -> Packet {
+    let mut packet = Packet::default();
+    packet.header.propagation_type = PropagationType::Transport;
+    packet.destination = destination;
+    packet.data = PacketDataBuffer::new_from_slice(bytes);
+    packet
+}
+
+async fn send_transport_packet_with_path_retry(
+    transport: &Arc<Transport>,
+    destination: AddressHash,
+    bytes: &[u8],
+) -> RnsSendOutcome {
+    const MAX_ATTEMPTS: usize = 6;
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
+
+    let mut last_outcome = RnsSendOutcome::DroppedNoRoute;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let packet = create_transport_data_packet(destination, bytes);
+        let outcome = transport.send_packet_with_outcome(packet).await;
+        if matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast) {
+            return outcome;
+        }
+
+        last_outcome = outcome;
+        if matches!(
+            outcome,
+            RnsSendOutcome::DroppedNoRoute | RnsSendOutcome::DroppedMissingDestinationIdentity
+        ) {
+            transport.request_path(&destination, None, None).await;
+            tokio::time::sleep(RETRY_DELAY).await;
+            continue;
+        }
+        break;
+    }
+
+    last_outcome
+}
+
 pub enum Command {
     Stop { resp: cb::Sender<Result<(), NodeError>> },
     ConnectPeer {
@@ -128,9 +169,7 @@ pub enum Command {
 struct NodeRuntimeState {
     identity: PrivateIdentity,
     transport: Arc<Transport>,
-    app_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
-    announce_capabilities: Arc<TokioMutex<String>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
@@ -396,13 +435,13 @@ pub async fn run_node(
         Arc::new(TokioMutex::new(HashMap::new()));
     let out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
+    let connected_peers: Arc<TokioMutex<HashSet<AddressHash>>> =
+        Arc::new(TokioMutex::new(HashSet::new()));
 
     let state = NodeRuntimeState {
         identity: identity.clone(),
         transport: transport.clone(),
-        app_destination: app_destination.clone(),
         lxmf_destination: lxmf_destination.clone(),
-        announce_capabilities: announce_capabilities.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
     };
@@ -572,6 +611,7 @@ pub async fn run_node(
                 destination_hex,
                 resp,
             } => {
+                let destination_hex_copy = destination_hex.clone();
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
                     bus.emit(NodeEvent::PeerChanged {
@@ -581,12 +621,28 @@ pub async fn run_node(
                             last_error: None,
                         },
                     });
-                    let desc = ensure_destination_desc(&state, dest, None).await?;
-                    let link = transport.link(desc).await;
-                    out_links.lock().await.insert(dest, link);
+                    connected_peers.lock().await.insert(dest);
+                    // Fire a path request in the background; direct send will resolve identity on demand.
+                    transport.request_path(&dest, None, None).await;
+                    bus.emit(NodeEvent::PeerChanged {
+                        change: PeerChange {
+                            destination_hex: destination_hex.clone(),
+                            state: PeerState::Connected {},
+                            last_error: None,
+                        },
+                    });
                     Ok::<(), NodeError>(())
                 }
                 .await;
+                if let Err(err) = &result {
+                    bus.emit(NodeEvent::PeerChanged {
+                        change: PeerChange {
+                            destination_hex: destination_hex_copy,
+                            state: PeerState::Disconnected {},
+                            last_error: Some(err.to_string()),
+                        },
+                    });
+                }
                 let _ = resp.send(result);
             }
             Command::DisconnectPeer {
@@ -595,6 +651,8 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
+                    connected_peers.lock().await.remove(&dest);
+                    // Clean up any stale link from older builds if present.
                     if let Some(link) = out_links.lock().await.remove(&dest) {
                         link.lock().await.close();
                     }
@@ -617,28 +675,19 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    let link = out_links
-                        .lock()
-                        .await
-                        .get(&dest)
-                        .cloned()
-                        .ok_or(NodeError::NetworkError {})?;
-                    if link.lock().await.status() != LinkStatus::Active {
-                        return Err(NodeError::NetworkError {});
-                    }
-                    let packet = link
-                        .lock()
-                        .await
-                        .data_packet(&bytes)
-                        .map_err(|_| NodeError::InternalError {})?;
-                    let outcome = transport.send_packet_with_outcome(packet).await;
-                    let outcome = send_outcome_to_udl(outcome);
+                    let outcome =
+                        send_transport_packet_with_path_retry(&transport, dest, &bytes).await;
+                    let mapped = send_outcome_to_udl(outcome);
                     bus.emit(NodeEvent::PacketSent {
                         destination_hex: destination_hex.clone(),
                         bytes: bytes.clone(),
-                        outcome,
+                        outcome: mapped,
                     });
-                    if matches!(outcome, SendOutcome::SentDirect {} | SendOutcome::SentBroadcast {}) {
+
+                    if matches!(
+                        outcome,
+                        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                    ) {
                         Ok(())
                     } else {
                         Err(NodeError::NetworkError {})
@@ -649,24 +698,27 @@ pub async fn run_node(
             }
             Command::BroadcastBytes { bytes, resp } => {
                 let result = async {
-                    let links = out_links.lock().await.clone();
-                    for (dest, link) in links {
-                        if link.lock().await.status() != LinkStatus::Active {
-                            continue;
-                        }
-                        let packet = link
-                            .lock()
-                            .await
-                            .data_packet(&bytes)
-                            .map_err(|_| NodeError::InternalError {})?;
-                        let outcome = transport.send_packet_with_outcome(packet).await;
+                    let peers = connected_peers.lock().await.iter().copied().collect::<Vec<_>>();
+                    let mut sent_any = false;
+                    for dest in peers {
+                        let outcome =
+                            send_transport_packet_with_path_retry(&transport, dest, &bytes).await;
                         bus.emit(NodeEvent::PacketSent {
                             destination_hex: address_hash_to_hex(&dest),
                             bytes: bytes.clone(),
                             outcome: send_outcome_to_udl(outcome),
                         });
+                        if matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast)
+                        {
+                            sent_any = true;
+                        }
                     }
-                    Ok::<(), NodeError>(())
+
+                    if sent_any {
+                        Ok::<(), NodeError>(())
+                    } else {
+                        Err(NodeError::NetworkError {})
+                    }
                 }
                 .await;
                 let _ = resp.send(result);
@@ -721,4 +773,3 @@ pub fn load_or_create_identity(
     fs::write(&path, identity.to_hex_string()).map_err(|_| NodeError::IoError {})?;
     Ok(identity)
 }
-

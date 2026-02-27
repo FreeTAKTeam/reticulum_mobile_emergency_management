@@ -44,7 +44,7 @@ dictionary NodeConfig {
   // When omitted, an in-memory identity derived from `name` is used.
   string? storage_dir;
 
-  // TCP client interfaces to join (host:port), e.g. "amsterdam.connect.reticulum.network:4965".
+  // TCP client interfaces to join (host:port), e.g. "rmap.world:4242".
   sequence<string> tcp_clients;
 
   // Transport broadcast mode (true enables broadcast for discovery/path requests).
