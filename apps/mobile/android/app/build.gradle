@@ -1,11 +1,23 @@
 import java.io.FileInputStream
 import java.util.Properties
+import java.util.TimeZone
 
 apply plugin: 'com.android.application'
 
 def keystorePropertiesFile = rootProject.file('keystore.properties')
 def keystoreProperties = new Properties()
 def hasReleaseKeystore = keystorePropertiesFile.exists()
+def utcTimeZone = TimeZone.getTimeZone("UTC")
+def versionCodeStamp = new Date().format("yyDDDHHmm", utcTimeZone)
+def versionNameStamp = new Date().format("yyyyMMddHHmmss", utcTimeZone)
+def computedVersionCode = versionCodeStamp.toInteger()
+def computedVersionName = "1.0.${versionNameStamp}"
+def stringsXml = new XmlParser().parse(file('src/main/res/values/strings.xml'))
+def appDisplayName = stringsXml.string.find { it.@name == 'app_name' }?.text() ?: "app"
+def appFileNamePrefix = appDisplayName
+    .toLowerCase()
+    .replaceAll('[^a-z0-9]+', '-')
+    .replaceAll('(^-|-$)', '')
 
 if (hasReleaseKeystore) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
@@ -19,8 +31,8 @@ android {
         applicationId "network.reticulum.emergency"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode computedVersionCode
+        versionName computedVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -49,6 +61,37 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+}
+
+android.applicationVariants.configureEach { variant ->
+    if (variant.buildType.name == "release") {
+        variant.outputs.configureEach {
+            outputFileName = "${appFileNamePrefix}-v${computedVersionName}-release.apk"
+        }
+    }
+}
+
+tasks.register("renameReleaseBundleWithAppName") {
+    doLast {
+        def bundleDir = file("$buildDir/outputs/bundle/release")
+        def sourceBundle = file("$bundleDir/app-release.aab")
+        if (!sourceBundle.exists()) {
+            logger.lifecycle("Release bundle not found at ${sourceBundle}; skipping bundle rename.")
+            return
+        }
+
+        def renamedBundle = file("$bundleDir/${appFileNamePrefix}-v${computedVersionName}-release.aab")
+        copy {
+            from sourceBundle
+            into bundleDir
+            rename { renamedBundle.name }
+        }
+        logger.lifecycle("Created ${renamedBundle.name}")
+    }
+}
+
+afterEvaluate {
+    tasks.findByName("bundleRelease")?.finalizedBy("renameReleaseBundleWithAppName")
 }
 
 repositories {

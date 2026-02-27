@@ -112,7 +112,7 @@ export interface ReticulumNodeClient {
 }
 
 export interface ReticulumNodeClientFactoryOptions {
-  mode?: "auto" | "capacitor" | "mock";
+  mode?: "auto" | "capacitor" | "web";
 }
 
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
@@ -485,6 +485,130 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   }
 }
 
+class WebReticulumNodeClient implements ReticulumNodeClient {
+  private readonly emitter = new TypedEmitter<NodeClientEvents>();
+  private status: NodeStatus = {
+    running: false,
+    name: "",
+    identityHex: randomHex32(),
+    appDestinationHex: randomHex32(),
+    lxmfDestinationHex: randomHex32(),
+  };
+  private readonly connected = new Set<string>();
+
+  async start(config: NodeConfig): Promise<void> {
+    this.status = {
+      ...this.status,
+      running: true,
+      name: config.name,
+    };
+    this.emitter.emit("statusChanged", { status: { ...this.status } });
+    this.emitter.emit("log", {
+      level: "Info",
+      message: "Web runtime node started.",
+    });
+  }
+
+  async stop(): Promise<void> {
+    for (const destinationHex of this.connected) {
+      this.emitter.emit("peerChanged", {
+        change: {
+          destinationHex,
+          state: "Disconnected",
+        },
+      });
+    }
+    this.connected.clear();
+    this.status = {
+      ...this.status,
+      running: false,
+    };
+    this.emitter.emit("statusChanged", { status: { ...this.status } });
+  }
+
+  async restart(config: NodeConfig): Promise<void> {
+    await this.start(config);
+  }
+
+  async getStatus(): Promise<NodeStatus> {
+    return { ...this.status };
+  }
+
+  async connectPeer(destinationHex: string): Promise<void> {
+    const normalized = normalizeHex(destinationHex);
+    this.emitter.emit("peerChanged", {
+      change: {
+        destinationHex: normalized,
+        state: "Connecting",
+      },
+    });
+    this.connected.add(normalized);
+    this.emitter.emit("peerChanged", {
+      change: {
+        destinationHex: normalized,
+        state: "Connected",
+      },
+    });
+  }
+
+  async disconnectPeer(destinationHex: string): Promise<void> {
+    const normalized = normalizeHex(destinationHex);
+    this.connected.delete(normalized);
+    this.emitter.emit("peerChanged", {
+      change: {
+        destinationHex: normalized,
+        state: "Disconnected",
+      },
+    });
+  }
+
+  async sendBytes(destinationHex: string, bytes: Uint8Array): Promise<void> {
+    const normalized = normalizeHex(destinationHex);
+    this.emitter.emit("packetSent", {
+      destinationHex: normalized,
+      bytes,
+      outcome: this.connected.has(normalized) ? "SentDirect" : "DroppedNoRoute",
+    });
+  }
+
+  async broadcastBytes(bytes: Uint8Array): Promise<void> {
+    for (const destinationHex of this.connected) {
+      this.emitter.emit("packetSent", {
+        destinationHex,
+        bytes,
+        outcome: "SentBroadcast",
+      });
+    }
+  }
+
+  async setAnnounceCapabilities(_capabilityString: string): Promise<void> {}
+
+  async setLogLevel(level: LogLevel): Promise<void> {
+    this.emitter.emit("log", {
+      level,
+      message: `Web runtime log level set to ${level}.`,
+    });
+  }
+
+  async refreshHubDirectory(): Promise<void> {
+    this.emitter.emit("hubDirectoryUpdated", {
+      destinations: [],
+      receivedAtMs: Date.now(),
+    });
+  }
+
+  on<K extends keyof NodeClientEvents>(
+    event: K,
+    handler: (payload: NodeClientEvents[K]) => void,
+  ): () => void {
+    return this.emitter.on(event, handler);
+  }
+
+  async dispose(): Promise<void> {
+    this.emitter.clear();
+  }
+}
+
 const MOCK_ANNOUNCED_PEERS = [
   "c3d4f7a6e01944ef8e620f5c5a146f1a",
   "4ecf4d0dcaf0f9126f493725314110bc",
@@ -673,15 +797,16 @@ export function createReticulumNodeClient(
   options: ReticulumNodeClientFactoryOptions = {},
 ): ReticulumNodeClient {
   const mode = options.mode ?? "auto";
-  if (mode === "mock") {
-    return new MockReticulumNodeClient();
+  if (mode === "web") {
+    return new WebReticulumNodeClient();
   }
   if (mode === "capacitor") {
     return new CapacitorReticulumNodeClient();
   }
-  return Capacitor.getPlatform() === "web"
-    ? new MockReticulumNodeClient()
-    : new CapacitorReticulumNodeClient();
+  if (Capacitor.getPlatform() === "web") {
+    return new WebReticulumNodeClient();
+  }
+  return new CapacitorReticulumNodeClient();
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {

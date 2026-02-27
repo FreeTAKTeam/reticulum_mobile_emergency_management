@@ -2,7 +2,6 @@
 import { computed, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
-import TopServiceCards from "./components/TopServiceCards.vue";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagesStore } from "./stores/messagesStore";
 import { useNodeStore } from "./stores/nodeStore";
@@ -52,12 +51,6 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
           <RouterLink to="/peers" class="peers-link">Peers &amp; Discovery</RouterLink>
         </div>
       </header>
-
-      <TopServiceCards
-        :running="nodeStore.status.running"
-        :connected-count="nodeStore.connectedDestinations.length"
-        :settings="nodeStore.settings"
-      />
 
       <main class="content">
         <RouterView />

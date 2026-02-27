@@ -7,8 +7,10 @@
     "packages/*"
   ],
   "scripts": {
-    "mobile:dev": "npm --workspace apps/mobile run dev",
-    "mobile:build": "npm --workspace apps/mobile run build",
+    "web:dev": "npm --workspace apps/mobile run dev:web",
+    "web:build": "npm --workspace apps/mobile run build:web",
+    "mobile:dev": "npm --workspace apps/mobile run dev:mobile",
+    "mobile:build": "npm --workspace apps/mobile run build:mobile",
     "node-client:build": "npm --workspace packages/node-client run build"
   }
 }

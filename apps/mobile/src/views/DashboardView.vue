@@ -1,56 +1,80 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { RouterLink } from "vue-router";
 
 import { useMessagesStore } from "../stores/messagesStore";
-import { useNodeStore } from "../stores/nodeStore";
+import type { EamStatus } from "../types/domain";
 
-const nodeStore = useNodeStore();
-const messagesStore = useMessagesStore();
-messagesStore.init();
+type GaugeField = "medicalStatus" | "commsStatus" | "mobilityStatus";
 
-const ringMetrics = computed(() => [
+const STATUS_SCORES: Record<EamStatus, number> = {
+  Green: 100,
+  Yellow: 50,
+  Red: 25,
+  Unknown: 0,
+};
+
+const GAUGE_CONFIG: Array<{
+  key: string;
+  label: string;
+  field: GaugeField;
+  color: string;
+}> = [
   {
     key: "medical",
     label: "Medical",
-    pct: Math.max(20, 100 - messagesStore.redCount * 5),
+    field: "medicalStatus",
     color: "#4aa3ff",
   },
   {
     key: "comms",
     label: "Comms",
-    pct: Math.max(20, 82 - messagesStore.redCount * 3),
+    field: "commsStatus",
     color: "#18e5ff",
   },
   {
     key: "mobility",
     label: "Mobility",
-    pct: Math.max(20, 76 - messagesStore.redCount * 4),
+    field: "mobilityStatus",
     color: "#ffc92e",
   },
-]);
+];
+
+const messagesStore = useMessagesStore();
+messagesStore.init();
+
+function averageScoreFor(field: GaugeField): number {
+  const messages = messagesStore.messages;
+  const totalMessages = messages.length;
+  if (totalMessages === 0) {
+    return 0;
+  }
+
+  const weightedTotal = messages.reduce((sum, message) => {
+    return sum + STATUS_SCORES[message[field]];
+  }, 0);
+
+  return Math.round(weightedTotal / totalMessages);
+}
+
+const ringMetrics = computed(() =>
+  GAUGE_CONFIG.map((gauge) => ({
+    key: gauge.key,
+    label: gauge.label,
+    color: gauge.color,
+    pct: averageScoreFor(gauge.field),
+  })),
+);
 </script>
 
 <template>
   <section class="view">
     <header class="headline">
       <h1>Emergency Ops Dashboard</h1>
-      <p>Mesh readiness, resource load, and peer control.</p>
+      <p>Status-weighted readiness from active action messages.</p>
     </header>
 
     <section class="panel">
-      <h2>Mesh Network Connectivity</h2>
-      <div class="wave-preview"></div>
-      <div class="ticks">
-        <span>12 AM</span>
-        <span>6 AM</span>
-        <span>12 PM</span>
-        <span>6 PM</span>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Resource Allocation</h2>
+      <h2>Operational Status</h2>
       <div class="rings">
         <div class="ring" v-for="ring in ringMetrics" :key="ring.key">
           <svg viewBox="0 0 120 120">
@@ -70,18 +94,6 @@ const ringMetrics = computed(() => [
           <p class="ring-label">{{ ring.label }}</p>
         </div>
       </div>
-    </section>
-
-    <section class="panel peers-entry">
-      <div>
-        <h2>Peers &amp; Discovery</h2>
-        <p>
-          Discovered: {{ nodeStore.discoveredPeers.length }} | Saved:
-          {{ nodeStore.savedPeers.length }} | Connected:
-          {{ nodeStore.connectedDestinations.length }}
-        </p>
-      </div>
-      <RouterLink to="/peers" class="open-btn">Open</RouterLink>
     </section>
   </section>
 </template>
@@ -117,51 +129,6 @@ h2 {
   font-family: var(--font-headline);
   font-size: 1.56rem;
   margin: 0;
-}
-
-.wave-preview {
-  background:
-    radial-gradient(circle at 50% 36%, rgb(66 234 255 / 44%), transparent 44%),
-    linear-gradient(180deg, rgb(4 13 31 / 96%), rgb(8 25 54 / 96%));
-  border: 1px solid rgb(85 132 196 / 31%);
-  border-radius: 10px;
-  height: 190px;
-  margin-top: 0.75rem;
-  position: relative;
-}
-
-.wave-preview::before {
-  animation: drift 5.4s linear infinite;
-  background:
-    radial-gradient(circle at 26% 50%, rgb(58 238 255 / 80%), transparent 34%),
-    radial-gradient(circle at 66% 52%, rgb(84 196 255 / 80%), transparent 34%);
-  content: "";
-  inset: 0;
-  mix-blend-mode: screen;
-  position: absolute;
-}
-
-@keyframes drift {
-  0% {
-    transform: translateX(-6%);
-  }
-  50% {
-    transform: translateX(6%);
-  }
-  100% {
-    transform: translateX(-6%);
-  }
-}
-
-.ticks {
-  color: #7d9bc3;
-  display: flex;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  justify-content: space-between;
-  letter-spacing: 0.08em;
-  margin-top: 0.44rem;
-  text-transform: uppercase;
 }
 
 .rings {
@@ -216,42 +183,9 @@ svg {
   text-transform: uppercase;
 }
 
-.peers-entry {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-.peers-entry p {
-  color: #95acd0;
-  font-family: var(--font-body);
-  margin: 0.2rem 0 0;
-}
-
-.open-btn {
-  background: linear-gradient(115deg, #00a2ff, #2df2ff);
-  border-radius: 11px;
-  color: #03274d;
-  font-family: var(--font-ui);
-  font-size: 0.84rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  min-width: 92px;
-  padding: 0.58rem 0.85rem;
-  text-align: center;
-  text-decoration: none;
-  text-transform: uppercase;
-}
-
 @media (max-width: 700px) {
   .rings {
     grid-template-columns: 1fr;
-  }
-
-  .peers-entry {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.7rem;
   }
 }
 </style>

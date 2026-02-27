@@ -1,4 +1,3 @@
-import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
@@ -28,45 +27,11 @@ type EventReplicationMessage =
       deletedAt: number;
     };
 
-const DEFAULT_EVENTS: EventRecord[] = [
-  {
-    uid: "evt-001",
-    callsign: "Hans",
-    type: "Drill",
-    summary: "Neighborhood check-in drill completed.",
-    updatedAt: Date.now() - 25_000,
-  },
-  {
-    uid: "evt-002",
-    callsign: "SanFran234",
-    type: "Supply",
-    summary: "Medical restock requested for sector 4.",
-    updatedAt: Date.now() - 11_000,
-  },
-  {
-    uid: "evt-003",
-    callsign: "Natha1",
-    type: "Incident",
-    summary: "Mobility path blocked near route C.",
-    updatedAt: Date.now() - 5_000,
-  },
-];
-
 function createEventUid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `evt-${crypto.randomUUID()}`;
   }
   return `evt-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`;
-}
-
-function shouldSeedDemoData(clientMode: "auto" | "mock" | "capacitor"): boolean {
-  if (clientMode === "mock") {
-    return true;
-  }
-  if (clientMode === "capacitor") {
-    return false;
-  }
-  return Capacitor.getPlatform() === "web";
 }
 
 function normalizeEvent(entry: EventRecord): EventRecord {
@@ -204,16 +169,6 @@ export const useEventsStore = defineStore("events", () => {
     const loaded = loadEvents();
     for (const [uid, entry] of Object.entries(loaded)) {
       byUid[uid] = entry;
-    }
-
-    if (
-      Object.keys(byUid).length === 0 &&
-      shouldSeedDemoData(nodeStore.settings.clientMode)
-    ) {
-      for (const entry of DEFAULT_EVENTS) {
-        byUid[entry.uid] = { ...entry };
-      }
-      persist();
     }
   }
 

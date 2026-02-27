@@ -100,7 +100,6 @@ function importPeerList(): void {
           Client mode
           <select v-model="form.clientMode">
             <option value="auto">Auto</option>
-            <option value="mock">Mock</option>
             <option value="capacitor">Capacitor only</option>
           </select>
         </label>

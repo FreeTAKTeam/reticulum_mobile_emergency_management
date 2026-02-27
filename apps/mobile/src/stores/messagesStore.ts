@@ -1,7 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
-import { Capacitor } from "@capacitor/core";
 
 import type { ActionMessage, EamStatus, ReplicationMessage } from "../types/domain";
 import { useNodeStore } from "./nodeStore";
@@ -38,66 +37,6 @@ function loadMessages(): Record<string, ActionMessage> {
 
 function saveMessages(messages: Record<string, ActionMessage>): void {
   localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(Object.values(messages)));
-}
-
-function seedMessages(): Record<string, ActionMessage> {
-  const now = Date.now();
-  return {
-    hans: {
-      callsign: "Hans",
-      groupName: "Cal team",
-      securityStatus: "Green",
-      capabilityStatus: "Yellow",
-      preparednessStatus: "Yellow",
-      medicalStatus: "Yellow",
-      mobilityStatus: "Red",
-      commsStatus: "Green",
-      updatedAt: now - 11000,
-    },
-    natha1: {
-      callsign: "Natha1",
-      groupName: "Cal team",
-      securityStatus: "Unknown",
-      capabilityStatus: "Unknown",
-      preparednessStatus: "Yellow",
-      medicalStatus: "Unknown",
-      mobilityStatus: "Unknown",
-      commsStatus: "Unknown",
-      updatedAt: now - 9000,
-    },
-    sanfran234: {
-      callsign: "SanFran234",
-      groupName: "Cal team",
-      securityStatus: "Red",
-      capabilityStatus: "Yellow",
-      preparednessStatus: "Yellow",
-      medicalStatus: "Green",
-      mobilityStatus: "Green",
-      commsStatus: "Yellow",
-      updatedAt: now - 5000,
-    },
-    tango5: {
-      callsign: "Tango5",
-      groupName: "India",
-      securityStatus: "Yellow",
-      capabilityStatus: "Red",
-      preparednessStatus: "Red",
-      medicalStatus: "Red",
-      mobilityStatus: "Red",
-      commsStatus: "Yellow",
-      updatedAt: now - 3000,
-    },
-  };
-}
-
-function shouldSeedDemoData(clientMode: "auto" | "mock" | "capacitor"): boolean {
-  if (clientMode === "mock") {
-    return true;
-  }
-  if (clientMode === "capacitor") {
-    return false;
-  }
-  return Capacitor.getPlatform() === "web";
 }
 
 function cloneMessage(message: ActionMessage): ActionMessage {
@@ -138,17 +77,6 @@ export const useMessagesStore = defineStore("messages", () => {
     saveMessages(byCallsign);
   }
 
-  function ensureSeed(): void {
-    if (Object.keys(byCallsign).length > 0) {
-      return;
-    }
-    const seeded = seedMessages();
-    for (const [key, message] of Object.entries(seeded)) {
-      byCallsign[key] = cloneMessage(message);
-    }
-    persist();
-  }
-
   function init(): void {
     if (initialized.value) {
       return;
@@ -158,9 +86,6 @@ export const useMessagesStore = defineStore("messages", () => {
     const loaded = loadMessages();
     for (const [key, message] of Object.entries(loaded)) {
       byCallsign[key] = cloneMessage(message);
-    }
-    if (shouldSeedDemoData(nodeStore.settings.clientMode)) {
-      ensureSeed();
     }
   }
 

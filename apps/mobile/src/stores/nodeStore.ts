@@ -12,6 +12,7 @@ import {
   type ReticulumNodeClient,
   type StatusChangedEvent,
 } from "@reticulum/node-client";
+import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
 import { computed, reactive, ref, shallowRef } from "vue";
 
@@ -29,6 +30,7 @@ import {
   normalizeDestinationHex,
   parsePeerListV1,
 } from "../utils/peers";
+import { runtimeProfile } from "../utils/runtimeProfile";
 
 const SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
@@ -86,6 +88,14 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
+  const requested = value === "capacitor" ? "capacitor" : "auto";
+  if (requested === "capacitor" && Capacitor.getPlatform() === "web") {
+    return "auto";
+  }
+  return requested;
+}
+
 function loadStoredSettings(): NodeUiSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -100,6 +110,7 @@ function loadStoredSettings(): NodeUiSettings {
         ...DEFAULT_SETTINGS.hub,
         ...(parsed.hub ?? {}),
       },
+      clientMode: normalizeClientMode(parsed.clientMode),
       tcpClients: Array.isArray(parsed.tcpClients)
         ? parsed.tcpClients.filter((item): item is string => typeof item === "string")
         : [...DEFAULT_SETTINGS.tcpClients],
@@ -253,6 +264,11 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function buildClient(): ReticulumNodeClient {
+    if (runtimeProfile === "web") {
+      return createReticulumNodeClient({
+        mode: "web",
+      });
+    }
     return createReticulumNodeClient({
       mode: settings.clientMode,
     });

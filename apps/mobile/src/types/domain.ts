@@ -66,7 +66,7 @@ export interface HubSettings {
 }
 
 export interface NodeUiSettings {
-  clientMode: "auto" | "mock" | "capacitor";
+  clientMode: "auto" | "capacitor";
   autoConnectSaved: boolean;
   announceCapabilities: string;
   tcpClients: string[];
