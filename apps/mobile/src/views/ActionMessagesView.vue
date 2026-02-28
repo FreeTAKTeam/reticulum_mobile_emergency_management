@@ -1,28 +1,57 @@
 <script setup lang="ts">
-import { computed, reactive } from "vue";
+import { computed, reactive, watch } from "vue";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
 import { useMessagesStore } from "../stores/messagesStore";
+import { useNodeStore } from "../stores/nodeStore";
+import {
+  DEFAULT_R3AKT_TEAM_COLOR,
+  R3AKT_TEAM_COLORS,
+  formatR3aktTeamColorLabel,
+  normalizeR3aktTeamColor,
+} from "../utils/r3akt";
 
 const messagesStore = useMessagesStore();
+const nodeStore = useNodeStore();
+
 messagesStore.init();
 messagesStore.initReplication();
 
+const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
+  value,
+  label: formatR3aktTeamColorLabel(value),
+}));
+const teamColorPrompt = R3AKT_TEAM_COLORS.join(", ");
+const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
+
 const createForm = reactive({
-  callsign: "",
-  groupName: "Cal team",
+  callsign: defaultCallSign.value,
+  groupName: DEFAULT_R3AKT_TEAM_COLOR,
 });
 
 const messages = computed(() => messagesStore.messages);
 
+watch(defaultCallSign, (next, previous) => {
+  const current = createForm.callsign.trim();
+  if (!current || current === previous) {
+    createForm.callsign = next;
+  }
+});
+
+function resetCreateForm(): void {
+  createForm.callsign = defaultCallSign.value;
+  createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
+}
+
 async function createMessage(): Promise<void> {
-  if (!createForm.callsign.trim()) {
+  const callsign = createForm.callsign.trim() || defaultCallSign.value;
+  if (!callsign) {
     return;
   }
   await messagesStore.upsertLocal({
-    callsign: createForm.callsign.trim(),
-    groupName: createForm.groupName.trim() || "Cal team",
+    callsign,
+    groupName: normalizeR3aktTeamColor(createForm.groupName, DEFAULT_R3AKT_TEAM_COLOR),
     securityStatus: "Unknown",
     capabilityStatus: "Unknown",
     preparednessStatus: "Unknown",
@@ -30,22 +59,25 @@ async function createMessage(): Promise<void> {
     mobilityStatus: "Unknown",
     commsStatus: "Unknown",
   });
-  createForm.callsign = "";
+  resetCreateForm();
 }
 
 function editMessage(callsign: string): void {
-  const nextGroup = window.prompt("Update group", "Cal team");
-  if (!nextGroup) {
-    return;
-  }
   const message = messages.value.find((item) => item.callsign === callsign);
   if (!message) {
+    return;
+  }
+  const nextGroup = window.prompt(
+    `Update team color (${teamColorPrompt})`,
+    normalizeR3aktTeamColor(message.groupName),
+  );
+  if (nextGroup === null) {
     return;
   }
   messagesStore
     .upsertLocal({
       ...message,
-      groupName: nextGroup.trim() || message.groupName,
+      groupName: normalizeR3aktTeamColor(nextGroup, normalizeR3aktTeamColor(message.groupName)),
     })
     .catch(() => undefined);
 }
@@ -69,15 +101,17 @@ function deleteMessage(callsign: string): void {
       <input
         v-model="createForm.callsign"
         type="text"
-        placeholder="New callsign"
-        aria-label="New callsign"
+        placeholder="Call Sign"
+        aria-label="Call Sign"
       />
-      <input
+      <select
         v-model="createForm.groupName"
-        type="text"
-        placeholder="Group name"
-        aria-label="Group name"
-      />
+        aria-label="Team color"
+      >
+        <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
+          {{ option.label }}
+        </option>
+      </select>
       <button type="submit">Add message</button>
     </form>
 
@@ -144,7 +178,8 @@ p {
   grid-template-columns: minmax(140px, 200px) minmax(160px, 220px) auto;
 }
 
-.create-form input {
+.create-form input,
+.create-form select {
   background: rgb(8 22 50 / 82%);
   border: 1px solid rgb(75 118 185 / 44%);
   border-radius: 10px;

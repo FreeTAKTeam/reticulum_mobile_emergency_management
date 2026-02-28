@@ -4,6 +4,11 @@ import type { PacketReceivedEvent } from "@reticulum/node-client";
 
 import { notifyOperationalUpdate } from "../services/notifications";
 import type { ActionMessage, EamStatus, ReplicationMessage } from "../types/domain";
+import {
+  DEFAULT_R3AKT_TEAM_COLOR,
+  formatR3aktTeamColor,
+  normalizeR3aktTeamColor,
+} from "../utils/r3akt";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
@@ -27,7 +32,7 @@ function loadMessages(): Record<string, ActionMessage> {
       out[callsign.toLowerCase()] = {
         ...message,
         callsign,
-        groupName: String(message.groupName ?? "Cal team"),
+        groupName: normalizeR3aktTeamColor(message.groupName, DEFAULT_R3AKT_TEAM_COLOR),
         updatedAt: Number(message.updatedAt ?? Date.now()),
       };
     }
@@ -58,7 +63,7 @@ function normalizeMessage(message: ActionMessage): ActionMessage {
   return {
     ...message,
     callsign: message.callsign.trim(),
-    groupName: message.groupName.trim(),
+    groupName: normalizeR3aktTeamColor(message.groupName, DEFAULT_R3AKT_TEAM_COLOR),
     securityStatus: normalizeStatus(message.securityStatus),
     capabilityStatus: normalizeStatus(message.capabilityStatus),
     preparednessStatus: normalizeStatus(message.preparednessStatus),
@@ -70,7 +75,7 @@ function normalizeMessage(message: ActionMessage): ActionMessage {
 }
 
 function summarizeMessage(message: ActionMessage): string {
-  return `${message.callsign} | ${message.groupName}`;
+  return `${message.callsign} | ${formatR3aktTeamColor(message.groupName)}`;
 }
 
 export const useMessagesStore = defineStore("messages", () => {

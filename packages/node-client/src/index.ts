@@ -119,10 +119,10 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: "emergency-ops-mobile",
   tcpClients: ["rmap.world:4242"],
   broadcast: true,
-  announceIntervalSeconds: 30,
+  announceIntervalSeconds: 1800,
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Disabled",
-  hubRefreshIntervalSeconds: 300,
+  hubRefreshIntervalSeconds: 3600,
 };
 
 type ListenerFn<T> = (payload: T) => void;

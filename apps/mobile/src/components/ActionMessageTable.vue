@@ -2,6 +2,7 @@
 import StatusPill from "./StatusPill.vue";
 
 import type { ActionMessage } from "../types/domain";
+import { formatR3aktTeamColor } from "../utils/r3akt";
 
 const props = defineProps<{
   messages: ActionMessage[];
@@ -19,8 +20,8 @@ const emit = defineEmits<{
     <table class="table">
       <thead>
         <tr>
-          <th>Callsign</th>
-          <th>Group</th>
+          <th>Call Sign</th>
+          <th>Team</th>
           <th>Security</th>
           <th>Capability</th>
           <th>Preparedness</th>
@@ -33,7 +34,7 @@ const emit = defineEmits<{
       <tbody>
         <tr v-for="message in props.messages" :key="message.callsign">
           <td>{{ message.callsign }}</td>
-          <td>{{ message.groupName }}</td>
+          <td>{{ formatR3aktTeamColor(message.groupName) }}</td>
           <td>
             <button
               class="pill-button"

@@ -9,6 +9,19 @@ const props = defineProps<{
   settings: NodeUiSettings;
 }>();
 
+const gatewayStatus = computed(() => {
+  if (props.settings.hub.mode === "Disabled") {
+    return "Hub disabled";
+  }
+  if (props.settings.hub.mode === "RchHttp") {
+    return "Legacy HTTP";
+  }
+  if (props.settings.hub.identityHash) {
+    return `RCH ${props.settings.hub.identityHash.slice(0, 8)}...`;
+  }
+  return "RCH ListClients";
+});
+
 const cards = computed(() => [
   {
     key: "mesh",
@@ -18,12 +31,7 @@ const cards = computed(() => [
   {
     key: "gateway",
     title: "Gateway",
-    value:
-      props.settings.hub.mode === "Disabled"
-        ? "http://localhost:8000"
-        : props.settings.hub.mode === "RchHttp"
-          ? props.settings.hub.apiBaseUrl || "Configured"
-          : "RCH via LXMF",
+    value: gatewayStatus.value,
   },
   {
     key: "package",

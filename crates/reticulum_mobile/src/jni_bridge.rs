@@ -151,7 +151,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .filter(|v| !v.is_empty())
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
-        announce_interval_seconds: input.announce_interval_seconds.unwrap_or(30).max(1),
+        announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
         announce_capabilities: input
             .announce_capabilities
             .map(|v| v.trim().to_string())
@@ -182,7 +182,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
                 Some(trimmed)
             }
         }),
-        hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(300).max(1),
+        hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
     }
 }
 

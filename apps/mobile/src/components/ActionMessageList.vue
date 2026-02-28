@@ -2,6 +2,7 @@
 import StatusPill from "./StatusPill.vue";
 
 import type { ActionMessage } from "../types/domain";
+import { formatR3aktTeamColor } from "../utils/r3akt";
 
 const props = defineProps<{
   messages: ActionMessage[];
@@ -22,8 +23,8 @@ function cycleStatus(callsign: string, field: keyof ActionMessage): void {
   <section class="list">
     <article v-for="message in props.messages" :key="message.callsign" class="item">
       <header class="item-header">
-        <h3 class="callsign">Callsign: {{ message.callsign }}</h3>
-        <p class="group">Group: {{ message.groupName }}</p>
+        <h3 class="callsign">Call Sign: {{ message.callsign }}</h3>
+        <p class="group">Team: {{ formatR3aktTeamColor(message.groupName) }}</p>
       </header>
       <div class="pills">
         <button
@@ -116,16 +117,28 @@ function cycleStatus(callsign: string, field: keyof ActionMessage): void {
 }
 
 .pills {
-  display: flex;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
 }
 
 .pill-button {
   background: transparent;
   border: 0;
   cursor: pointer;
+  display: block;
   padding: 0;
+  width: 100%;
+}
+
+.pill-button :deep(.pill) {
+  box-sizing: border-box;
+  font-size: 1rem;
+  margin-right: 0;
+  margin-top: 0;
+  min-height: 3.1rem;
+  padding: 0.82rem 1rem;
+  width: 100%;
 }
 
 .item-actions {

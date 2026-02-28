@@ -27,6 +27,7 @@ const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
+const showLegacyHubHttpFields = computed(() => form.hubMode === "RchHttp");
 
 function applySettings(): void {
   const previousDisplayName = nodeStore.settings.displayName;
@@ -36,7 +37,7 @@ function applySettings(): void {
     autoConnectSaved: form.autoConnectSaved,
     showOnlyCapabilityVerified: form.showOnlyCapabilityVerified,
     announceCapabilities: form.announceCapabilities.trim(),
-    announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 30)),
+    announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
     tcpClients: form.tcpClientsText
       .split(/\n/g)
       .map((line: string) => line.trim())
@@ -47,13 +48,13 @@ function applySettings(): void {
       identityHash: form.hubIdentityHash.trim(),
       apiBaseUrl: form.hubApiBaseUrl.trim(),
       apiKey: form.hubApiKey.trim(),
-      refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 300)),
+      refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
     },
   });
   form.displayName = nodeStore.settings.displayName;
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
-      ? "Settings saved. Restart the node to announce the updated name."
+      ? "Settings saved. Restart the node to announce the updated call sign."
       : "Settings saved.";
 }
 
@@ -112,7 +113,7 @@ function importPeerList(): void {
           </select>
         </label>
         <label>
-          Human-readable name
+          Call Sign
           <input v-model="form.displayName" type="text" maxlength="64" />
         </label>
         <label>
@@ -162,26 +163,30 @@ function importPeerList(): void {
     </section>
 
     <section class="panel">
-      <h2>Hub Directory</h2>
+      <h2>RCH Hub Directory</h2>
+      <p class="section-note">
+        Uses Reticulum LXMF and the RCH <code>ListClients</code> command to fetch the active
+        client list.
+      </p>
       <div class="grid">
         <label>
           Mode
           <select v-model="form.hubMode">
             <option value="Disabled">Disabled</option>
-            <option value="RchLxmf">RCH via LXMF</option>
-            <option value="RchHttp">RCH via HTTP</option>
+            <option value="RchLxmf">RCH via Reticulum (LXMF)</option>
+            <option value="RchHttp">Legacy HTTP (deprecated)</option>
           </select>
         </label>
         <label>
           Hub identity hash
           <input v-model="form.hubIdentityHash" type="text" />
         </label>
-        <label>
-          Hub API base URL
+        <label v-if="showLegacyHubHttpFields">
+          Legacy hub API base URL
           <input v-model="form.hubApiBaseUrl" type="url" />
         </label>
-        <label>
-          Hub API key
+        <label v-if="showLegacyHubHttpFields">
+          Legacy hub API key
           <input v-model="form.hubApiKey" type="text" />
         </label>
         <label>
@@ -279,6 +284,12 @@ h2 {
   font-family: var(--font-headline);
   font-size: 1.5rem;
   margin: 0 0 0.75rem;
+}
+
+.section-note {
+  color: #90aad4;
+  font-family: var(--font-body);
+  margin: 0 0 0.8rem;
 }
 
 .grid {

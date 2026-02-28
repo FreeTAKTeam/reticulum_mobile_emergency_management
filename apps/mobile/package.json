@@ -1,7 +1,7 @@
 {
   "name": "@reticulum/mobile",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite --mode web",

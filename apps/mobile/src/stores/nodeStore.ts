@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     identityHash: "",
     apiBaseUrl: "",
     apiKey: "",
-    refreshIntervalSeconds: 300,
+    refreshIntervalSeconds: 3600,
   },
 };
 
