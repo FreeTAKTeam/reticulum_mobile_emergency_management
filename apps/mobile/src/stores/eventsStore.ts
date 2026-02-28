@@ -2,10 +2,12 @@ import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
 
+import { notifyOperationalUpdate } from "../services/notifications";
 import type { EventRecord, ReplicationMessage } from "../types/domain";
 import { useNodeStore } from "./nodeStore";
 
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
+type UpsertOutcome = "inserted" | "updated" | "ignored";
 
 type EventReplicationMessage =
   | {
@@ -43,6 +45,13 @@ function normalizeEvent(entry: EventRecord): EventRecord {
     updatedAt: Number(entry.updatedAt ?? Date.now()),
     deletedAt: entry.deletedAt ? Number(entry.deletedAt) : undefined,
   };
+}
+
+function summarizeEvent(record: EventRecord): string {
+  const summary = record.summary.length > 96
+    ? `${record.summary.slice(0, 93)}...`
+    : record.summary;
+  return `${record.callsign} | ${record.type}: ${summary}`;
 }
 
 function loadEvents(): Record<string, EventRecord> {
@@ -123,17 +132,19 @@ export const useEventsStore = defineStore("events", () => {
     saveEvents(byUid);
   }
 
-  function applyUpsert(record: EventRecord): void {
+  function applyUpsert(record: EventRecord): UpsertOutcome {
     const normalized = normalizeEvent(record);
     if (!normalized.uid || !normalized.callsign || !normalized.summary) {
-      return;
+      return "ignored";
     }
     const existing = byUid[normalized.uid];
     if (existing && existing.updatedAt > normalized.updatedAt) {
-      return;
+      return "ignored";
     }
+    const outcome: UpsertOutcome = existing ? "updated" : "inserted";
     byUid[normalized.uid] = normalized;
     persist();
+    return outcome;
   }
 
   function applyDelete(uid: string, deletedAt: number): void {
@@ -238,7 +249,13 @@ export const useEventsStore = defineStore("events", () => {
       }
 
       if (message.kind === "event_upsert") {
-        applyUpsert(message.event);
+        const outcome = applyUpsert(message.event);
+        if (outcome !== "ignored") {
+          notifyOperationalUpdate(
+            outcome === "inserted" ? "New event" : "Updated event",
+            summarizeEvent(message.event),
+          ).catch(() => undefined);
+        }
         return;
       }
 

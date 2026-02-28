@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
@@ -26,6 +26,7 @@ const importText = ref("");
 const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
+const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 
 function applySettings(): void {
   const previousDisplayName = nodeStore.settings.displayName;
@@ -113,6 +114,10 @@ function importPeerList(): void {
         <label>
           Human-readable name
           <input v-model="form.displayName" type="text" maxlength="64" />
+        </label>
+        <label>
+          Own app hash
+          <input :value="ownAppHash" class="readonly-input" type="text" readonly />
         </label>
         <label>
           Announce capabilities
@@ -302,6 +307,10 @@ select {
   font-family: var(--font-body);
   font-size: 0.98rem;
   padding: 0.48rem 0.56rem;
+}
+
+.readonly-input {
+  color: #89d8ff;
 }
 
 textarea {

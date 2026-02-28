@@ -1,10 +1,27 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import type { EamStatus } from "../types/domain";
+
 const props = defineProps<{
   label: string;
-  value: "Red" | "Yellow" | "Green" | "Unknown";
+  value: EamStatus;
 }>();
+
+const visibleLabel = computed(() => props.label.trim());
+
+const statusMeaning = computed(() => {
+  if (props.value === "Green") {
+    return "OK";
+  }
+  if (props.value === "Yellow") {
+    return "Challenge";
+  }
+  if (props.value === "Red") {
+    return "Critical";
+  }
+  return "Unknown";
+});
 
 const cssClass = computed(() => {
   if (props.value === "Green") {
@@ -18,12 +35,25 @@ const cssClass = computed(() => {
   }
   return "pill unknown";
 });
+
+const titleText = computed(() =>
+  visibleLabel.value.length > 0
+    ? `${visibleLabel.value}: ${statusMeaning.value}`
+    : statusMeaning.value,
+);
+
+const assistiveText = computed(() =>
+  visibleLabel.value.length > 0
+    ? ` status: ${statusMeaning.value}`
+    : statusMeaning.value,
+);
 </script>
 
 <template>
-  <span :class="cssClass">{{
-    props.label.trim().length > 0 ? `${props.label}: ${props.value}` : props.value
-  }}</span>
+  <span :class="cssClass" :title="titleText">
+    <span v-if="visibleLabel.length > 0">{{ visibleLabel }}</span>
+    <span class="sr-only">{{ assistiveText }}</span>
+  </span>
 </template>
 
 <style scoped>
@@ -33,12 +63,15 @@ const cssClass = computed(() => {
   font-family: var(--font-body);
   font-size: 0.88rem;
   font-weight: 700;
+  justify-content: center;
   letter-spacing: 0.01em;
   line-height: 1;
   margin-right: 0.5rem;
   margin-top: 0.45rem;
   padding: 0.38rem 0.7rem 0.42rem;
+  position: relative;
   text-shadow: 0 0 8px rgb(0 0 0 / 35%);
+  white-space: nowrap;
 }
 
 .green {
@@ -59,5 +92,16 @@ const cssClass = computed(() => {
 .unknown {
   background: linear-gradient(120deg, #2d3f66, #4f6f9f);
   color: #afbed8;
+}
+
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
 }
 </style>

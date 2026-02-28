@@ -23,12 +23,12 @@ async function createMessage(): Promise<void> {
   await messagesStore.upsertLocal({
     callsign: createForm.callsign.trim(),
     groupName: createForm.groupName.trim() || "Cal team",
-    securityStatus: "Green",
-    capabilityStatus: "Yellow",
-    preparednessStatus: "Yellow",
-    medicalStatus: "Yellow",
+    securityStatus: "Unknown",
+    capabilityStatus: "Unknown",
+    preparednessStatus: "Unknown",
+    medicalStatus: "Unknown",
     mobilityStatus: "Unknown",
-    commsStatus: "Green",
+    commsStatus: "Unknown",
   });
   createForm.callsign = "";
 }

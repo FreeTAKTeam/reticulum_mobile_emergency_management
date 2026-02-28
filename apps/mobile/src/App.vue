@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import { initAppNotifications } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagesStore } from "./stores/messagesStore";
 import { useNodeStore } from "./stores/nodeStore";
@@ -13,6 +14,7 @@ const route = useRoute();
 
 onMounted(async () => {
   try {
+    await initAppNotifications();
     messagesStore.init();
     messagesStore.initReplication();
     eventsStore.init();
@@ -26,10 +28,10 @@ onMounted(async () => {
 });
 
 const tabItems = [
-  { path: "/messages", label: "Action Messages", icon: "MSG" },
-  { path: "/events", label: "Events", icon: "EVT" },
-  { path: "/dashboard", label: "Dashboard", icon: "DASH" },
-  { path: "/settings", label: "Settings", icon: "CFG" },
+  { path: "/messages", label: "Action Messages", icon: "messages" },
+  { path: "/events", label: "Events", icon: "events" },
+  { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
 const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offline"));
@@ -63,9 +65,57 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
           :to="tab.path"
           class="tab"
           :class="{ active: route.path === tab.path }"
+          :aria-label="tab.label"
+          :title="tab.label"
         >
-          <span class="icon">{{ tab.icon }}</span>
-          <span class="label">{{ tab.label }}</span>
+          <span class="tab-icon" aria-hidden="true">
+            <svg
+              v-if="tab.icon === 'messages'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path
+                d="M6 7.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H11l-4 3v-3H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z"
+              />
+              <path d="M8 11h8" />
+              <path d="M8 14h5" />
+            </svg>
+            <svg
+              v-else-if="tab.icon === 'events'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path
+                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
+              />
+              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
+            </svg>
+            <svg
+              v-else-if="tab.icon === 'dashboard'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M5 5h5v5H5z" />
+              <path d="M14 5h5v8h-5z" />
+              <path d="M5 14h5v5H5z" />
+              <path d="M14 16h5v3h-5z" />
+            </svg>
+            <svg
+              v-else
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M5 7h10" />
+              <path d="M5 17h14" />
+              <path d="M15 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
+              <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
+            </svg>
+          </span>
+          <span class="sr-only">{{ tab.label }}</span>
         </RouterLink>
       </nav>
     </div>
@@ -97,6 +147,7 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 .app-shell {
   margin: 0 auto;
   max-width: 1600px;
+  padding-bottom: calc(5.8rem + env(safe-area-inset-bottom, 0px));
   position: relative;
   z-index: 1;
 }
@@ -173,7 +224,7 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 .content {
   margin-top: 0.95rem;
   min-height: calc(100dvh - 240px);
-  padding-bottom: 5rem;
+  padding-bottom: 0;
 }
 
 .tabs {
@@ -181,13 +232,13 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
   background: rgb(3 13 33 / 84%);
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
-  bottom: 1rem;
+  bottom: calc(1.15rem + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  left: 1rem;
-  max-width: calc(1600px - 2rem);
+  left: 0.8rem;
+  max-width: calc(1600px - 1.6rem);
   position: fixed;
-  right: 1rem;
+  right: 0.8rem;
 }
 
 .tab {
@@ -195,10 +246,10 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
   border-right: 1px solid rgb(60 101 160 / 20%);
   color: #8ea5ca;
   display: grid;
-  font-family: var(--font-body);
   justify-items: center;
-  min-height: 52px;
-  padding: 0.3rem;
+  min-height: 50px;
+  padding: 0.35rem;
+  position: relative;
   text-decoration: none;
 }
 
@@ -206,17 +257,38 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
   border-right: 0;
 }
 
-.icon {
-  font-size: 1rem;
+.tab-icon {
+  align-items: center;
+  display: inline-flex;
+  height: 1.45rem;
+  justify-content: center;
+  width: 1.45rem;
 }
 
-.label {
-  font-size: 0.72rem;
+.icon-svg {
+  height: 100%;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 100%;
 }
 
 .tab.active {
   color: #54ceff;
   text-shadow: 0 0 16px rgb(84 206 255 / 40%);
+}
+
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 @media (max-width: 780px) {
@@ -226,10 +298,6 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 
   .content {
     min-height: calc(100dvh - 220px);
-  }
-
-  .label {
-    font-size: 0.64rem;
   }
 }
 </style>

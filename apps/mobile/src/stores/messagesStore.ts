@@ -2,12 +2,14 @@ import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
 
+import { notifyOperationalUpdate } from "../services/notifications";
 import type { ActionMessage, EamStatus, ReplicationMessage } from "../types/domain";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 
-const STATUS_ROTATION: EamStatus[] = ["Green", "Yellow", "Red"];
+const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
+type UpsertOutcome = "inserted" | "updated" | "ignored";
 
 function loadMessages(): Record<string, ActionMessage> {
   try {
@@ -67,6 +69,10 @@ function normalizeMessage(message: ActionMessage): ActionMessage {
   };
 }
 
+function summarizeMessage(message: ActionMessage): string {
+  return `${message.callsign} | ${message.groupName}`;
+}
+
 export const useMessagesStore = defineStore("messages", () => {
   const byCallsign = reactive<Record<string, ActionMessage>>({});
   const initialized = ref(false);
@@ -93,15 +99,17 @@ export const useMessagesStore = defineStore("messages", () => {
     return callsign.trim().toLowerCase();
   }
 
-  function applyUpsert(message: ActionMessage): void {
+  function applyUpsert(message: ActionMessage): UpsertOutcome {
     const normalized = normalizeMessage(message);
     const key = keyFor(normalized.callsign);
     const existing = byCallsign[key];
     if (existing && existing.updatedAt > normalized.updatedAt) {
-      return;
+      return "ignored";
     }
+    const outcome: UpsertOutcome = existing ? "updated" : "inserted";
     byCallsign[key] = normalized;
     persist();
+    return outcome;
   }
 
   function applyDelete(callsign: string, deletedAt: number): void {
@@ -256,7 +264,13 @@ export const useMessagesStore = defineStore("messages", () => {
       }
 
       if (message.kind === "message_upsert") {
-        applyUpsert(message.message);
+        const outcome = applyUpsert(message.message);
+        if (outcome !== "ignored") {
+          notifyOperationalUpdate(
+            outcome === "inserted" ? "New message" : "Updated message",
+            summarizeMessage(message.message),
+          ).catch(() => undefined);
+        }
         return;
       }
 
