@@ -7,6 +7,7 @@ import { useNodeStore } from "../stores/nodeStore";
 const nodeStore = useNodeStore();
 
 const form = reactive({
+  displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
   autoConnectSaved: nodeStore.settings.autoConnectSaved,
   showOnlyCapabilityVerified: nodeStore.settings.showOnlyCapabilityVerified,
@@ -27,7 +28,9 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 
 function applySettings(): void {
+  const previousDisplayName = nodeStore.settings.displayName;
   nodeStore.updateSettings({
+    displayName: form.displayName,
     clientMode: form.clientMode,
     autoConnectSaved: form.autoConnectSaved,
     showOnlyCapabilityVerified: form.showOnlyCapabilityVerified,
@@ -46,7 +49,11 @@ function applySettings(): void {
       refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 300)),
     },
   });
-  runtimeFeedback.value = "Settings saved.";
+  form.displayName = nodeStore.settings.displayName;
+  runtimeFeedback.value =
+    nodeStore.settings.displayName !== previousDisplayName
+      ? "Settings saved. Restart the node to announce the updated name."
+      : "Settings saved.";
 }
 
 async function runNodeAction(
@@ -102,6 +109,10 @@ function importPeerList(): void {
             <option value="auto">Auto</option>
             <option value="capacitor">Capacitor only</option>
           </select>
+        </label>
+        <label>
+          Human-readable name
+          <input v-model="form.displayName" type="text" maxlength="64" />
         </label>
         <label>
           Announce capabilities

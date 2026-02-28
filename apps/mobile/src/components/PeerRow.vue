@@ -37,6 +37,9 @@ const stateLabel = computed(() => {
   <article class="row">
     <div class="meta">
       <p class="dest">{{ props.peer.destination }}</p>
+      <p class="announced-name" v-if="props.peer.announcedName">
+        {{ props.peer.announcedName }}
+      </p>
       <p class="details">
         {{ stateLabel }} | last seen {{ new Date(props.peer.lastSeenAt).toLocaleTimeString() }}
       </p>
@@ -45,7 +48,7 @@ const stateLabel = computed(() => {
       </p>
     </div>
     <label class="label-input-wrap">
-      Label
+      Local label
       <input
         class="label-input"
         type="text"
@@ -96,6 +99,13 @@ const stateLabel = computed(() => {
   letter-spacing: 0.06em;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.announced-name {
+  color: #7be4ff;
+  font-family: var(--font-headline);
+  font-size: 1rem;
+  margin: 0.22rem 0 0;
 }
 
 .details {

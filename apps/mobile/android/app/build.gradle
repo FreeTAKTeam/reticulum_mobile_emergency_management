@@ -11,7 +11,8 @@ def utcTimeZone = TimeZone.getTimeZone("UTC")
 def versionCodeStamp = new Date().format("yyDDDHHmm", utcTimeZone)
 def versionNameStamp = new Date().format("yyyyMMddHHmmss", utcTimeZone)
 def computedVersionCode = versionCodeStamp.toInteger()
-def computedVersionName = "1.0.${versionNameStamp}"
+def overrideVersionName = project.findProperty("appVersionName")?.toString()?.trim()
+def computedVersionName = overrideVersionName ? overrideVersionName : "1.0.${versionNameStamp}"
 def stringsXml = new XmlParser().parse(file('src/main/res/values/strings.xml'))
 def appDisplayName = stringsXml.string.find { it.@name == 'app_name' }?.text() ?: "app"
 def appFileNamePrefix = appDisplayName

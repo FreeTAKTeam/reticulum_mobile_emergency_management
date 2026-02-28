@@ -29,6 +29,7 @@ export type PeerConnectionState = "disconnected" | "connecting" | "connected";
 export interface DiscoveredPeer {
   destination: string;
   label?: string;
+  announcedName?: string;
   lastSeenAt: number;
   hops?: number;
   interfaceHex?: string;
@@ -66,6 +67,7 @@ export interface HubSettings {
 }
 
 export interface NodeUiSettings {
+  displayName: string;
   clientMode: "auto" | "capacitor";
   autoConnectSaved: boolean;
   announceCapabilities: string;

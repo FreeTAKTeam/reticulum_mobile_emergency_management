@@ -26,10 +26,15 @@ const filteredDiscovered = computed(() => {
     return (
       peer.destination.includes(query) ||
       (peer.label ?? "").toLowerCase().includes(query) ||
+      (peer.announcedName ?? "").toLowerCase().includes(query) ||
       (peer.appData ?? "").toLowerCase().includes(query)
     );
   });
 });
+
+function announcedNameFor(destination: string): string | undefined {
+  return nodeStore.discoveredByDestination[destination]?.announcedName;
+}
 
 const filteredSaved = computed(() => {
   const query = searchText.value.trim().toLowerCase();
@@ -37,8 +42,11 @@ const filteredSaved = computed(() => {
     if (!query) {
       return true;
     }
+    const announcedName = announcedNameFor(peer.destination)?.toLowerCase() ?? "";
     return (
-      peer.destination.includes(query) || (peer.label ?? "").toLowerCase().includes(query)
+      peer.destination.includes(query) ||
+      (peer.label ?? "").toLowerCase().includes(query) ||
+      announcedName.includes(query)
     );
   });
 });
@@ -124,7 +132,11 @@ async function onFileSelected(event: Event): Promise<void> {
     </header>
 
     <section class="panel controls">
-      <input v-model="searchText" type="search" placeholder="Search destination or label" />
+      <input
+        v-model="searchText"
+        type="search"
+        placeholder="Search destination, label, or announced name"
+      />
       <label class="checkbox">
         <input
           :checked="nodeStore.settings.showOnlyCapabilityVerified"

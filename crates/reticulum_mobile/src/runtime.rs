@@ -8,6 +8,7 @@ use fs_err as fs;
 use lxmf::message::Message as LxmfMessage;
 use rand_core::OsRng;
 use regex::Regex;
+use rmpv::Value as MsgPackValue;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName};
 use reticulum::hash::AddressHash;
@@ -96,6 +97,15 @@ fn send_outcome_to_udl(outcome: RnsSendOutcome) -> SendOutcome {
         RnsSendOutcome::DroppedEncryptFailed => SendOutcome::DroppedEncryptFailed {},
         RnsSendOutcome::DroppedNoRoute => SendOutcome::DroppedNoRoute {},
     }
+}
+
+fn encode_delivery_display_name_app_data(display_name: &str) -> Option<Vec<u8>> {
+    let normalized = lxmf::helpers::normalize_display_name(display_name).ok()?;
+    let peer_data = MsgPackValue::Array(vec![
+        MsgPackValue::Binary(normalized.into_bytes()),
+        MsgPackValue::Nil,
+    ]);
+    rmp_serde::to_vec(&peer_data).ok()
 }
 
 fn create_transport_data_packet(destination: AddressHash, bytes: &[u8]) -> Packet {
@@ -457,6 +467,7 @@ pub async fn run_node(
         let app_destination = app_destination.clone();
         let lxmf_destination = lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
+        let lxmf_display_name_app_data = encode_delivery_display_name_app_data(&config.name);
         let interval_secs = config.announce_interval_seconds.max(1);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
@@ -466,7 +477,9 @@ pub async fn run_node(
                 transport
                     .send_announce(&app_destination, Some(caps.as_bytes()))
                     .await;
-                transport.send_announce(&lxmf_destination, None).await;
+                transport
+                    .send_announce(&lxmf_destination, lxmf_display_name_app_data.as_deref())
+                    .await;
             }
         });
     }

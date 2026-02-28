@@ -1,6 +1,9 @@
 import type { PeerListV1, PeerListV1Peer, SavedPeer } from "../types/domain";
 
 const DEST_HEX_REGEX = /^[0-9a-f]{32}$/i;
+const CONTROL_CHAR_REGEX = /[\u0000-\u001f\u007f]+/g;
+const DISPLAY_NAME_TOKEN_PREFIX = "name=";
+const MAX_DISPLAY_NAME_LENGTH = 64;
 
 export function normalizeDestinationHex(value: string): string {
   return value.trim().toLowerCase();
@@ -10,10 +13,71 @@ export function isValidDestinationHex(value: string): boolean {
   return DEST_HEX_REGEX.test(value.trim());
 }
 
-export function parseCapabilityTokens(appData: string): string[] {
+function tokenizeAnnounceAppData(appData: string): string[] {
   return appData
     .split(/[,;\s]+/g)
-    .map((token) => token.trim().toLowerCase())
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+function isDisplayNameToken(token: string): boolean {
+  return token.toLowerCase().startsWith(DISPLAY_NAME_TOKEN_PREFIX);
+}
+
+export function normalizeDisplayName(value: string): string | undefined {
+  const sanitized = value
+    .replace(CONTROL_CHAR_REGEX, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.slice(0, MAX_DISPLAY_NAME_LENGTH);
+}
+
+export function extractAnnouncedName(appData: string): string | undefined {
+  const nameToken = tokenizeAnnounceAppData(appData).find((token) => isDisplayNameToken(token));
+  if (!nameToken) {
+    return undefined;
+  }
+
+  const encodedName = nameToken.slice(DISPLAY_NAME_TOKEN_PREFIX.length);
+  if (!encodedName) {
+    return undefined;
+  }
+
+  try {
+    return normalizeDisplayName(decodeURIComponent(encodedName));
+  } catch {
+    return undefined;
+  }
+}
+
+export function extractAnnounceCapabilityText(appData: string): string {
+  return tokenizeAnnounceAppData(appData)
+    .filter((token) => !isDisplayNameToken(token))
+    .join(",");
+}
+
+export function formatAnnounceAppData(
+  capabilityText: string,
+  displayName?: string,
+): string {
+  const normalizedCapabilityText = extractAnnounceCapabilityText(capabilityText);
+  const normalizedDisplayName = normalizeDisplayName(displayName ?? "");
+  if (!normalizedDisplayName) {
+    return normalizedCapabilityText;
+  }
+  if (!normalizedCapabilityText) {
+    return `${DISPLAY_NAME_TOKEN_PREFIX}${encodeURIComponent(normalizedDisplayName)}`;
+  }
+  return `${normalizedCapabilityText};${DISPLAY_NAME_TOKEN_PREFIX}${encodeURIComponent(normalizedDisplayName)}`;
+}
+
+export function parseCapabilityTokens(appData: string): string[] {
+  return tokenizeAnnounceAppData(appData)
+    .filter((token) => !isDisplayNameToken(token))
+    .map((token) => token.toLowerCase())
     .filter((token) => token.length > 0);
 }
 

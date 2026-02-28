@@ -1,21 +1,9 @@
 # Reticulum Mobile Emergency Management App
-
+![alt text](image.png)
 Mobile emergency operations client built with Vue 3 + Capacitor and backed by a
-Reticulum node runtime (`@reticulum/node-client`).
-
+Reticulum RUST runtime.
 The app is designed for field-team coordination over mesh-style connectivity,
 including peer discovery, replicated status messaging, and incident/event tracking.
-
-## Runtime profiles
-
-The app ships with separate Vite profiles so browser and mobile-native workflows stay isolated.
-
-- `web` profile (`VITE_RUNTIME_PROFILE=web`)
-  - Browser-safe workflow with a web runtime client
-  - Node controls remain available for browser testing
-- `mobile` profile (`VITE_RUNTIME_PROFILE=mobile`)
-  - Native Capacitor runtime workflow
-  - Full native Reticulum runtime (start/stop/restart, connect/disconnect, hub refresh)
 
 ## What you can do with this app
 
@@ -24,7 +12,7 @@ The app ships with separate Vite profiles so browser and mobile-native workflows
    - Recreate the client runtime without restarting the app
    - Configure announce interval, announce capability string, TCP interfaces, and broadcast
 2. Discover and manage peers
-   - View peers discovered from announces, hub directory, and imported lists
+   - View peers discovered from announces, Reticulum Community hub , or imported lists
    - Save/unsave peers locally (allowlist model; discoveries are not auto-saved)
    - Connect/disconnect individual peers, or connect/disconnect all saved peers
    - Label peers and filter by destination/label/capability data
@@ -45,7 +33,7 @@ The app ships with separate Vite profiles so browser and mobile-native workflows
 ## Data behavior
 
 - Messages, events, settings, and saved peers persist in local storage on-device.
-- No demo records are auto-seeded. Messages and events only come from local/user input or peer replication.
+- On web in `auto` mode (or when `mock` mode is selected), demo data is seeded for quick testing.
 - Replication uses JSON payloads exchanged over the node packet channel.
 
 ## Local development
@@ -53,21 +41,18 @@ The app ships with separate Vite profiles so browser and mobile-native workflows
 From repo root:
 
 1. Install dependencies (once): `npm install`
-2. Start browser-safe dev server: `npm run web:dev`
-3. Start mobile profile dev server (for native workflow): `npm run mobile:dev`
+2. Start app dev server: `npm run mobile:dev`
 
 Or from `apps/mobile` directly:
 
-- `npm run dev:web`
-- `npm run dev:mobile`
+- `npm run dev`
 
 ## Build and native sync
 
 From repo root:
 
-1. Build browser profile assets: `npm run web:build`
-2. Build mobile profile assets: `npm run mobile:build`
-3. Sync Capacitor platforms with mobile build output: `npm --workspace apps/mobile run sync`
+1. Build web assets: `npm run mobile:build`
+2. Sync Capacitor platforms: `npm --workspace apps/mobile run sync`
 
 Open native projects:
 

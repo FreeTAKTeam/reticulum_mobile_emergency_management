@@ -25,8 +25,12 @@ import type {
 } from "../types/domain";
 import {
   createPeerListV1,
+  extractAnnounceCapabilityText,
+  extractAnnouncedName,
+  formatAnnounceAppData,
   isValidDestinationHex,
   matchesEmergencyCapabilities,
+  normalizeDisplayName,
   normalizeDestinationHex,
   parsePeerListV1,
 } from "../utils/peers";
@@ -44,6 +48,7 @@ const EMPTY_STATUS: NodeStatus = {
 };
 
 const DEFAULT_SETTINGS: NodeUiSettings = {
+  displayName: DEFAULT_NODE_CONFIG.name,
   clientMode: "auto",
   autoConnectSaved: true,
   announceCapabilities: "R3AKT,EMergencyMessages",
@@ -96,6 +101,10 @@ function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
   return requested;
 }
 
+function normalizeStoredDisplayName(value: unknown): string {
+  return normalizeDisplayName(typeof value === "string" ? value : "") ?? DEFAULT_SETTINGS.displayName;
+}
+
 function loadStoredSettings(): NodeUiSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -110,6 +119,7 @@ function loadStoredSettings(): NodeUiSettings {
         ...DEFAULT_SETTINGS.hub,
         ...(parsed.hub ?? {}),
       },
+      displayName: normalizeStoredDisplayName(parsed.displayName),
       clientMode: normalizeClientMode(parsed.clientMode),
       tcpClients: Array.isArray(parsed.tcpClients)
         ? parsed.tcpClients.filter((item): item is string => typeof item === "string")
@@ -154,13 +164,14 @@ function saveSavedPeers(savedPeers: Record<string, SavedPeer>): void {
 }
 
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
+  const displayName = normalizeDisplayName(settings.displayName) ?? DEFAULT_NODE_CONFIG.name;
   return {
-    name: DEFAULT_NODE_CONFIG.name,
+    name: displayName,
     storageDir: "reticulum-mobile",
     tcpClients: settings.tcpClients.filter((entry) => entry.trim().length > 0),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
-    announceCapabilities: settings.announceCapabilities,
+    announceCapabilities: formatAnnounceAppData(settings.announceCapabilities, displayName),
     hubMode: settings.hub.mode,
     hubIdentityHash: settings.hub.identityHash || undefined,
     hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,
@@ -289,11 +300,14 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         const saved = savedByDestination[event.destinationHex];
+        const announcedName = extractAnnouncedName(event.appData);
+        const capabilityText = extractAnnounceCapabilityText(event.appData);
         const verifiedCapability = matchesEmergencyCapabilities(event.appData);
         upsertDiscovered(
           event.destinationHex,
           {
-            appData: event.appData,
+            announcedName,
+            appData: capabilityText || undefined,
             hops: event.hops,
             interfaceHex: event.interfaceHex,
             label: saved?.label,
@@ -324,6 +338,7 @@ export const useNodeStore = defineStore("node", () => {
             destination,
             {
               label: existing?.label ?? saved?.label,
+              announcedName: existing?.announcedName,
               verifiedCapability: existing?.verifiedCapability ?? false,
               lastSeenAt: event.receivedAtMs,
             },
@@ -565,6 +580,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function updateSettings(next: Partial<NodeUiSettings>): void {
+    if (next.displayName !== undefined) {
+      settings.displayName = normalizeStoredDisplayName(next.displayName);
+    }
     if (next.clientMode) {
       settings.clientMode = next.clientMode;
     }
