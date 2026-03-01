@@ -29,6 +29,12 @@ Alongside statuses, the app supports simple events and logs: short notes about c
 
 The network layer uses Reticulum, a secure mesh networking system. The core is implemented in Rust so it stays responsive on mobile devices.
 
+## Install with Obtainium
+
+Use Obtainium to track releases from this repository and install updates directly:
+
+[![Add to Obtainium](https://img.shields.io/badge/Add%20to-Obtainium-3ddc84?style=for-the-badge&logo=android&logoColor=white)](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management)
+
 ## Layout (For Developers)
 - `apps/mobile`: Vue + Capacitor application shell.
 - `packages/node-client`: TypeScript wrapper around the Capacitor plugin surface.
