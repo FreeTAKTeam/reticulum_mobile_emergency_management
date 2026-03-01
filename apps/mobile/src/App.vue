@@ -128,8 +128,12 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
     radial-gradient(circle at 78% -15%, rgb(35 124 255 / 34%), transparent 42%),
     radial-gradient(circle at -5% 100%, rgb(10 164 255 / 20%), transparent 38%),
     linear-gradient(170deg, #030914, #091632 44%, #06142f 100%);
+  height: 100dvh;
   min-height: 100dvh;
-  padding: 1rem;
+  overflow: hidden;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.8rem);
+  padding-inline: 0.8rem;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.9rem);
 }
 
 .app-bg::before {
@@ -145,9 +149,13 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 }
 
 .app-shell {
+  display: grid;
+  gap: 0.95rem;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
   margin: 0 auto;
   max-width: 1600px;
-  padding-bottom: calc(5.8rem + env(safe-area-inset-bottom, 0px));
+  min-height: 0;
   position: relative;
   z-index: 1;
 }
@@ -156,7 +164,6 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
   align-items: center;
   display: flex;
   justify-content: space-between;
-  margin-bottom: 0.8rem;
 }
 
 .brand {
@@ -222,23 +229,24 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 }
 
 .content {
-  margin-top: 0.95rem;
-  min-height: calc(100dvh - 240px);
-  padding-bottom: 0;
+  -webkit-overflow-scrolling: touch;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.2rem;
+  padding-right: 0.15rem;
+  scrollbar-gutter: stable both-edges;
 }
 
 .tabs {
+  align-self: end;
   backdrop-filter: blur(9px);
   background: rgb(3 13 33 / 84%);
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
-  bottom: calc(1.15rem + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  left: 0.8rem;
-  max-width: calc(1600px - 1.6rem);
-  position: fixed;
-  right: 0.8rem;
+  max-width: 100%;
 }
 
 .tab {
@@ -293,11 +301,9 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 
 @media (max-width: 780px) {
   .app-bg {
-    padding: 0.6rem;
-  }
-
-  .content {
-    min-height: calc(100dvh - 220px);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.6rem);
+    padding-inline: 0.6rem;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 0.6rem);
   }
 }
 </style>

@@ -1,7 +1,7 @@
 {
   "name": "@reticulum/node-client",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.3.5",
   "type": "module",
   "main": "src/index.ts",
   "module": "src/index.ts",
