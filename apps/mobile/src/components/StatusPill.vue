@@ -9,6 +9,7 @@ const props = defineProps<{
 }>();
 
 const visibleLabel = computed(() => props.label.trim());
+const visibleValue = computed(() => props.value);
 
 const statusMeaning = computed(() => {
   if (props.value === "Green") {
@@ -24,46 +25,50 @@ const statusMeaning = computed(() => {
 });
 
 const cssClass = computed(() => {
+  const densityClass = visibleLabel.value.length > 0 ? "with-label" : "without-label";
+
   if (props.value === "Green") {
-    return "pill green";
+    return `pill ${densityClass} green`;
   }
   if (props.value === "Yellow") {
-    return "pill yellow";
+    return `pill ${densityClass} yellow`;
   }
   if (props.value === "Red") {
-    return "pill red";
+    return `pill ${densityClass} red`;
   }
-  return "pill unknown";
+  return `pill ${densityClass} unknown`;
 });
 
 const titleText = computed(() =>
   visibleLabel.value.length > 0
-    ? `${visibleLabel.value}: ${statusMeaning.value}`
-    : statusMeaning.value,
+    ? `${visibleLabel.value}: ${visibleValue.value} (${statusMeaning.value})`
+    : `${visibleValue.value} (${statusMeaning.value})`,
 );
 
 const assistiveText = computed(() =>
   visibleLabel.value.length > 0
-    ? ` status: ${statusMeaning.value}`
-    : statusMeaning.value,
+    ? ` ${visibleValue.value} status: ${statusMeaning.value}`
+    : `${visibleValue.value} status: ${statusMeaning.value}`,
 );
 </script>
 
 <template>
   <span :class="cssClass" :title="titleText">
-    <span v-if="visibleLabel.length > 0">{{ visibleLabel }}</span>
+    <span v-if="visibleLabel.length > 0" class="pill-label">{{ visibleLabel }}</span>
+    <span class="pill-value">{{ visibleValue }}</span>
     <span class="sr-only">{{ assistiveText }}</span>
   </span>
 </template>
 
 <style scoped>
 .pill {
+  align-items: center;
   border-radius: 999px;
   display: inline-flex;
+  gap: 0.5rem;
   font-family: var(--font-body);
   font-size: 0.88rem;
   font-weight: 700;
-  justify-content: center;
   letter-spacing: 0.01em;
   line-height: 1;
   margin-right: 0.5rem;
@@ -71,7 +76,31 @@ const assistiveText = computed(() =>
   padding: 0.38rem 0.7rem 0.42rem;
   position: relative;
   text-shadow: 0 0 8px rgb(0 0 0 / 35%);
-  white-space: nowrap;
+}
+
+.with-label {
+  justify-content: space-between;
+}
+
+.without-label {
+  justify-content: center;
+}
+
+.pill-label {
+  flex: 1 1 auto;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.pill-value {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .green {

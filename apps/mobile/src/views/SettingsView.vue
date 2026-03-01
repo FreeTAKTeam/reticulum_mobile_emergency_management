@@ -247,7 +247,7 @@ function importPeerList(): void {
       <p class="feedback" v-if="runtimeFeedback">{{ runtimeFeedback }}</p>
       <p class="feedback" v-if="nodeStore.lastError">{{ nodeStore.lastError }}</p>
       <div class="log-list">
-        <p class="log" v-for="entry in nodeStore.logs.slice(0, 8)" :key="entry.at">
+        <p class="log" v-for="entry in nodeStore.logs" :key="entry.at">
           {{ entry.level }} | {{ entry.message }}
         </p>
       </div>
@@ -376,12 +376,20 @@ button {
 }
 
 .log-list {
+  background: rgb(5 16 35 / 76%);
+  border: 1px solid rgb(68 105 164 / 28%);
+  border-radius: 12px;
   margin-top: 0.55rem;
+  max-height: 13rem;
+  overflow-y: auto;
+  padding: 0.35rem 0.65rem 0.55rem;
+  scrollbar-gutter: stable;
 }
 
 .log {
   color: #88a4d0;
   font-family: var(--font-body);
   margin: 0.28rem 0 0;
+  overflow-wrap: anywhere;
 }
 </style>

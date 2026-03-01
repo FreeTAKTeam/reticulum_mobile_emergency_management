@@ -2,16 +2,9 @@
 import { computed } from "vue";
 
 import { useMessagesStore } from "../stores/messagesStore";
-import type { EamStatus } from "../types/domain";
+import { getStatusScore } from "../utils/actionMessageStatus";
 
 type GaugeField = "medicalStatus" | "commsStatus" | "mobilityStatus";
-
-const STATUS_SCORES: Record<EamStatus, number> = {
-  Green: 100,
-  Yellow: 50,
-  Red: 25,
-  Unknown: 0,
-};
 
 const GAUGE_CONFIG: Array<{
   key: string;
@@ -50,7 +43,7 @@ function averageScoreFor(field: GaugeField): number {
   }
 
   const weightedTotal = messages.reduce((sum, message) => {
-    return sum + STATUS_SCORES[message[field]];
+    return sum + getStatusScore(message[field]);
   }, 0);
 
   return Math.round(weightedTotal / totalMessages);

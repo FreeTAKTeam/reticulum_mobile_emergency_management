@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, shallowRef, watch } from "vue";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
@@ -29,6 +29,7 @@ const createForm = reactive({
   callsign: defaultCallSign.value,
   groupName: DEFAULT_R3AKT_TEAM_COLOR,
 });
+const isCreateFormVisible = shallowRef(false);
 
 const messages = computed(() => messagesStore.messages);
 
@@ -42,6 +43,10 @@ watch(defaultCallSign, (next, previous) => {
 function resetCreateForm(): void {
   createForm.callsign = defaultCallSign.value;
   createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
+}
+
+function toggleCreateForm(): void {
+  isCreateFormVisible.value = !isCreateFormVisible.value;
 }
 
 async function createMessage(): Promise<void> {
@@ -60,6 +65,7 @@ async function createMessage(): Promise<void> {
     commsStatus: "Unknown",
   });
   resetCreateForm();
+  isCreateFormVisible.value = false;
 }
 
 function editMessage(callsign: string): void {
@@ -94,10 +100,21 @@ function deleteMessage(callsign: string): void {
         <h1>Emergency Action Messages</h1>
         <p>Monitor status updates from field teams and dispatch support.</p>
       </div>
-      <span class="badge">{{ messagesStore.activeCount }} active</span>
+      <div class="header-actions">
+        <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
+        <button
+          class="create-toggle"
+          type="button"
+          aria-label="Add message"
+          :aria-expanded="isCreateFormVisible"
+          @click="toggleCreateForm"
+        >
+          +
+        </button>
+      </div>
     </header>
 
-    <form class="create-form" @submit.prevent="createMessage">
+    <form v-show="isCreateFormVisible" class="create-form" @submit.prevent="createMessage">
       <input
         v-model="createForm.callsign"
         type="text"
@@ -146,9 +163,16 @@ function deleteMessage(callsign: string): void {
   justify-content: space-between;
 }
 
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+}
+
 h1 {
   font-family: var(--font-headline);
-  font-size: clamp(1.9rem, 4vw, 3.1rem);
+  font-size: clamp(1.4rem, 3vw, 2.4rem);
+  line-height: 1;
   margin: 0;
 }
 
@@ -169,6 +193,21 @@ p {
   letter-spacing: 0.08em;
   padding: 0.46rem 0.8rem;
   text-transform: uppercase;
+}
+
+.create-toggle {
+  background: linear-gradient(110deg, #00a8ff, #14f0ff);
+  border: 0;
+  border-radius: 12px;
+  color: #032748;
+  cursor: pointer;
+  font-family: var(--font-headline);
+  font-size: 1.5rem;
+  font-weight: 700;
+  height: 2.3rem;
+  line-height: 1;
+  min-width: 2.3rem;
+  padding: 0;
 }
 
 .create-form {
@@ -219,6 +258,18 @@ p {
 
   .create-form {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  h1 {
+    font-size: 1.1rem;
+  }
+
+  .view-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.65rem;
   }
 }
 </style>

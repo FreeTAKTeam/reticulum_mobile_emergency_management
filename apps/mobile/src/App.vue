@@ -45,12 +45,11 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
           <p class="asterisk">*</p>
           <div>
             <p class="title">Emergency Ops</p>
-            <p class="subtitle">Rapid Mesh Response</p>
           </div>
         </div>
         <div class="mast-actions">
           <span class="running">{{ runningText }}</span>
-          <RouterLink to="/peers" class="peers-link">Peers &amp; Discovery</RouterLink>
+          <RouterLink to="/peers" class="peers-link">Network</RouterLink>
         </div>
       </header>
 
@@ -183,17 +182,8 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
 
 .title {
   font-family: var(--font-headline);
-  font-size: clamp(1.2rem, 2vw, 1.8rem);
+  font-size: clamp(1rem, 1.5vw, 1.45rem);
   margin: 0;
-  text-transform: uppercase;
-}
-
-.subtitle {
-  color: #7da0d7;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  margin: 0.1rem 0 0;
   text-transform: uppercase;
 }
 
