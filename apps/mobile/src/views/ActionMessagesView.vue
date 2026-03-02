@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
+import { useRouter } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
@@ -14,6 +15,7 @@ import {
 
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
+const router = useRouter();
 
 messagesStore.init();
 messagesStore.initReplication();
@@ -47,6 +49,10 @@ function resetCreateForm(): void {
 
 function toggleCreateForm(): void {
   isCreateFormVisible.value = !isCreateFormVisible.value;
+}
+
+function openHelp(): void {
+  router.push("/messages/help").catch(() => undefined);
 }
 
 async function createMessage(): Promise<void> {
@@ -102,6 +108,14 @@ function deleteMessage(callsign: string): void {
       </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
+        <button
+          class="help-trigger"
+          type="button"
+          aria-label="Open status color help"
+          @click="openHelp"
+        >
+          ?
+        </button>
         <button
           class="create-toggle"
           type="button"
@@ -208,6 +222,31 @@ p {
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.help-trigger {
+  align-items: center;
+  background: rgb(8 28 58 / 92%);
+  border: 1px solid rgb(93 171 255 / 42%);
+  border-radius: 12px;
+  color: #8fdbff;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-headline);
+  font-size: 1.2rem;
+  font-weight: 700;
+  height: 2.3rem;
+  justify-content: center;
+  line-height: 1;
+  min-width: 2.3rem;
+  padding: 0;
+}
+
+.help-trigger:hover,
+.help-trigger:focus-visible {
+  border-color: rgb(102 219 255 / 76%);
+  box-shadow: 0 0 0 1px rgb(9 55 95 / 75%), 0 0 20px rgb(40 178 255 / 18%);
+  color: #d8f8ff;
 }
 
 .create-form {

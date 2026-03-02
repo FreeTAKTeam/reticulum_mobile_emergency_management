@@ -35,6 +35,10 @@ const tabItems = [
 ];
 
 const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offline"));
+
+function isTabActive(path: string): boolean {
+  return route.path === path || route.path.startsWith(`${path}/`);
+}
 </script>
 
 <template>
@@ -63,7 +67,7 @@ const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offli
           :key="tab.path"
           :to="tab.path"
           class="tab"
-          :class="{ active: route.path === tab.path }"
+          :class="{ active: isTabActive(tab.path) }"
           :aria-label="tab.label"
           :title="tab.label"
         >
