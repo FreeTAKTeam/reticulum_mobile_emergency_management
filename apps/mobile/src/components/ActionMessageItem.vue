@@ -48,7 +48,38 @@ function cycleStatus(field: ActionMessageStatusField): void {
       <div class="identity">
         <div class="identity-copy">
           <p class="eyebrow">Call Sign</p>
-          <h3 class="callsign">{{ props.message.callsign }}</h3>
+          <div class="callsign-row">
+            <h3 class="callsign">{{ props.message.callsign }}</h3>
+            <div class="item-actions" role="group" aria-label="Message actions">
+              <button
+                class="action edit"
+                type="button"
+                :aria-label="`Edit ${props.message.callsign}`"
+                title="Edit"
+                @click="emit('edit', props.message.callsign)"
+              >
+                <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="m16.5 3.5 4 4L8 20l-4 1 1-4z" />
+                </svg>
+              </button>
+              <button
+                class="action delete"
+                type="button"
+                :aria-label="`Delete ${props.message.callsign}`"
+                title="Delete"
+                @click="emit('delete', props.message.callsign)"
+              >
+                <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6l-1 14H6L5 6" />
+                  <path d="M10 11v5" />
+                  <path d="M14 11v5" />
+                </svg>
+              </button>
+            </div>
+          </div>
           <p class="group">Team: {{ formattedTeam }}</p>
         </div>
 
@@ -83,15 +114,6 @@ function cycleStatus(field: ActionMessageStatusField): void {
             <path d="M7 10.5 12 15.5 17 10.5" />
           </svg>
         </button>
-
-        <div class="item-actions">
-          <button class="action edit" type="button" @click="emit('edit', props.message.callsign)">
-            Edit
-          </button>
-          <button class="action delete" type="button" @click="emit('delete', props.message.callsign)">
-            Delete
-          </button>
-        </div>
       </div>
     </header>
 
@@ -135,6 +157,14 @@ function cycleStatus(field: ActionMessageStatusField): void {
   min-width: 0;
 }
 
+.callsign-row {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-top: 0.18rem;
+}
+
 .eyebrow {
   color: #7ea6dc;
   font-family: var(--font-ui);
@@ -147,7 +177,8 @@ function cycleStatus(field: ActionMessageStatusField): void {
 .callsign {
   font-family: var(--font-headline);
   font-size: clamp(1.2rem, 2.3vw, 1.75rem);
-  margin: 0.18rem 0 0;
+  margin: 0;
+  min-width: 0;
 }
 
 .group {
@@ -217,8 +248,7 @@ function cycleStatus(field: ActionMessageStatusField): void {
   justify-content: space-between;
 }
 
-.status-toggle,
-.action {
+.status-toggle {
   border-radius: 12px;
   cursor: pointer;
   font-family: var(--font-ui);
@@ -255,12 +285,32 @@ function cycleStatus(field: ActionMessageStatusField): void {
 }
 
 .item-actions {
+  align-items: center;
   display: flex;
-  gap: 0.65rem;
+  flex-shrink: 0;
+  gap: 0.45rem;
 }
 
 .action {
+  align-items: center;
   border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+}
+
+.action-icon {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
 }
 
 .edit {
@@ -315,19 +365,19 @@ function cycleStatus(field: ActionMessageStatusField): void {
     text-align: left;
   }
 
-  .controls,
-  .item-actions {
+  .callsign-row {
+    align-items: flex-start;
+  }
+
+  .controls {
     width: 100%;
   }
 
-  .item-actions {
-    justify-content: space-between;
-  }
-
-  .action,
   .status-toggle {
+    display: flex;
     flex: 1 1 auto;
     justify-content: center;
+    width: 100%;
   }
 }
 </style>

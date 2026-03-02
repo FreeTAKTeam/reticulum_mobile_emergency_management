@@ -271,5 +271,10 @@ p {
     flex-direction: column;
     gap: 0.65rem;
   }
+
+  .header-actions {
+    align-self: stretch;
+    justify-content: flex-end;
+  }
 }
 </style>
