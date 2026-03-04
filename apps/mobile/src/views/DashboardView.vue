@@ -2,40 +2,18 @@
 import { computed } from "vue";
 
 import { useMessagesStore } from "../stores/messagesStore";
-import { getStatusScore } from "../utils/actionMessageStatus";
-
-type GaugeField = "medicalStatus" | "commsStatus" | "mobilityStatus";
-
-const GAUGE_CONFIG: Array<{
-  key: string;
-  label: string;
-  field: GaugeField;
-  color: string;
-}> = [
-  {
-    key: "medical",
-    label: "Medical",
-    field: "medicalStatus",
-    color: "#4aa3ff",
-  },
-  {
-    key: "comms",
-    label: "Comms",
-    field: "commsStatus",
-    color: "#18e5ff",
-  },
-  {
-    key: "mobility",
-    label: "Mobility",
-    field: "mobilityStatus",
-    color: "#ffc92e",
-  },
-];
+import {
+  ACTION_MESSAGE_STATUS_CONFIG,
+  getOverallRingColor,
+  getOverallStatusBand,
+  getStatusScore,
+  type ActionMessageStatusField,
+} from "../utils/actionMessageStatus";
 
 const messagesStore = useMessagesStore();
 messagesStore.init();
 
-function averageScoreFor(field: GaugeField): number {
+function averageScoreFor(field: ActionMessageStatusField): number {
   const messages = messagesStore.messages;
   const totalMessages = messages.length;
   if (totalMessages === 0) {
@@ -50,26 +28,35 @@ function averageScoreFor(field: GaugeField): number {
 }
 
 const ringMetrics = computed(() =>
-  GAUGE_CONFIG.map((gauge) => ({
-    key: gauge.key,
-    label: gauge.label,
-    color: gauge.color,
-    pct: averageScoreFor(gauge.field),
-  })),
+  ACTION_MESSAGE_STATUS_CONFIG.map((status) => {
+    const pct = averageScoreFor(status.field);
+    return {
+      key: status.field,
+      label: status.label,
+      color: getOverallRingColor(pct),
+      band: getOverallStatusBand(pct),
+      pct,
+    };
+  }),
 );
 </script>
 
 <template>
   <section class="view">
-    <header class="headline">
-      <h1>Emergency Ops Dashboard</h1>
-      <p>Status-weighted readiness from active action messages.</p>
+    <header class="view-header">
+      <div>
+        <h1>Emergency Ops Dashboard</h1>
+        <p>Status-weighted readiness from active action messages.</p>
+      </div>
+      <div class="header-actions">
+        <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
+      </div>
     </header>
 
     <section class="panel">
       <h2>Operational Status</h2>
       <div class="rings">
-        <div class="ring" v-for="ring in ringMetrics" :key="ring.key">
+        <article class="ring-card" v-for="ring in ringMetrics" :key="ring.key">
           <svg viewBox="0 0 120 120">
             <circle cx="60" cy="60" r="44" class="ring-bg" />
             <circle
@@ -83,9 +70,10 @@ const ringMetrics = computed(() =>
               }"
             />
           </svg>
-          <p class="ring-value">{{ ring.pct }}%</p>
+          <p class="ring-value" :style="{ color: ring.color }">{{ ring.pct }}%</p>
           <p class="ring-label">{{ ring.label }}</p>
-        </div>
+          <p class="ring-band">{{ ring.band }}</p>
+        </article>
       </div>
     </section>
   </section>
@@ -97,16 +85,42 @@ const ringMetrics = computed(() =>
   gap: 1rem;
 }
 
-.headline h1 {
+.view-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+}
+
+h1 {
   font-family: var(--font-headline);
-  font-size: clamp(1.8rem, 3.4vw, 2.9rem);
+  font-size: clamp(1.4rem, 3vw, 2.4rem);
+  line-height: 1;
   margin: 0;
 }
 
-.headline p {
+.view-header p {
   color: #9cb3d6;
   font-family: var(--font-body);
-  margin: 0.28rem 0 0;
+  font-size: clamp(1rem, 1.6vw, 1.3rem);
+  margin: 0.2rem 0 0;
+}
+
+.badge {
+  background: rgb(9 61 108 / 68%);
+  border: 1px solid rgb(73 173 255 / 62%);
+  border-radius: 999px;
+  color: #64beff;
+  font-family: var(--font-ui);
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
+  padding: 0.46rem 0.8rem;
+  text-transform: uppercase;
 }
 
 .panel {
@@ -120,26 +134,33 @@ const ringMetrics = computed(() =>
 
 h2 {
   font-family: var(--font-headline);
-  font-size: 1.56rem;
+  font-size: clamp(1.2rem, 2.4vw, 1.56rem);
   margin: 0;
 }
 
 .rings {
   display: grid;
-  gap: 0.7rem;
+  gap: 0.75rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 0.75rem;
 }
 
-.ring {
+.ring-card {
   align-items: center;
   display: grid;
+  background:
+    linear-gradient(145deg, rgb(18 35 68 / 92%), rgb(10 20 45 / 90%)),
+    radial-gradient(circle at 72% 10%, rgb(69 235 255 / 14%), transparent 36%);
+  border: 1px solid rgb(90 142 220 / 24%);
+  border-radius: 14px;
+  gap: 0.12rem;
   justify-items: center;
+  padding: 0.72rem 0.5rem 0.66rem;
 }
 
 svg {
-  height: 110px;
-  width: 110px;
+  height: 94px;
+  width: 94px;
 }
 
 .ring-bg {
@@ -161,10 +182,10 @@ svg {
 }
 
 .ring-value {
-  color: #deefff;
   font-family: var(--font-ui);
-  font-size: 1rem;
-  margin: -0.35rem 0 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: -0.08rem 0 0;
 }
 
 .ring-label {
@@ -176,9 +197,38 @@ svg {
   text-transform: uppercase;
 }
 
-@media (max-width: 700px) {
-  .rings {
-    grid-template-columns: 1fr;
+.ring-band {
+  color: #9fb7d8;
+  font-family: var(--font-ui);
+  font-size: 0.69rem;
+  letter-spacing: 0.08em;
+  margin: 0.06rem 0 0;
+  text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+  h1 {
+    font-size: 1.1rem;
+  }
+
+  .view-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .header-actions {
+    align-self: stretch;
+    justify-content: flex-end;
+  }
+
+  .ring-card {
+    padding-inline: 0.32rem;
+  }
+
+  svg {
+    height: 84px;
+    width: 84px;
   }
 }
 </style>

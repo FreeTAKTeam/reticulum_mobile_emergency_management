@@ -28,9 +28,9 @@ onMounted(async () => {
 });
 
 const tabItems = [
+  { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
-  { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 

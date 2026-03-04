@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive } from "vue";
+import { computed, reactive, shallowRef } from "vue";
 
 import { useEventsStore } from "../stores/eventsStore";
 
@@ -7,11 +7,18 @@ const eventsStore = useEventsStore();
 eventsStore.init();
 eventsStore.initReplication();
 
+const events = computed(() => eventsStore.records);
+const isCreateFormVisible = shallowRef(false);
+
 const createForm = reactive({
   callsign: "",
   type: "Incident",
   summary: "",
 });
+
+function toggleCreateForm(): void {
+  isCreateFormVisible.value = !isCreateFormVisible.value;
+}
 
 async function createEvent(): Promise<void> {
   if (!createForm.callsign.trim() || !createForm.summary.trim()) {
@@ -23,6 +30,7 @@ async function createEvent(): Promise<void> {
     summary: createForm.summary.trim(),
   });
   createForm.summary = "";
+  isCreateFormVisible.value = false;
 }
 
 async function deleteEvent(uid: string): Promise<void> {
@@ -33,16 +41,30 @@ async function deleteEvent(uid: string): Promise<void> {
 <template>
   <section class="view">
     <header class="view-header">
-      <h1>Events</h1>
-      <p>Live replicated incident feed across connected peers.</p>
+      <div>
+        <h1>Events</h1>
+        <p>Live replicated incident feed across connected peers.</p>
+      </div>
+      <div class="header-actions">
+        <span class="badge"># {{ events.length }} EVT</span>
+        <button
+          class="create-toggle"
+          type="button"
+          aria-label="Add event"
+          :aria-expanded="isCreateFormVisible"
+          @click="toggleCreateForm"
+        >
+          +
+        </button>
+      </div>
     </header>
 
-    <form class="create-form" @submit.prevent="createEvent">
+    <form v-show="isCreateFormVisible" class="create-form" @submit.prevent="createEvent">
       <input
         v-model="createForm.callsign"
         type="text"
-        placeholder="Callsign"
-        aria-label="Callsign"
+        placeholder="Call Sign"
+        aria-label="Call Sign"
       />
       <input
         v-model="createForm.type"
@@ -60,17 +82,31 @@ async function deleteEvent(uid: string): Promise<void> {
     </form>
 
     <section class="timeline">
-      <article class="event" v-for="event in eventsStore.records" :key="event.uid">
+      <article class="event" v-for="event in events" :key="event.uid">
         <div class="event-head">
           <p class="event-type">{{ event.type }}</p>
-          <button type="button" @click="deleteEvent(event.uid)">Delete</button>
+          <button
+            class="action delete"
+            type="button"
+            :aria-label="`Delete ${event.callsign}`"
+            title="Delete"
+            @click="deleteEvent(event.uid)"
+          >
+            <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M8 6V4h8v2" />
+              <path d="M19 6l-1 14H6L5 6" />
+              <path d="M10 11v5" />
+              <path d="M14 11v5" />
+            </svg>
+          </button>
         </div>
         <h3>{{ event.summary }}</h3>
         <p class="meta">
           {{ event.callsign }} | {{ new Date(event.updatedAt).toLocaleTimeString() }}
         </p>
       </article>
-      <p v-if="eventsStore.records.length === 0" class="empty">
+      <p v-if="events.length === 0" class="empty">
         No events yet. Add one locally or wait for a peer snapshot.
       </p>
     </section>
@@ -83,17 +119,57 @@ async function deleteEvent(uid: string): Promise<void> {
   gap: 1rem;
 }
 
+.view-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+}
+
 h1 {
   font-family: var(--font-headline);
-  font-size: clamp(1.8rem, 3.6vw, 2.9rem);
+  font-size: clamp(1.4rem, 3vw, 2.4rem);
+  line-height: 1;
   margin: 0;
 }
 
 .view-header p {
   color: #9cb3d6;
   font-family: var(--font-body);
-  font-size: clamp(1rem, 1.6vw, 1.25rem);
-  margin: 0.25rem 0 0;
+  font-size: clamp(1rem, 1.6vw, 1.3rem);
+  margin: 0.2rem 0 0;
+}
+
+.badge {
+  background: rgb(9 61 108 / 68%);
+  border: 1px solid rgb(73 173 255 / 62%);
+  border-radius: 999px;
+  color: #64beff;
+  font-family: var(--font-ui);
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
+  padding: 0.46rem 0.8rem;
+  text-transform: uppercase;
+}
+
+.create-toggle {
+  background: linear-gradient(110deg, #00a8ff, #14f0ff);
+  border: 0;
+  border-radius: 12px;
+  color: #032748;
+  cursor: pointer;
+  font-family: var(--font-headline);
+  font-size: 1.5rem;
+  font-weight: 700;
+  height: 2.3rem;
+  line-height: 1;
+  min-width: 2.3rem;
+  padding: 0;
 }
 
 .create-form {
@@ -170,18 +246,34 @@ h3 {
   margin: 0.3rem 0 0;
 }
 
-.event button {
-  background: rgb(84 14 42 / 73%);
-  border: 1px solid rgb(255 86 120 / 72%);
-  border-radius: 9px;
-  color: #ff95b0;
+.action {
+  align-items: center;
+  border: 0;
+  border-radius: 10px;
   cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.09em;
-  min-height: 28px;
-  padding: 0 0.58rem;
-  text-transform: uppercase;
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+}
+
+.action-icon {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
+}
+
+.delete {
+  background: rgb(53 15 25 / 70%);
+  border: 1px solid rgb(255 70 91 / 84%);
+  box-shadow: 0 0 16px rgb(255 72 104 / 24%);
+  color: #ff7b89;
 }
 
 .empty {
@@ -190,9 +282,26 @@ h3 {
   margin: 0;
 }
 
-@media (max-width: 920px) {
+@media (max-width: 980px) {
   .create-form {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  h1 {
+    font-size: 1.1rem;
+  }
+
+  .view-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .header-actions {
+    align-self: stretch;
+    justify-content: flex-end;
   }
 }
 </style>
