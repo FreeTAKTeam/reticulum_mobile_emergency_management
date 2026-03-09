@@ -17,7 +17,14 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
   return nodeStore.discoveredPeers.filter((peer: DiscoveredPeer) => {
-    if (nodeStore.settings.showOnlyCapabilityVerified && !peer.verifiedCapability) {
+    const requiresCapabilityVerification =
+      peer.sources.includes("announce") && !peer.sources.includes("hub");
+
+    if (
+      nodeStore.settings.showOnlyCapabilityVerified &&
+      requiresCapabilityVerification &&
+      !peer.verifiedCapability
+    ) {
       return false;
     }
     if (!query) {

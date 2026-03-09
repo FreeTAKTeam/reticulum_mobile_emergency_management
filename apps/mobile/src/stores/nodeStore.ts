@@ -73,11 +73,14 @@ interface UiLogLine {
 
 type PacketListener = (event: PacketReceivedEvent) => void;
 
-function isSpecCompliantAnnouncePeer(peer: DiscoveredPeer): boolean {
-  if (!peer.verifiedCapability) {
-    return false;
+function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
+  if (peer.sources.includes("hub") || peer.sources.includes("import")) {
+    return true;
   }
   if (!peer.sources.includes("announce")) {
+    return false;
+  }
+  if (!peer.verifiedCapability) {
     return false;
   }
   return matchesEmergencyCapabilities(peer.appData ?? "");
@@ -427,6 +430,12 @@ export const useNodeStore = defineStore("node", () => {
       await refreshStatusSnapshot(8, 250);
       appendLog("Info", "Node started.");
 
+      if (settings.hub.mode !== "Disabled") {
+        await refreshHubDirectory().catch((error: unknown) => {
+          appendLog("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
+        });
+      }
+
       if (settings.autoConnectSaved) {
         await connectAllSaved().catch((error: unknown) => {
           appendLog("Warn", `Auto connect failed: ${errorMessage(error)}`);
@@ -664,7 +673,7 @@ export const useNodeStore = defineStore("node", () => {
 
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
-      .filter((peer) => isSpecCompliantAnnouncePeer(peer))
+      .filter((peer) => shouldDisplayDiscoveredPeer(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 

@@ -31,6 +31,7 @@ const tabItems = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
+  { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -53,7 +54,6 @@ function isTabActive(path: string): boolean {
         </div>
         <div class="mast-actions">
           <span class="running">{{ runningText }}</span>
-          <RouterLink to="/peers" class="peers-link">Network</RouterLink>
         </div>
       </header>
 
@@ -107,7 +107,7 @@ function isTabActive(path: string): boolean {
               <path d="M14 16h5v3h-5z" />
             </svg>
             <svg
-              v-else
+              v-else-if="tab.icon === 'settings'"
               class="icon-svg"
               viewBox="0 0 24 24"
               fill="none"
@@ -116,6 +116,22 @@ function isTabActive(path: string): boolean {
               <path d="M5 17h14" />
               <path d="M15 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
               <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
+            </svg>
+            <svg
+              v-else
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M12 5v4" />
+              <path d="M12 15v4" />
+              <path d="M5 12h4" />
+              <path d="M15 12h4" />
+              <path d="M7.8 7.8l2.8 2.8" />
+              <path d="M13.4 13.4l2.8 2.8" />
+              <path d="M16.2 7.8l-2.8 2.8" />
+              <path d="M10.6 13.4l-2.8 2.8" />
+              <circle cx="12" cy="12" r="2.2" />
             </svg>
           </span>
           <span class="sr-only">{{ tab.label }}</span>
@@ -209,19 +225,6 @@ function isTabActive(path: string): boolean {
   text-transform: uppercase;
 }
 
-.peers-link {
-  background: linear-gradient(115deg, #0ca0ff, #16edff);
-  border-radius: 11px;
-  color: #05274b;
-  font-family: var(--font-ui);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  padding: 0.48rem 0.74rem;
-  text-decoration: none;
-  text-transform: uppercase;
-}
-
 .content {
   -webkit-overflow-scrolling: touch;
   min-height: 0;
@@ -239,7 +242,7 @@ function isTabActive(path: string): boolean {
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   max-width: 100%;
 }
 
