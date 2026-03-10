@@ -95,7 +95,12 @@ pub enum NodeEvent {
         received_at_ms: u64,
     },
     PeerChanged { change: PeerChange },
-    PacketReceived { destination_hex: String, bytes: Vec<u8> },
+    PacketReceived {
+        destination_hex: String,
+        source_hex: Option<String>,
+        bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
+    },
     PacketSent {
         destination_hex: String,
         bytes: Vec<u8>,
@@ -108,4 +113,3 @@ pub enum NodeEvent {
     Log { level: LogLevel, message: String },
     Error { code: String, message: String },
 }
-

@@ -57,12 +57,15 @@ export interface PeerChangedEvent {
 
 export interface PacketReceivedEvent {
   destinationHex: string;
+  sourceHex?: string;
   bytes: Uint8Array;
   dedicatedFields?: Record<string, string>;
+  fieldsBase64?: string;
 }
 
 export interface PacketSendOptions {
   dedicatedFields?: Record<string, string>;
+  fieldsBase64?: string;
 }
 
 export interface PacketSentEvent {
@@ -177,8 +180,17 @@ interface ReticulumNodePlugin {
   getStatus(): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
-  send(options: { destinationHex: string; bytesBase64: string; dedicatedFields?: Record<string, string> }): Promise<void>;
-  broadcast(options: { bytesBase64: string; dedicatedFields?: Record<string, string> }): Promise<void>;
+  send(options: {
+    destinationHex: string;
+    bytesBase64: string;
+    dedicatedFields?: Record<string, string>;
+    fieldsBase64?: string;
+  }): Promise<void>;
+  broadcast(options: {
+    bytesBase64: string;
+    dedicatedFields?: Record<string, string>;
+    fieldsBase64?: string;
+  }): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   refreshHubDirectory(): Promise<void>;
@@ -328,8 +340,18 @@ function toPacketReceivedEvent(
     destinationHex: normalizeHex(
       String(raw.destinationHex ?? raw.destination_hex ?? ""),
     ),
+    sourceHex:
+      raw.sourceHex !== undefined || raw.source_hex !== undefined
+        ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
+        : undefined,
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
     dedicatedFields: toDedicatedFields(raw.dedicatedFields ?? raw.dedicated_fields),
+    fieldsBase64:
+      typeof raw.fieldsBase64 === "string"
+        ? raw.fieldsBase64
+        : typeof raw.fields_base64 === "string"
+          ? raw.fields_base64
+          : undefined,
   };
 }
 
@@ -470,6 +492,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       destinationHex: normalizeHex(destinationHex),
       bytesBase64: encodeBytesToBase64(bytes),
       dedicatedFields: options?.dedicatedFields,
+      fieldsBase64: options?.fieldsBase64,
     });
   }
 
@@ -478,6 +501,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.broadcast({
       bytesBase64: encodeBytesToBase64(bytes),
       dedicatedFields: options?.dedicatedFields,
+      fieldsBase64: options?.fieldsBase64,
     });
   }
 

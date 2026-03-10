@@ -125,6 +125,7 @@ public class ReticulumNodePlugin extends Plugin {
     public void send(PluginCall call) {
         String destinationHex = call.getString("destinationHex");
         String bytesBase64 = call.getString("bytesBase64");
+        String fieldsBase64 = call.getString("fieldsBase64");
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
@@ -137,6 +138,9 @@ public class ReticulumNodePlugin extends Plugin {
         JSObject payload = new JSObject();
         payload.put("destinationHex", destinationHex);
         payload.put("bytesBase64", bytesBase64);
+        if (fieldsBase64 != null && !fieldsBase64.isEmpty()) {
+            payload.put("fieldsBase64", fieldsBase64);
+        }
 
         int result = ReticulumBridge.sendJson(payload.toString());
         if (result != 0) {
@@ -149,8 +153,13 @@ public class ReticulumNodePlugin extends Plugin {
     @PluginMethod
     public void broadcast(PluginCall call) {
         String bytesBase64 = call.getString("bytesBase64");
+        String fieldsBase64 = call.getString("fieldsBase64");
         if (bytesBase64 == null) {
             call.reject("bytesBase64 is required.");
+            return;
+        }
+        if (fieldsBase64 != null && !fieldsBase64.isEmpty()) {
+            call.reject("fieldsBase64 is not supported for broadcast.");
             return;
         }
 

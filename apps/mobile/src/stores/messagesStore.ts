@@ -247,7 +247,7 @@ export const useMessagesStore = defineStore("messages", () => {
 
       if (message.kind === "snapshot_request") {
         nodeStore
-          .broadcastJson({
+          .sendJson(event.destinationHex, {
             kind: "snapshot_response",
             requestedAt: message.requestedAt,
             messages: snapshotMessages(),
@@ -284,7 +284,7 @@ export const useMessagesStore = defineStore("messages", () => {
     });
 
     watch(
-      () => [...nodeStore.connectedDestinations],
+      () => nodeStore.discoveredPeers.map((peer) => peer.destination),
       (current, previous) => {
         const previousSet = new Set(previous);
         for (const destination of current) {

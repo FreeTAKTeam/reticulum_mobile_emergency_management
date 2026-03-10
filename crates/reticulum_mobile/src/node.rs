@@ -201,7 +201,12 @@ impl Node {
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 
-    pub fn send_bytes(&self, destination_hex: String, bytes: Vec<u8>) -> Result<(), NodeError> {
+    pub fn send_bytes(
+        &self,
+        destination_hex: String,
+        bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
+    ) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
@@ -211,6 +216,7 @@ impl Node {
         tx.send(Command::SendBytes {
             destination_hex,
             bytes,
+            fields_bytes,
             resp: resp_tx,
         })
         .map_err(|_| NodeError::NotRunning {})?;

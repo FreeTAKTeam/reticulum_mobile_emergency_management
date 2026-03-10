@@ -226,7 +226,7 @@ export const useEventsStore = defineStore("events", () => {
 
       if (message.kind === "event_snapshot_request") {
         nodeStore
-          .broadcastJson({
+          .sendJson(event.destinationHex, {
             kind: "event_snapshot_response",
             requestedAt: message.requestedAt,
             events: snapshotEvents(),
@@ -261,7 +261,7 @@ export const useEventsStore = defineStore("events", () => {
     });
 
     watch(
-      () => [...nodeStore.connectedDestinations],
+      () => nodeStore.discoveredPeers.map((peer) => peer.destination),
       (current, previous) => {
         const previousSet = new Set(previous);
         for (const destination of current) {

@@ -51,6 +51,7 @@ struct NodeConfigInput {
 struct SendInput {
     destination_hex: String,
     bytes_base64: String,
+    fields_base64: Option<String>,
 }
 
 fn bridge_state() -> &'static Mutex<BridgeState> {
@@ -268,12 +269,16 @@ fn event_to_wire_json(event: NodeEvent) -> String {
         ),
         NodeEvent::PacketReceived {
             destination_hex,
+            source_hex,
             bytes,
+            fields_bytes,
         } => (
             "packetReceived",
             json!({
                 "destinationHex": destination_hex,
-                "bytesBase64": BASE64_STANDARD.encode(bytes)
+                "sourceHex": source_hex,
+                "bytesBase64": BASE64_STANDARD.encode(bytes),
+                "fieldsBase64": fields_bytes.map(|bytes| BASE64_STANDARD.encode(bytes))
             }),
         ),
         NodeEvent::PacketSent {
@@ -540,6 +545,15 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid base64 payload: {e}")),
     };
+    let fields_bytes = match payload.fields_base64 {
+        Some(encoded) => match BASE64_STANDARD.decode(encoded.as_bytes()) {
+            Ok(value) => Some(value),
+            Err(e) => {
+                return err_result("InvalidConfig", format!("invalid fields base64 payload: {e}"))
+            }
+        },
+        None => None,
+    };
 
     let guard = match bridge_state().lock() {
         Ok(v) => v,
@@ -549,7 +563,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         Some(v) => v,
         None => return err_result("NotRunning", "node not initialized"),
     };
-    match node.send_bytes(payload.destination_hex, bytes) {
+    match node.send_bytes(payload.destination_hex, bytes, fields_bytes) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);

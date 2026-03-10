@@ -90,7 +90,7 @@ interface NodeEvent {
     u64 received_at_ms
   );
   PeerChanged(PeerChange change);
-  PacketReceived(string destination_hex, sequence<u8> bytes);
+  PacketReceived(string destination_hex, string? source_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
   PacketSent(string destination_hex, sequence<u8> bytes, SendOutcome outcome);
   HubDirectoryUpdated(sequence<string> destinations, u64 received_at_ms);
   Log(LogLevel level, string message);
@@ -120,7 +120,7 @@ interface Node {
   void disconnect_peer(string destination_hex);
 
   [Throws=NodeError]
-  void send_bytes(string destination_hex, sequence<u8> bytes);
+  void send_bytes(string destination_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
   [Throws=NodeError]
   void broadcast_bytes(sequence<u8> bytes);
 

@@ -4,7 +4,7 @@ import { computed, reactive, ref } from "vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import { parseCapabilityTokens } from "../utils/peers";
+import { ensureCapabilityTokens, parseCapabilityTokens, TELEMETRY_CAPABILITY } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
 interface KnownTcpServerOption {
@@ -27,7 +27,7 @@ const form = reactive({
   clientMode: nodeStore.settings.clientMode,
   autoConnectSaved: nodeStore.settings.autoConnectSaved,
   showOnlyCapabilityVerified: nodeStore.settings.showOnlyCapabilityVerified,
-  announceCapabilities: nodeStore.settings.announceCapabilities,
+  announceCapabilities: ensureCapabilityTokens(nodeStore.settings.announceCapabilities, [TELEMETRY_CAPABILITY]),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
@@ -201,7 +201,7 @@ function applySettings(): void {
     clientMode: form.clientMode,
     autoConnectSaved: form.autoConnectSaved,
     showOnlyCapabilityVerified: form.showOnlyCapabilityVerified,
-    announceCapabilities: form.announceCapabilities.trim(),
+    announceCapabilities: ensureCapabilityTokens(form.announceCapabilities.trim(), [TELEMETRY_CAPABILITY]),
     announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
     tcpClients: normalizedTcpClients.value,
     broadcast: form.broadcast,
@@ -222,6 +222,7 @@ function applySettings(): void {
     },
   });
   form.displayName = nodeStore.settings.displayName;
+  form.announceCapabilities = nodeStore.settings.announceCapabilities;
   form.tcpClients = [...nodeStore.settings.tcpClients];
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;

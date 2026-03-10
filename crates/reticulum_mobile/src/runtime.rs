@@ -10,7 +10,7 @@ use rand_core::OsRng;
 use regex::Regex;
 use rmpv::Value as MsgPackValue;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
-use reticulum::destination::{DestinationDesc, DestinationName};
+use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
@@ -161,6 +161,7 @@ pub enum Command {
     SendBytes {
         destination_hex: String,
         bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
         resp: cb::Sender<Result<(), NodeError>>,
     },
     BroadcastBytes {
@@ -218,6 +219,64 @@ async fn ensure_destination_desc(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+async fn resolve_lxmf_destination_desc(
+    state: &NodeRuntimeState,
+    destination: AddressHash,
+) -> Result<DestinationDesc, NodeError> {
+    let desc = ensure_destination_desc(state, destination, None).await?;
+    let lxmf_destination = SingleOutputDestination::new(
+        desc.identity,
+        DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+    );
+    Ok(lxmf_destination.desc)
+}
+
+async fn send_lxmf_message(
+    state: &NodeRuntimeState,
+    destination: AddressHash,
+    content: &[u8],
+    fields_bytes: Option<Vec<u8>>,
+) -> Result<RnsSendOutcome, NodeError> {
+    let remote_desc = resolve_lxmf_destination_desc(state, destination).await?;
+
+    let mut source = [0u8; 16];
+    source.copy_from_slice(
+        state
+            .lxmf_destination
+            .lock()
+            .await
+            .desc
+            .address_hash
+            .as_slice(),
+    );
+
+    let mut target = [0u8; 16];
+    target.copy_from_slice(remote_desc.address_hash.as_slice());
+
+    let mut message = LxmfMessage::new();
+    message.source_hash = Some(source);
+    message.destination_hash = Some(target);
+    message.set_content_from_bytes(content);
+    message.fields = match fields_bytes {
+        Some(bytes) => Some(
+            rmp_serde::from_slice::<MsgPackValue>(&bytes)
+                .map_err(|_| NodeError::InvalidConfig {})?,
+        ),
+        None => None,
+    };
+
+    let wire = message
+        .to_wire(Some(&state.identity))
+        .map_err(|_| NodeError::InternalError {})?;
+
+    Ok(send_transport_packet_with_path_retry(
+        &state.transport,
+        remote_desc.address_hash,
+        &wire,
+    )
+    .await)
 }
 
 async fn wait_for_link_active(
@@ -524,9 +583,25 @@ pub async fn run_node(
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        let destination_hex = address_hash_to_hex(&event.destination);
+                        if let Ok(message) = LxmfMessage::from_wire(event.data.as_slice()) {
+                            let source_hex = message.source_hash.map(hex::encode);
+                            bus.emit(NodeEvent::PacketReceived {
+                                destination_hex,
+                                source_hex,
+                                bytes: message.content,
+                                fields_bytes: message
+                                    .fields
+                                    .and_then(|value| rmp_serde::to_vec(&value).ok()),
+                            });
+                            continue;
+                        }
+
                         bus.emit(NodeEvent::PacketReceived {
-                            destination_hex: address_hash_to_hex(&event.destination),
+                            destination_hex,
+                            source_hex: None,
                             bytes: event.data.as_slice().to_vec(),
+                            fields_bytes: None,
                         });
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -684,12 +759,16 @@ pub async fn run_node(
             Command::SendBytes {
                 destination_hex,
                 bytes,
+                fields_bytes,
                 resp,
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    let outcome =
-                        send_transport_packet_with_path_retry(&transport, dest, &bytes).await;
+                    let outcome = if fields_bytes.is_some() {
+                        send_lxmf_message(&state, dest, &bytes, fields_bytes.clone()).await?
+                    } else {
+                        send_transport_packet_with_path_retry(&transport, dest, &bytes).await
+                    };
                     let mapped = send_outcome_to_udl(outcome);
                     bus.emit(NodeEvent::PacketSent {
                         destination_hex: destination_hex.clone(),

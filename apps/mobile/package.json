@@ -1,7 +1,7 @@
 {
   "name": "@reticulum/mobile",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite --mode web",
@@ -26,6 +26,7 @@
     "@capacitor/share": "^7.0.0",
     "@reticulum/node-client": "file:../../packages/node-client",
     "maplibre-gl": "^4.7.1",
+    "msgpackr": "^1.11.8",
     "pinia": "^2.2.4",
     "vue": "^3.5.0",
     "vue-router": "^4.5.1"

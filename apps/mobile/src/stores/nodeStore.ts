@@ -25,14 +25,17 @@ import type {
 } from "../types/domain";
 import {
   createPeerListV1,
+  ensureCapabilityTokens,
   extractAnnounceCapabilityText,
   extractAnnouncedName,
   formatAnnounceAppData,
+  hasCapability,
   isValidDestinationHex,
   matchesEmergencyCapabilities,
   normalizeDisplayName,
   normalizeDestinationHex,
   parsePeerListV1,
+  TELEMETRY_CAPABILITY,
 } from "../utils/peers";
 import { runtimeProfile } from "../utils/runtimeProfile";
 
@@ -51,7 +54,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
   clientMode: "auto",
   autoConnectSaved: true,
-  announceCapabilities: "R3AKT,EMergencyMessages",
+  announceCapabilities: ensureCapabilityTokens("R3AKT,EMergencyMessages", [TELEMETRY_CAPABILITY]),
   tcpClients: [...DEFAULT_NODE_CONFIG.tcpClients],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
@@ -78,6 +81,10 @@ interface UiLogLine {
 
 type PacketListener = (event: PacketReceivedEvent) => void;
 type DedicatedFields = Record<string, string>;
+type PacketSendOptions = {
+  dedicatedFields?: DedicatedFields;
+  fieldsBase64?: string;
+};
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
   if (peer.sources.includes("hub") || peer.sources.includes("import")) {
@@ -138,6 +145,12 @@ function loadStoredSettings(): NodeUiSettings {
             : Math.max(0, Number(parsed.telemetry.accuracyThresholdMeters)),
       },
       displayName: normalizeStoredDisplayName(parsed.displayName),
+      announceCapabilities: ensureCapabilityTokens(
+        typeof parsed.announceCapabilities === "string"
+          ? parsed.announceCapabilities
+          : DEFAULT_SETTINGS.announceCapabilities,
+        [TELEMETRY_CAPABILITY],
+      ),
       clientMode: normalizeClientMode(parsed.clientMode),
       tcpClients: Array.isArray(parsed.tcpClients)
         ? parsed.tcpClients.filter((item): item is string => typeof item === "string")
@@ -189,7 +202,10 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     tcpClients: settings.tcpClients.filter((entry) => entry.trim().length > 0),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
-    announceCapabilities: formatAnnounceAppData(settings.announceCapabilities, displayName),
+    announceCapabilities: formatAnnounceAppData(
+      ensureCapabilityTokens(settings.announceCapabilities, [TELEMETRY_CAPABILITY]),
+      displayName,
+    ),
     hubMode: settings.hub.mode,
     hubIdentityHash: settings.hub.identityHash || undefined,
     hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,
@@ -549,7 +565,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function setAnnounceCapabilities(capabilityString: string): Promise<void> {
-    settings.announceCapabilities = capabilityString;
+    settings.announceCapabilities = ensureCapabilityTokens(capabilityString, [TELEMETRY_CAPABILITY]);
     persistSettings();
 
     if (!client.value || !status.value.running) {
@@ -557,7 +573,7 @@ export const useNodeStore = defineStore("node", () => {
     }
     try {
       clearLastError();
-      await client.value.setAnnounceCapabilities(capabilityString);
+      await client.value.setAnnounceCapabilities(settings.announceCapabilities);
     } catch (error: unknown) {
       throw captureActionError("Set announce capabilities failed", error);
     }
@@ -614,7 +630,7 @@ export const useNodeStore = defineStore("node", () => {
       settings.autoConnectSaved = next.autoConnectSaved;
     }
     if (next.announceCapabilities !== undefined) {
-      settings.announceCapabilities = next.announceCapabilities;
+      settings.announceCapabilities = ensureCapabilityTokens(next.announceCapabilities, [TELEMETRY_CAPABILITY]);
     }
     if (next.tcpClients) {
       settings.tcpClients = [...next.tcpClients];
@@ -708,30 +724,62 @@ export const useNodeStore = defineStore("node", () => {
       .map((peer) => peer.destination),
   );
 
+  const telemetryDestinations = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => peer.sources.includes("announce"))
+      .filter((peer) => hasCapability(peer.appData ?? "", TELEMETRY_CAPABILITY))
+      .map((peer) => peer.destination),
+  );
+
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
 
-  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+  function destinationHasCapability(destinationRaw: string, capability: string): boolean {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const peer = discoveredByDestination[destination];
+    if (!peer || !peer.sources.includes("announce")) {
+      return false;
+    }
+    return hasCapability(peer.appData ?? "", capability);
+  }
+
+  async function broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     if (!client.value) {
       return;
     }
     try {
-      const body = new TextEncoder().encode(JSON.stringify(payload));
-      await client.value.broadcastBytes(body, { dedicatedFields });
+      await client.value.broadcastBytes(bytes, options);
     } catch (error: unknown) {
       throw captureActionError("Broadcast failed", error);
     }
   }
 
-  async function sendJson(destinationHex: string, payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+  async function sendBytes(
+    destinationHex: string,
+    bytes: Uint8Array,
+    options?: PacketSendOptions,
+  ): Promise<void> {
     if (!client.value) {
       return;
     }
     try {
-      const body = new TextEncoder().encode(JSON.stringify(payload));
-      await client.value.sendBytes(destinationHex, body, { dedicatedFields });
+      await client.value.sendBytes(destinationHex, bytes, options);
     } catch (error: unknown) {
       throw captureActionError(`Send failed (${destinationHex})`, error);
     }
+  }
+
+  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+    const body = new TextEncoder().encode(JSON.stringify(payload));
+    await broadcastBytes(body, { dedicatedFields });
+  }
+
+  async function sendJson(
+    destinationHex: string,
+    payload: unknown,
+    dedicatedFields?: DedicatedFields,
+  ): Promise<void> {
+    const body = new TextEncoder().encode(JSON.stringify(payload));
+    await sendBytes(destinationHex, body, { dedicatedFields });
   }
 
   async function reinitializeClient(): Promise<void> {
@@ -760,6 +808,7 @@ export const useNodeStore = defineStore("node", () => {
     discoveredPeers,
     savedPeers,
     connectedDestinations,
+    telemetryDestinations,
     savedDestinations,
     init,
     startNode,
@@ -779,8 +828,11 @@ export const useNodeStore = defineStore("node", () => {
     importPeerList,
     parsePeerListText,
     onPacket,
+    sendBytes,
+    broadcastBytes,
     broadcastJson,
     sendJson,
+    destinationHasCapability,
     reinitializeClient,
   };
 });

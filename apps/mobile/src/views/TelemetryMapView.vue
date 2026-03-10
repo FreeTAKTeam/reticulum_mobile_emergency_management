@@ -5,10 +5,12 @@ import maplibregl, { Marker, type LngLatLike, type Map as MapLibreMap } from "ma
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import type { TelemetryPosition } from "../types/domain";
+import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
+const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 telemetryStore.init();
 
@@ -32,15 +34,26 @@ function speedLine(position: TelemetryPosition): string {
     parts.push(`Speed ${position.speed.toFixed(1)}`);
   }
   if (position.course !== undefined) {
-    parts.push(`Course ${position.course.toFixed(0)}°`);
+    parts.push(`Course ${position.course.toFixed(0)}&deg;`);
   }
-  return `<div class=\"popup-secondary\">${parts.join(" • ")}</div>`;
+  return `<div class="popup-secondary">${parts.join(" &middot; ")}</div>`;
+}
+
+function positionLabel(position: TelemetryPosition): string {
+  const peer = nodeStore.discoveredByDestination[position.callsign.trim().toLowerCase()];
+  return peer?.announcedName?.trim() || peer?.label?.trim() || position.callsign;
 }
 
 function popupHtml(position: TelemetryPosition): string {
+  const label = positionLabel(position);
+  const identityLine =
+    label === position.callsign
+      ? ""
+      : `<div class="popup-secondary">${position.callsign}</div>`;
   return `
-    <div class=\"popup-title\">${position.callsign}</div>
-    <div class=\"popup-secondary\">Updated ${new Date(position.updatedAt).toLocaleString()}</div>
+    <div class="popup-title">${label}</div>
+    ${identityLine}
+    <div class="popup-secondary">Updated ${new Date(position.updatedAt).toLocaleString()}</div>
     ${speedLine(position)}
   `;
 }
@@ -62,7 +75,7 @@ function syncMarkers(positions: TelemetryPosition[]): void {
     if (!marker || !markerElement) {
       markerElement = document.createElement("div");
       markerElement.className = "telemetry-marker";
-      markerElement.title = position.callsign;
+      markerElement.title = positionLabel(position);
 
       marker = new maplibregl.Marker({ element: markerElement })
         .setLngLat([position.lon, position.lat] as LngLatLike)
@@ -74,6 +87,7 @@ function syncMarkers(positions: TelemetryPosition[]): void {
     } else {
       marker.setLngLat([position.lon, position.lat] as LngLatLike);
       marker.getPopup()?.setHTML(popupHtml(position));
+      markerElement.title = positionLabel(position);
     }
 
     markerElement.classList.remove("is-live", "is-stale");
@@ -136,7 +150,6 @@ onMounted(() => {
     },
     { immediate: true, deep: true },
   );
-
 });
 
 onBeforeUnmount(() => {
