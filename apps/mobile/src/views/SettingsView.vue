@@ -3,6 +3,7 @@ import { computed, reactive, ref } from "vue";
 
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
+import { useTelemetryStore } from "../stores/telemetryStore";
 import { parseCapabilityTokens } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
@@ -18,6 +19,8 @@ interface HubAnnounceCandidate {
 }
 
 const nodeStore = useNodeStore();
+const telemetryStore = useTelemetryStore();
+telemetryStore.init();
 
 const form = reactive({
   displayName: nodeStore.settings.displayName,
@@ -28,6 +31,9 @@ const form = reactive({
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  telemetryEnabled: nodeStore.settings.telemetry.enabled,
+  telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
+  telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
   hubMode: nodeStore.settings.hub.mode,
   hubIdentityHash: nodeStore.settings.hub.identityHash,
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
@@ -67,7 +73,10 @@ const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
-  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
+  const telemetrySummary = form.telemetryEnabled
+    ? `telemetry every ${form.telemetryPublishIntervalSeconds}s`
+    : "telemetry off";
+  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel} | ${telemetrySummary}`;
 });
 
 function peerExposesHubCapability(appData: string): boolean {
@@ -103,6 +112,22 @@ const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved pee
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
+
+const telemetryStatusText = computed(() => {
+  if (!form.telemetryEnabled) {
+    return "Disabled";
+  }
+  if (telemetryStore.loopStatus === "permission_denied") {
+    return "Permission denied";
+  }
+  if (telemetryStore.loopStatus === "gps_unavailable") {
+    return "GPS unavailable";
+  }
+  if (telemetryStore.loopStatus === "running") {
+    return "Publishing";
+  }
+  return "Idle";
+});
 
 function normalizeTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
@@ -180,6 +205,14 @@ function applySettings(): void {
     announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
     tcpClients: normalizedTcpClients.value,
     broadcast: form.broadcast,
+    telemetry: {
+      enabled: form.telemetryEnabled,
+      publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 10))),
+      accuracyThresholdMeters:
+        form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
+          ? undefined
+          : Math.max(1, Number(form.telemetryAccuracyThresholdMeters)),
+    },
     hub: {
       mode: form.hubMode,
       identityHash: form.hubIdentityHash.trim(),
@@ -190,6 +223,8 @@ function applySettings(): void {
   });
   form.displayName = nodeStore.settings.displayName;
   form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
+  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
@@ -287,6 +322,22 @@ function importPeerList(): void {
             Broadcast enabled
           </label>
           <label class="checkbox">
+            <input v-model="form.telemetryEnabled" type="checkbox" />
+            Enable telemetry sharing
+          </label>
+          <label>
+            Telemetry publish interval (seconds)
+            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="5" max="60" />
+          </label>
+          <label>
+            Telemetry accuracy threshold (meters, optional)
+            <input v-model.number="form.telemetryAccuracyThresholdMeters" type="number" min="0" placeholder="Unset" />
+          </label>
+          <label class="full">
+            Telemetry status
+            <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
+          </label>
+          <label class="checkbox">
             <input v-model="form.showOnlyCapabilityVerified" type="checkbox" />
             Show capability-verified peers by default
           </label>
@@ -355,6 +406,7 @@ function importPeerList(): void {
             Restart Node
           </button>
         </div>
+        <p v-if="telemetryStore.telemetryError" class="feedback">{{ telemetryStore.telemetryError }}</p>
       </div>
     </details>
 

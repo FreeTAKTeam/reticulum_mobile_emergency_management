@@ -86,6 +86,11 @@ export interface NodeUiSettings {
   broadcast: boolean;
   announceIntervalSeconds: number;
   showOnlyCapabilityVerified: boolean;
+  telemetry: {
+    enabled: boolean;
+    publishIntervalSeconds: number;
+    accuracyThresholdMeters?: number;
+  };
   hub: HubSettings;
 }
 

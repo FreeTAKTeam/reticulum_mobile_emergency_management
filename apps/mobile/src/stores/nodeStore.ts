@@ -56,6 +56,11 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   showOnlyCapabilityVerified: true,
+  telemetry: {
+    enabled: false,
+    publishIntervalSeconds: 10,
+    accuracyThresholdMeters: undefined,
+  },
   hub: {
     mode: "Disabled",
     identityHash: "",
@@ -113,7 +118,7 @@ function loadStoredSettings(): NodeUiSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) {
-      return { ...DEFAULT_SETTINGS, hub: { ...DEFAULT_SETTINGS.hub } };
+      return { ...DEFAULT_SETTINGS, telemetry: { ...DEFAULT_SETTINGS.telemetry }, hub: { ...DEFAULT_SETTINGS.hub } };
     }
     const parsed = JSON.parse(raw) as Partial<NodeUiSettings>;
     return {
@@ -123,6 +128,15 @@ function loadStoredSettings(): NodeUiSettings {
         ...DEFAULT_SETTINGS.hub,
         ...(parsed.hub ?? {}),
       },
+      telemetry: {
+        ...DEFAULT_SETTINGS.telemetry,
+        ...(parsed.telemetry ?? {}),
+        publishIntervalSeconds: Math.min(60, Math.max(5, Number(parsed.telemetry?.publishIntervalSeconds ?? DEFAULT_SETTINGS.telemetry.publishIntervalSeconds))),
+        accuracyThresholdMeters:
+          parsed.telemetry?.accuracyThresholdMeters === undefined || parsed.telemetry?.accuracyThresholdMeters === null
+            ? undefined
+            : Math.max(0, Number(parsed.telemetry.accuracyThresholdMeters)),
+      },
       displayName: normalizeStoredDisplayName(parsed.displayName),
       clientMode: normalizeClientMode(parsed.clientMode),
       tcpClients: Array.isArray(parsed.tcpClients)
@@ -130,7 +144,7 @@ function loadStoredSettings(): NodeUiSettings {
         : [...DEFAULT_SETTINGS.tcpClients],
     };
   } catch {
-    return { ...DEFAULT_SETTINGS, hub: { ...DEFAULT_SETTINGS.hub } };
+    return { ...DEFAULT_SETTINGS, telemetry: { ...DEFAULT_SETTINGS.telemetry }, hub: { ...DEFAULT_SETTINGS.hub } };
   }
 }
 
@@ -613,6 +627,12 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (typeof next.showOnlyCapabilityVerified === "boolean") {
       settings.showOnlyCapabilityVerified = next.showOnlyCapabilityVerified;
+    }
+    if (next.telemetry) {
+      settings.telemetry = {
+        ...settings.telemetry,
+        ...next.telemetry,
+      };
     }
     if (next.hub) {
       settings.hub = {

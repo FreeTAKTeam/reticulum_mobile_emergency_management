@@ -3,13 +3,21 @@ import { computed, reactive, ref, watch } from "vue";
 import type { PacketReceivedEvent } from "@reticulum/node-client";
 
 import type { ReplicationMessage, TelemetryPosition } from "../types/domain";
+import {
+  telemetryService,
+  TelemetryPermissionDeniedError,
+  type TelemetryPermissionState,
+} from "../services/telemetry";
 import { asNumber, asTrimmedString, parseReplicationEnvelope } from "../utils/replicationParser";
 import { useNodeStore } from "./nodeStore";
 
 const TELEMETRY_STORAGE_KEY = "reticulum.mobile.telemetry.v1";
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 const EXPIRED_THRESHOLD_MS = 10 * 60 * 1000;
+const MIN_MOVEMENT_METERS = 15;
 type UpsertOutcome = "inserted" | "updated" | "ignored";
+
+type TelemetryLoopStatus = "idle" | "running" | "permission_denied" | "gps_unavailable" | "error";
 
 const TELEMETRY_FIELD_PREFIX = "telemetry.";
 const TELEMETRY_KIND_FIELD = `${TELEMETRY_FIELD_PREFIX}kind`;
@@ -81,7 +89,6 @@ function loadPositions(): Record<string, TelemetryPosition> {
 function savePositions(records: Record<string, TelemetryPosition>): void {
   localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(Object.values(records)));
 }
-
 
 function dedicatedTelemetryValue(fields: Record<string, string>, key: string): string | undefined {
   return fields[`${TELEMETRY_FIELD_PREFIX}${key}`];
@@ -202,12 +209,33 @@ function parseTelemetryReplicationMessage(raw: string): TelemetryReplicationMess
   }
 }
 
+function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const toRadians = (value: number): number => (value * Math.PI) / 180;
+  const earthRadiusMeters = 6_371_000;
+  const dLat = toRadians(b.lat - a.lat);
+  const dLon = toRadians(b.lon - a.lon);
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+
+  const haversine =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return earthRadiusMeters * c;
+}
+
 export const useTelemetryStore = defineStore("telemetry", () => {
   const byCallsign = reactive<Record<string, TelemetryPosition>>({});
   const tombstones = reactive<Record<string, number>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
   const nowTimestamp = ref(Date.now());
+  const loopTimer = ref<number | null>(null);
+  const loopInFlight = ref(false);
+  const permissionState = ref<TelemetryPermissionState>("prompt");
+  const loopStatus = ref<TelemetryLoopStatus>("idle");
+  const telemetryError = ref("");
+  const lastLocalFix = ref<TelemetryPosition | null>(null);
   const nodeStore = useNodeStore();
 
   function persist(): void {
@@ -257,6 +285,141 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     return Object.values(byCallsign).map((entry) => ({ ...entry }));
   }
 
+  function buildLocalPosition(): Promise<TelemetryPosition | null> {
+    return telemetryService.getCurrentPosition().then((fix) => {
+      const callsign = nodeStore.settings.displayName.trim();
+      if (!callsign) {
+        return null;
+      }
+      return normalizeTelemetryPosition({
+        callsign,
+        lat: fix.lat,
+        lon: fix.lon,
+        alt: fix.alt,
+        course: fix.course,
+        speed: fix.speed,
+        accuracy: fix.accuracy,
+        updatedAt: fix.timestamp || Date.now(),
+      });
+    });
+  }
+
+  function shouldPublishPosition(next: TelemetryPosition): boolean {
+    const previous = lastLocalFix.value;
+    if (!previous) {
+      return true;
+    }
+
+    const moved = distanceMeters(previous, next);
+    if (moved >= MIN_MOVEMENT_METERS) {
+      return true;
+    }
+
+    const accuracyThreshold = nodeStore.settings.telemetry.accuracyThresholdMeters;
+    if (accuracyThreshold === undefined) {
+      return false;
+    }
+
+    return (next.accuracy ?? Number.POSITIVE_INFINITY) <= accuracyThreshold;
+  }
+
+  async function publishOnce(): Promise<void> {
+    if (loopInFlight.value) {
+      return;
+    }
+    loopInFlight.value = true;
+
+    try {
+      const position = await buildLocalPosition();
+      if (!position) {
+        loopStatus.value = "error";
+        telemetryError.value = "Set a call sign before enabling telemetry.";
+        return;
+      }
+
+      if (!shouldPublishPosition(position)) {
+        loopStatus.value = "running";
+        telemetryError.value = "";
+        return;
+      }
+
+      lastLocalFix.value = position;
+      applyUpsert(position);
+      const message: TelemetryReplicationMessage = {
+        kind: "telemetry_upsert",
+        position,
+      };
+      await nodeStore.broadcastJson(message as ReplicationMessage, buildTelemetryDedicatedFields(message));
+      loopStatus.value = "running";
+      telemetryError.value = "";
+    } catch (error: unknown) {
+      if (error instanceof TelemetryPermissionDeniedError) {
+        permissionState.value = "denied";
+        loopStatus.value = "permission_denied";
+        telemetryError.value = "Location permission denied.";
+        stopPublishLoop();
+        return;
+      }
+
+      loopStatus.value = "gps_unavailable";
+      telemetryError.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      loopInFlight.value = false;
+    }
+  }
+
+  function stopPublishLoop(): void {
+    if (loopTimer.value !== null) {
+      window.clearInterval(loopTimer.value);
+      loopTimer.value = null;
+    }
+    if (loopStatus.value === "running") {
+      loopStatus.value = "idle";
+    }
+  }
+
+  async function startPublishLoop(): Promise<void> {
+    stopPublishLoop();
+
+    permissionState.value = await telemetryService.getPermissionState();
+    if (permissionState.value !== "granted") {
+      permissionState.value = await telemetryService.requestPermission();
+    }
+
+    if (permissionState.value === "denied") {
+      loopStatus.value = "permission_denied";
+      telemetryError.value = "Telemetry disabled: location permission denied.";
+      return;
+    }
+
+    if (permissionState.value === "unavailable") {
+      loopStatus.value = "gps_unavailable";
+      telemetryError.value = "Telemetry unavailable on this device.";
+      return;
+    }
+
+    loopStatus.value = "running";
+    telemetryError.value = "";
+
+    await publishOnce();
+    const intervalMs = Math.max(5, nodeStore.settings.telemetry.publishIntervalSeconds) * 1000;
+    loopTimer.value = window.setInterval(() => {
+      void publishOnce();
+    }, intervalMs);
+  }
+
+  function syncPublishLoopFromSettings(): void {
+    if (!nodeStore.settings.telemetry.enabled) {
+      stopPublishLoop();
+      permissionState.value = "prompt";
+      telemetryError.value = "";
+      loopStatus.value = "idle";
+      return;
+    }
+
+    void startPublishLoop();
+  }
+
   function init(): void {
     if (initialized.value) {
       return;
@@ -271,6 +434,19 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     window.setInterval(() => {
       nowTimestamp.value = Date.now();
     }, 30_000);
+
+    watch(
+      () => [
+        nodeStore.settings.telemetry.enabled,
+        nodeStore.settings.telemetry.publishIntervalSeconds,
+        nodeStore.settings.telemetry.accuracyThresholdMeters,
+        nodeStore.settings.displayName,
+      ],
+      () => {
+        syncPublishLoopFromSettings();
+      },
+      { immediate: true },
+    );
   }
 
   async function upsertLocalPosition(
@@ -388,8 +564,13 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     activePositions,
     stalePositions,
     expiredPositions,
+    permissionState,
+    loopStatus,
+    telemetryError,
     init,
     initReplication,
+    startPublishLoop,
+    stopPublishLoop,
     upsertLocalPosition,
     deleteLocal,
   };
