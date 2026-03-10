@@ -7,6 +7,8 @@ import { asNumber, asTrimmedString, parseReplicationEnvelope } from "../utils/re
 import { useNodeStore } from "./nodeStore";
 
 const TELEMETRY_STORAGE_KEY = "reticulum.mobile.telemetry.v1";
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+const EXPIRED_THRESHOLD_MS = 10 * 60 * 1000;
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 
 const TELEMETRY_FIELD_PREFIX = "telemetry.";
@@ -205,6 +207,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   const tombstones = reactive<Record<string, number>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
+  const nowTimestamp = ref(Date.now());
   const nodeStore = useNodeStore();
 
   function persist(): void {
@@ -264,9 +267,13 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     for (const [key, position] of Object.entries(loaded)) {
       byCallsign[key] = position;
     }
+
+    window.setInterval(() => {
+      nowTimestamp.value = Date.now();
+    }, 30_000);
   }
 
-  async function upsertLocal(
+  async function upsertLocalPosition(
     input: Omit<TelemetryPosition, "updatedAt"> & {
       updatedAt?: number;
     },
@@ -357,11 +364,33 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     Object.values(byCallsign).sort((a, b) => b.updatedAt - a.updatedAt),
   );
 
+  const activePositions = computed(() =>
+    positions.value
+      .filter((position) => nowTimestamp.value - position.updatedAt <= EXPIRED_THRESHOLD_MS)
+      .sort((a, b) => b.updatedAt - a.updatedAt),
+  );
+
+  const stalePositions = computed(() =>
+    activePositions.value.filter(
+      (position) => nowTimestamp.value - position.updatedAt > STALE_THRESHOLD_MS,
+    ),
+  );
+
+  const expiredPositions = computed(() =>
+    positions.value.filter(
+      (position) => nowTimestamp.value - position.updatedAt > EXPIRED_THRESHOLD_MS,
+    ),
+  );
+
   return {
+    byCallsign,
     positions,
+    activePositions,
+    stalePositions,
+    expiredPositions,
     init,
     initReplication,
-    upsertLocal,
+    upsertLocalPosition,
     deleteLocal,
   };
 });
