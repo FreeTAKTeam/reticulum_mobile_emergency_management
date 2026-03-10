@@ -72,6 +72,7 @@ interface UiLogLine {
 }
 
 type PacketListener = (event: PacketReceivedEvent) => void;
+type DedicatedFields = Record<string, string>;
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
   if (peer.sources.includes("hub") || peer.sources.includes("import")) {
@@ -689,25 +690,25 @@ export const useNodeStore = defineStore("node", () => {
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
 
-  async function broadcastJson(payload: unknown): Promise<void> {
+  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
     if (!client.value) {
       return;
     }
     try {
       const body = new TextEncoder().encode(JSON.stringify(payload));
-      await client.value.broadcastBytes(body);
+      await client.value.broadcastBytes(body, { dedicatedFields });
     } catch (error: unknown) {
       throw captureActionError("Broadcast failed", error);
     }
   }
 
-  async function sendJson(destinationHex: string, payload: unknown): Promise<void> {
+  async function sendJson(destinationHex: string, payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
     if (!client.value) {
       return;
     }
     try {
       const body = new TextEncoder().encode(JSON.stringify(payload));
-      await client.value.sendBytes(destinationHex, body);
+      await client.value.sendBytes(destinationHex, body, { dedicatedFields });
     } catch (error: unknown) {
       throw captureActionError(`Send failed (${destinationHex})`, error);
     }

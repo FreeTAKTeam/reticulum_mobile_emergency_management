@@ -58,6 +58,11 @@ export interface PeerChangedEvent {
 export interface PacketReceivedEvent {
   destinationHex: string;
   bytes: Uint8Array;
+  dedicatedFields?: Record<string, string>;
+}
+
+export interface PacketSendOptions {
+  dedicatedFields?: Record<string, string>;
 }
 
 export interface PacketSentEvent {
@@ -99,8 +104,8 @@ export interface ReticulumNodeClient {
   getStatus(): Promise<NodeStatus>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
-  sendBytes(destinationHex: string, bytes: Uint8Array): Promise<void>;
-  broadcastBytes(bytes: Uint8Array): Promise<void>;
+  sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
+  broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   refreshHubDirectory(): Promise<void>;
@@ -172,8 +177,8 @@ interface ReticulumNodePlugin {
   getStatus(): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
-  send(options: { destinationHex: string; bytesBase64: string }): Promise<void>;
-  broadcast(options: { bytesBase64: string }): Promise<void>;
+  send(options: { destinationHex: string; bytesBase64: string; dedicatedFields?: Record<string, string> }): Promise<void>;
+  broadcast(options: { bytesBase64: string; dedicatedFields?: Record<string, string> }): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   refreshHubDirectory(): Promise<void>;
@@ -297,6 +302,24 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
   };
 }
 
+
+function toDedicatedFields(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string") {
+      out[String(key)] = value;
+      continue;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      out[String(key)] = String(value);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function toPacketReceivedEvent(
   raw: Record<string, unknown>,
 ): PacketReceivedEvent {
@@ -306,6 +329,7 @@ function toPacketReceivedEvent(
       String(raw.destinationHex ?? raw.destination_hex ?? ""),
     ),
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
+    dedicatedFields: toDedicatedFields(raw.dedicatedFields ?? raw.dedicated_fields),
   };
 }
 
@@ -440,17 +464,21 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async sendBytes(destinationHex: string, bytes: Uint8Array): Promise<void> {
+  async sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     await this.ready();
     await this.plugin.send({
       destinationHex: normalizeHex(destinationHex),
       bytesBase64: encodeBytesToBase64(bytes),
+      dedicatedFields: options?.dedicatedFields,
     });
   }
 
-  async broadcastBytes(bytes: Uint8Array): Promise<void> {
+  async broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     await this.ready();
-    await this.plugin.broadcast({ bytesBase64: encodeBytesToBase64(bytes) });
+    await this.plugin.broadcast({
+      bytesBase64: encodeBytesToBase64(bytes),
+      dedicatedFields: options?.dedicatedFields,
+    });
   }
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
@@ -562,7 +590,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async sendBytes(destinationHex: string, bytes: Uint8Array): Promise<void> {
+  async sendBytes(destinationHex: string, bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     const normalized = normalizeHex(destinationHex);
     this.emitter.emit("packetSent", {
       destinationHex: normalized,
@@ -571,7 +599,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async broadcastBytes(bytes: Uint8Array): Promise<void> {
+  async broadcastBytes(bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     for (const destinationHex of this.connected) {
       this.emitter.emit("packetSent", {
         destinationHex,
@@ -743,7 +771,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async sendBytes(destinationHex: string, bytes: Uint8Array): Promise<void> {
+  async sendBytes(destinationHex: string, bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     this.emitter.emit("packetSent", {
       destinationHex: normalizeHex(destinationHex),
       bytes,
@@ -751,7 +779,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async broadcastBytes(bytes: Uint8Array): Promise<void> {
+  async broadcastBytes(bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     for (const destinationHex of this.connected) {
       this.emitter.emit("packetSent", {
         destinationHex,

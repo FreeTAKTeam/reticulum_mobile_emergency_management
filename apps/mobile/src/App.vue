@@ -5,11 +5,13 @@ import { RouterLink, RouterView, useRoute } from "vue-router";
 import { initAppNotifications } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagesStore } from "./stores/messagesStore";
+import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
 
 const nodeStore = useNodeStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
+const telemetryStore = useTelemetryStore();
 const route = useRoute();
 
 onMounted(async () => {
@@ -19,6 +21,8 @@ onMounted(async () => {
     messagesStore.initReplication();
     eventsStore.init();
     eventsStore.initReplication();
+    telemetryStore.init();
+    telemetryStore.initReplication();
 
     await nodeStore.init();
     await nodeStore.startNode();
