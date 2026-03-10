@@ -26,7 +26,8 @@
     "@reticulum/node-client": "file:../../packages/node-client",
     "pinia": "^2.2.4",
     "vue": "^3.5.0",
-    "vue-router": "^4.5.1"
+    "vue-router": "^4.5.1",
+    "maplibre-gl": "^4.7.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0",

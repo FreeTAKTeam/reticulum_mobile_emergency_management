@@ -35,6 +35,11 @@ const routes = [
     name: "peers",
     component: () => import("./views/PeersDiscoveryView.vue"),
   },
+  {
+    path: "/telemetry",
+    name: "telemetry",
+    component: () => import("./views/TelemetryMapView.vue"),
+  },
 ];
 
 export const router = createRouter({
