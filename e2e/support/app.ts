@@ -3,6 +3,7 @@ import { expect, type Page } from "@playwright/test";
 const STORAGE_KEYS = {
   messages: "reticulum.mobile.messages.v1",
   events: "reticulum.mobile.events.v1",
+  telemetry: "reticulum.mobile.telemetry.v1",
   settings: "reticulum.mobile.settings.v1",
   savedPeers: "reticulum.mobile.savedPeers.v1",
 } as const;
@@ -29,6 +30,17 @@ export interface EventSeed {
   deletedAt?: number;
 }
 
+export interface TelemetrySeed {
+  callsign: string;
+  lat: number;
+  lon: number;
+  alt?: number;
+  course?: number;
+  speed?: number;
+  accuracy?: number;
+  updatedAt: number;
+}
+
 export interface SettingsSeed {
   displayName: string;
   clientMode: "auto" | "capacitor";
@@ -38,6 +50,11 @@ export interface SettingsSeed {
   broadcast: boolean;
   announceIntervalSeconds: number;
   showOnlyCapabilityVerified: boolean;
+  telemetry: {
+    enabled: boolean;
+    publishIntervalSeconds: number;
+    accuracyThresholdMeters?: number;
+  };
   hub: {
     mode: "Disabled" | "RchLxmf" | "RchHttp";
     identityHash: string;
@@ -56,6 +73,7 @@ export interface SavedPeerSeed {
 interface StorageSeed {
   messages?: ActionMessageSeed[];
   events?: EventSeed[];
+  telemetry?: TelemetrySeed[];
   settings?: SettingsSeed;
   savedPeers?: SavedPeerSeed[];
 }
@@ -69,6 +87,10 @@ export const defaultSettings: SettingsSeed = {
   broadcast: true,
   announceIntervalSeconds: 1800,
   showOnlyCapabilityVerified: true,
+  telemetry: {
+    enabled: false,
+    publishIntervalSeconds: 10,
+  },
   hub: {
     mode: "Disabled",
     identityHash: "",
@@ -91,6 +113,10 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
         window.localStorage.setItem(keys.events, JSON.stringify(payload.events));
       }
 
+      if (payload.telemetry) {
+        window.localStorage.setItem(keys.telemetry, JSON.stringify(payload.telemetry));
+      }
+
       if (payload.settings) {
         window.localStorage.setItem(keys.settings, JSON.stringify(payload.settings));
       }
@@ -104,6 +130,7 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
       payload: {
         messages: seed.messages,
         events: seed.events,
+        telemetry: seed.telemetry,
         settings: seed.settings,
         savedPeers: seed.savedPeers,
       },
