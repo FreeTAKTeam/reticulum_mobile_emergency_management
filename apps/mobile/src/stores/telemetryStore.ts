@@ -229,6 +229,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   const tombstones = reactive<Record<string, number>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
+  const startupPermissionRequested = ref(false);
   const nowTimestamp = ref(Date.now());
   const loopTimer = ref<number | null>(null);
   const loopInFlight = ref(false);
@@ -408,10 +409,31 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     }, intervalMs);
   }
 
+  async function requestStartupPermission(): Promise<void> {
+    if (startupPermissionRequested.value) {
+      return;
+    }
+    startupPermissionRequested.value = true;
+
+    permissionState.value = await telemetryService.getPermissionState();
+    if (permissionState.value !== "prompt") {
+      return;
+    }
+
+    permissionState.value = await telemetryService.requestPermission();
+    if (permissionState.value === "unavailable") {
+      telemetryError.value = "Telemetry unavailable on this device.";
+      return;
+    }
+
+    if (permissionState.value === "denied" && nodeStore.settings.telemetry.enabled) {
+      telemetryError.value = "Telemetry disabled: location permission denied.";
+    }
+  }
+
   function syncPublishLoopFromSettings(): void {
     if (!nodeStore.settings.telemetry.enabled) {
       stopPublishLoop();
-      permissionState.value = "prompt";
       telemetryError.value = "";
       loopStatus.value = "idle";
       return;
@@ -569,6 +591,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     telemetryError,
     init,
     initReplication,
+    requestStartupPermission,
     startPublishLoop,
     stopPublishLoop,
     upsertLocalPosition,

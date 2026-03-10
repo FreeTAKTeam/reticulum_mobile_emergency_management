@@ -23,6 +23,7 @@ onMounted(async () => {
     eventsStore.initReplication();
     telemetryStore.init();
     telemetryStore.initReplication();
+    await telemetryStore.requestStartupPermission();
 
     await nodeStore.init();
     await nodeStore.startNode();
