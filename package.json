@@ -11,6 +11,12 @@
     "web:build": "npm --workspace apps/mobile run build:web",
     "mobile:dev": "npm --workspace apps/mobile run dev:mobile",
     "mobile:build": "npm --workspace apps/mobile run build:mobile",
-    "node-client:build": "npm --workspace packages/node-client run build"
+    "node-client:build": "npm --workspace packages/node-client run build",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
   }
 }

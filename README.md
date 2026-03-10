@@ -10,8 +10,8 @@ It is designed to be simple enough for anyone to use, even under stress.
 
 - **Shares status updates** about people or teams (who is OK, who needs help, who is missing, etc.).
 - **Works without any server**. Phones can form a peer-to-peer mesh of trusted peers and share updates directly.
-- **Stays compatible with RCH (Reticulum Community Hub)** if you want a directory to help discover peers, but it is not required.
-
+- **Stays compatible with RCH (Reticulum Community Hub)** if you want a directory to help discover peers, but it is not required. (in progress)
+- **Ssends logs of Events**
 ## Trust-Based Updates
 
 This app assumes information is updated by the people who know the facts.
@@ -40,3 +40,11 @@ Use Obtainium to track releases from this repository and install updates directl
 - `packages/node-client`: TypeScript wrapper around the Capacitor plugin surface.
 - `crates/reticulum_mobile`: Rust UniFFI wrapper crate.
 - `tools/codegen`: Scripts for UniFFI code generation.
+
+## End-to-End Testing
+
+Playwright coverage runs the web build of `apps/mobile` and exercises the core operator flows in a browser.
+
+1. Install browser binaries once: `npx playwright install chromium`
+2. Run the suite from the repo root: `npm run test:e2e`
+3. Use `npm run test:e2e:headed` when you want an interactive browser session
