@@ -5,6 +5,7 @@ import type { PacketReceivedEvent } from "@reticulum/node-client";
 import { notifyOperationalUpdate } from "../services/notifications";
 import type { EventRecord, ReplicationMessage } from "../types/domain";
 import { useNodeStore } from "./nodeStore";
+import { asNumber, asTrimmedString, parseReplicationEnvelope } from "../utils/replicationParser";
 
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
 type UpsertOutcome = "inserted" | "updated" | "ignored";
@@ -80,45 +81,42 @@ function saveEvents(records: Record<string, EventRecord>): void {
 }
 
 function parseEventReplicationMessage(raw: string): EventReplicationMessage | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<EventReplicationMessage>;
-    if (!parsed || typeof parsed !== "object" || !("kind" in parsed)) {
-      return null;
-    }
-
-    switch (parsed.kind) {
-      case "event_snapshot_request":
-        return {
-          kind: "event_snapshot_request",
-          requestedAt: Number(parsed.requestedAt ?? Date.now()),
-        };
-      case "event_snapshot_response":
-        return {
-          kind: "event_snapshot_response",
-          requestedAt: Number(parsed.requestedAt ?? Date.now()),
-          events: Array.isArray(parsed.events)
-            ? parsed.events.map((entry) => normalizeEvent(entry as EventRecord))
-            : [],
-        };
-      case "event_upsert":
-        if (!parsed.event) {
-          return null;
-        }
-        return {
-          kind: "event_upsert",
-          event: normalizeEvent(parsed.event as EventRecord),
-        };
-      case "event_delete":
-        return {
-          kind: "event_delete",
-          uid: String(parsed.uid ?? "").trim(),
-          deletedAt: Number(parsed.deletedAt ?? Date.now()),
-        };
-      default:
-        return null;
-    }
-  } catch {
+  const envelope = parseReplicationEnvelope(raw);
+  if (!envelope) {
     return null;
+  }
+
+  const { kind, payload } = envelope;
+  switch (kind) {
+    case "event_snapshot_request":
+      return {
+        kind: "event_snapshot_request",
+        requestedAt: asNumber(payload.requestedAt, Date.now()),
+      };
+    case "event_snapshot_response":
+      return {
+        kind: "event_snapshot_response",
+        requestedAt: asNumber(payload.requestedAt, Date.now()),
+        events: Array.isArray(payload.events)
+          ? payload.events.map((entry) => normalizeEvent(entry as EventRecord))
+          : [],
+      };
+    case "event_upsert":
+      if (!payload.event || typeof payload.event !== "object") {
+        return null;
+      }
+      return {
+        kind: "event_upsert",
+        event: normalizeEvent(payload.event as EventRecord),
+      };
+    case "event_delete":
+      return {
+        kind: "event_delete",
+        uid: asTrimmedString(payload.uid),
+        deletedAt: asNumber(payload.deletedAt, Date.now()),
+      };
+    default:
+      return null;
   }
 }
 

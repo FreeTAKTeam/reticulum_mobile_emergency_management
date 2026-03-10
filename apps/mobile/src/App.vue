@@ -5,11 +5,13 @@ import { RouterLink, RouterView, useRoute } from "vue-router";
 import { initAppNotifications } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagesStore } from "./stores/messagesStore";
+import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
 
 const nodeStore = useNodeStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
+const telemetryStore = useTelemetryStore();
 const route = useRoute();
 
 onMounted(async () => {
@@ -19,6 +21,8 @@ onMounted(async () => {
     messagesStore.initReplication();
     eventsStore.init();
     eventsStore.initReplication();
+    telemetryStore.init();
+    telemetryStore.initReplication();
 
     await nodeStore.init();
     await nodeStore.startNode();
@@ -32,6 +36,7 @@ const tabItems = [
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
   { path: "/peers", label: "Peers", icon: "peers" },
+  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -105,6 +110,17 @@ function isTabActive(path: string): boolean {
               <path d="M14 5h5v8h-5z" />
               <path d="M5 14h5v5H5z" />
               <path d="M14 16h5v3h-5z" />
+            </svg>
+            <svg
+              v-else-if="tab.icon === 'telemetry'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M12 3.5a7 7 0 1 0 7 7" />
+              <path d="M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z" />
+              <path d="M15.7 4.2l4.1.1-.1 4.1" />
+              <path d="M19.7 4.3l-5.1 5.1" />
             </svg>
             <svg
               v-else-if="tab.icon === 'settings'"
@@ -242,7 +258,7 @@ function isTabActive(path: string): boolean {
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   max-width: 100%;
 }
 
