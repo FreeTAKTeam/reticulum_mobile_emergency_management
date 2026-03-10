@@ -23,6 +23,17 @@ export interface EventRecord {
   deletedAt?: number;
 }
 
+export interface TelemetryPosition {
+  callsign: string;
+  lat: number;
+  lon: number;
+  alt?: number;
+  course?: number;
+  speed?: number;
+  accuracy?: number;
+  updatedAt: number;
+}
+
 export type PeerSource = "announce" | "hub" | "import";
 export type PeerConnectionState = "disconnected" | "connecting" | "connected";
 
@@ -114,4 +125,22 @@ export type ReplicationMessage =
       kind: "event_delete";
       uid: string;
       deletedAt: number;
+    }
+  | {
+      kind: "telemetry_upsert";
+      position: TelemetryPosition;
+    }
+  | {
+      kind: "telemetry_delete";
+      callsign: string;
+      deletedAt: number;
+    }
+  | {
+      kind: "telemetry_snapshot_request";
+      requestedAt: number;
+    }
+  | {
+      kind: "telemetry_snapshot_response";
+      requestedAt: number;
+      positions: TelemetryPosition[];
     };

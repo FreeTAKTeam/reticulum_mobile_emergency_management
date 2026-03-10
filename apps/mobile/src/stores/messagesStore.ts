@@ -10,6 +10,7 @@ import {
   normalizeR3aktTeamColor,
 } from "../utils/r3akt";
 import { useNodeStore } from "./nodeStore";
+import { asNumber, asTrimmedString, parseReplicationEnvelope } from "../utils/replicationParser";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 
@@ -187,44 +188,42 @@ export const useMessagesStore = defineStore("messages", () => {
   }
 
   function parseReplicationMessage(raw: string): ReplicationMessage | null {
-    try {
-      const parsed = JSON.parse(raw) as Partial<ReplicationMessage>;
-      if (!parsed || typeof parsed !== "object" || !("kind" in parsed)) {
-        return null;
-      }
-      switch (parsed.kind) {
-        case "snapshot_request":
-          return {
-            kind: "snapshot_request",
-            requestedAt: Number(parsed.requestedAt ?? Date.now()),
-          };
-        case "snapshot_response":
-          return {
-            kind: "snapshot_response",
-            requestedAt: Number(parsed.requestedAt ?? Date.now()),
-            messages: Array.isArray(parsed.messages)
-              ? parsed.messages.map((entry) => normalizeMessage(entry as ActionMessage))
-              : [],
-          };
-        case "message_upsert":
-          if (!parsed.message) {
-            return null;
-          }
-          return {
-            kind: "message_upsert",
-            message: normalizeMessage(parsed.message as ActionMessage),
-          };
-        case "message_delete":
-          return {
-            kind: "message_delete",
-            callsign: String(parsed.callsign ?? ""),
-            deletedAt: Number(parsed.deletedAt ?? Date.now()),
-          };
-        default:
-          return null;
-      }
-    } catch {
+    const envelope = parseReplicationEnvelope(raw);
+    if (!envelope) {
       return null;
+    }
+
+    const { kind, payload } = envelope;
+    switch (kind) {
+      case "snapshot_request":
+        return {
+          kind: "snapshot_request",
+          requestedAt: asNumber(payload.requestedAt, Date.now()),
+        };
+      case "snapshot_response":
+        return {
+          kind: "snapshot_response",
+          requestedAt: asNumber(payload.requestedAt, Date.now()),
+          messages: Array.isArray(payload.messages)
+            ? payload.messages.map((entry) => normalizeMessage(entry as ActionMessage))
+            : [],
+        };
+      case "message_upsert":
+        if (!payload.message || typeof payload.message !== "object") {
+          return null;
+        }
+        return {
+          kind: "message_upsert",
+          message: normalizeMessage(payload.message as ActionMessage),
+        };
+      case "message_delete":
+        return {
+          kind: "message_delete",
+          callsign: asTrimmedString(payload.callsign),
+          deletedAt: asNumber(payload.deletedAt, Date.now()),
+        };
+      default:
+        return null;
     }
   }
 
