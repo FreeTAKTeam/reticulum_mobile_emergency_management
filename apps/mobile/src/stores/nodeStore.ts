@@ -63,6 +63,8 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     enabled: false,
     publishIntervalSeconds: 10,
     accuracyThresholdMeters: undefined,
+    staleAfterMinutes: 30,
+    expireAfterMinutes: 180,
   },
   hub: {
     mode: "Disabled",
@@ -121,6 +123,35 @@ function normalizeStoredDisplayName(value: unknown): string {
   return normalizeDisplayName(typeof value === "string" ? value : "") ?? DEFAULT_SETTINGS.displayName;
 }
 
+function normalizeTelemetrySettings(
+  telemetry: Partial<NodeUiSettings["telemetry"]> | undefined,
+  base: NodeUiSettings["telemetry"] = DEFAULT_SETTINGS.telemetry,
+): NodeUiSettings["telemetry"] {
+  const staleAfterMinutes = Math.max(
+    1,
+    Number(telemetry?.staleAfterMinutes ?? base.staleAfterMinutes),
+  );
+  const expireAfterMinutes = Math.max(
+    staleAfterMinutes,
+    Number(telemetry?.expireAfterMinutes ?? base.expireAfterMinutes),
+  );
+
+  return {
+    ...base,
+    ...telemetry,
+    publishIntervalSeconds: Math.min(
+      60,
+      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds)),
+    ),
+    accuracyThresholdMeters:
+      telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
+        ? undefined
+        : Math.max(0, Number(telemetry.accuracyThresholdMeters)),
+    staleAfterMinutes,
+    expireAfterMinutes,
+  };
+}
+
 function loadStoredSettings(): NodeUiSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -135,15 +166,7 @@ function loadStoredSettings(): NodeUiSettings {
         ...DEFAULT_SETTINGS.hub,
         ...(parsed.hub ?? {}),
       },
-      telemetry: {
-        ...DEFAULT_SETTINGS.telemetry,
-        ...(parsed.telemetry ?? {}),
-        publishIntervalSeconds: Math.min(60, Math.max(5, Number(parsed.telemetry?.publishIntervalSeconds ?? DEFAULT_SETTINGS.telemetry.publishIntervalSeconds))),
-        accuracyThresholdMeters:
-          parsed.telemetry?.accuracyThresholdMeters === undefined || parsed.telemetry?.accuracyThresholdMeters === null
-            ? undefined
-            : Math.max(0, Number(parsed.telemetry.accuracyThresholdMeters)),
-      },
+      telemetry: normalizeTelemetrySettings(parsed.telemetry),
       displayName: normalizeStoredDisplayName(parsed.displayName),
       announceCapabilities: ensureCapabilityTokens(
         typeof parsed.announceCapabilities === "string"
@@ -645,10 +668,7 @@ export const useNodeStore = defineStore("node", () => {
       settings.showOnlyCapabilityVerified = next.showOnlyCapabilityVerified;
     }
     if (next.telemetry) {
-      settings.telemetry = {
-        ...settings.telemetry,
-        ...next.telemetry,
-      };
+      settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
     }
     if (next.hub) {
       settings.hub = {

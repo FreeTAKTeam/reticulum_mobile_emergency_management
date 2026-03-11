@@ -90,6 +90,8 @@ export interface NodeUiSettings {
     enabled: boolean;
     publishIntervalSeconds: number;
     accuracyThresholdMeters?: number;
+    staleAfterMinutes: number;
+    expireAfterMinutes: number;
   };
   hub: HubSettings;
 }

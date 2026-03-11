@@ -14,8 +14,6 @@ import { TELEMETRY_CAPABILITY } from "../utils/peers";
 import { useNodeStore } from "./nodeStore";
 
 const TELEMETRY_STORAGE_KEY = "reticulum.mobile.telemetry.v1";
-const STALE_THRESHOLD_MS = 5 * 60 * 1000;
-const EXPIRED_THRESHOLD_MS = 10 * 60 * 1000;
 const MIN_MOVEMENT_METERS = 15;
 const EMPTY_BYTES = new Uint8Array(0);
 
@@ -551,6 +549,15 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   const telemetryError = ref("");
   const lastLocalFix = ref<TelemetryPosition | null>(null);
   const nodeStore = useNodeStore();
+  const staleThresholdMs = computed(
+    () => Math.max(1, nodeStore.settings.telemetry.staleAfterMinutes) * 60 * 1000,
+  );
+  const expireThresholdMs = computed(
+    () =>
+      Math.max(nodeStore.settings.telemetry.staleAfterMinutes, nodeStore.settings.telemetry.expireAfterMinutes) *
+      60 *
+      1000,
+  );
 
   function persist(): void {
     savePositions(byCallsign);
@@ -970,19 +977,19 @@ export const useTelemetryStore = defineStore("telemetry", () => {
 
   const activePositions = computed(() =>
     positions.value
-      .filter((position) => nowTimestamp.value - position.updatedAt <= EXPIRED_THRESHOLD_MS)
+      .filter((position) => nowTimestamp.value - position.updatedAt <= expireThresholdMs.value)
       .sort((a, b) => b.updatedAt - a.updatedAt),
   );
 
   const stalePositions = computed(() =>
     activePositions.value.filter(
-      (position) => nowTimestamp.value - position.updatedAt > STALE_THRESHOLD_MS,
+      (position) => nowTimestamp.value - position.updatedAt > staleThresholdMs.value,
     ),
   );
 
   const expiredPositions = computed(() =>
     positions.value.filter(
-      (position) => nowTimestamp.value - position.updatedAt > EXPIRED_THRESHOLD_MS,
+      (position) => nowTimestamp.value - position.updatedAt > expireThresholdMs.value,
     ),
   );
 
@@ -992,6 +999,8 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     activePositions,
     stalePositions,
     expiredPositions,
+    staleThresholdMs,
+    expireThresholdMs,
     permissionState,
     loopStatus,
     telemetryError,

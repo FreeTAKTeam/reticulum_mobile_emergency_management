@@ -34,6 +34,8 @@ const form = reactive({
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
+  telemetryStaleAfterMinutes: nodeStore.settings.telemetry.staleAfterMinutes,
+  telemetryExpireAfterMinutes: nodeStore.settings.telemetry.expireAfterMinutes,
   hubMode: nodeStore.settings.hub.mode,
   hubIdentityHash: nodeStore.settings.hub.identityHash,
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
@@ -212,6 +214,11 @@ function applySettings(): void {
         form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
           ? undefined
           : Math.max(1, Number(form.telemetryAccuracyThresholdMeters)),
+      staleAfterMinutes: Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
+      expireAfterMinutes: Math.max(
+        Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
+        Number(form.telemetryExpireAfterMinutes || 180),
+      ),
     },
     hub: {
       mode: form.hubMode,
@@ -226,6 +233,8 @@ function applySettings(): void {
   form.tcpClients = [...nodeStore.settings.tcpClients];
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
+  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
+  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
@@ -333,6 +342,14 @@ function importPeerList(): void {
           <label>
             Telemetry accuracy threshold (meters, optional)
             <input v-model.number="form.telemetryAccuracyThresholdMeters" type="number" min="0" placeholder="Unset" />
+          </label>
+          <label>
+            Telemetry goes stale after (minutes)
+            <input v-model.number="form.telemetryStaleAfterMinutes" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry disappears after (minutes)
+            <input v-model.number="form.telemetryExpireAfterMinutes" type="number" min="1" />
           </label>
           <label class="full">
             Telemetry status

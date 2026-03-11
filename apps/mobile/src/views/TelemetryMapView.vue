@@ -8,8 +8,6 @@ import type { TelemetryPosition } from "../types/domain";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 
-const STALE_THRESHOLD_MS = 5 * 60 * 1000;
-
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 telemetryStore.init();
@@ -22,7 +20,7 @@ const markersByCallsign = new Map<string, Marker>();
 const markerElementsByCallsign = new Map<string, HTMLDivElement>();
 
 function markerStatusClass(position: TelemetryPosition): string {
-  return Date.now() - position.updatedAt > STALE_THRESHOLD_MS ? "is-stale" : "is-live";
+  return Date.now() - position.updatedAt > telemetryStore.staleThresholdMs ? "is-stale" : "is-live";
 }
 
 function speedLine(position: TelemetryPosition): string {
@@ -117,6 +115,10 @@ const lastUpdatedLabel = computed(() => {
   return `Last update: ${minutes} min ago`;
 });
 
+const staleThresholdMinutesLabel = computed(() =>
+  Math.max(1, nodeStore.settings.telemetry.staleAfterMinutes),
+);
+
 onMounted(() => {
   if (!mapHost.value) {
     return;
@@ -173,8 +175,8 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="telemetry-legend">
-      <span><i class="dot live"></i> Live (&lt; 5 min)</span>
-      <span><i class="dot stale"></i> Stale (&ge; 5 min)</span>
+      <span><i class="dot live"></i> Live (&lt; {{ staleThresholdMinutesLabel }} min)</span>
+      <span><i class="dot stale"></i> Stale (&ge; {{ staleThresholdMinutesLabel }} min)</span>
     </div>
 
     <div ref="mapHost" class="map-container"></div>
