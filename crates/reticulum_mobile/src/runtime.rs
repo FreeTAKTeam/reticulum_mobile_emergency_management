@@ -62,13 +62,24 @@ fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
 }
 
-fn announce_destination_kind(name: &DestinationName) -> &'static str {
-    if name.hash == DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1).hash {
+fn announce_destination_kind(desc: &DestinationDesc) -> &'static str {
+    let app_name = DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1);
+    let lxmf_name = DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1);
+
+    let app_hash = SingleOutputDestination::new(desc.identity.clone(), app_name.clone())
+        .desc
+        .address_hash;
+    if desc.address_hash == app_hash || desc.name.hash == app_name.hash {
         "app"
-    } else if name.hash == DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1).hash {
-        "lxmf_delivery"
     } else {
-        "other"
+        let lxmf_hash = SingleOutputDestination::new(desc.identity.clone(), lxmf_name.clone())
+            .desc
+            .address_hash;
+        if desc.address_hash == lxmf_hash || desc.name.hash == lxmf_name.hash {
+            "lxmf_delivery"
+        } else {
+            "other"
+        }
     }
 }
 
@@ -181,6 +192,7 @@ struct PendingLxmfDelivery {
 struct LxmfSendReport {
     outcome: RnsSendOutcome,
     message_id_hex: String,
+    resolved_destination_hex: String,
     metadata: Option<MissionSyncMetadata>,
 }
 
@@ -502,6 +514,50 @@ async fn resolve_lxmf_destination_desc(
     Ok(lxmf_destination.desc)
 }
 
+async fn ensure_lxmf_output_link(
+    state: &NodeRuntimeState,
+    desc: DestinationDesc,
+) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
+    const MAX_ATTEMPTS: usize = 3;
+    const RETRY_DELAY: Duration = Duration::from_millis(500);
+
+    for attempt in 0..MAX_ATTEMPTS {
+        let link = {
+            let mut links = state.out_links.lock().await;
+            if let Some(existing) = links.get(&desc.address_hash).cloned() {
+                existing
+            } else {
+                let created = state.transport.link(desc).await;
+                links.insert(desc.address_hash, created.clone());
+                created
+            }
+        };
+
+        match wait_for_link_active(&state.transport, &link).await {
+            Ok(()) => return Ok(link),
+            Err(err) => {
+                let stale = state.out_links.lock().await.remove(&desc.address_hash);
+                if let Some(stale) = stale {
+                    stale.lock().await.close();
+                }
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return Err(err);
+                }
+                info!(
+                    "[lxmf][events] link activation retry destination={} attempt={} reason={}",
+                    address_hash_to_hex(&desc.address_hash),
+                    attempt + 1,
+                    err,
+                );
+                state.transport.request_path(&desc.address_hash, None, None).await;
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+        }
+    }
+
+    Err(NodeError::Timeout {})
+}
+
 async fn send_lxmf_message(
     state: &NodeRuntimeState,
     destination: AddressHash,
@@ -546,28 +602,45 @@ async fn send_lxmf_message(
         .as_deref()
         .and_then(parse_mission_sync_metadata);
 
+    if let Some(metadata) = metadata.as_ref().filter(|metadata| metadata.is_event_related()) {
+        info!(
+            "[lxmf][events] attempting send requested_destination={} resolved_destination={} kind={} name={} message_id={} event_uid={} mission_uid={} correlation={}",
+            address_hash_to_hex(&destination),
+            address_hash_to_hex(&remote_desc.address_hash),
+            metadata.primary_kind(),
+            metadata.primary_name().unwrap_or("-"),
+            message_id_hex,
+            metadata.event_uid.as_deref().unwrap_or("-"),
+            metadata.mission_uid.as_deref().unwrap_or("-"),
+            metadata.correlation_id.as_deref().unwrap_or("-"),
+        );
+    }
+
+    let link = ensure_lxmf_output_link(state, remote_desc).await?;
+    let packet = link
+        .lock()
+        .await
+        .data_packet(&wire)
+        .map_err(|_| NodeError::InternalError {})?;
+    let outcome = state.transport.send_packet_with_outcome(packet).await;
+
     Ok(LxmfSendReport {
-        outcome: send_transport_packet_with_path_retry(
-            &state.transport,
-            remote_desc.address_hash,
-            &wire,
-        )
-        .await,
+        outcome,
         message_id_hex,
+        resolved_destination_hex: address_hash_to_hex(&remote_desc.address_hash),
         metadata,
     })
 }
 
 async fn register_pending_lxmf_delivery(
     state: &NodeRuntimeState,
-    destination_hex: String,
     report: &LxmfSendReport,
 ) -> Option<PendingLxmfDelivery> {
     let metadata = report.metadata.as_ref()?;
     let tracking_key = metadata.tracking_key()?.to_string();
     let pending = PendingLxmfDelivery {
         message_id_hex: report.message_id_hex.clone(),
-        destination_hex,
+        destination_hex: report.resolved_destination_hex.clone(),
         correlation_id: metadata.correlation_id.clone(),
         command_id: metadata.command_id.clone(),
         command_type: metadata.command_type.clone(),
@@ -943,7 +1016,7 @@ pub async fn run_node(
                             .insert(desc.address_hash, desc);
                         let destination_hex = address_hash_to_hex(&desc.address_hash);
                         let identity_hex = desc.identity.address_hash.to_hex_string();
-                        let destination_kind = announce_destination_kind(&desc.name).to_string();
+                        let destination_kind = announce_destination_kind(&desc).to_string();
                         let app_data = String::from_utf8(event.app_data.as_slice().to_vec())
                             .unwrap_or_else(|_| hex::encode(event.app_data.as_slice()));
                         let interface_hex = hex::encode(event.interface);
@@ -1251,7 +1324,7 @@ pub async fn run_node(
                                     "[lxmf][events] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
                                     metadata.primary_kind(),
                                     metadata.primary_name().unwrap_or("-"),
-                                    destination_hex,
+                                    report.resolved_destination_hex.as_str(),
                                     report.message_id_hex,
                                     metadata.event_uid.as_deref().unwrap_or("-"),
                                     metadata.mission_uid.as_deref().unwrap_or("-"),
@@ -1262,7 +1335,6 @@ pub async fn run_node(
 
                         if let Some(pending) = register_pending_lxmf_delivery(
                             &state,
-                            destination_hex.clone(),
                             report,
                         )
                         .await

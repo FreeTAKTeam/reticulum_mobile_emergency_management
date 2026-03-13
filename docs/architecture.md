@@ -1,4 +1,4 @@
-# Event Flow Architecture
+# Event And Telemetry Flow Architecture
 
 This diagram shows the end-to-end mobile event replication flow over LXMF, including local creation, peer LXMF destination resolution, Community Hub-compatible mission payload transport, receiver-side application, and acknowledgement handling.
 
@@ -68,3 +68,247 @@ sequenceDiagram
         end
     end
 ```
+
+This diagram shows the end-to-end mobile telemetry replication flow. Unlike events, telemetry uses peers that advertise the `Telemetry` capability on the app destination, sends compact telemetry fields directly, and does not wait for LXMF delivery acknowledgement.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as "User / GPS on S8"
+    participant TUI as "Telemetry UI / telemetryStore (S8)"
+    participant TNode as "nodeStore (S8)"
+    participant TRT as "Rust runtime + transport (S8)"
+    participant RNS as "Reticulum Network"
+    participant RRT as "Rust runtime + transport (Pixel/Poco)"
+    participant RNode as "nodeStore (Pixel/Poco)"
+    participant RUI as "Telemetry UI / telemetryStore (Pixel/Poco)"
+
+    Note over TNode,RNode: Telemetry peers are selected from app-destination announces that include the Telemetry capability.
+
+    User->>TUI: Enable telemetry or publish local position
+    TUI->>TUI: Read GPS fix\nnormalize TelemetryPosition
+    TUI->>TUI: Apply locally
+
+    TUI->>TNode: Read telemetryDestinations
+    alt No telemetry-capable peers
+        TUI->>TUI: Keep local position only
+    else Telemetry peers available
+        loop For each telemetry destination
+            TUI->>TNode: sendBytes(destination=app peer,\nfieldsBase64=telemetry payload,\nbytes=EMPTY)
+            TNode->>TRT: Native send request
+            TRT->>RNS: Send transport packet to app destination
+            RNS-->>RRT: Deliver packet
+            RRT-->>RNode: packetReceived(fieldsBase64)
+            RNode-->>RUI: Parse telemetry field
+            RUI->>RUI: Upsert remote position
+            RUI-->>User: Telemetry marker/list updates
+        end
+    end
+
+    Note over TUI,RUI: Snapshot sync is also app-destination based.
+    TUI->>TNode: Watch for newly seen telemetryDestinations
+    TNode->>TRT: sendBytes(destination=app peer,\nfieldsBase64=telemetry snapshot request,\nbytes=EMPTY)
+    TRT->>RNS: Send snapshot request
+    RNS-->>RRT: Deliver request
+    RRT-->>RNode: packetReceived(fieldsBase64)
+    RNode-->>RUI: Parse telemetry_snapshot_request
+    RUI->>RNode: sendBytes(sourceHex,\nfieldsBase64=telemetry stream snapshot,\nbytes=EMPTY)
+    RNode->>RRT: Native send response
+    RRT->>RNS: Send telemetry stream snapshot
+    RNS-->>TRT: Deliver snapshot
+    TRT-->>TNode: packetReceived(fieldsBase64)
+    TNode-->>TUI: Parse telemetry stream
+    TUI->>TUI: Upsert snapshot positions
+```
+
+## Flow Differences
+
+- Telemetry routes to the peer's app destination from `telemetryDestinations`; events route to the peer's separately announced `lxmf/delivery` destination from `connectedEventPeerRoutes`.
+- Telemetry peer selection depends on the `Telemetry` capability in the app announce; event delivery depends on correlating two announces from the same identity: `r3akt/emergency` and `lxmf/delivery`.
+- Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
+- Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
+- Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over app destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
+- Telemetry works even when only the app-destination route is healthy; events additionally require the peer's `lxmf/delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly.
+- Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
+
+## Payloads And Transport
+
+### EmergencyMessage
+
+Primary payload:
+
+```json
+{
+  "kind": "message_upsert",
+  "message": {
+    "callsign": "emergency-ops-S8",
+    "groupName": "Red",
+    "securityStatus": "Green",
+    "capabilityStatus": "Yellow",
+    "preparednessStatus": "Unknown",
+    "medicalStatus": "Green",
+    "mobilityStatus": "Green",
+    "commsStatus": "Green",
+    "notes": "optional",
+    "updatedAt": 1741891234567
+  }
+}
+```
+
+Additional message forms:
+- `{"kind":"message_delete","callsign":"...","deletedAt":<ms>}`
+- `{"kind":"snapshot_request","requestedAt":<ms>}`
+- `{"kind":"snapshot_response","requestedAt":<ms>,"messages":[ActionMessage,...]}`
+
+Transport:
+- Sent with `nodeStore.broadcastJson(...)` for live upserts and deletes.
+- Sent with `nodeStore.sendJson(destination, ...)` for snapshot request/response.
+- This is **not LXMF**.
+- The runtime sends a raw Reticulum transport packet because `sendJson` and `broadcastJson` only provide UTF-8 JSON bytes and no `fieldsBase64`.
+- On the wire the payload is a UTF-8 JSON body parsed by `parseReplicationEnvelope(...)`.
+- LXMF fields used: none.
+
+Routing:
+- Broadcast or direct send over the peer's **app destination** (`r3akt/emergency` path).
+
+### Event
+
+Primary payload:
+- Local `EventRecord` is normalized into a Community Hub-compatible `mission.registry.log_entry.upsert` command.
+- The command is placed inside an array carried in LXMF `FIELD_COMMANDS (0x09)`.
+- This matches the Hub model documented in `Reticulum-Telemetry-Hub/docs/architecture/LXMFfields.md`, where `FIELD_COMMANDS` contains command structures.
+
+Hub-compatible command array shape:
+
+```json
+[
+  {
+    "command_id": "cmd-123",
+    "source": {
+      "rns_identity": "<sender-identity>"
+    },
+    "timestamp": "2026-03-13T12:00:00Z",
+    "command_type": "mission.registry.log_entry.upsert",
+    "args": {
+      "mission_uid": "mission-1",
+      "content": "Operator note",
+      "callsign": "EAGLE-1"
+    },
+    "correlation_id": "ui-save-42",
+    "topics": ["mission-1", "audit"]
+  }
+]
+```
+
+Field placement:
+- LXMF `0x09` (`FIELD_COMMANDS`): array of command envelopes like the example above
+- LXMF `0x0A` (`FIELD_RESULTS`): accepted/result/rejected response payload
+- LXMF `0x0D` (`FIELD_EVENT`): emitted event envelope such as `mission.registry.log_entry.upserted`
+
+Mobile-specific note:
+- The mobile app currently often includes additional event args such as `entry_uid`, `server_time`, `client_time`, `keywords`, `content_hashes`, and may include `source.display_name`.
+- Those are extra fields inside the same Hub command structure; the core transport contract is still an array of commands inside `FIELD_COMMANDS`.
+
+Additional event forms:
+- Mission bootstrap command:
+  - `command_type: "mission.registry.mission.upsert"`
+- Event list request:
+  - `command_type: "mission.registry.log_entry.list"`
+- Accepted/result response:
+  - `status: "accepted" | "result" | "rejected"`
+- Receiver-side event envelope:
+  - `event_type: "mission.registry.log_entry.upserted" | "mission.registry.log_entry.listed"`
+
+Transport:
+- Sent with `nodeStore.sendBytes(destination, EMPTY_BYTES, { fieldsBase64 })`.
+- This **is LXMF**.
+- In the runtime, any `sendBytes(...)` call that includes `fieldsBase64` is wrapped into an LXMF message and sent to the peer's **`lxmf/delivery` destination**.
+- The body bytes are empty for the mission-sync event path; the meaningful data is in the LXMF fields map.
+
+Routing:
+- Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
+
+Acknowledgement:
+- Sender success is tracked from the LXMF response path, not just packet send.
+- The runtime marks delivery `Acknowledged` when it receives a matching response/event on the same `correlation_id` or `command_id`.
+
+### Telemetry
+
+Telemetry has two active wire formats in the app today.
+
+Primary live upsert payload:
+- Local `TelemetryPosition` is encoded into a compact MsgPack telemetry payload and placed into LXMF fields.
+
+Logical telemetry position:
+
+```json
+{
+  "callsign": "<sender lxmf hash or local callsign>",
+  "lat": 44.6488,
+  "lon": -63.5752,
+  "alt": 12.3,
+  "course": 180.0,
+  "speed": 0.5,
+  "accuracy": 4.2,
+  "updatedAt": 1741891234567
+}
+```
+
+Compact telemetry payload content:
+- MsgPack map with:
+  - `0x01` (`SID_TIME`) -> Unix timestamp seconds
+  - `0x02` (`SID_LOCATION`) -> array:
+    1. latitude as signed int32 microdegrees
+    2. longitude as signed int32 microdegrees
+    3. altitude as uint32 centimeters
+    4. speed as uint32 centi-units
+    5. course as uint32 centi-degrees
+    6. accuracy as uint16 centimeters
+    7. timestamp seconds
+
+Snapshot response payload:
+- LXMF telemetry stream field containing entries of:
+  - `[peerHashBytes, timestampSeconds, telemetryPayloadBytes]`
+
+Legacy delete / compatibility payload:
+
+```json
+{
+  "kind": "telemetry_delete",
+  "callsign": "<callsign>",
+  "deletedAt": 1741891234567
+}
+```
+
+Transport:
+- Live upsert:
+  - sent with `nodeStore.sendBytes(destination, EMPTY_BYTES, { fieldsBase64 })`
+  - this **is LXMF**
+  - routed to the peer's **app destination** selected from `telemetryDestinations`
+- Snapshot request and snapshot response:
+  - sent with `sendBytes(..., { fieldsBase64 })`
+  - this **is LXMF**
+  - also routed to the peer's **app destination**
+- Delete compatibility path:
+  - sent with `nodeStore.sendJson(destination, message, dedicatedFields)`
+  - this is **raw RNS direct**, not LXMF
+
+LXMF fields used:
+- `0x02` (`LXMF_FIELD_TELEMETRY`): single telemetry upsert payload
+- `0x03` (`LXMF_FIELD_TELEMETRY_STREAM`): snapshot response stream entries
+- `0x09` (`LXMF_FIELD_COMMANDS`): snapshot request command list with command id `1`
+
+Dedicated raw-field keys used for compatibility delete/upsert parsing:
+- `telemetry.kind`
+- `telemetry.callsign`
+- `telemetry.lat`
+- `telemetry.lon`
+- `telemetry.alt`
+- `telemetry.course`
+- `telemetry.speed`
+- `telemetry.accuracy`
+- `telemetry.updatedAt`
+- `telemetry.deletedAt`
+
+Routing:
+- Telemetry uses the peer's **app destination** when that peer advertises the `Telemetry` capability.

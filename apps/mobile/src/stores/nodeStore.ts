@@ -322,6 +322,27 @@ export const useNodeStore = defineStore("node", () => {
     };
   }
 
+  function isLocalPeerDestination(destinationRaw: string): boolean {
+    const destination = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(destination)) {
+      return false;
+    }
+
+    const localAppDestination = normalizeDestinationHex(status.value.appDestinationHex ?? "");
+    const localLxmfDestination = normalizeDestinationHex(status.value.lxmfDestinationHex ?? "");
+    return destination === localAppDestination || destination === localLxmfDestination;
+  }
+
+  function isLocalPeer(peer: Pick<DiscoveredPeer, "destination" | "identityHex">): boolean {
+    if (isLocalPeerDestination(peer.destination)) {
+      return true;
+    }
+
+    const localIdentity = normalizeDestinationHex(status.value.identityHex ?? "");
+    const peerIdentity = normalizeDestinationHex(peer.identityHex ?? "");
+    return isValidDestinationHex(localIdentity) && peerIdentity === localIdentity;
+  }
+
   function setPeerState(
     destinationRaw: string,
     stateValue: PeerConnectionState,
@@ -587,6 +608,10 @@ export const useNodeStore = defineStore("node", () => {
     if (!client.value || !isValidDestinationHex(destination)) {
       return;
     }
+    if (isLocalPeerDestination(destination)) {
+      appendLog("Warn", `Skipped self-connect for ${destination}.`);
+      return;
+    }
 
     setPeerState(destination, "connecting");
     try {
@@ -788,6 +813,7 @@ export const useNodeStore = defineStore("node", () => {
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
+      .filter((peer) => !isLocalPeer(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 

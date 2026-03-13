@@ -1,5 +1,7 @@
 package network.reticulum.emergency;
 
+import android.util.Log;
+
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 import com.getcapacitor.Plugin;
@@ -232,6 +234,7 @@ public class ReticulumNodePlugin extends Plugin {
                     String eventName = envelope.getString("event");
                     JSObject payload = envelope.getJSObject("payload", new JSObject());
                     if (eventName != null && !eventName.isEmpty()) {
+                        mirrorEventToLogcat(eventName, payload);
                         notifyListeners(eventName, payload);
                     }
                 } catch (Exception ex) {
@@ -239,6 +242,57 @@ public class ReticulumNodePlugin extends Plugin {
                 }
             }
         });
+    }
+
+    private void mirrorEventToLogcat(String eventName, JSObject payload) {
+        if ("log".equals(eventName)) {
+            String level = payload.getString("level", "Info");
+            String message = payload.getString("message", payload.toString());
+            writeLogcat(level, message);
+            return;
+        }
+
+        if (
+            "lxmfDelivery".equals(eventName)
+                || "packetReceived".equals(eventName)
+                || "packetSent".equals(eventName)
+                || "announceReceived".equals(eventName)
+        ) {
+            Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
+        }
+    }
+
+    private void writeLogcat(String level, String message) {
+        int priority;
+        switch (level) {
+            case "Trace":
+            case "Debug":
+                priority = Log.DEBUG;
+                break;
+            case "Warn":
+                priority = Log.WARN;
+                break;
+            case "Error":
+                priority = Log.ERROR;
+                break;
+            case "Info":
+            default:
+                priority = Log.INFO;
+                break;
+        }
+
+        Log.println(priority, TAG, abbreviate(message));
+    }
+
+    private String abbreviate(String value) {
+        if (value == null) {
+            return "";
+        }
+        final int maxLength = 4000;
+        if (value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, maxLength) + "…";
     }
 
     private void stopPoller() {
