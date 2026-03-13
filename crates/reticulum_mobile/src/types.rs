@@ -33,6 +33,14 @@ pub enum SendOutcome {
     DroppedNoRoute {},
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxmfDeliveryStatus {
+    Sent {},
+    Acknowledged {},
+    Failed {},
+    TimedOut {},
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NodeError {
     #[error("invalid config")]
@@ -85,16 +93,38 @@ pub struct PeerChange {
 }
 
 #[derive(Debug, Clone)]
+pub struct LxmfDeliveryUpdate {
+    pub message_id_hex: String,
+    pub destination_hex: String,
+    pub source_hex: Option<String>,
+    pub correlation_id: Option<String>,
+    pub command_id: Option<String>,
+    pub command_type: Option<String>,
+    pub event_uid: Option<String>,
+    pub mission_uid: Option<String>,
+    pub status: LxmfDeliveryStatus,
+    pub detail: Option<String>,
+    pub sent_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
 pub enum NodeEvent {
-    StatusChanged { status: NodeStatus },
+    StatusChanged {
+        status: NodeStatus,
+    },
     AnnounceReceived {
         destination_hex: String,
+        identity_hex: String,
+        destination_kind: String,
         app_data: String,
         hops: u8,
         interface_hex: String,
         received_at_ms: u64,
     },
-    PeerChanged { change: PeerChange },
+    PeerChanged {
+        change: PeerChange,
+    },
     PacketReceived {
         destination_hex: String,
         source_hex: Option<String>,
@@ -106,10 +136,19 @@ pub enum NodeEvent {
         bytes: Vec<u8>,
         outcome: SendOutcome,
     },
+    LxmfDelivery {
+        update: LxmfDeliveryUpdate,
+    },
     HubDirectoryUpdated {
         destinations: Vec<String>,
         received_at_ms: u64,
     },
-    Log { level: LogLevel, message: String },
-    Error { code: String, message: String },
+    Log {
+        level: LogLevel,
+        message: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }

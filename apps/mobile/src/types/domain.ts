@@ -16,9 +16,17 @@ export interface ActionMessage {
 
 export interface EventRecord {
   uid: string;
+  entryUid: string;
+  missionUid: string;
   callsign: string;
+  sourceIdentity?: string;
+  sourceDisplayName?: string;
   type: string;
   summary: string;
+  content: string;
+  serverTime?: string;
+  clientTime?: string;
+  keywords: string[];
   updatedAt: number;
   deletedAt?: number;
 }
@@ -39,6 +47,9 @@ export type PeerConnectionState = "disconnected" | "connecting" | "connected";
 
 export interface DiscoveredPeer {
   destination: string;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  lxmfLastSeenAt?: number;
   label?: string;
   announcedName?: string;
   lastSeenAt: number;

@@ -7,8 +7,8 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    HubMode, LogLevel, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange, PeerState,
-    SendOutcome,
+    HubMode, LogLevel, LxmfDeliveryStatus, LxmfDeliveryUpdate, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, PeerChange, PeerState, SendOutcome,
 };
 
 pub fn healthcheck() -> String {

@@ -3,6 +3,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Disabled" | "RchLxmf" | "RchHttp";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
+export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "other";
 export type SendOutcome =
   | "SentDirect"
   | "SentBroadcast"
@@ -10,6 +11,7 @@ export type SendOutcome =
   | "DroppedCiphertextTooLarge"
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
+export type LxmfDeliveryStatus = "Sent" | "Acknowledged" | "Failed" | "TimedOut";
 
 export interface NodeConfig {
   name: string;
@@ -45,6 +47,8 @@ export interface StatusChangedEvent {
 
 export interface AnnounceReceivedEvent {
   destinationHex: string;
+  identityHex: string;
+  destinationKind: AnnounceDestinationKind;
   appData: string;
   hops: number;
   interfaceHex: string;
@@ -74,6 +78,21 @@ export interface PacketSentEvent {
   outcome: SendOutcome;
 }
 
+export interface LxmfDeliveryEvent {
+  messageIdHex: string;
+  destinationHex: string;
+  sourceHex?: string;
+  correlationId?: string;
+  commandId?: string;
+  commandType?: string;
+  eventUid?: string;
+  missionUid?: string;
+  status: LxmfDeliveryStatus;
+  detail?: string;
+  sentAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface HubDirectoryUpdatedEvent {
   destinations: string[];
   receivedAtMs: number;
@@ -95,6 +114,7 @@ export interface NodeClientEvents {
   peerChanged: PeerChangedEvent;
   packetReceived: PacketReceivedEvent;
   packetSent: PacketSentEvent;
+  lxmfDelivery: LxmfDeliveryEvent;
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
   log: NodeLogEvent;
   error: NodeErrorEvent;
@@ -288,10 +308,21 @@ function toStatusChangedEvent(raw: Record<string, unknown>): StatusChangedEvent 
 function toAnnounceReceivedEvent(
   raw: Record<string, unknown>,
 ): AnnounceReceivedEvent {
+  const destinationKindRaw = String(
+    raw.destinationKind ?? raw.destination_kind ?? "other",
+  );
+  const destinationKind: AnnounceDestinationKind =
+    destinationKindRaw === "app" || destinationKindRaw === "lxmf_delivery"
+      ? destinationKindRaw
+      : "other";
   return {
     destinationHex: normalizeHex(
       String(raw.destinationHex ?? raw.destination_hex ?? ""),
     ),
+    identityHex: normalizeHex(
+      String(raw.identityHex ?? raw.identity_hex ?? ""),
+    ),
+    destinationKind,
     appData: String(raw.appData ?? raw.app_data ?? ""),
     hops: Number(raw.hops ?? 0),
     interfaceHex: String(raw.interfaceHex ?? raw.interface_hex ?? ""),
@@ -363,6 +394,66 @@ function toPacketSentEvent(raw: Record<string, unknown>): PacketSentEvent {
     ),
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
     outcome: toSendOutcome(raw.outcome),
+  };
+}
+
+function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
+  const value = String(raw ?? "");
+  const valid: LxmfDeliveryStatus[] = ["Sent", "Acknowledged", "Failed", "TimedOut"];
+  return valid.includes(value as LxmfDeliveryStatus)
+    ? (value as LxmfDeliveryStatus)
+    : "Failed";
+}
+
+function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
+  return {
+    messageIdHex: normalizeHex(
+      String(raw.messageIdHex ?? raw.message_id_hex ?? ""),
+    ),
+    destinationHex: normalizeHex(
+      String(raw.destinationHex ?? raw.destination_hex ?? ""),
+    ),
+    sourceHex:
+      raw.sourceHex !== undefined || raw.source_hex !== undefined
+        ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
+        : undefined,
+    correlationId:
+      typeof raw.correlationId === "string"
+        ? raw.correlationId
+        : typeof raw.correlation_id === "string"
+          ? raw.correlation_id
+          : undefined,
+    commandId:
+      typeof raw.commandId === "string"
+        ? raw.commandId
+        : typeof raw.command_id === "string"
+          ? raw.command_id
+          : undefined,
+    commandType:
+      typeof raw.commandType === "string"
+        ? raw.commandType
+        : typeof raw.command_type === "string"
+          ? raw.command_type
+          : undefined,
+    eventUid:
+      typeof raw.eventUid === "string"
+        ? raw.eventUid
+        : typeof raw.event_uid === "string"
+          ? raw.event_uid
+          : undefined,
+    missionUid:
+      typeof raw.missionUid === "string"
+        ? raw.missionUid
+        : typeof raw.mission_uid === "string"
+          ? raw.mission_uid
+          : undefined,
+    status: toLxmfDeliveryStatus(raw.status),
+    detail:
+      typeof raw.detail === "string"
+        ? raw.detail
+        : undefined,
+    sentAtMs: Number(raw.sentAtMs ?? raw.sent_at_ms ?? Date.now()),
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
   };
 }
 
@@ -441,6 +532,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("peerChanged", toPeerChangedEvent);
       await register("packetReceived", toPacketReceivedEvent);
       await register("packetSent", toPacketSentEvent);
+      await register("lxmfDelivery", toLxmfDeliveryEvent);
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
@@ -668,6 +760,7 @@ const MOCK_ANNOUNCED_PEERS = [
   "99dd0a1cf3e95fc6f1d3a6765af96752",
   "a2f0d9a5fb6b94317802fca20af739b0",
 ];
+const MOCK_ANNOUNCED_IDENTITIES = MOCK_ANNOUNCED_PEERS.map(() => randomHex32());
 
 const MOCK_HUB_PEERS = [
   "7eb6e03ed67cd89bb3c5a7ac8713a109",
@@ -697,9 +790,16 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   private announceTimer: number | null = null;
   private readonly connected = new Set<string>();
 
-  private emitAnnounce(destinationHex: string, appData: string): void {
+  private emitAnnounce(
+    destinationHex: string,
+    appData: string,
+    identityHex = randomHex32(),
+    destinationKind: AnnounceDestinationKind = "app",
+  ): void {
     this.emitter.emit("announceReceived", {
       destinationHex,
+      identityHex,
+      destinationKind,
       appData,
       hops: Math.max(1, Math.floor(Math.random() * 3)),
       interfaceHex: randomHex32(),
@@ -711,16 +811,21 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     if (this.announceTimer !== null) {
       return;
     }
-    for (const peer of MOCK_ANNOUNCED_PEERS) {
-      this.emitAnnounce(peer, "R3AKT,EMergencyMessages");
+    for (const [index, peer] of MOCK_ANNOUNCED_PEERS.entries()) {
+      const identityHex = MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32();
+      this.emitAnnounce(peer, "R3AKT,EMergencyMessages", identityHex, "app");
+      this.emitAnnounce(randomHex32(), "6ac46f686174", identityHex, "lxmf_delivery");
     }
-    this.emitAnnounce(randomHex32(), "LXMF,Chat");
+    this.emitAnnounce(randomHex32(), "LXMF,Chat", randomHex32(), "other");
 
     this.announceTimer = window.setInterval(() => {
-      const shuffled = [...MOCK_ANNOUNCED_PEERS].sort(() => Math.random() - 0.5);
+      const shuffled = [...MOCK_ANNOUNCED_PEERS.entries()].sort(() => Math.random() - 0.5);
+      const [index, destinationHex] = shuffled[0] ?? [0, randomHex32()];
       this.emitAnnounce(
-        shuffled[0] ?? randomHex32(),
+        destinationHex,
         Math.random() > 0.25 ? this.capabilities : "R3AKT,Other",
+        MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32(),
+        "app",
       );
     }, 5000);
   }

@@ -31,4 +31,3 @@ impl EventBus {
         guard.retain(|tx| tx.send(event.clone()).is_ok());
     }
 }
-

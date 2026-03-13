@@ -20,6 +20,8 @@ enum SendOutcome {
   "DroppedNoRoute"
 };
 
+enum LxmfDeliveryStatus { "Sent", "Acknowledged", "Failed", "TimedOut" };
+
 // Error surface.
 
 [Error]
@@ -78,12 +80,29 @@ dictionary PeerChange {
   string? last_error;
 };
 
+dictionary LxmfDeliveryUpdate {
+  string message_id_hex;
+  string destination_hex;
+  string? source_hex;
+  string? correlation_id;
+  string? command_id;
+  string? command_type;
+  string? event_uid;
+  string? mission_uid;
+  LxmfDeliveryStatus status;
+  string? detail;
+  u64 sent_at_ms;
+  u64 updated_at_ms;
+};
+
 // Event stream from the node to the UI.
 [Enum]
 interface NodeEvent {
   StatusChanged(NodeStatus status);
   AnnounceReceived(
     string destination_hex,
+    string identity_hex,
+    string destination_kind,
     string app_data,
     u8 hops,
     string interface_hex,
@@ -92,6 +111,7 @@ interface NodeEvent {
   PeerChanged(PeerChange change);
   PacketReceived(string destination_hex, string? source_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
   PacketSent(string destination_hex, sequence<u8> bytes, SendOutcome outcome);
+  LxmfDelivery(LxmfDeliveryUpdate update);
   HubDirectoryUpdated(sequence<string> destinations, u64 received_at_ms);
   Log(LogLevel level, string message);
   Error(string code, string message);

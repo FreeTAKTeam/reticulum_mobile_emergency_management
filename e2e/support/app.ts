@@ -23,10 +23,18 @@ export interface ActionMessageSeed {
 
 export interface EventSeed {
   uid: string;
+  entryUid?: string;
+  missionUid?: string;
   callsign: string;
+  sourceIdentity?: string;
+  sourceDisplayName?: string;
   type: string;
   summary: string;
+  content?: string;
   updatedAt: number;
+  serverTime?: number;
+  clientTime?: number;
+  keywords?: string[];
   deletedAt?: number;
 }
 
@@ -54,6 +62,8 @@ export interface SettingsSeed {
     enabled: boolean;
     publishIntervalSeconds: number;
     accuracyThresholdMeters?: number;
+    staleAfterMinutes: number;
+    expireAfterMinutes: number;
   };
   hub: {
     mode: "Disabled" | "RchLxmf" | "RchHttp";
@@ -90,6 +100,8 @@ export const defaultSettings: SettingsSeed = {
   telemetry: {
     enabled: false,
     publishIntervalSeconds: 10,
+    staleAfterMinutes: 30,
+    expireAfterMinutes: 180,
   },
   hub: {
     mode: "Disabled",

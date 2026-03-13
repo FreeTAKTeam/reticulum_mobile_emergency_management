@@ -11,7 +11,8 @@ use serde_json::json;
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    HubMode, LogLevel, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerState, SendOutcome,
+    HubMode, LogLevel, LxmfDeliveryStatus, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerState,
+    SendOutcome,
 };
 
 const RESULT_OK: jint = 0;
@@ -112,7 +113,12 @@ fn make_jstring_or_null(env: &mut JNIEnv, value: String) -> jstring {
 }
 
 fn parse_hub_mode(value: Option<&str>) -> HubMode {
-    match value.unwrap_or("Disabled").trim().to_ascii_lowercase().as_str() {
+    match value
+        .unwrap_or("Disabled")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "rchlxmf" | "rch_lxmf" => HubMode::RchLxmf {},
         "rchhttp" | "rch_http" => HubMode::RchHttp {},
         _ => HubMode::Disabled {},
@@ -217,6 +223,15 @@ fn send_outcome_to_str(outcome: SendOutcome) -> &'static str {
     }
 }
 
+fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
+    match status {
+        LxmfDeliveryStatus::Sent {} => "Sent",
+        LxmfDeliveryStatus::Acknowledged {} => "Acknowledged",
+        LxmfDeliveryStatus::Failed {} => "Failed",
+        LxmfDeliveryStatus::TimedOut {} => "TimedOut",
+    }
+}
+
 fn log_level_to_str(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Trace {} => "Trace",
@@ -243,6 +258,8 @@ fn event_to_wire_json(event: NodeEvent) -> String {
         ),
         NodeEvent::AnnounceReceived {
             destination_hex,
+            identity_hex,
+            destination_kind,
             app_data,
             hops,
             interface_hex,
@@ -251,6 +268,8 @@ fn event_to_wire_json(event: NodeEvent) -> String {
             "announceReceived",
             json!({
                 "destinationHex": destination_hex,
+                "identityHex": identity_hex,
+                "destinationKind": destination_kind,
                 "appData": app_data,
                 "hops": hops,
                 "interfaceHex": interface_hex,
@@ -291,6 +310,23 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "destinationHex": destination_hex,
                 "bytesBase64": BASE64_STANDARD.encode(bytes),
                 "outcome": send_outcome_to_str(outcome)
+            }),
+        ),
+        NodeEvent::LxmfDelivery { update } => (
+            "lxmfDelivery",
+            json!({
+                "messageIdHex": update.message_id_hex,
+                "destinationHex": update.destination_hex,
+                "sourceHex": update.source_hex,
+                "correlationId": update.correlation_id,
+                "commandId": update.command_id,
+                "commandType": update.command_type,
+                "eventUid": update.event_uid,
+                "missionUid": update.mission_uid,
+                "status": lxmf_delivery_status_to_str(update.status),
+                "detail": update.detail,
+                "sentAtMs": update.sent_at_ms,
+                "updatedAtMs": update.updated_at_ms
             }),
         ),
         NodeEvent::HubDirectoryUpdated {
@@ -549,7 +585,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         Some(encoded) => match BASE64_STANDARD.decode(encoded.as_bytes()) {
             Ok(value) => Some(value),
             Err(e) => {
-                return err_result("InvalidConfig", format!("invalid fields base64 payload: {e}"))
+                return err_result(
+                    "InvalidConfig",
+                    format!("invalid fields base64 payload: {e}"),
+                )
             }
         },
         None => None,

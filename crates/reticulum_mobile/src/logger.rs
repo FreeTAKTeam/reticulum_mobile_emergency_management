@@ -101,4 +101,3 @@ impl Log for NodeLogger {
 
     fn flush(&self) {}
 }
-

@@ -2,16 +2,18 @@
 import { computed, reactive, shallowRef } from "vue";
 
 import { useEventsStore } from "../stores/eventsStore";
+import { useNodeStore } from "../stores/nodeStore";
 
 const eventsStore = useEventsStore();
+const nodeStore = useNodeStore();
 eventsStore.init();
 eventsStore.initReplication();
 
 const events = computed(() => eventsStore.records);
 const isCreateFormVisible = shallowRef(false);
+const configuredCallsign = computed(() => nodeStore.settings.displayName.trim() || "Unset");
 
 const createForm = reactive({
-  callsign: "",
   type: "Incident",
   summary: "",
 });
@@ -21,11 +23,10 @@ function toggleCreateForm(): void {
 }
 
 async function createEvent(): Promise<void> {
-  if (!createForm.callsign.trim() || !createForm.summary.trim()) {
+  if (!createForm.summary.trim() || configuredCallsign.value === "Unset") {
     return;
   }
   await eventsStore.upsertLocal({
-    callsign: createForm.callsign.trim(),
     type: createForm.type.trim() || "Incident",
     summary: createForm.summary.trim(),
   });
@@ -61,10 +62,11 @@ async function deleteEvent(uid: string): Promise<void> {
 
     <form v-show="isCreateFormVisible" class="create-form" @submit.prevent="createEvent">
       <input
-        v-model="createForm.callsign"
+        :value="configuredCallsign"
         type="text"
-        placeholder="Call Sign"
-        aria-label="Call Sign"
+        placeholder="Configured call sign"
+        aria-label="Configured call sign"
+        readonly
       />
       <input
         v-model="createForm.type"
@@ -176,7 +178,7 @@ h1 {
   align-items: center;
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: minmax(120px, 170px) minmax(120px, 160px) 1fr auto;
+  grid-template-columns: minmax(150px, 190px) minmax(120px, 160px) 1fr auto;
 }
 
 .create-form input {

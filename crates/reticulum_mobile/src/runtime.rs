@@ -5,10 +5,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel as cb;
 use fs_err as fs;
-use lxmf::message::Message as LxmfMessage;
+use log::info;
+use lxmf::message::{Message as LxmfMessage, WireMessage as LxmfWireMessage};
 use rand_core::OsRng;
 use regex::Regex;
-use rmpv::Value as MsgPackValue;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
 use reticulum::hash::AddressHash;
@@ -16,18 +16,24 @@ use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
 use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport, TransportConfig};
+use rmpv::Value as MsgPackValue;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 use crate::event_bus::EventBus;
 use crate::types::{
-    HubMode, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange, PeerState, SendOutcome,
+    HubMode, LxmfDeliveryStatus, LxmfDeliveryUpdate, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    PeerChange, PeerState, SendOutcome,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const LXMF_FIELD_COMMANDS: i64 = 0x09;
+const LXMF_FIELD_RESULTS: i64 = 0x0A;
+const LXMF_FIELD_EVENT: i64 = 0x0D;
 
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
+const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -54,6 +60,16 @@ fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {
 
 fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
+}
+
+fn announce_destination_kind(name: &DestinationName) -> &'static str {
+    if name.hash == DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1).hash {
+        "app"
+    } else if name.hash == DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1).hash {
+        "lxmf_delivery"
+    } else {
+        "other"
+    }
 }
 
 fn join_url(base: &str, path: &str) -> Result<String, NodeError> {
@@ -99,6 +115,249 @@ fn send_outcome_to_udl(outcome: RnsSendOutcome) -> SendOutcome {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct MissionSyncMetadata {
+    correlation_id: Option<String>,
+    command_id: Option<String>,
+    command_type: Option<String>,
+    result_status: Option<String>,
+    event_type: Option<String>,
+    event_uid: Option<String>,
+    mission_uid: Option<String>,
+}
+
+impl MissionSyncMetadata {
+    fn tracking_key(&self) -> Option<&str> {
+        self.correlation_id
+            .as_deref()
+            .or(self.command_id.as_deref())
+    }
+
+    fn primary_kind(&self) -> &'static str {
+        if self.command_type.is_some() {
+            "command"
+        } else if self.result_status.is_some() {
+            "result"
+        } else if self.event_type.is_some() {
+            "event"
+        } else {
+            "message"
+        }
+    }
+
+    fn primary_name(&self) -> Option<&str> {
+        self.command_type
+            .as_deref()
+            .or(self.event_type.as_deref())
+            .or(self.result_status.as_deref())
+    }
+
+    fn is_event_related(&self) -> bool {
+        self.command_type
+            .as_deref()
+            .is_some_and(is_event_mission_name)
+            || self
+                .event_type
+                .as_deref()
+                .is_some_and(is_event_mission_name)
+            || self.event_uid.is_some()
+            || self.mission_uid.is_some()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingLxmfDelivery {
+    message_id_hex: String,
+    destination_hex: String,
+    correlation_id: Option<String>,
+    command_id: Option<String>,
+    command_type: Option<String>,
+    event_uid: Option<String>,
+    mission_uid: Option<String>,
+    sent_at_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LxmfSendReport {
+    outcome: RnsSendOutcome,
+    message_id_hex: String,
+    metadata: Option<MissionSyncMetadata>,
+}
+
+fn is_event_mission_name(name: &str) -> bool {
+    matches!(
+        name,
+        "mission.registry.mission.upsert"
+            | "mission.registry.mission.upserted"
+            | "mission.registry.log_entry.upsert"
+            | "mission.registry.log_entry.upserted"
+            | "mission.registry.log_entry.list"
+            | "mission.registry.log_entry.listed"
+    )
+}
+
+fn msgpack_get_indexed<'a>(value: &'a MsgPackValue, key: i64) -> Option<&'a MsgPackValue> {
+    let entries = match value {
+        MsgPackValue::Map(entries) => entries,
+        _ => return None,
+    };
+    let key_string = key.to_string();
+
+    for (entry_key, entry_value) in entries {
+        match entry_key {
+            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => {
+                return Some(entry_value)
+            }
+            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
+                return Some(entry_value)
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn msgpack_get_named<'a>(value: &'a MsgPackValue, keys: &[&str]) -> Option<&'a MsgPackValue> {
+    let entries = match value {
+        MsgPackValue::Map(entries) => entries,
+        _ => return None,
+    };
+
+    for wanted in keys {
+        for (entry_key, entry_value) in entries {
+            if matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
+            {
+                return Some(entry_value);
+            }
+        }
+    }
+    None
+}
+
+fn msgpack_string(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::String(value) => value.as_str().map(ToOwned::to_owned),
+        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
+        _ => None,
+    }
+}
+
+fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<MissionSyncMetadata> {
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
+    let mut metadata = MissionSyncMetadata::default();
+
+    if let Some(commands) = msgpack_get_indexed(&fields, LXMF_FIELD_COMMANDS) {
+        if let MsgPackValue::Array(entries) = commands {
+            if let Some(first) = entries.first() {
+                metadata.command_id =
+                    msgpack_get_named(first, &["command_id"]).and_then(msgpack_string);
+                metadata.correlation_id =
+                    msgpack_get_named(first, &["correlation_id"]).and_then(msgpack_string);
+                metadata.command_type =
+                    msgpack_get_named(first, &["command_type"]).and_then(msgpack_string);
+                if let Some(args) = msgpack_get_named(first, &["args"]) {
+                    metadata.event_uid = msgpack_get_named(args, &["entry_uid", "entryUid", "uid"])
+                        .and_then(msgpack_string);
+                    metadata.mission_uid =
+                        msgpack_get_named(args, &["mission_uid", "missionUid", "uid"])
+                            .and_then(msgpack_string);
+                }
+            }
+        }
+    }
+
+    if let Some(result) = msgpack_get_indexed(&fields, LXMF_FIELD_RESULTS) {
+        metadata.command_id = metadata
+            .command_id
+            .or_else(|| msgpack_get_named(result, &["command_id"]).and_then(msgpack_string));
+        metadata.correlation_id = metadata
+            .correlation_id
+            .or_else(|| msgpack_get_named(result, &["correlation_id"]).and_then(msgpack_string));
+        metadata.result_status = msgpack_get_named(result, &["status"]).and_then(msgpack_string);
+    }
+
+    if let Some(event) = msgpack_get_indexed(&fields, LXMF_FIELD_EVENT) {
+        metadata.event_type = msgpack_get_named(event, &["event_type"]).and_then(msgpack_string);
+        metadata.event_uid = metadata
+            .event_uid
+            .or_else(|| msgpack_get_named(event, &["event_id"]).and_then(msgpack_string));
+        if let Some(payload) = msgpack_get_named(event, &["payload"]) {
+            metadata.event_uid = metadata.event_uid.or_else(|| {
+                msgpack_get_named(payload, &["entry_uid", "entryUid", "uid"])
+                    .and_then(msgpack_string)
+            });
+            metadata.mission_uid = metadata.mission_uid.or_else(|| {
+                msgpack_get_named(payload, &["mission_uid", "missionUid", "uid"])
+                    .and_then(msgpack_string)
+            });
+        }
+    }
+
+    if metadata.command_id.is_none()
+        && metadata.correlation_id.is_none()
+        && metadata.command_type.is_none()
+        && metadata.result_status.is_none()
+        && metadata.event_type.is_none()
+        && metadata.event_uid.is_none()
+        && metadata.mission_uid.is_none()
+    {
+        return None;
+    }
+
+    Some(metadata)
+}
+
+fn emit_lxmf_delivery(
+    bus: &EventBus,
+    pending: &PendingLxmfDelivery,
+    status: LxmfDeliveryStatus,
+    detail: Option<String>,
+) {
+    let now = now_ms();
+    bus.emit(NodeEvent::LxmfDelivery {
+        update: LxmfDeliveryUpdate {
+            message_id_hex: pending.message_id_hex.clone(),
+            destination_hex: pending.destination_hex.clone(),
+            source_hex: None,
+            correlation_id: pending.correlation_id.clone(),
+            command_id: pending.command_id.clone(),
+            command_type: pending.command_type.clone(),
+            event_uid: pending.event_uid.clone(),
+            mission_uid: pending.mission_uid.clone(),
+            status,
+            detail,
+            sent_at_ms: pending.sent_at_ms,
+            updated_at_ms: now,
+        },
+    });
+}
+
+fn emit_lxmf_delivery_with_source(
+    bus: &EventBus,
+    pending: &PendingLxmfDelivery,
+    source_hex: Option<String>,
+    status: LxmfDeliveryStatus,
+    detail: Option<String>,
+) {
+    let now = now_ms();
+    bus.emit(NodeEvent::LxmfDelivery {
+        update: LxmfDeliveryUpdate {
+            message_id_hex: pending.message_id_hex.clone(),
+            destination_hex: pending.destination_hex.clone(),
+            source_hex,
+            correlation_id: pending.correlation_id.clone(),
+            command_id: pending.command_id.clone(),
+            command_type: pending.command_type.clone(),
+            event_uid: pending.event_uid.clone(),
+            mission_uid: pending.mission_uid.clone(),
+            status,
+            detail,
+            sent_at_ms: pending.sent_at_ms,
+            updated_at_ms: now,
+        },
+    });
+}
+
 fn encode_delivery_display_name_app_data(display_name: &str) -> Option<Vec<u8>> {
     let normalized = lxmf::helpers::normalize_display_name(display_name).ok()?;
     let peer_data = MsgPackValue::Array(vec![
@@ -129,7 +388,10 @@ async fn send_transport_packet_with_path_retry(
     for _ in 0..MAX_ATTEMPTS {
         let packet = create_transport_data_packet(destination, bytes);
         let outcome = transport.send_packet_with_outcome(packet).await;
-        if matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast) {
+        if matches!(
+            outcome,
+            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+        ) {
             return outcome;
         }
 
@@ -149,7 +411,9 @@ async fn send_transport_packet_with_path_retry(
 }
 
 pub enum Command {
-    Stop { resp: cb::Sender<Result<(), NodeError>> },
+    Stop {
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
     ConnectPeer {
         destination_hex: String,
         resp: cb::Sender<Result<(), NodeError>>,
@@ -172,8 +436,12 @@ pub enum Command {
         capability_string: String,
         resp: cb::Sender<Result<(), NodeError>>,
     },
-    SetLogLevel { level: crate::types::LogLevel },
-    RefreshHubDirectory { resp: cb::Sender<Result<(), NodeError>> },
+    SetLogLevel {
+        level: crate::types::LogLevel,
+    },
+    RefreshHubDirectory {
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
 }
 
 #[derive(Clone)]
@@ -184,6 +452,7 @@ struct NodeRuntimeState {
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
+    pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
 }
 
 async fn ensure_destination_desc(
@@ -238,7 +507,7 @@ async fn send_lxmf_message(
     destination: AddressHash,
     content: &[u8],
     fields_bytes: Option<Vec<u8>>,
-) -> Result<RnsSendOutcome, NodeError> {
+) -> Result<LxmfSendReport, NodeError> {
     let remote_desc = resolve_lxmf_destination_desc(state, destination).await?;
 
     let mut source = [0u8; 16];
@@ -259,9 +528,9 @@ async fn send_lxmf_message(
     message.source_hash = Some(source);
     message.destination_hash = Some(target);
     message.set_content_from_bytes(content);
-    message.fields = match fields_bytes {
+    message.fields = match fields_bytes.as_ref() {
         Some(bytes) => Some(
-            rmp_serde::from_slice::<MsgPackValue>(&bytes)
+            rmp_serde::from_slice::<MsgPackValue>(bytes)
                 .map_err(|_| NodeError::InvalidConfig {})?,
         ),
         None => None,
@@ -270,13 +539,118 @@ async fn send_lxmf_message(
     let wire = message
         .to_wire(Some(&state.identity))
         .map_err(|_| NodeError::InternalError {})?;
+    let message_id_hex = LxmfWireMessage::unpack(&wire)
+        .map(|wire| hex::encode(wire.message_id()))
+        .map_err(|_| NodeError::InternalError {})?;
+    let metadata = fields_bytes
+        .as_deref()
+        .and_then(parse_mission_sync_metadata);
 
-    Ok(send_transport_packet_with_path_retry(
-        &state.transport,
-        remote_desc.address_hash,
-        &wire,
-    )
-    .await)
+    Ok(LxmfSendReport {
+        outcome: send_transport_packet_with_path_retry(
+            &state.transport,
+            remote_desc.address_hash,
+            &wire,
+        )
+        .await,
+        message_id_hex,
+        metadata,
+    })
+}
+
+async fn register_pending_lxmf_delivery(
+    state: &NodeRuntimeState,
+    destination_hex: String,
+    report: &LxmfSendReport,
+) -> Option<PendingLxmfDelivery> {
+    let metadata = report.metadata.as_ref()?;
+    let tracking_key = metadata.tracking_key()?.to_string();
+    let pending = PendingLxmfDelivery {
+        message_id_hex: report.message_id_hex.clone(),
+        destination_hex,
+        correlation_id: metadata.correlation_id.clone(),
+        command_id: metadata.command_id.clone(),
+        command_type: metadata.command_type.clone(),
+        event_uid: metadata.event_uid.clone(),
+        mission_uid: metadata.mission_uid.clone(),
+        sent_at_ms: now_ms(),
+    };
+
+    state
+        .pending_lxmf_deliveries
+        .lock()
+        .await
+        .insert(tracking_key, pending.clone());
+    Some(pending)
+}
+
+async fn ack_pending_lxmf_delivery(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    source_hex: Option<&str>,
+    metadata: &MissionSyncMetadata,
+) {
+    let Some(source_hex) = source_hex else {
+        return;
+    };
+
+    let detail = metadata
+        .result_status
+        .clone()
+        .or_else(|| metadata.event_type.clone())
+        .or_else(|| metadata.command_type.clone());
+    let mut guard = state.pending_lxmf_deliveries.lock().await;
+    let mut matched: Option<PendingLxmfDelivery> = None;
+
+    for key in [
+        metadata.correlation_id.as_deref(),
+        metadata.command_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(candidate) = guard.remove(key) {
+            matched = Some(candidate);
+            break;
+        }
+    }
+
+    drop(guard);
+
+    let Some(pending) = matched else {
+        return;
+    };
+    if pending.destination_hex != source_hex {
+        if let Some(tracking_key) = pending
+            .correlation_id
+            .as_deref()
+            .or(pending.command_id.as_deref())
+            .map(ToOwned::to_owned)
+        {
+            state
+                .pending_lxmf_deliveries
+                .lock()
+                .await
+                .insert(tracking_key, pending);
+        }
+        return;
+    }
+
+    emit_lxmf_delivery_with_source(
+        bus,
+        &pending,
+        Some(source_hex.to_string()),
+        LxmfDeliveryStatus::Acknowledged {},
+        detail.clone(),
+    );
+    info!(
+        "[lxmf][events] acknowledged message_id={} destination={} command={} correlation={} detail={}",
+        pending.message_id_hex,
+        pending.destination_hex,
+        pending.command_type.as_deref().unwrap_or("-"),
+        pending.correlation_id.as_deref().unwrap_or("-"),
+        detail.as_deref().unwrap_or("-"),
+    );
 }
 
 async fn wait_for_link_active(
@@ -401,7 +775,10 @@ async fn refresh_hub_directory_lxmf(
         .data_packet(&wire)
         .map_err(|_| NodeError::InternalError {})?;
     let outcome = state.transport.send_packet_with_outcome(packet).await;
-    if !matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast) {
+    if !matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    ) {
         return Err(NodeError::NetworkError {});
     }
 
@@ -502,10 +879,13 @@ pub async fn run_node(
     let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
-    let out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>> =
-        Arc::new(TokioMutex::new(HashMap::new()));
+    let out_links: Arc<
+        TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>,
+    > = Arc::new(TokioMutex::new(HashMap::new()));
     let connected_peers: Arc<TokioMutex<HashSet<AddressHash>>> =
         Arc::new(TokioMutex::new(HashSet::new()));
+    let pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>> =
+        Arc::new(TokioMutex::new(HashMap::new()));
 
     let state = NodeRuntimeState {
         identity: identity.clone(),
@@ -513,11 +893,14 @@ pub async fn run_node(
         lxmf_destination: lxmf_destination.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
+        pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
     };
 
     if let Ok(mut guard) = status.lock() {
         guard.running = true;
-        bus.emit(NodeEvent::StatusChanged { status: guard.clone() });
+        bus.emit(NodeEvent::StatusChanged {
+            status: guard.clone(),
+        });
     }
 
     // Announces.
@@ -554,13 +937,20 @@ pub async fn run_node(
                 match rx.recv().await {
                     Ok(event) => {
                         let desc = event.destination.lock().await.desc;
-                        known_destinations.lock().await.insert(desc.address_hash, desc);
+                        known_destinations
+                            .lock()
+                            .await
+                            .insert(desc.address_hash, desc);
                         let destination_hex = address_hash_to_hex(&desc.address_hash);
+                        let identity_hex = desc.identity.address_hash.to_hex_string();
+                        let destination_kind = announce_destination_kind(&desc.name).to_string();
                         let app_data = String::from_utf8(event.app_data.as_slice().to_vec())
                             .unwrap_or_else(|_| hex::encode(event.app_data.as_slice()));
                         let interface_hex = hex::encode(event.interface);
                         bus.emit(NodeEvent::AnnounceReceived {
                             destination_hex,
+                            identity_hex,
+                            destination_kind,
                             app_data,
                             hops: event.hops,
                             interface_hex,
@@ -578,6 +968,7 @@ pub async fn run_node(
     {
         let transport = transport.clone();
         let bus = bus.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             let mut rx = transport.received_data_events();
             loop {
@@ -586,13 +977,38 @@ pub async fn run_node(
                         let destination_hex = address_hash_to_hex(&event.destination);
                         if let Ok(message) = LxmfMessage::from_wire(event.data.as_slice()) {
                             let source_hex = message.source_hash.map(hex::encode);
+                            let fields_bytes = message
+                                .fields
+                                .and_then(|value| rmp_serde::to_vec(&value).ok());
+                            if let Some(metadata) = fields_bytes
+                                .as_deref()
+                                .and_then(parse_mission_sync_metadata)
+                            {
+                                if metadata.is_event_related() {
+                                    info!(
+                                        "[lxmf][events] received kind={} name={} source={} destination={} event_uid={} mission_uid={} correlation={}",
+                                        metadata.primary_kind(),
+                                        metadata.primary_name().unwrap_or("-"),
+                                        source_hex.as_deref().unwrap_or("-"),
+                                        destination_hex,
+                                        metadata.event_uid.as_deref().unwrap_or("-"),
+                                        metadata.mission_uid.as_deref().unwrap_or("-"),
+                                        metadata.correlation_id.as_deref().unwrap_or("-"),
+                                    );
+                                }
+                                ack_pending_lxmf_delivery(
+                                    &state,
+                                    &bus,
+                                    source_hex.as_deref(),
+                                    &metadata,
+                                )
+                                .await;
+                            }
                             bus.emit(NodeEvent::PacketReceived {
                                 destination_hex,
                                 source_hex,
                                 bytes: message.content,
-                                fields_bytes: message
-                                    .fields
-                                    .and_then(|value| rmp_serde::to_vec(&value).ok()),
+                                fields_bytes,
                             });
                             continue;
                         }
@@ -606,6 +1022,51 @@ pub async fn run_node(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    }
+
+    // Pending LXMF acknowledgement timeout watcher.
+    {
+        let bus = bus.clone();
+        let pending_lxmf_deliveries = pending_lxmf_deliveries.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let now = now_ms();
+                let mut expired = Vec::<PendingLxmfDelivery>::new();
+                {
+                    let mut guard = pending_lxmf_deliveries.lock().await;
+                    let expired_keys = guard
+                        .iter()
+                        .filter_map(|(key, pending)| {
+                            (now.saturating_sub(pending.sent_at_ms)
+                                >= DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64)
+                                .then(|| key.clone())
+                        })
+                        .collect::<Vec<_>>();
+                    for key in expired_keys {
+                        if let Some(pending) = guard.remove(&key) {
+                            expired.push(pending);
+                        }
+                    }
+                }
+                for pending in expired {
+                    emit_lxmf_delivery(
+                        &bus,
+                        &pending,
+                        LxmfDeliveryStatus::TimedOut {},
+                        Some("ack timeout".to_string()),
+                    );
+                    info!(
+                        "[lxmf][events] timed out message_id={} destination={} command={} correlation={}",
+                        pending.message_id_hex,
+                        pending.destination_hex,
+                        pending.command_type.as_deref().unwrap_or("-"),
+                        pending.correlation_id.as_deref().unwrap_or("-"),
+                    );
                 }
             }
         });
@@ -676,7 +1137,9 @@ pub async fn run_node(
             Command::Stop { resp } => {
                 if let Ok(mut guard) = status.lock() {
                     guard.running = false;
-                    bus.emit(NodeEvent::StatusChanged { status: guard.clone() });
+                    bus.emit(NodeEvent::StatusChanged {
+                        status: guard.clone(),
+                    });
                 }
                 let _ = resp.send(Ok(()));
                 break;
@@ -764,8 +1227,13 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    let outcome = if fields_bytes.is_some() {
-                        send_lxmf_message(&state, dest, &bytes, fields_bytes.clone()).await?
+                    let lxmf_report = if fields_bytes.is_some() {
+                        Some(send_lxmf_message(&state, dest, &bytes, fields_bytes.clone()).await?)
+                    } else {
+                        None
+                    };
+                    let outcome = if let Some(report) = lxmf_report.as_ref() {
+                        report.outcome
                     } else {
                         send_transport_packet_with_path_retry(&transport, dest, &bytes).await
                     };
@@ -775,6 +1243,75 @@ pub async fn run_node(
                         bytes: bytes.clone(),
                         outcome: mapped,
                     });
+
+                    if let Some(report) = lxmf_report.as_ref() {
+                        if let Some(metadata) = report.metadata.as_ref() {
+                            if metadata.is_event_related() {
+                                info!(
+                                    "[lxmf][events] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
+                                    metadata.primary_kind(),
+                                    metadata.primary_name().unwrap_or("-"),
+                                    destination_hex,
+                                    report.message_id_hex,
+                                    metadata.event_uid.as_deref().unwrap_or("-"),
+                                    metadata.mission_uid.as_deref().unwrap_or("-"),
+                                    metadata.correlation_id.as_deref().unwrap_or("-"),
+                                );
+                            }
+                        }
+
+                        if let Some(pending) = register_pending_lxmf_delivery(
+                            &state,
+                            destination_hex.clone(),
+                            report,
+                        )
+                        .await
+                        {
+                            if matches!(
+                                report.outcome,
+                                RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                            ) {
+                                emit_lxmf_delivery(
+                                    &bus,
+                                    &pending,
+                                    LxmfDeliveryStatus::Sent {},
+                                    None,
+                                );
+                                info!(
+                                    "[lxmf][events] sent message_id={} destination={} command={} correlation={}",
+                                    pending.message_id_hex,
+                                    pending.destination_hex,
+                                    pending.command_type.as_deref().unwrap_or("-"),
+                                    pending.correlation_id.as_deref().unwrap_or("-"),
+                                );
+                            } else {
+                                {
+                                    let tracking_key = pending
+                                        .correlation_id
+                                        .as_deref()
+                                        .or(pending.command_id.as_deref())
+                                        .map(ToOwned::to_owned);
+                                    if let Some(tracking_key) = tracking_key {
+                                        state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
+                                    }
+                                }
+                                emit_lxmf_delivery(
+                                    &bus,
+                                    &pending,
+                                    LxmfDeliveryStatus::Failed {},
+                                    Some(format!("{mapped:?}")),
+                                );
+                                info!(
+                                    "[lxmf][events] failed message_id={} destination={} command={} correlation={} outcome={:?}",
+                                    pending.message_id_hex,
+                                    pending.destination_hex,
+                                    pending.command_type.as_deref().unwrap_or("-"),
+                                    pending.correlation_id.as_deref().unwrap_or("-"),
+                                    mapped,
+                                );
+                            }
+                        }
+                    }
 
                     if matches!(
                         outcome,
@@ -790,7 +1327,12 @@ pub async fn run_node(
             }
             Command::BroadcastBytes { bytes, resp } => {
                 let result = async {
-                    let peers = connected_peers.lock().await.iter().copied().collect::<Vec<_>>();
+                    let peers = connected_peers
+                        .lock()
+                        .await
+                        .iter()
+                        .copied()
+                        .collect::<Vec<_>>();
                     let mut sent_any = false;
                     for dest in peers {
                         let outcome =
@@ -800,8 +1342,10 @@ pub async fn run_node(
                             bytes: bytes.clone(),
                             outcome: send_outcome_to_udl(outcome),
                         });
-                        if matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast)
-                        {
+                        if matches!(
+                            outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        ) {
                             sent_any = true;
                         }
                     }
@@ -834,7 +1378,9 @@ pub async fn run_node(
 
     if let Ok(mut guard) = status.lock() {
         guard.running = false;
-        bus.emit(NodeEvent::StatusChanged { status: guard.clone() });
+        bus.emit(NodeEvent::StatusChanged {
+            status: guard.clone(),
+        });
     }
 }
 
@@ -864,4 +1410,112 @@ pub fn load_or_create_identity(
     let identity = PrivateIdentity::new_from_rand(OsRng);
     fs::write(&path, identity.to_hex_string()).map_err(|_| NodeError::IoError {})?;
     Ok(identity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mission_sync_metadata_extracts_command_fields() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(LXMF_FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-123"),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from("corr-123"),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.log_entry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (
+                            MsgPackValue::from("entry_uid"),
+                            MsgPackValue::from("evt-123"),
+                        ),
+                        (
+                            MsgPackValue::from("mission_uid"),
+                            MsgPackValue::from("default"),
+                        ),
+                    ]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let metadata = parse_mission_sync_metadata(&bytes).expect("metadata");
+
+        assert_eq!(metadata.command_id.as_deref(), Some("cmd-123"));
+        assert_eq!(metadata.correlation_id.as_deref(), Some("corr-123"));
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.log_entry.upsert")
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
+        assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
+        assert!(metadata.is_event_related());
+    }
+
+    #[test]
+    fn parse_mission_sync_metadata_extracts_result_and_event_fields() {
+        let fields = MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from(LXMF_FIELD_RESULTS),
+                MsgPackValue::Map(vec![
+                    (
+                        MsgPackValue::from("command_id"),
+                        MsgPackValue::from("cmd-123"),
+                    ),
+                    (
+                        MsgPackValue::from("correlation_id"),
+                        MsgPackValue::from("corr-123"),
+                    ),
+                    (MsgPackValue::from("status"), MsgPackValue::from("accepted")),
+                ]),
+            ),
+            (
+                MsgPackValue::from(LXMF_FIELD_EVENT),
+                MsgPackValue::Map(vec![
+                    (
+                        MsgPackValue::from("event_type"),
+                        MsgPackValue::from("mission.registry.log_entry.upserted"),
+                    ),
+                    (
+                        MsgPackValue::from("payload"),
+                        MsgPackValue::Map(vec![
+                            (
+                                MsgPackValue::from("entry_uid"),
+                                MsgPackValue::from("evt-123"),
+                            ),
+                            (
+                                MsgPackValue::from("mission_uid"),
+                                MsgPackValue::from("default"),
+                            ),
+                        ]),
+                    ),
+                ]),
+            ),
+        ]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let metadata = parse_mission_sync_metadata(&bytes).expect("metadata");
+
+        assert_eq!(metadata.command_id.as_deref(), Some("cmd-123"));
+        assert_eq!(metadata.correlation_id.as_deref(), Some("corr-123"));
+        assert_eq!(metadata.result_status.as_deref(), Some("accepted"));
+        assert_eq!(
+            metadata.event_type.as_deref(),
+            Some("mission.registry.log_entry.upserted")
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
+        assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
+        assert!(metadata.is_event_related());
+    }
 }

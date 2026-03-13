@@ -18,6 +18,8 @@ export const R3AKT_TEAM_COLORS = [
 export type R3aktTeamColor = (typeof R3AKT_TEAM_COLORS)[number];
 
 export const DEFAULT_R3AKT_TEAM_COLOR: R3aktTeamColor = "YELLOW";
+export const DEFAULT_R3AKT_MISSION_UID = "r3akt-default-mission";
+export const DEFAULT_R3AKT_MISSION_NAME = "Default";
 
 const R3AKT_TEAM_COLOR_SET = new Set<string>(R3AKT_TEAM_COLORS);
 

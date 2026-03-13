@@ -3,6 +3,7 @@ import {
   createReticulumNodeClient,
   type AnnounceReceivedEvent,
   type HubDirectoryUpdatedEvent,
+  type LxmfDeliveryEvent,
   type NodeConfig,
   type NodeErrorEvent,
   type NodeLogEvent,
@@ -82,7 +83,15 @@ interface UiLogLine {
 }
 
 type PacketListener = (event: PacketReceivedEvent) => void;
+type LxmfDeliveryListener = (event: LxmfDeliveryEvent) => void;
 type DedicatedFields = Record<string, string>;
+type EventPeerRoute = {
+  appDestinationHex: string;
+  lxmfDestinationHex?: string;
+  identityHex?: string;
+  label?: string;
+  announcedName?: string;
+};
 type PacketSendOptions = {
   dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
@@ -242,6 +251,8 @@ export const useNodeStore = defineStore("node", () => {
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>(loadSavedPeers());
+  const appDestinationByIdentity = reactive<Record<string, string>>({});
+  const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
   const logs = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
@@ -250,9 +261,14 @@ export const useNodeStore = defineStore("node", () => {
   const client = shallowRef<ReticulumNodeClient | null>(null);
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
   const packetListeners = new Set<PacketListener>();
+  const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
 
   function appendLog(level: string, message: string): void {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
+  }
+
+  function logUi(level: string, message: string): void {
+    appendLog(level, message);
   }
 
   function clearLastError(): void {
@@ -356,13 +372,42 @@ export const useNodeStore = defineStore("node", () => {
         status.value = { ...event.status };
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
+        const identityHex = normalizeDestinationHex(event.identityHex ?? "");
+        if (event.destinationKind === "lxmf_delivery") {
+          if (isValidDestinationHex(identityHex)) {
+            lxmfDestinationByIdentity[identityHex] = event.destinationHex;
+            const appDestinationHex = appDestinationByIdentity[identityHex];
+            if (isValidDestinationHex(appDestinationHex)) {
+              upsertDiscovered(appDestinationHex, {
+                identityHex,
+                lxmfDestinationHex: event.destinationHex,
+                lxmfLastSeenAt: event.receivedAtMs,
+              });
+            }
+          }
+          return;
+        }
+
         const saved = savedByDestination[event.destinationHex];
         const announcedName = extractAnnouncedName(event.appData);
         const capabilityText = extractAnnounceCapabilityText(event.appData);
         const verifiedCapability = matchesEmergencyCapabilities(event.appData);
+        const knownLxmfDestination = isValidDestinationHex(identityHex)
+          ? lxmfDestinationByIdentity[identityHex]
+          : undefined;
+        if (isValidDestinationHex(identityHex)) {
+          appDestinationByIdentity[identityHex] = event.destinationHex;
+        }
         upsertDiscovered(
           event.destinationHex,
           {
+            identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+            lxmfDestinationHex: isValidDestinationHex(knownLxmfDestination ?? "")
+              ? knownLxmfDestination
+              : undefined,
+            lxmfLastSeenAt: isValidDestinationHex(knownLxmfDestination ?? "")
+              ? event.receivedAtMs
+              : undefined,
             announcedName,
             appData: capabilityText || undefined,
             hops: event.hops,
@@ -406,6 +451,11 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("packetReceived", (event: PacketReceivedEvent) => {
         for (const listener of packetListeners) {
+          listener(event);
+        }
+      }),
+      nodeClient.on("lxmfDelivery", (event: LxmfDeliveryEvent) => {
+        for (const listener of lxmfDeliveryListeners) {
           listener(event);
         }
       }),
@@ -728,6 +778,13 @@ export const useNodeStore = defineStore("node", () => {
     };
   }
 
+  function onLxmfDelivery(listener: LxmfDeliveryListener): () => void {
+    lxmfDeliveryListeners.add(listener);
+    return () => {
+      lxmfDeliveryListeners.delete(listener);
+    };
+  }
+
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
@@ -742,6 +799,18 @@ export const useNodeStore = defineStore("node", () => {
     discoveredPeers.value
       .filter((peer) => peer.state === "connected")
       .map((peer) => peer.destination),
+  );
+
+  const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
+    discoveredPeers.value
+      .filter((peer) => peer.state === "connected")
+      .map((peer) => ({
+        appDestinationHex: peer.destination,
+        lxmfDestinationHex: peer.lxmfDestinationHex,
+        identityHex: peer.identityHex,
+        label: peer.label,
+        announcedName: peer.announcedName,
+      })),
   );
 
   const telemetryDestinations = computed(() =>
@@ -828,6 +897,7 @@ export const useNodeStore = defineStore("node", () => {
     discoveredPeers,
     savedPeers,
     connectedDestinations,
+    connectedEventPeerRoutes,
     telemetryDestinations,
     savedDestinations,
     init,
@@ -847,7 +917,9 @@ export const useNodeStore = defineStore("node", () => {
     getSavedPeerList,
     importPeerList,
     parsePeerListText,
+    logUi,
     onPacket,
+    onLxmfDelivery,
     sendBytes,
     broadcastBytes,
     broadcastJson,
