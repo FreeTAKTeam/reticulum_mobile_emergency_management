@@ -140,6 +140,7 @@ export const useMessagesStore = defineStore("messages", () => {
       updatedAt?: number;
     },
   ): Promise<void> {
+    nodeStore.assertReadyForOutbound("send messages");
     const updatedAt = Number(next.updatedAt ?? Date.now());
     const message: ActionMessage = normalizeMessage({
       ...next,
@@ -153,6 +154,7 @@ export const useMessagesStore = defineStore("messages", () => {
   }
 
   async function deleteLocal(callsign: string): Promise<void> {
+    nodeStore.assertReadyForOutbound("send messages");
     const deletedAt = Date.now();
     applyDelete(callsign, deletedAt);
     await nodeStore.broadcastJson({

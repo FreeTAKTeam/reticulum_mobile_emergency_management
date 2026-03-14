@@ -95,6 +95,11 @@ fn node_error_code(err: &NodeError) -> &'static str {
         NodeError::AlreadyRunning {} => "AlreadyRunning",
         NodeError::NotRunning {} => "NotRunning",
         NodeError::Timeout {} => "Timeout",
+        NodeError::LxmfWireEncodeError {} => "LxmfWireEncodeError",
+        NodeError::LxmfMessageIdParseError {} => "LxmfMessageIdParseError",
+        NodeError::LxmfPacketTooLarge {} => "LxmfPacketTooLarge",
+        NodeError::LxmfPacketBuildError {} => "LxmfPacketBuildError",
+        NodeError::EventStreamClosed {} => "EventStreamClosed",
         NodeError::InternalError {} => "InternalError",
     }
 }
@@ -603,8 +608,16 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         None => return err_result("NotRunning", "node not initialized"),
     };
     match node.send_bytes(payload.destination_hex, bytes, fields_bytes) {
-        Ok(_) => ok_result(),
+        Ok(_) => {
+            log::debug!("jni sendJson result=ok");
+            ok_result()
+        }
         Err(err) => {
+            log::error!(
+                "jni sendJson result=err code={} message={}",
+                node_error_code(&err),
+                err
+            );
             set_last_node_error(err);
             RESULT_ERR
         }

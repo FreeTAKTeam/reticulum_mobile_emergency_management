@@ -14,6 +14,7 @@ use crate::types::{LogLevel, NodeConfig, NodeError, NodeEvent, NodeStatus};
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 
 struct NodeInner {
     bus: EventBus,
@@ -221,7 +222,7 @@ impl Node {
         })
         .map_err(|_| NodeError::NotRunning {})?;
         resp_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 
@@ -235,7 +236,7 @@ impl Node {
         tx.send(Command::BroadcastBytes { bytes, resp: resp_tx })
             .map_err(|_| NodeError::NotRunning {})?;
         resp_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 

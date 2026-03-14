@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+legacy-lxmf-runtime = []
+
 [dependencies]
 reticulum = { package = "reticulum-rs", git = "https://github.com/FreeTAKTeam/Reticulum-rs" }
 base64 = "0.22"
@@ -16,6 +20,7 @@ hex = "0.4"
 jni = "0.21"
 log = "0.4"
 lxmf = { version = "0.2.1", default-features = false }
+lxmf-sdk = { git = "https://github.com/FreeTAKTeam/LXMF-rs", rev = "ff904d103d2c323b55a65a4254283549f2a62204", default-features = false, features = ["std"] }
 rmp-serde = "1"
 rmpv = "1"
 rand_core = { version = "0.6.4", features = ["getrandom"] }

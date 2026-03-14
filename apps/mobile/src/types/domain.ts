@@ -14,21 +14,33 @@ export interface ActionMessage {
   deletedAt?: number;
 }
 
-export interface EventRecord {
-  uid: string;
-  entryUid: string;
-  missionUid: string;
-  callsign: string;
-  sourceIdentity?: string;
-  sourceDisplayName?: string;
-  type: string;
-  summary: string;
+export interface EventSource {
+  rns_identity: string;
+  display_name?: string;
+}
+
+export interface EventArgs {
+  entry_uid: string;
+  mission_uid: string;
   content: string;
-  serverTime?: string;
-  clientTime?: string;
+  callsign: string;
+  server_time?: string;
+  client_time?: string;
   keywords: string[];
-  updatedAt: number;
-  deletedAt?: number;
+  content_hashes: string[];
+  source_identity?: string;
+  source_display_name?: string;
+}
+
+export interface EventRecord {
+  command_id: string;
+  source: EventSource;
+  timestamp: string;
+  command_type: string;
+  args: EventArgs;
+  correlation_id?: string;
+  topics: string[];
+  deleted_at?: number;
 }
 
 export interface TelemetryPosition {

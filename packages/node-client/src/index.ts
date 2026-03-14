@@ -131,6 +131,7 @@ export interface ReticulumNodeClient {
   broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
+  logMessage(level: LogLevel, message: string): Promise<void>;
   refreshHubDirectory(): Promise<void>;
   on<K extends keyof NodeClientEvents>(
     event: K,
@@ -213,6 +214,7 @@ interface ReticulumNodePlugin {
   }): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
+  logMessage(options: { level: LogLevel; message: string }): Promise<void>;
   refreshHubDirectory(): Promise<void>;
   addListener(
     eventName: string,
@@ -607,6 +609,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.setLogLevel({ level });
   }
 
+  async logMessage(level: LogLevel, message: string): Promise<void> {
+    await this.ready();
+    await this.plugin.logMessage({ level, message });
+  }
+
   async refreshHubDirectory(): Promise<void> {
     await this.ready();
     await this.plugin.refreshHubDirectory();
@@ -732,6 +739,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       level,
       message: `Web runtime log level set to ${level}.`,
     });
+  }
+
+  async logMessage(level: LogLevel, message: string): Promise<void> {
+    this.emitter.emit("log", { level, message });
   }
 
   async refreshHubDirectory(): Promise<void> {
@@ -928,6 +939,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       level,
       message: `Mock log level set to ${level}`,
     });
+  }
+
+  async logMessage(level: LogLevel, message: string): Promise<void> {
+    this.emitter.emit("log", { level, message });
   }
 
   async refreshHubDirectory(): Promise<void> {

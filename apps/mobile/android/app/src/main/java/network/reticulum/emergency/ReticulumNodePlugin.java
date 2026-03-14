@@ -144,11 +144,23 @@ public class ReticulumNodePlugin extends Plugin {
             payload.put("fieldsBase64", fieldsBase64);
         }
 
+        Log.d(
+            TAG,
+            "send destination="
+                + destinationHex
+                + " bytesBase64Length="
+                + bytesBase64.length()
+                + " fieldsBase64Present="
+                + (fieldsBase64 != null && !fieldsBase64.isEmpty())
+        );
+
         int result = ReticulumBridge.sendJson(payload.toString());
         if (result != 0) {
+            Log.e(TAG, "send native returned non-zero destination=" + destinationHex);
             rejectFromNative(call, "Failed to send bytes.");
             return;
         }
+        Log.d(TAG, "send native accepted destination=" + destinationHex);
         call.resolve();
     }
 
@@ -197,6 +209,14 @@ public class ReticulumNodePlugin extends Plugin {
             rejectFromNative(call, "Failed to set log level.");
             return;
         }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void logMessage(PluginCall call) {
+        String level = call.getString("level", "Info");
+        String message = call.getString("message", "");
+        writeLogcat(level, "[ui][" + level + "] " + message);
         call.resolve();
     }
 
@@ -315,6 +335,7 @@ public class ReticulumNodePlugin extends Plugin {
             JSObject payload = new JSObject(raw);
             String code = payload.getString("code", "NativeError");
             String message = payload.getString("message", fallbackMessage);
+            Log.e(TAG, "rejectFromNative code=" + code + " message=" + message);
             Logger.error(TAG, "Native error [" + code + "]: " + message, new Exception(message));
             call.reject(message, code);
         } catch (JSONException ex) {

@@ -22,16 +22,38 @@ export interface ActionMessageSeed {
 }
 
 export interface EventSeed {
-  uid: string;
+  command_id?: string;
+  source?: {
+    rns_identity?: string;
+    display_name?: string;
+  };
+  timestamp?: string;
+  command_type?: string;
+  args?: {
+    entry_uid?: string;
+    mission_uid?: string;
+    content?: string;
+    callsign?: string;
+    server_time?: string;
+    client_time?: string;
+    keywords?: string[];
+    content_hashes?: string[];
+    source_identity?: string;
+    source_display_name?: string;
+  };
+  correlation_id?: string;
+  topics?: string[];
+  deleted_at?: number;
+  uid?: string;
   entryUid?: string;
   missionUid?: string;
-  callsign: string;
+  callsign?: string;
   sourceIdentity?: string;
   sourceDisplayName?: string;
-  type: string;
-  summary: string;
+  type?: string;
+  summary?: string;
   content?: string;
-  updatedAt: number;
+  updatedAt?: number;
   serverTime?: number;
   clientTime?: number;
   keywords?: string[];

@@ -33,6 +33,11 @@ enum NodeError {
   "AlreadyRunning",
   "NotRunning",
   "Timeout",
+  "LxmfWireEncodeError",
+  "LxmfMessageIdParseError",
+  "LxmfPacketTooLarge",
+  "LxmfPacketBuildError",
+  "EventStreamClosed",
   "InternalError"
 };
 

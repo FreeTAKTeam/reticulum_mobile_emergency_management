@@ -4,6 +4,7 @@ import {
   type AnnounceReceivedEvent,
   type HubDirectoryUpdatedEvent,
   type LxmfDeliveryEvent,
+  type LogLevel,
   type NodeConfig,
   type NodeErrorEvent,
   type NodeLogEvent,
@@ -267,8 +268,51 @@ export const useNodeStore = defineStore("node", () => {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
   }
 
+  function toPluginLogLevel(level: string): LogLevel {
+    switch (level.trim().toLowerCase()) {
+      case "trace":
+        return "Trace";
+      case "debug":
+        return "Debug";
+      case "warn":
+        return "Warn";
+      case "error":
+        return "Error";
+      case "info":
+      default:
+        return "Info";
+    }
+  }
+
+  function mirrorUiLogToNative(level: string, message: string): void {
+    if (!client.value || runtimeProfile === "web") {
+      return;
+    }
+    void client.value.logMessage(toPluginLogLevel(level), message).catch(() => undefined);
+  }
+
   function logUi(level: string, message: string): void {
     appendLog(level, message);
+    mirrorUiLogToNative(level, message);
+    const normalizedLevel = level.trim().toLowerCase();
+    if (normalizedLevel === "error") {
+      lastError.value = message;
+      console.error(`[ui][${level}] ${message}`);
+      return;
+    }
+    if (normalizedLevel === "debug" || normalizedLevel === "trace") {
+      console.debug(`[ui][${level}] ${message}`);
+      return;
+    }
+    if (normalizedLevel === "warn") {
+      console.warn(`[ui][${level}] ${message}`);
+      return;
+    }
+    console.info(`[ui][${level}] ${message}`);
+  }
+
+  function setLastError(message: string): void {
+    lastError.value = message.trim();
   }
 
   function clearLastError(): void {
@@ -285,6 +329,8 @@ export const useNodeStore = defineStore("node", () => {
   function captureActionError(action: string, error: unknown): Error {
     const message = `${action}: ${errorMessage(error)}`;
     lastError.value = message;
+    mirrorUiLogToNative("Error", message);
+    console.error(`[ui][Error] ${message}`);
     appendLog("Error", message);
     return error instanceof Error ? error : new Error(message);
   }
@@ -360,6 +406,25 @@ export const useNodeStore = defineStore("node", () => {
     });
   }
 
+  function describePeerState(destinationRaw: string): string {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const peer = discoveredByDestination[destination];
+    if (!peer) {
+      return `destination=${destination} state=missing`;
+    }
+
+    return [
+      `destination=${destination}`,
+      `state=${peer.state}`,
+      `label=${peer.label ?? "-"}`,
+      `announced=${peer.announcedName ?? "-"}`,
+      `identity=${peer.identityHex ?? "-"}`,
+      `lxmf=${peer.lxmfDestinationHex ?? "-"}`,
+      `sources=${peer.sources.join("+") || "-"}`,
+      `verified=${peer.verifiedCapability}`,
+    ].join(" ");
+  }
+
   function persistSavedPeers(): void {
     saveSavedPeers(savedByDestination);
   }
@@ -377,6 +442,18 @@ export const useNodeStore = defineStore("node", () => {
     return createReticulumNodeClient({
       mode: settings.clientMode,
     });
+  }
+
+  async function configureClientLogging(): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    try {
+      await client.value.setLogLevel("Debug");
+      logUi("Debug", "Node client log level set to Debug.");
+    } catch (error: unknown) {
+      logUi("Warn", `Failed to set node log level: ${errorMessage(error)}`);
+    }
   }
 
   function resetClientEventBindings(): void {
@@ -452,6 +529,10 @@ export const useNodeStore = defineStore("node", () => {
             event.change.lastError,
           );
         }
+        logUi(
+          "Debug",
+          `[peers] peerChanged destination=${normalizeDestinationHex(event.change.destinationHex)} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(event.change.destinationHex)}.`,
+        );
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
         for (const destination of event.destinations) {
@@ -527,6 +608,7 @@ export const useNodeStore = defineStore("node", () => {
 
     client.value = buildClient();
     bindClientEvents(client.value);
+    await configureClientLogging();
 
     for (const savedPeer of Object.values(savedByDestination)) {
       upsertDiscovered(
@@ -553,6 +635,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await configureClientLogging();
       appendLog("Info", "Node started.");
 
       if (settings.hub.mode !== "Disabled") {
@@ -597,6 +680,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await configureClientLogging();
       appendLog("Info", "Node restarted with updated settings.");
     } catch (error: unknown) {
       throw captureActionError("Restart node failed", error);
@@ -616,6 +700,7 @@ export const useNodeStore = defineStore("node", () => {
     setPeerState(destination, "connecting");
     try {
       clearLastError();
+      logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
       await client.value.connectPeer(destination);
     } catch (error: unknown) {
       const message = errorMessage(error);
@@ -631,8 +716,10 @@ export const useNodeStore = defineStore("node", () => {
     }
     try {
       clearLastError();
+      logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
       await client.value.disconnectPeer(destination);
       setPeerState(destination, "disconnected");
+      logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
     } catch (error: unknown) {
       throw captureActionError(`Disconnect peer failed (${destination})`, error);
     }
@@ -847,6 +934,26 @@ export const useNodeStore = defineStore("node", () => {
   );
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
+  const ready = computed(() => status.value.running);
+
+  function notReadyMessage(action: string): string {
+    return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
+  }
+
+  function assertReadyForOutbound(action: string): void {
+    if (ready.value) {
+      return;
+    }
+
+    const message = notReadyMessage(action);
+    logUi(
+      "Debug",
+      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value}.`,
+    );
+    lastError.value = message;
+    logUi("Warn", message);
+    throw new Error(message);
+  }
 
   function destinationHasCapability(destinationRaw: string, capability: string): boolean {
     const destination = normalizeDestinationHex(destinationRaw);
@@ -859,9 +966,13 @@ export const useNodeStore = defineStore("node", () => {
 
   async function broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     if (!client.value) {
-      return;
+      throw captureActionError("Broadcast failed", new Error("Node client is not initialized."));
     }
     try {
+      logUi(
+        "Debug",
+        `Broadcast requested bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
+      );
       await client.value.broadcastBytes(bytes, options);
     } catch (error: unknown) {
       throw captureActionError("Broadcast failed", error);
@@ -874,10 +985,21 @@ export const useNodeStore = defineStore("node", () => {
     options?: PacketSendOptions,
   ): Promise<void> {
     if (!client.value) {
-      return;
+      throw captureActionError(
+        `Send failed (${destinationHex})`,
+        new Error("Node client is not initialized."),
+      );
     }
     try {
+      logUi(
+        "Debug",
+        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
+      );
       await client.value.sendBytes(destinationHex, bytes, options);
+      logUi(
+        "Debug",
+        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
+      );
     } catch (error: unknown) {
       throw captureActionError(`Send failed (${destinationHex})`, error);
     }
@@ -905,6 +1027,7 @@ export const useNodeStore = defineStore("node", () => {
       }
       client.value = buildClient();
       bindClientEvents(client.value);
+      await configureClientLogging();
       status.value = { ...EMPTY_STATUS };
       appendLog("Info", "Node client recreated.");
     } catch (error: unknown) {
@@ -926,6 +1049,7 @@ export const useNodeStore = defineStore("node", () => {
     connectedEventPeerRoutes,
     telemetryDestinations,
     savedDestinations,
+    ready,
     init,
     startNode,
     stopNode,
@@ -952,5 +1076,7 @@ export const useNodeStore = defineStore("node", () => {
     sendJson,
     destinationHasCapability,
     reinitializeClient,
+    setLastError,
+    assertReadyForOutbound,
   };
 });

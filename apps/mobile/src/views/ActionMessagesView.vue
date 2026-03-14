@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
+import type { ActionMessage } from "../types/domain";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
@@ -26,6 +27,8 @@ const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
 }));
 const teamColorPrompt = R3AKT_TEAM_COLORS.join(", ");
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
+const appReady = computed(() => nodeStore.ready);
+const readinessHint = "Node is not ready yet. Wait for the top-right status to show Ready.";
 
 const createForm = reactive({
   callsign: defaultCallSign.value,
@@ -47,7 +50,19 @@ function resetCreateForm(): void {
   createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
 }
 
+function ensureReady(action: string): boolean {
+  try {
+    nodeStore.assertReadyForOutbound(action);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toggleCreateForm(): void {
+  if (!isCreateFormVisible.value && !ensureReady("send messages")) {
+    return;
+  }
   isCreateFormVisible.value = !isCreateFormVisible.value;
 }
 
@@ -56,6 +71,9 @@ function openHelp(): void {
 }
 
 async function createMessage(): Promise<void> {
+  if (!ensureReady("send messages")) {
+    return;
+  }
   const callsign = createForm.callsign.trim() || defaultCallSign.value;
   if (!callsign) {
     return;
@@ -75,6 +93,9 @@ async function createMessage(): Promise<void> {
 }
 
 function editMessage(callsign: string): void {
+  if (!ensureReady("send messages")) {
+    return;
+  }
   const message = messages.value.find((item) => item.callsign === callsign);
   if (!message) {
     return;
@@ -94,7 +115,17 @@ function editMessage(callsign: string): void {
     .catch(() => undefined);
 }
 
+function cycleMessage(callsign: string, field: keyof ActionMessage | string): void {
+  if (!ensureReady("send messages")) {
+    return;
+  }
+  messagesStore.rotateStatus(callsign, field as keyof ActionMessage);
+}
+
 function deleteMessage(callsign: string): void {
+  if (!ensureReady("send messages")) {
+    return;
+  }
   messagesStore.deleteLocal(callsign).catch(() => undefined);
 }
 </script>
@@ -121,6 +152,9 @@ function deleteMessage(callsign: string): void {
           type="button"
           aria-label="Add message"
           :aria-expanded="isCreateFormVisible"
+          :aria-disabled="!appReady"
+          :disabled="!appReady"
+          :title="appReady ? 'Add message' : readinessHint"
           @click="toggleCreateForm"
         >
           +
@@ -134,16 +168,20 @@ function deleteMessage(callsign: string): void {
         type="text"
         placeholder="Call Sign"
         aria-label="Call Sign"
+        :disabled="!appReady"
       />
       <select
         v-model="createForm.groupName"
         aria-label="Team color"
+        :disabled="!appReady"
       >
         <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
           {{ option.label }}
         </option>
       </select>
-      <button type="submit">Add message</button>
+      <button type="submit" :disabled="!appReady" :title="appReady ? 'Add message' : readinessHint">
+        Add message
+      </button>
     </form>
 
     <div class="desktop-only">
@@ -151,7 +189,7 @@ function deleteMessage(callsign: string): void {
         :messages="messages"
         @edit="editMessage"
         @delete="deleteMessage"
-        @cycle="messagesStore.rotateStatus"
+        @cycle="cycleMessage"
       />
     </div>
     <div class="mobile-only">
@@ -159,7 +197,7 @@ function deleteMessage(callsign: string): void {
         :messages="messages"
         @edit="editMessage"
         @delete="deleteMessage"
-        @cycle="messagesStore.rotateStatus"
+        @cycle="cycleMessage"
       />
     </div>
   </section>
@@ -222,6 +260,14 @@ p {
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.create-toggle:disabled,
+.create-form button:disabled,
+.create-form input:disabled,
+.create-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .help-trigger {

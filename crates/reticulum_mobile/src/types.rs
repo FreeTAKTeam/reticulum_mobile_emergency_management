@@ -57,6 +57,16 @@ pub enum NodeError {
     NotRunning {},
     #[error("timeout")]
     Timeout {},
+    #[error("lxmf wire encode failed")]
+    LxmfWireEncodeError {},
+    #[error("lxmf message id parse failed")]
+    LxmfMessageIdParseError {},
+    #[error("lxmf packet too large")]
+    LxmfPacketTooLarge {},
+    #[error("lxmf packet build failed")]
+    LxmfPacketBuildError {},
+    #[error("event stream closed")]
+    EventStreamClosed {},
     #[error("internal error")]
     InternalError {},
 }

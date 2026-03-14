@@ -41,7 +41,12 @@ const tabItems = [
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
-const runningText = computed(() => (nodeStore.status.running ? "Active" : "Offline"));
+const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
+const runningTitle = computed(() =>
+  nodeStore.ready
+    ? "App ready to send and receive events or messages."
+    : "App is still starting. Sending stays blocked until the node is ready.",
+);
 
 function isTabActive(path: string): boolean {
   return route.path === path || route.path.startsWith(`${path}/`);
@@ -59,7 +64,9 @@ function isTabActive(path: string): boolean {
           </div>
         </div>
         <div class="mast-actions">
-          <span class="running">{{ runningText }}</span>
+          <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">
+            {{ runningText }}
+          </span>
         </div>
       </header>
 
@@ -240,6 +247,12 @@ function isTabActive(path: string): boolean {
   letter-spacing: 0.09em;
   padding: 0.3rem 0.62rem;
   text-transform: uppercase;
+}
+
+.running.pending {
+  background: rgb(58 34 10 / 76%);
+  border-color: rgb(255 178 72 / 54%);
+  color: #ffcf7b;
 }
 
 .content {

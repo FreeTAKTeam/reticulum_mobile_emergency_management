@@ -10,28 +10,49 @@ eventsStore.init();
 eventsStore.initReplication();
 
 const events = computed(() => eventsStore.records);
+const appReady = computed(() => nodeStore.ready);
 const isCreateFormVisible = shallowRef(false);
 const configuredCallsign = computed(() => nodeStore.settings.displayName.trim() || "Unset");
+const readinessHint = "Node is not ready yet. Wait for the top-right status to show Ready.";
 
 const createForm = reactive({
   type: "Incident",
   summary: "",
 });
 
+function ensureReady(action: string): boolean {
+  try {
+    nodeStore.assertReadyForOutbound(action);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function toggleCreateForm(): void {
+  if (!isCreateFormVisible.value && !ensureReady("send events")) {
+    return;
+  }
   isCreateFormVisible.value = !isCreateFormVisible.value;
 }
 
 async function createEvent(): Promise<void> {
+  if (!ensureReady("send events")) {
+    return;
+  }
   if (!createForm.summary.trim() || configuredCallsign.value === "Unset") {
     return;
   }
-  await eventsStore.upsertLocal({
-    type: createForm.type.trim() || "Incident",
-    summary: createForm.summary.trim(),
-  });
-  createForm.summary = "";
-  isCreateFormVisible.value = false;
+  try {
+    await eventsStore.upsertLocal({
+      type: createForm.type.trim() || "Incident",
+      summary: createForm.summary.trim(),
+    });
+    createForm.summary = "";
+    isCreateFormVisible.value = false;
+  } catch (error: unknown) {
+    nodeStore.setLastError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function deleteEvent(uid: string): Promise<void> {
@@ -53,6 +74,9 @@ async function deleteEvent(uid: string): Promise<void> {
           type="button"
           aria-label="Add event"
           :aria-expanded="isCreateFormVisible"
+          :aria-disabled="!appReady"
+          :disabled="!appReady"
+          :title="appReady ? 'Add event' : readinessHint"
           @click="toggleCreateForm"
         >
           +
@@ -66,6 +90,7 @@ async function deleteEvent(uid: string): Promise<void> {
         type="text"
         placeholder="Configured call sign"
         aria-label="Configured call sign"
+        :disabled="!appReady"
         readonly
       />
       <input
@@ -73,14 +98,18 @@ async function deleteEvent(uid: string): Promise<void> {
         type="text"
         placeholder="Type"
         aria-label="Type"
+        :disabled="!appReady"
       />
       <input
         v-model="createForm.summary"
         type="text"
         placeholder="Event summary"
         aria-label="Event summary"
+        :disabled="!appReady"
       />
-      <button type="submit">Add event</button>
+      <button type="submit" :disabled="!appReady" :title="appReady ? 'Add event' : readinessHint">
+        Add event
+      </button>
     </form>
 
     <section class="timeline">
@@ -172,6 +201,13 @@ h1 {
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.create-toggle:disabled,
+.create-form button:disabled,
+.create-form input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .create-form {
