@@ -72,10 +72,7 @@ impl NodeLogger {
 
 impl Log for NodeLogger {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        let max = self
-            .current_level()
-            .to_level()
-            .unwrap_or(log::Level::Info);
+        let max = self.current_level().to_level().unwrap_or(log::Level::Info);
         metadata.level() <= max
     }
 

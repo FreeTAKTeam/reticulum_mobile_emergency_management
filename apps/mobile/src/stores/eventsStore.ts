@@ -7,7 +7,6 @@ import type { EventRecord } from "../types/domain";
 import {
   buildMissionCommandFieldsBase64,
   buildMissionResponseFieldsBase64,
-  createMissionAcceptedPayload,
   createMissionCommandEnvelope,
   createMissionEventEnvelope,
   createMissionRejectedPayload,
@@ -28,8 +27,23 @@ import { useNodeStore } from "./nodeStore";
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const EVENT_TYPE_KEYWORD_PREFIX = "r3akt:event-type:";
+const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 35_000;
+const BACKGROUND_MISSION_HYDRATION_ENABLED = false;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
+type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
+type ReplicationPeer = {
+  appDestinationHex: string;
+  lxmfDestinationHex?: string;
+  identityHex?: string;
+  label: string;
+  announcedName?: string;
+};
+type ReplicationFailure = {
+  stage: ReplicationStage;
+  peer: ReplicationPeer;
+  message: string;
+};
 
 type LegacyEventReplicationMessage =
   | {
@@ -59,6 +73,16 @@ type EventTimelineRecord = {
   updatedAt: number;
 };
 
+class EventReplicationError extends Error {
+  readonly failures: ReplicationFailure[];
+
+  constructor(message: string, failures: ReplicationFailure[]) {
+    super(message);
+    this.name = "EventReplicationError";
+    this.failures = failures;
+  }
+}
+
 function createEventUid(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return `evt-${crypto.randomUUID()}`;
@@ -77,6 +101,10 @@ function createMissionTrackingId(prefix: string, suffix?: string): string {
   return normalizedSuffix
     ? `${prefix}-${normalizedSuffix}-${Date.now().toString(36)}-${entropy}`
     : `${prefix}-${Date.now().toString(36)}-${entropy}`;
+}
+
+function normalizeHex(value: string | undefined | null): string {
+  return value?.trim().toLowerCase() ?? "";
 }
 
 function toIsoString(value: unknown): string | undefined {
@@ -203,6 +231,12 @@ function getEventUpdatedAt(record: EventRecord): number {
       ?? record.timestamp,
     Date.now(),
   );
+}
+
+function getEventMissionCommandType(record: EventRecord): ReplicationStage {
+  return record.command_type === "mission.registry.mission.upsert"
+    ? "mission.registry.mission.upsert"
+    : "mission.registry.log_entry.upsert";
 }
 
 function isDeletedEvent(record: EventRecord): boolean {
@@ -387,6 +421,29 @@ function notifyIncomingEvent(record: EventRecord, outcome: Exclude<UpsertOutcome
     outcome === "inserted" ? `New event from ${sourceLabel}` : `Updated event from ${sourceLabel}`,
     summarizeEvent(record),
   ).catch(() => undefined);
+}
+
+function missionResponseMatches(
+  expected: {
+    correlationId: string;
+    commandId: string;
+  },
+  result: MissionResponsePayload | null,
+): result is MissionResponsePayload {
+  if (!result) {
+    return false;
+  }
+  return result.correlation_id === expected.correlationId || result.command_id === expected.commandId;
+}
+
+function missionResponseDetail(result: MissionResponsePayload): string {
+  if (result.status === "rejected") {
+    return result.reason?.trim() || result.reason_code;
+  }
+  if (result.status === "accepted") {
+    return `accepted at ${result.accepted_at}`;
+  }
+  return "result received";
 }
 
 function loadEvents(): Record<string, EventRecord> {
@@ -602,24 +659,42 @@ export const useEventsStore = defineStore("events", () => {
       || peer.appDestinationHex;
   }
 
+  function formatPeerRoute(peer: ReplicationPeer): string {
+    return `${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}${peer.identityHex ? ` identity=${peer.identityHex}` : ""})`;
+  }
+
   function isEventDelivery(event: LxmfDeliveryEvent): boolean {
     return Boolean(event.commandType?.startsWith("mission.registry.log_entry"))
       || Boolean(event.eventUid);
   }
 
-  function replicationPeers(logMissing = false): Array<{
-    appDestinationHex: string;
-    lxmfDestinationHex?: string;
-    label: string;
-  }> {
-    const deliverable: Array<{
-      appDestinationHex: string;
-      lxmfDestinationHex?: string;
-      label: string;
-    }> = [];
+  function replicationPeers(logMissing = false): ReplicationPeer[] {
+    const localIdentity = normalizeHex(nodeStore.status.identityHex);
+    const localAppDestination = normalizeHex(nodeStore.status.appDestinationHex);
+    const localLxmfDestination = normalizeHex(nodeStore.status.lxmfDestinationHex);
+    const deliverable: ReplicationPeer[] = [];
 
     for (const peer of nodeStore.connectedEventPeerRoutes) {
       const label = formatPeerLabel(peer);
+      const appDestinationHex = normalizeHex(peer.appDestinationHex);
+      const lxmfDestinationHex = normalizeHex(peer.lxmfDestinationHex);
+      const peerIdentity = normalizeHex(peer.identityHex);
+      if (
+        !appDestinationHex
+        || appDestinationHex === localAppDestination
+        || appDestinationHex === localLxmfDestination
+        || lxmfDestinationHex === localAppDestination
+        || lxmfDestinationHex === localLxmfDestination
+        || (peerIdentity.length > 0 && peerIdentity === localIdentity)
+      ) {
+        if (logMissing) {
+          nodeStore.logUi(
+            "Debug",
+            `[events] skipping self route for ${label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}${peer.identityHex ? ` identity=${peer.identityHex}` : ""}).`,
+          );
+        }
+        continue;
+      }
       if (!peer.lxmfDestinationHex) {
         if (logMissing) {
           nodeStore.logUi(
@@ -631,17 +706,212 @@ export const useEventsStore = defineStore("events", () => {
       deliverable.push({
         appDestinationHex: peer.appDestinationHex,
         lxmfDestinationHex: peer.lxmfDestinationHex,
+        identityHex: peer.identityHex,
         label,
+        announcedName: peer.announcedName,
       });
     }
 
+    if (logMissing && deliverable.length === 0) {
+      nodeStore.logUi(
+        "Debug",
+        `[events] no deliverable event peers. connectedRoutes=${nodeStore.connectedEventPeerRoutes.length} connectedDestinations=${nodeStore.connectedDestinations.length} discoveredPeers=${nodeStore.discoveredPeers.length}.`,
+      );
+    }
+
     return deliverable;
+  }
+
+  function createReplicationFailure(
+    stage: ReplicationStage,
+    peer: ReplicationPeer,
+    error: unknown,
+  ): ReplicationFailure {
+    return {
+      stage,
+      peer,
+      message: errorMessage(error),
+    };
+  }
+
+  function createMissionDeliveryTracker(
+    peer: ReplicationPeer,
+    expected: {
+      stage: ReplicationStage;
+      correlationId: string;
+      commandId: string;
+      commandType: string;
+      eventUid?: string;
+      missionUid?: string;
+    },
+  ): {
+    promise: Promise<void>;
+    cancel: () => void;
+  } {
+    let cleanup = () => undefined;
+
+    const promise = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let unsubscribeDelivery: () => void = () => undefined;
+      let unsubscribePacket: () => void = () => undefined;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const finish = (effect: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        unsubscribeDelivery();
+        unsubscribePacket();
+        effect();
+      };
+
+      unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
+        if (!isEventDelivery(event)) {
+          return;
+        }
+        if (event.correlationId !== expected.correlationId && event.commandId !== expected.commandId) {
+          return;
+        }
+        if (event.commandType && event.commandType !== expected.commandType) {
+          return;
+        }
+        if (expected.eventUid && event.eventUid && event.eventUid !== expected.eventUid) {
+          return;
+        }
+        if (expected.missionUid && event.missionUid && event.missionUid !== expected.missionUid) {
+          return;
+        }
+
+        const destinationMatches = normalizeHex(event.destinationHex) === normalizeHex(peer.appDestinationHex)
+          || normalizeHex(event.destinationHex) === normalizeHex(peer.lxmfDestinationHex);
+        if (!destinationMatches && peer.lxmfDestinationHex) {
+          return;
+        }
+
+        if (event.status === "Sent") {
+          nodeStore.logUi(
+            "Debug",
+            `[events] ${expected.stage} sent to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
+          );
+          return;
+        }
+
+        if (event.status === "Acknowledged") {
+          finish(() => resolve());
+          return;
+        }
+
+        const detail = event.detail?.trim() || "delivery failed";
+        finish(() => reject(new EventReplicationError(
+          `[events] ${expected.stage} failed for ${formatPeerRoute(peer)}: ${detail}`,
+          [{
+            stage: expected.stage,
+            peer,
+            message: detail,
+          }],
+        )));
+      });
+
+      unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
+        const missionSync = parseMissionSyncFields(packet.fieldsBase64);
+        if (!missionResponseMatches(expected, missionSync?.result ?? null)) {
+          return;
+        }
+
+        const result = missionSync!.result!;
+        if (result.status === "accepted") {
+          nodeStore.logUi(
+            "Debug",
+            `[events] ${expected.stage} accepted by ${formatPeerRoute(peer)} (${missionResponseDetail(result)}).`,
+          );
+          return;
+        }
+
+        if (result.status === "rejected") {
+          const detail = missionResponseDetail(result);
+          finish(() => reject(new EventReplicationError(
+            `[events] ${expected.stage} rejected by ${formatPeerRoute(peer)}: ${detail}`,
+            [{
+              stage: expected.stage,
+              peer,
+              message: detail,
+            }],
+          )));
+          return;
+        }
+
+        nodeStore.logUi(
+          "Debug",
+          `[events] ${expected.stage} result received from ${formatPeerRoute(peer)}.`,
+        );
+        finish(() => resolve());
+      });
+
+      timeoutId = setTimeout(() => {
+        finish(() => reject(new EventReplicationError(
+          `[events] ${expected.stage} timed out for ${formatPeerRoute(peer)} after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`,
+          [{
+            stage: expected.stage,
+            peer,
+            message: `Timed out waiting for LXMF acknowledgement after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`,
+          }],
+        )));
+      }, LXMF_DELIVERY_WAIT_TIMEOUT_MS);
+
+      cleanup = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        unsubscribeDelivery();
+        unsubscribePacket();
+      };
+    });
+
+    return {
+      promise,
+      cancel: () => cleanup(),
+    };
   }
 
   async function sendMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
     await nodeStore.sendBytes(destination, EMPTY_BYTES, {
       fieldsBase64: buildMissionCommandFieldsBase64([command]),
     });
+  }
+
+  async function sendMissionCommandAwaitingDelivery(
+    peer: ReplicationPeer,
+    command: MissionCommandEnvelope,
+    stage: ReplicationStage,
+  ): Promise<void> {
+    const tracker = createMissionDeliveryTracker(peer, {
+      stage,
+      correlationId: command.correlation_id ?? command.command_id,
+      commandId: command.command_id,
+      commandType: command.command_type,
+      eventUid: asTrimmedString(command.args.entry_uid),
+      missionUid: asTrimmedString(command.args.mission_uid ?? command.args.uid),
+    });
+
+    try {
+      await sendMissionCommand(peer.appDestinationHex, command);
+    } catch (error: unknown) {
+      tracker.cancel();
+      throw new EventReplicationError(
+        `[events] ${stage} send failed for ${formatPeerRoute(peer)}: ${errorMessage(error)}`,
+        [createReplicationFailure(stage, peer, error)],
+      );
+    }
+
+    await tracker.promise;
   }
 
   async function sendMissionResponse(
@@ -654,21 +924,22 @@ export const useEventsStore = defineStore("events", () => {
     });
   }
 
-  async function ensureDefaultMission(destination: string): Promise<void> {
+  async function ensureDefaultMission(peer: ReplicationPeer): Promise<void> {
     const sourceIdentity = localSourceIdentity();
     if (!sourceIdentity) {
       return;
     }
-    const correlationId = createMissionTrackingId("mission-upsert", DEFAULT_R3AKT_MISSION_UID);
-    await sendMissionCommand(destination, createMissionCommandEnvelope({
-      commandId: createMissionTrackingId("mission-upsert-command", DEFAULT_R3AKT_MISSION_UID),
+    const routeSuffix = peer.appDestinationHex.slice(0, 8);
+    const correlationId = createMissionTrackingId("mission-upsert", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`);
+    await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
+      commandId: createMissionTrackingId("mission-upsert-command", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`),
       sourceIdentity,
       sourceDisplayName: localCallsign() || undefined,
       commandType: "mission.registry.mission.upsert",
       args: buildDefaultMissionPayload(),
       correlationId,
       topics: [DEFAULT_R3AKT_MISSION_UID],
-    }));
+    }), "mission.registry.mission.upsert");
   }
 
   async function requestEventList(destination: string): Promise<void> {
@@ -705,34 +976,58 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
 
-    await Promise.all(peers.map(async (peer) => {
+    const eventUid = getEventUid(record);
+    const failures = (await Promise.all(peers.map(async (peer) => {
       try {
-        const eventUid = getEventUid(record);
-        const correlationId = createMissionTrackingId("log-upsert", eventUid);
-        await sendMissionCommand(peer.appDestinationHex, createMissionCommandEnvelope({
-          commandId: createMissionTrackingId("log-upsert-command", eventUid),
+        const routeSuffix = peer.appDestinationHex.slice(0, 8);
+        const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
+        await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
+          commandId: createMissionTrackingId("log-upsert-command", `${eventUid}-${routeSuffix}`),
           sourceIdentity: record.source.rns_identity || sourceIdentity,
           sourceDisplayName: record.source.display_name ?? (localCallsign() || undefined),
-          commandType: record.command_type,
+          commandType: getEventMissionCommandType(record),
           args: buildMissionPayload(record),
           correlationId,
           topics: [...record.topics],
-        }));
+        }), "mission.registry.log_entry.upsert");
+        nodeStore.logUi(
+          "Info",
+          `[events] replicated ${eventUid} to ${formatPeerRoute(peer)}.`,
+        );
+        return null;
       } catch (error: unknown) {
         nodeStore.logUi(
           "Error",
-          `[events] failed to send ${getEventUid(record)} to ${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}): ${errorMessage(error)}`,
+          `[events] failed to send ${eventUid} to ${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}): ${errorMessage(error)}`,
         );
+        if (error instanceof EventReplicationError) {
+          return error.failures;
+        }
+        return [createReplicationFailure("mission.registry.log_entry.upsert", peer, error)];
       }
-    }));
+    }))).flat().filter((failure): failure is ReplicationFailure => failure !== null);
+
+    if (failures.length > 0) {
+      throw new EventReplicationError(
+        `[events] replicated ${eventUid} to ${peers.length - failures.length}/${peers.length} peers.`,
+        failures,
+      );
+    }
   }
 
   async function hydrateDestination(destination: string): Promise<void> {
+    if (!BACKGROUND_MISSION_HYDRATION_ENABLED) {
+      return;
+    }
+
     const sourceIdentity = localSourceIdentity();
     if (!sourceIdentity) {
       return;
     }
-    await ensureDefaultMission(destination);
+    await ensureDefaultMission({
+      appDestinationHex: destination,
+      label: destination,
+    });
     await requestEventList(destination);
   }
 
@@ -754,11 +1049,6 @@ export const useEventsStore = defineStore("events", () => {
   async function handleMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
     const localIdentity = localSourceIdentity();
     const localDisplayName = localCallsign() || undefined;
-    const accepted = createMissionAcceptedPayload({
-      commandId: command.command_id,
-      correlationId: command.correlation_id,
-      byIdentity: localIdentity || undefined,
-    });
 
     if (command.command_type === "mission.registry.mission.upsert") {
       const missionUid = String(command.args.mission_uid ?? command.args.uid ?? "").trim() || DEFAULT_R3AKT_MISSION_UID;
@@ -776,7 +1066,6 @@ export const useEventsStore = defineStore("events", () => {
       }
 
       const missionPayload = buildDefaultMissionPayload();
-      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
@@ -826,7 +1115,6 @@ export const useEventsStore = defineStore("events", () => {
       } as unknown as Partial<EventRecord> & Record<string, unknown>);
       const outcome = applyUpsert(incoming);
       const stored = byUid[getEventUid(incoming)];
-      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
@@ -866,7 +1154,6 @@ export const useEventsStore = defineStore("events", () => {
       const payload = {
         log_entries: snapshotEvents().map((entry) => buildMissionPayload(entry)),
       };
-      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
@@ -914,6 +1201,7 @@ export const useEventsStore = defineStore("events", () => {
     uid?: string;
     updatedAt?: number;
   }): Promise<void> {
+    nodeStore.assertReadyForOutbound("send events");
     const callsign = localCallsign();
     const now = Number(input.updatedAt ?? Date.now());
     const uid = input.uid?.trim() || createEventUid();
@@ -954,6 +1242,7 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
     replicationInitialized.value = true;
+    let hydrationSuppressedLogged = false;
 
     const decoder = new TextDecoder();
     nodeStore.onPacket((event: PacketReceivedEvent) => {
@@ -1066,6 +1355,16 @@ export const useEventsStore = defineStore("events", () => {
       }),
       (current, previous) => {
         if (!current.identity) {
+          return;
+        }
+        if (!BACKGROUND_MISSION_HYDRATION_ENABLED) {
+          if (!hydrationSuppressedLogged) {
+            hydrationSuppressedLogged = true;
+            nodeStore.logUi(
+              "Debug",
+              "[events] background mission hydration is disabled in this worktree; connected peers will not be auto-hydrated.",
+            );
+          }
           return;
         }
         const previousDestinations = previous?.identity

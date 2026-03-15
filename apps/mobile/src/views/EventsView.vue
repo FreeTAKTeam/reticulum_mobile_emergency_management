@@ -24,7 +24,10 @@ function ensureReady(action: string): boolean {
   try {
     nodeStore.assertReadyForOutbound(action);
     return true;
-  } catch {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    nodeStore.setLastError(message);
+    nodeStore.logUi("Error", `[events] ${action} blocked: ${message}`);
     return false;
   }
 }
@@ -41,9 +44,14 @@ async function createEvent(): Promise<void> {
     return;
   }
   if (!createForm.summary.trim() || configuredCallsign.value === "Unset") {
+    nodeStore.logUi(
+      "Warn",
+      `[events] create blocked: summary=${createForm.summary.trim() ? "set" : "empty"} callsign=${configuredCallsign.value}`,
+    );
     return;
   }
   try {
+    nodeStore.logUi("Info", `[events] creating local event summary="${createForm.summary.trim()}".`);
     await eventsStore.upsertLocal({
       type: createForm.type.trim() || "Incident",
       summary: createForm.summary.trim(),
@@ -51,7 +59,9 @@ async function createEvent(): Promise<void> {
     createForm.summary = "";
     isCreateFormVisible.value = false;
   } catch (error: unknown) {
-    nodeStore.setLastError(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    nodeStore.setLastError(message);
+    nodeStore.logUi("Error", `[events] create failed: ${message}`);
   }
 }
 

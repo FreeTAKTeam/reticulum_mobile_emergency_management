@@ -47,6 +47,11 @@ const runningTitle = computed(() =>
     ? "App ready to send and receive events or messages."
     : "App is still starting. Sending stays blocked until the node is ready.",
 );
+const connectedPeerCount = computed(() => nodeStore.connectedDestinations.length);
+const connectedPeerCountTitle = computed(() => {
+  const count = connectedPeerCount.value;
+  return count === 1 ? "1 connected peer" : `${count} connected peers`;
+});
 
 function isTabActive(path: string): boolean {
   return route.path === path || route.path.startsWith(`${path}/`);
@@ -64,6 +69,14 @@ function isTabActive(path: string): boolean {
           </div>
         </div>
         <div class="mast-actions">
+          <span
+            class="peer-count"
+            data-testid="connected-peer-count"
+            aria-label="Connected peers"
+            :title="connectedPeerCountTitle"
+          >
+            {{ connectedPeerCount }}
+          </span>
           <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">
             {{ runningText }}
           </span>
@@ -235,6 +248,21 @@ function isTabActive(path: string): boolean {
   align-items: center;
   display: flex;
   gap: 0.65rem;
+}
+
+.peer-count {
+  align-items: center;
+  background: rgb(8 35 71 / 78%);
+  border: 1px solid rgb(78 166 255 / 50%);
+  border-radius: 999px;
+  color: #d7efff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 0.28rem 0.52rem;
 }
 
 .running {

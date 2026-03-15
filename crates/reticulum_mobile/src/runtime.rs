@@ -5,9 +5,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel as cb;
 use fs_err as fs;
-use log::{debug, info};
 #[cfg(feature = "legacy-lxmf-runtime")]
 use log::error;
+use log::{debug, info};
 use lxmf::message::Message as LxmfMessage;
 #[cfg(feature = "legacy-lxmf-runtime")]
 use lxmf::message::WireMessage as LxmfWireMessage;
@@ -18,9 +18,9 @@ use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDesti
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
-use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 #[cfg(feature = "legacy-lxmf-runtime")]
 use reticulum::packet::LXMF_MAX_PAYLOAD;
+use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 use reticulum::resource::ResourceEventKind;
 use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport, TransportConfig};
 use rmpv::Value as MsgPackValue;
@@ -1224,7 +1224,8 @@ pub async fn run_node(
                                 transport.find_in_link(&event.link_id).await
                             {
                                 address_hash_to_hex(&link.lock().await.destination().address_hash)
-                            } else if let Some(link) = transport.find_out_link(&event.link_id).await {
+                            } else if let Some(link) = transport.find_out_link(&event.link_id).await
+                            {
                                 address_hash_to_hex(&link.lock().await.destination().address_hash)
                             } else {
                                 address_hash_to_hex(&event.link_id)

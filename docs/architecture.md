@@ -209,6 +209,14 @@ Mobile-specific note:
 - The mobile app currently often includes additional event args such as `entry_uid`, `server_time`, `client_time`, `keywords`, `content_hashes`, and may include `source.display_name`.
 - Those are extra fields inside the same Hub command structure; the core transport contract is still an array of commands inside `FIELD_COMMANDS`.
 
+Implementation mapping:
+- `apps/mobile/src/stores/eventsStore.ts` persists events in the same RCH envelope shape used on the wire.
+- `apps/mobile/src/utils/missionSync.ts` serializes the command array with `msgpackr.pack(new Map([[0x09, commands]]))`, then base64-encodes the raw MsgPack bytes.
+- `packages/node-client/src/index.ts` forwards `fieldsBase64` unchanged to the Capacitor plugin in `sendBytes(...)`.
+- `crates/reticulum_mobile/src/jni_bridge.rs` base64-decodes `fields_base64` into `Vec<u8>` and passes those raw bytes to `node.send_bytes(...)`.
+- `crates/reticulum_mobile/src/runtime.rs` does not transform field names on send. It deserializes the raw MsgPack bytes into `message.fields` and separately reads metadata from the same byte slice using `parse_mission_sync_metadata(...)`.
+- Because the bridge passes raw MsgPack bytes through untouched, snake_case field names such as `command_id`, `command_type`, `correlation_id`, `mission_uid`, and `entry_uid` arrive in Rust exactly as produced by TypeScript.
+
 Additional event forms:
 - Mission bootstrap command:
   - `command_type: "mission.registry.mission.upsert"`
@@ -224,6 +232,13 @@ Transport:
 - This **is LXMF**.
 - In the runtime, any `sendBytes(...)` call that includes `fieldsBase64` is wrapped into an LXMF message and sent to the peer's **`lxmf/delivery` destination**.
 - The body bytes are empty for the mission-sync event path; the meaningful data is in the LXMF fields map.
+
+Verification:
+- `npm --workspace apps/mobile run typecheck`
+- `npm --workspace apps/mobile run build:web`
+- `npx playwright test e2e/events.spec.ts`
+- `cargo test -p reticulum_mobile parse_mission_sync_metadata`
+- The Rust test suite now includes a full-RCH-envelope case that exercises `source`, `timestamp`, `args`, `correlation_id`, and `topics` through `parse_mission_sync_metadata(...)`.
 
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
@@ -312,3 +327,27 @@ Dedicated raw-field keys used for compatibility delete/upsert parsing:
 
 Routing:
 - Telemetry uses the peer's **app destination** when that peer advertises the `Telemetry` capability.
+
+### LXMF SDK Bridge
+
+`crates/reticulum_mobile/src/sdk_bridge.rs` is now the single SDK-facing boundary for the Rust node runtime.
+
+Current wiring:
+- `runtime.rs` still owns the transport lifecycle, peer discovery, and UniFFI event emission.
+- Outbound LXMF event sends now go through `RuntimeLxmfSdk`, which wraps `lxmf-sdk`'s `Client<CompatBackend>`.
+- `CompatBackend` is a compatibility backend that implements the upstream `SdkBackend` contract against the existing local `reticulum-rs` transport and `lxmf` wire encoder.
+- Inbound packet reception, announce ingestion, peer state changes, hub-directory refreshes, and delivery-status transitions are mirrored into the SDK event/status model so send, receive, and delivery tracking share one internal SDK layer.
+
+Payload mapping:
+- `SendRequest.payload` carries the outbound content as base64 JSON.
+- `SendRequest.extensions["reticulum.raw_bytes_base64"]` preserves the raw message bytes used to build the LXMF message body.
+- `SendRequest.extensions["reticulum.fields_base64"]` preserves the original MsgPack LXMF fields without changing field names or structure.
+- Delivery tracking maps app-visible states onto SDK states:
+  - `Sent` -> `DeliveryState::Sent`
+  - `Acknowledged` -> `DeliveryState::Delivered`
+  - `Failed` -> `DeliveryState::Failed`
+  - `TimedOut` -> `DeliveryState::Expired`
+
+Rollback gate:
+- The default build uses the SDK-backed path.
+- `cargo test -p reticulum_mobile --features legacy-lxmf-runtime` keeps the previous direct send implementation available for one release cycle.

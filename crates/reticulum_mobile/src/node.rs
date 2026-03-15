@@ -88,9 +88,9 @@ impl Node {
         NodeLogger::global().set_bus(Some(inner.bus.clone()));
 
         if let Ok(guard) = inner.status.lock() {
-            inner
-                .bus
-                .emit(NodeEvent::StatusChanged { status: guard.clone() });
+            inner.bus.emit(NodeEvent::StatusChanged {
+                status: guard.clone(),
+            });
         }
 
         let runtime = Runtime::new().map_err(|_| NodeError::InternalError {})?;
@@ -136,7 +136,9 @@ impl Node {
 
         if let Ok(mut guard) = status.lock() {
             guard.running = false;
-            bus.emit(NodeEvent::StatusChanged { status: guard.clone() });
+            bus.emit(NodeEvent::StatusChanged {
+                status: guard.clone(),
+            });
         }
 
         Ok(())
@@ -159,13 +161,17 @@ impl Node {
             };
         };
 
-        inner.status.lock().map(|v| v.clone()).unwrap_or(NodeStatus {
-            running: false,
-            name: String::new(),
-            identity_hex: String::new(),
-            app_destination_hex: String::new(),
-            lxmf_destination_hex: String::new(),
-        })
+        inner
+            .status
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or(NodeStatus {
+                running: false,
+                name: String::new(),
+                identity_hex: String::new(),
+                app_destination_hex: String::new(),
+                lxmf_destination_hex: String::new(),
+            })
     }
 
     pub fn connect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
@@ -233,8 +239,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::BroadcastBytes { bytes, resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
+        tx.send(Command::BroadcastBytes {
+            bytes,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
         resp_rx
             .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))

@@ -299,11 +299,11 @@ impl CompatBackend {
         }
     }
 
-    fn take_send_report(&self, message_id_hex: &str) -> Option<CompatSendReport> {
+    fn send_report(&self, message_id_hex: &str) -> Option<CompatSendReport> {
         self.state
             .lock()
             .ok()
-            .and_then(|mut state| state.send_reports.remove(message_id_hex))
+            .and_then(|state| state.send_reports.get(message_id_hex).cloned())
     }
 
     fn record_packet_received(
@@ -630,7 +630,7 @@ impl RuntimeLxmfSdk {
         let report = self
             .client
             .backend()
-            .take_send_report(message_id.0.as_str())
+            .send_report(message_id.0.as_str())
             .ok_or(NodeError::InternalError {})?;
 
         if let Some(metadata) = metadata.as_ref().filter(|value| value.is_event_related()) {
@@ -1227,5 +1227,30 @@ mod tests {
         assert_eq!(batch.events[0].event_type, EVENT_PEER_CHANGED);
         assert_eq!(batch.events[1].event_type, EVENT_DELIVERY_UPDATED);
         assert_eq!(batch.next_cursor.0, "2");
+    }
+
+    #[test]
+    fn send_reports_are_reusable_for_idempotent_sdk_replays() {
+        let backend = CompatBackend::new_for_tests("runtime-test");
+        let report = CompatSendReport {
+            outcome: RnsSendOutcome::SentDirect,
+            message_id_hex: "msg-1".to_string(),
+            resolved_destination_hex: "dest-1".to_string(),
+            used_resource: true,
+        };
+        {
+            let mut state = backend.state.lock().expect("state lock");
+            state
+                .send_reports
+                .insert(report.message_id_hex.clone(), report.clone());
+        }
+
+        let first = backend.send_report("msg-1").expect("first lookup");
+        let second = backend.send_report("msg-1").expect("second lookup");
+
+        assert_eq!(first.message_id_hex, "msg-1");
+        assert_eq!(second.message_id_hex, "msg-1");
+        assert!(first.used_resource);
+        assert!(second.used_resource);
     }
 }
