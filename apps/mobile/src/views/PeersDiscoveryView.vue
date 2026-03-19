@@ -9,10 +9,8 @@ import type { DiscoveredPeer, SavedPeer } from "../types/domain";
 const nodeStore = useNodeStore();
 
 const searchText = ref("");
-const importText = ref("");
-const importMode = ref<"merge" | "replace">("merge");
 const feedback = ref("");
-const fileInput = ref<HTMLInputElement | null>(null);
+const isSavedSectionOpen = ref(true);
 
 const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
@@ -101,32 +99,6 @@ async function exportSaved(): Promise<void> {
   await shareText("PeerListV1", payload);
   feedback.value = "Saved peers exported to clipboard/share.";
 }
-
-function runImport(): void {
-  try {
-    const parsed = nodeStore.parsePeerListText(importText.value);
-    nodeStore.importPeerList(parsed.peerList, importMode.value);
-    feedback.value = `Imported ${parsed.peerList.peers.length} peers using ${importMode.value}.`;
-    if (parsed.warnings.length > 0) {
-      feedback.value += ` Warnings: ${parsed.warnings.join(" ")}`;
-    }
-  } catch (error) {
-    feedback.value = String(error);
-  }
-}
-
-function openFilePicker(): void {
-  fileInput.value?.click();
-}
-
-async function onFileSelected(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    return;
-  }
-  importText.value = await file.text();
-}
 </script>
 
 <template>
@@ -156,25 +128,6 @@ async function onFileSelected(event: Event): Promise<void> {
         />
         Show only capability-verified peers
       </label>
-      <div class="actions">
-        <button
-          type="button"
-          @click="
-            runNodeAction(() => nodeStore.connectAllSaved(), 'Connected all saved peers.')
-          "
-        >
-          Connect all saved
-        </button>
-        <button
-          type="button"
-          @click="
-            runNodeAction(() => nodeStore.disconnectAllSaved(), 'Disconnected all saved peers.')
-          "
-        >
-          Disconnect all saved
-        </button>
-        <button type="button" @click="exportSaved">Export saved</button>
-      </div>
     </section>
 
     <section class="panel">
@@ -217,62 +170,66 @@ async function onFileSelected(event: Event): Promise<void> {
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Saved</h2>
-      <p class="section-meta">{{ filteredSaved.length }} peers saved locally</p>
-      <div class="saved-list">
-        <article v-for="peer in filteredSaved" :key="peer.destination" class="saved-item">
-          <div>
-            <p class="dest">{{ peer.destination }}</p>
-            <p class="saved-label">{{ peer.label || "No label" }}</p>
-          </div>
-          <div class="actions">
-            <button
-              type="button"
-              @click="
-                runNodeAction(
-                  () => nodeStore.connectPeer(peer.destination),
-                  `Connect requested for ${peer.destination}.`,
-                )
-              "
-            >
-              Connect
-            </button>
-            <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
-          </div>
-        </article>
+    <section class="panel saved-panel">
+      <button
+        type="button"
+        class="saved-toggle"
+        :aria-expanded="isSavedSectionOpen"
+        @click="isSavedSectionOpen = !isSavedSectionOpen"
+      >
+        <div class="saved-toggle-copy">
+          <h2>Saved</h2>
+          <p class="section-meta">{{ filteredSaved.length }} peers saved locally</p>
+        </div>
+        <span class="saved-toggle-icon" :class="{ open: isSavedSectionOpen }" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      <div v-show="isSavedSectionOpen" class="saved-section-body">
+        <div class="actions saved-actions">
+          <button
+            type="button"
+            @click="
+              runNodeAction(() => nodeStore.connectAllSaved(), 'Connected all saved peers.')
+            "
+          >
+            Connect all
+          </button>
+          <button
+            type="button"
+            @click="
+              runNodeAction(() => nodeStore.disconnectAllSaved(), 'Disconnected all saved peers.')
+            "
+          >
+            Disconnect all
+          </button>
+          <button type="button" @click="exportSaved">Export</button>
+        </div>
+        <div v-if="filteredSaved.length > 0" class="saved-list">
+          <article v-for="peer in filteredSaved" :key="peer.destination" class="saved-item">
+            <div>
+              <p class="dest">{{ peer.destination }}</p>
+              <p class="saved-label">{{ peer.label || "No label" }}</p>
+            </div>
+            <div class="actions">
+              <button
+                type="button"
+                @click="
+                  runNodeAction(
+                    () => nodeStore.connectPeer(peer.destination),
+                    `Connect requested for ${peer.destination}.`,
+                  )
+                "
+              >
+                Connect
+              </button>
+              <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
+            </div>
+          </article>
+        </div>
+        <p v-else class="saved-empty">No saved peers yet.</p>
+        <p v-if="feedback" class="feedback">{{ feedback }}</p>
       </div>
-    </section>
-
-    <section class="panel">
-      <h2>Import / Exchange</h2>
-      <input
-        ref="fileInput"
-        type="file"
-        accept="application/json"
-        class="hidden-input"
-        @change="onFileSelected"
-      />
-      <div class="actions">
-        <button type="button" @click="openFilePicker">Load JSON file</button>
-      </div>
-      <textarea
-        v-model="importText"
-        rows="8"
-        placeholder="Paste PeerListV1 JSON here"
-      ></textarea>
-      <div class="actions">
-        <label class="radio">
-          <input v-model="importMode" type="radio" value="merge" />
-          Merge
-        </label>
-        <label class="radio">
-          <input v-model="importMode" type="radio" value="replace" />
-          Replace
-        </label>
-        <button type="button" @click="runImport">Apply import</button>
-      </div>
-      <p v-if="feedback" class="feedback">{{ feedback }}</p>
     </section>
   </section>
 </template>
@@ -334,6 +291,52 @@ h2 {
   gap: 0.5rem;
 }
 
+.saved-panel {
+  gap: 0.75rem;
+}
+
+.saved-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  justify-content: space-between;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.saved-toggle-copy {
+  min-width: 0;
+}
+
+.saved-toggle-copy .section-meta {
+  margin-bottom: 0;
+}
+
+.saved-toggle-icon {
+  color: #7fd8ff;
+  font-size: 1.1rem;
+  line-height: 1;
+  transform: rotate(-90deg);
+  transition: transform 160ms ease;
+}
+
+.saved-toggle-icon.open {
+  transform: rotate(0deg);
+}
+
+.saved-section-body {
+  border-top: 1px solid rgb(71 112 176 / 22%);
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.saved-actions {
+  margin-top: 0;
+}
+
 .saved-item {
   align-items: center;
   background: rgb(9 24 50 / 70%);
@@ -358,6 +361,12 @@ h2 {
   margin: 0.15rem 0 0;
 }
 
+.saved-empty {
+  color: #8aa5d1;
+  font-family: var(--font-body);
+  margin: 0;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -365,10 +374,11 @@ h2 {
   margin-top: 0.65rem;
 }
 
-button {
+button:not(.saved-toggle) {
   background: linear-gradient(118deg, #0b9fff, #20ecff);
   border: 0;
   border-radius: 10px;
+  box-shadow: 0 10px 22px rgb(3 32 75 / 22%);
   color: #03284b;
   cursor: pointer;
   font-family: var(--font-ui);
@@ -377,7 +387,22 @@ button {
   letter-spacing: 0.08em;
   min-height: 34px;
   padding: 0 0.76rem;
+  touch-action: manipulation;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
   text-transform: uppercase;
+}
+
+button:not(.saved-toggle):active {
+  background: linear-gradient(118deg, #046aa8, #0ea9cb);
+  box-shadow:
+    inset 0 1px 0 rgb(220 248 255 / 16%),
+    0 4px 10px rgb(3 21 47 / 24%);
+  color: #e8fbff;
+  transform: translateY(1px) scale(0.985);
 }
 
 .checkbox {
@@ -406,22 +431,10 @@ textarea {
   width: 100%;
 }
 
-.radio {
-  align-items: center;
-  color: #9db6dc;
-  display: flex;
-  font-family: var(--font-body);
-  gap: 0.35rem;
-}
-
 .feedback {
   color: #96afd5;
   font-family: var(--font-body);
   margin: 0.58rem 0 0;
-}
-
-.hidden-input {
-  display: none;
 }
 
 @media (max-width: 760px) {

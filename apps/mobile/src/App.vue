@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 import { RouterLink, RouterView, useRoute } from "vue-router";
 
+import logoUrl from "./assets/rem-logo.png";
 import { initAppNotifications } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagesStore } from "./stores/messagesStore";
@@ -63,10 +64,10 @@ function isTabActive(path: string): boolean {
     <div class="app-shell">
       <header class="masthead">
         <div class="brand">
-          <p class="asterisk">*</p>
-          <div>
-            <p class="title">Emergency Ops</p>
+          <div class="brand-mark-wrap">
+            <img class="brand-mark" :src="logoUrl" alt="R.E.M. logo" />
           </div>
+          <p class="title">R.E.M.</p>
         </div>
         <div class="mast-actions">
           <span
@@ -138,10 +139,10 @@ function isTabActive(path: string): boolean {
               viewBox="0 0 24 24"
               fill="none"
             >
-              <path d="M12 3.5a7 7 0 1 0 7 7" />
-              <path d="M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z" />
-              <path d="M15.7 4.2l4.1.1-.1 4.1" />
-              <path d="M19.7 4.3l-5.1 5.1" />
+              <path
+                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
+              />
+              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
             </svg>
             <svg
               v-else-if="tab.icon === 'settings'"
@@ -218,28 +219,50 @@ function isTabActive(path: string): boolean {
 
 .masthead {
   align-items: center;
+  backdrop-filter: blur(16px);
+  background: linear-gradient(135deg, rgb(5 21 43 / 88%), rgb(6 27 52 / 62%));
+  border: 1px solid rgb(74 137 214 / 28%);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgb(147 214 255 / 10%),
+    0 18px 40px rgb(1 6 19 / 28%);
   display: flex;
   justify-content: space-between;
+  padding: 0.72rem 0.9rem;
 }
 
 .brand {
   align-items: center;
   display: flex;
-  gap: 0.7rem;
+  gap: 0.82rem;
 }
 
-.asterisk {
-  color: #00d4ff;
-  font-family: var(--font-headline);
-  font-size: 2.8rem;
-  line-height: 0.8;
-  margin: 0;
-  text-shadow: 0 0 20px rgb(0 212 255 / 48%);
+.brand-mark-wrap {
+  align-items: center;
+  background:
+    radial-gradient(circle at 30% 30%, rgb(114 232 255 / 16%), transparent 48%),
+    linear-gradient(145deg, rgb(8 31 59 / 90%), rgb(6 18 39 / 96%));
+  border: 1px solid rgb(104 200 255 / 24%);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 rgb(188 241 255 / 10%),
+    0 12px 30px rgb(1 8 22 / 36%);
+  display: inline-flex;
+  padding: 0.24rem;
+}
+
+.brand-mark {
+  display: block;
+  filter: drop-shadow(0 0 18px rgb(80 212 255 / 16%));
+  height: 3.05rem;
+  width: 3.05rem;
 }
 
 .title {
+  color: #f3fbff;
   font-family: var(--font-headline);
-  font-size: clamp(1rem, 1.5vw, 1.45rem);
+  font-size: clamp(1.28rem, 1.8vw, 1.72rem);
+  letter-spacing: 0.22em;
   margin: 0;
   text-transform: uppercase;
 }
@@ -247,7 +270,9 @@ function isTabActive(path: string): boolean {
 .mast-actions {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.65rem;
+  justify-content: flex-end;
 }
 
 .peer-count {
@@ -263,6 +288,7 @@ function isTabActive(path: string): boolean {
   justify-content: center;
   min-width: 2rem;
   padding: 0.28rem 0.52rem;
+  box-shadow: inset 0 1px 0 rgb(211 241 255 / 8%);
 }
 
 .running {
@@ -274,6 +300,7 @@ function isTabActive(path: string): boolean {
   font-size: 0.74rem;
   letter-spacing: 0.09em;
   padding: 0.3rem 0.62rem;
+  box-shadow: inset 0 1px 0 rgb(211 241 255 / 8%);
   text-transform: uppercase;
 }
 
@@ -359,6 +386,49 @@ function isTabActive(path: string): boolean {
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.6rem);
     padding-inline: 0.6rem;
     padding-top: calc(env(safe-area-inset-top, 0px) + 0.6rem);
+  }
+
+  .masthead {
+    gap: 0.6rem;
+    padding: 0.62rem 0.72rem;
+  }
+
+  .brand {
+    flex: 1;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+
+  .brand-mark {
+    height: 2.5rem;
+    width: 2.5rem;
+  }
+
+  .title {
+    font-size: 1.12rem;
+    letter-spacing: 0.16em;
+  }
+
+  .masthead {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .mast-actions {
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    gap: 0.45rem;
+    width: auto;
+  }
+
+  .peer-count {
+    min-width: 1.8rem;
+    padding: 0.25rem 0.48rem;
+  }
+
+  .running {
+    font-size: 0.68rem;
+    padding: 0.28rem 0.52rem;
   }
 }
 </style>

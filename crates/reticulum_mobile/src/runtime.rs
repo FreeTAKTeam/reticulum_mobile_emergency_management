@@ -50,6 +50,13 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+pub(crate) fn lxmf_private_identity(
+    identity: &PrivateIdentity,
+) -> Result<lxmf::identity::PrivateIdentity, NodeError> {
+    lxmf::identity::PrivateIdentity::from_private_key_bytes(&identity.to_private_key_bytes())
+        .map_err(|_| NodeError::InternalError {})
+}
+
 fn normalize_hex_32(s: &str) -> Option<String> {
     let trimmed = s.trim();
     if trimmed.len() != 32 {
@@ -68,6 +75,22 @@ fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {
 
 fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
+}
+
+fn normalize_display_name(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().any(char::is_control) {
+        return None;
+    }
+    let normalized: String = trimmed.chars().take(64).collect();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 fn announce_destination_kind(desc: &DestinationDesc) -> &'static str {
@@ -380,7 +403,7 @@ fn emit_lxmf_delivery_with_source(
 }
 
 fn encode_delivery_display_name_app_data(display_name: &str) -> Option<Vec<u8>> {
-    let normalized = lxmf::helpers::normalize_display_name(display_name).ok()?;
+    let normalized = normalize_display_name(display_name)?;
     let peer_data = MsgPackValue::Array(vec![
         MsgPackValue::Binary(normalized.into_bytes()),
         MsgPackValue::Nil,
@@ -608,8 +631,9 @@ async fn send_lxmf_message(
         None => None,
     };
 
+    let signer = lxmf_private_identity(&state.identity)?;
     let wire = message
-        .to_wire(Some(&state.identity))
+        .to_wire(Some(&signer))
         .map_err(|_| NodeError::LxmfWireEncodeError {})?;
     debug!(
         "[lxmf][debug] send_lxmf_message wire ready requested_destination={} resolved_destination={} content_bytes={} fields_bytes={} wire_bytes={} max_wire_bytes={}",
@@ -953,8 +977,9 @@ async fn refresh_hub_directory_lxmf(
     message.set_title_from_string("ListClients");
     message.set_content_from_string(content);
 
+    let signer = lxmf_private_identity(&state.identity)?;
     let wire = message
-        .to_wire(Some(&state.identity))
+        .to_wire(Some(&signer))
         .map_err(|_| NodeError::InternalError {})?;
 
     let packet = link

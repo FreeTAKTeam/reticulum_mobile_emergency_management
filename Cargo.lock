@@ -380,9 +380,9 @@ dependencies = [
 
 [[package]]
 name = "ed25519-dalek"
-version = "2.2.0"
+version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+checksum = "4a3daa8e81a3963a60642bcc1f90a670680bd4a77535faa384e9d1c79d620871"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
@@ -897,30 +897,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "lxmf"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2c457f41e740450b22880ce7669558b661e04e1176f41d1c697ff6b50d100b8"
+name = "lxmf-core"
+version = "0.1.0"
 dependencies = [
  "base64",
  "ed25519-dalek",
  "hex",
- "hkdf",
  "rand_core 0.6.4",
- "reticulum-rs",
  "rmp-serde",
  "rmpv",
+ "rns-core",
  "serde",
  "serde_bytes",
+ "serde_json",
  "sha2",
- "thiserror 1.0.69",
  "x25519-dalek",
 ]
 
 [[package]]
 name = "lxmf-sdk"
 version = "0.1.0"
-source = "git+https://github.com/FreeTAKTeam/LXMF-rs?rev=ff904d103d2c323b55a65a4254283549f2a62204#ff904d103d2c323b55a65a4254283549f2a62204"
 dependencies = [
  "hex",
  "hmac",
@@ -1313,7 +1309,7 @@ dependencies = [
  "hex",
  "jni",
  "log",
- "lxmf",
+ "lxmf-core",
  "lxmf-sdk",
  "rand_core 0.6.4",
  "regex",
@@ -1370,6 +1366,25 @@ dependencies = [
  "rmp",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "rns-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "cbc",
+ "crypto-common",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "hmac",
+ "rand_core 0.6.4",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "sha2",
+ "x25519-dalek",
 ]
 
 [[package]]

@@ -23,7 +23,7 @@ use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::runtime::{LxmfSendReport, MissionSyncMetadata};
+use crate::runtime::{lxmf_private_identity, LxmfSendReport, MissionSyncMetadata};
 use crate::types::{NodeError, PeerState};
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
@@ -873,8 +873,10 @@ async fn compat_send_lxmf(
         None => None,
     };
 
+    let signer =
+        lxmf_private_identity(&state.identity).map_err(|_| sdk_internal("invalid signer"))?;
     let wire = message
-        .to_wire(Some(&state.identity))
+        .to_wire(Some(&signer))
         .map_err(|_| sdk_internal("failed to encode lxmf wire message"))?;
     debug!(
         "[lxmf][debug][sdk] compat_send_lxmf wire ready requested_destination={} resolved_destination={} content_bytes={} fields_bytes={} wire_bytes={} max_wire_bytes={}",

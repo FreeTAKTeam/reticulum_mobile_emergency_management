@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, reactive, ref, useTemplateRef } from "vue";
 
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
@@ -48,6 +48,7 @@ const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
+const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 const showLegacyHubHttpFields = computed(() => form.hubMode === "RchHttp");
@@ -75,10 +76,7 @@ const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
-  const telemetrySummary = form.telemetryEnabled
-    ? `telemetry every ${form.telemetryPublishIntervalSeconds}s`
-    : "telemetry off";
-  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel} | ${telemetrySummary}`;
+  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
 });
 
 function peerExposesHubCapability(appData: string): boolean {
@@ -129,6 +127,14 @@ const telemetryStatusText = computed(() => {
     return "Publishing";
   }
   return "Idle";
+});
+
+const telemetrySummary = computed(() => {
+  if (!form.telemetryEnabled) {
+    return "Disabled";
+  }
+
+  return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
 
 function normalizeTcpEndpoint(value: string): string | undefined {
@@ -276,6 +282,19 @@ function importPeerList(): void {
     importFeedback.value = String(error);
   }
 }
+
+function openPeerListFilePicker(): void {
+  peerListFileInput.value?.click();
+}
+
+async function onPeerListFileSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) {
+    return;
+  }
+  importText.value = await file.text();
+}
 </script>
 
 <template>
@@ -292,7 +311,15 @@ function importPeerList(): void {
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
-        <div>
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M5 7h10" />
+              <path d="M5 17h14" />
+              <path d="M15 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
+              <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
+            </svg>
+          </span>
           <h2>Runtime</h2>
           <p>{{ runtimeSummary }}</p>
         </div>
@@ -330,30 +357,6 @@ function importPeerList(): void {
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />
             Broadcast enabled
-          </label>
-          <label class="checkbox">
-            <input v-model="form.telemetryEnabled" type="checkbox" />
-            Enable telemetry sharing
-          </label>
-          <label>
-            Telemetry publish interval (seconds)
-            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="5" max="60" />
-          </label>
-          <label>
-            Telemetry accuracy threshold (meters, optional)
-            <input v-model.number="form.telemetryAccuracyThresholdMeters" type="number" min="0" placeholder="Unset" />
-          </label>
-          <label>
-            Telemetry goes stale after (minutes)
-            <input v-model.number="form.telemetryStaleAfterMinutes" type="number" min="1" />
-          </label>
-          <label>
-            Telemetry disappears after (minutes)
-            <input v-model.number="form.telemetryExpireAfterMinutes" type="number" min="1" />
-          </label>
-          <label class="full">
-            Telemetry status
-            <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
           </label>
           <label class="checkbox">
             <input v-model="form.showOnlyCapabilityVerified" type="checkbox" />
@@ -430,7 +433,66 @@ function importPeerList(): void {
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
-        <div>
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
+              />
+              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
+            </svg>
+          </span>
+          <h2>Telemetry</h2>
+          <p>{{ telemetrySummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.telemetryEnabled" type="checkbox" />
+            Enable telemetry sharing
+          </label>
+          <label>
+            Telemetry publish interval (seconds)
+            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="5" max="60" />
+          </label>
+          <label>
+            Telemetry accuracy threshold (meters, optional)
+            <input
+              v-model.number="form.telemetryAccuracyThresholdMeters"
+              type="number"
+              min="0"
+              placeholder="Unset"
+            />
+          </label>
+          <label>
+            Telemetry goes stale after (minutes)
+            <input v-model.number="form.telemetryStaleAfterMinutes" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry disappears after (minutes)
+            <input v-model.number="form.telemetryExpireAfterMinutes" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry status
+            <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3.5a7 7 0 1 0 7 7" />
+              <path d="M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z" />
+              <path d="M15.7 4.2l4.1.1-.1 4.1" />
+              <path d="M19.7 4.3l-5.1 5.1" />
+            </svg>
+          </span>
           <h2>RCH Hub Directory</h2>
           <p>{{ hubSummary }}</p>
         </div>
@@ -500,19 +562,43 @@ function importPeerList(): void {
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
-        <div>
-          <h2>Peer List Exchange (PeerListV1)</h2>
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M12 5v4" />
+              <path d="M12 15v4" />
+              <path d="M5 12h4" />
+              <path d="M15 12h4" />
+              <path d="M7.8 7.8l2.8 2.8" />
+              <path d="M13.4 13.4l2.8 2.8" />
+              <path d="M16.2 7.8l-2.8 2.8" />
+              <path d="M10.6 13.4l-2.8 2.8" />
+              <circle cx="12" cy="12" r="2.2" />
+            </svg>
+          </span>
+          <h2>Manage Peers</h2>
           <p>{{ peerListSummary }}</p>
         </div>
         <span class="chevron" aria-hidden="true">&#9662;</span>
       </summary>
       <div class="panel-body">
+        <p class="section-note">
+          Peer List Exchange (PeerListV1) lets you export or import saved peer lists.
+        </p>
+        <input
+          ref="peerListFileInput"
+          type="file"
+          accept="application/json"
+          class="hidden-input"
+          @change="onPeerListFileSelected"
+        />
         <div class="actions">
+          <button type="button" @click="openPeerListFilePicker">Load JSON File</button>
           <button type="button" @click="exportPeerList">Export + Share</button>
         </div>
         <label class="full">
           Import JSON
-          <textarea v-model="importText" rows="7"></textarea>
+          <textarea v-model="importText" rows="7" placeholder="Paste PeerListV1 JSON here"></textarea>
         </label>
         <div class="actions">
           <label class="radio">
@@ -531,7 +617,22 @@ function importPeerList(): void {
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
-        <div>
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <circle cx="6" cy="12" r="1.6" />
+              <circle cx="12" cy="6" r="1.6" />
+              <circle cx="18" cy="8" r="1.6" />
+              <circle cx="18" cy="16" r="1.6" />
+              <circle cx="10" cy="18" r="1.6" />
+              <path d="M7.4 10.9 10.6 7.1" />
+              <path d="M13.5 6.5 16.5 7.5" />
+              <path d="M18 9.6v4.8" />
+              <path d="M16.7 17.1 11.3 16.9" />
+              <path d="M8.7 16.9 6.9 13.5" />
+              <path d="M11.2 7.5 10.4 16.4" />
+            </svg>
+          </span>
           <h2>Node Control</h2>
           <p>{{ nodeControlSummary }}</p>
         </div>
@@ -631,6 +732,40 @@ h1 {
 
 .panel-summary::-webkit-details-marker {
   display: none;
+}
+
+.summary-copy {
+  align-items: center;
+  column-gap: 0.72rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+}
+
+.summary-icon {
+  align-items: center;
+  background:
+    radial-gradient(circle at 30% 30%, rgb(120 228 255 / 16%), transparent 52%),
+    linear-gradient(145deg, rgb(8 29 58 / 92%), rgb(5 20 44 / 96%));
+  border: 1px solid rgb(92 184 255 / 28%);
+  border-radius: 11px;
+  box-shadow:
+    inset 0 1px 0 rgb(210 245 255 / 8%),
+    0 8px 18px rgb(2 14 32 / 18%);
+  color: #7fdbff;
+  display: inline-flex;
+  grid-row: 1 / span 2;
+  height: 2.4rem;
+  justify-content: center;
+  width: 2.4rem;
+}
+
+.summary-icon-svg {
+  height: 1.2rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 1.2rem;
 }
 
 .panel-summary h2 {
@@ -821,6 +956,7 @@ button {
   background: linear-gradient(118deg, #0b9fff, #20ecff);
   border: 0;
   border-radius: 10px;
+  box-shadow: 0 10px 22px rgb(3 32 75 / 22%);
   color: #03284b;
   cursor: pointer;
   font-family: var(--font-ui);
@@ -829,13 +965,37 @@ button {
   letter-spacing: 0.08em;
   min-height: 34px;
   padding: 0 0.76rem;
+  touch-action: manipulation;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
   text-transform: uppercase;
+}
+
+button:active {
+  background: linear-gradient(118deg, #046aa8, #0ea9cb);
+  box-shadow:
+    inset 0 1px 0 rgb(220 248 255 / 16%),
+    0 4px 10px rgb(3 21 47 / 24%);
+  color: #e8fbff;
+  transform: translateY(1px) scale(0.985);
+}
+
+.inline-remove:active {
+  background: rgb(15 73 115 / 92%);
+  border-color: rgb(112 197 255 / 56%);
 }
 
 .feedback {
   color: #96afd5;
   font-family: var(--font-body);
   margin: 0.58rem 0 0;
+}
+
+.hidden-input {
+  display: none;
 }
 
 .log-list {

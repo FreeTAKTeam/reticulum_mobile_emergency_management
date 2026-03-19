@@ -7,6 +7,7 @@ import type { EventRecord } from "../types/domain";
 import {
   buildMissionCommandFieldsBase64,
   buildMissionResponseFieldsBase64,
+  createMissionAcceptedPayload,
   createMissionCommandEnvelope,
   createMissionEventEnvelope,
   createMissionRejectedPayload,
@@ -979,6 +980,7 @@ export const useEventsStore = defineStore("events", () => {
     const eventUid = getEventUid(record);
     const failures = (await Promise.all(peers.map(async (peer) => {
       try {
+        await ensureDefaultMission(peer);
         const routeSuffix = peer.appDestinationHex.slice(0, 8);
         const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
         await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
@@ -1049,6 +1051,11 @@ export const useEventsStore = defineStore("events", () => {
   async function handleMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
     const localIdentity = localSourceIdentity();
     const localDisplayName = localCallsign() || undefined;
+    const accepted = createMissionAcceptedPayload({
+      commandId: command.command_id,
+      correlationId: command.correlation_id,
+      byIdentity: localIdentity || undefined,
+    });
 
     if (command.command_type === "mission.registry.mission.upsert") {
       const missionUid = String(command.args.mission_uid ?? command.args.uid ?? "").trim() || DEFAULT_R3AKT_MISSION_UID;
@@ -1066,6 +1073,7 @@ export const useEventsStore = defineStore("events", () => {
       }
 
       const missionPayload = buildDefaultMissionPayload();
+      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
@@ -1115,6 +1123,7 @@ export const useEventsStore = defineStore("events", () => {
       } as unknown as Partial<EventRecord> & Record<string, unknown>);
       const outcome = applyUpsert(incoming);
       const stored = byUid[getEventUid(incoming)];
+      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
@@ -1154,6 +1163,7 @@ export const useEventsStore = defineStore("events", () => {
       const payload = {
         log_entries: snapshotEvents().map((entry) => buildMissionPayload(entry)),
       };
+      await sendMissionResponse(destination, accepted);
       await sendMissionResponse(
         destination,
         createMissionResultPayload({
