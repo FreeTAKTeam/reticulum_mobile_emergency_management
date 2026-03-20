@@ -5,11 +5,13 @@ import { RouterLink, RouterView, useRoute } from "vue-router";
 import logoUrl from "./assets/rem-logo.png";
 import { initAppNotifications } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
+import { useMessagingStore } from "./stores/messagingStore";
 import { useMessagesStore } from "./stores/messagesStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
 
 const nodeStore = useNodeStore();
+const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
 const telemetryStore = useTelemetryStore();
@@ -18,6 +20,7 @@ const route = useRoute();
 onMounted(async () => {
   try {
     await initAppNotifications();
+    messagingStore.init();
     messagesStore.init();
     messagesStore.initReplication();
     eventsStore.init();
@@ -35,6 +38,7 @@ onMounted(async () => {
 
 const tabItems = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { path: "/inbox", label: "Inbox", icon: "inbox" },
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
   { path: "/peers", label: "Peers", icon: "peers" },
@@ -48,10 +52,10 @@ const runningTitle = computed(() =>
     ? "App ready to send and receive events or messages."
     : "App is still starting. Sending stays blocked until the node is ready.",
 );
-const connectedPeerCount = computed(() => nodeStore.connectedDestinations.length);
+const connectedPeerCount = computed(() => nodeStore.connectedLinkDestinations.length);
 const connectedPeerCountTitle = computed(() => {
   const count = connectedPeerCount.value;
-  return count === 1 ? "1 connected peer" : `${count} connected peers`;
+  return count === 1 ? "1 connected link" : `${count} connected links`;
 });
 
 function isTabActive(path: string): boolean {
@@ -100,7 +104,16 @@ function isTabActive(path: string): boolean {
         >
           <span class="tab-icon" aria-hidden="true">
             <svg
-              v-if="tab.icon === 'messages'"
+              v-if="tab.icon === 'inbox'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M5 6.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" />
+              <path d="M3 10.5h5l1.8 2h4.4l1.8-2H21" />
+            </svg>
+            <svg
+              v-else-if="tab.icon === 'messages'"
               class="icon-svg"
               viewBox="0 0 24 24"
               fill="none"
@@ -327,7 +340,7 @@ function isTabActive(path: string): boolean {
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   max-width: 100%;
 }
 

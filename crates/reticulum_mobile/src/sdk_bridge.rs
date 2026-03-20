@@ -534,6 +534,7 @@ struct CompatSendReport {
     message_id_hex: String,
     resolved_destination_hex: String,
     used_resource: bool,
+    receipt_hash_hex: Option<String>,
 }
 
 pub(crate) struct RuntimeLxmfSdk {
@@ -578,6 +579,7 @@ impl RuntimeLxmfSdk {
         &self,
         destination: AddressHash,
         content: &[u8],
+        title: Option<String>,
         fields_bytes: Option<Vec<u8>>,
         metadata: Option<MissionSyncMetadata>,
     ) -> Result<LxmfSendReport, NodeError> {
@@ -599,6 +601,7 @@ impl RuntimeLxmfSdk {
             requested_destination_hex.clone(),
             json!({
                 "encoding": "base64",
+                "title": title.clone().unwrap_or_default(),
                 "content_base64": BASE64_STANDARD.encode(content),
             }),
         )
@@ -653,6 +656,8 @@ impl RuntimeLxmfSdk {
             resolved_destination_hex: report.resolved_destination_hex,
             metadata,
             track_delivery_timeout: !report.used_resource,
+            used_resource: report.used_resource,
+            receipt_hash_hex: report.receipt_hash_hex,
         })
     }
 
@@ -950,6 +955,7 @@ async fn compat_send_lxmf(
                                 message_id_hex,
                                 resolved_destination_hex,
                                 used_resource: true,
+                                receipt_hash_hex: None,
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
@@ -968,6 +974,7 @@ async fn compat_send_lxmf(
         .await
         .data_packet(&wire)
         .map_err(|_| sdk_internal("failed to create transport packet"))?;
+    let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
     let outcome = state.transport.send_packet_with_outcome(packet).await;
 
     Ok(CompatSendReport {
@@ -975,6 +982,7 @@ async fn compat_send_lxmf(
         message_id_hex,
         resolved_destination_hex,
         used_resource: false,
+        receipt_hash_hex: Some(receipt_hash_hex),
     })
 }
 
@@ -1239,6 +1247,7 @@ mod tests {
             message_id_hex: "msg-1".to_string(),
             resolved_destination_hex: "dest-1".to_string(),
             used_resource: true,
+            receipt_hash_hex: None,
         };
         {
             let mut state = backend.state.lock().expect("state lock");

@@ -12,6 +12,20 @@ export type SendOutcome =
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
 export type LxmfDeliveryStatus = "Sent" | "Acknowledged" | "Failed" | "TimedOut";
+export type MessageMethod = "Direct" | "Opportunistic" | "Propagated" | "Resource";
+export type MessageState =
+  | "Queued"
+  | "PathRequested"
+  | "LinkEstablishing"
+  | "Sending"
+  | "SentDirect"
+  | "SentToPropagation"
+  | "Delivered"
+  | "Failed"
+  | "TimedOut"
+  | "Cancelled"
+  | "Received";
+export type MessageDirection = "Inbound" | "Outbound";
 
 export interface NodeConfig {
   name: string;
@@ -55,6 +69,17 @@ export interface AnnounceReceivedEvent {
   receivedAtMs: number;
 }
 
+export interface AnnounceRecord {
+  destinationHex: string;
+  identityHex: string;
+  destinationKind: AnnounceDestinationKind;
+  appData: string;
+  displayName?: string;
+  hops: number;
+  interfaceHex: string;
+  receivedAtMs: number;
+}
+
 export interface PeerChangedEvent {
   change: PeerChange;
 }
@@ -93,6 +118,68 @@ export interface LxmfDeliveryEvent {
   updatedAtMs: number;
 }
 
+export interface MessageRecord {
+  messageIdHex: string;
+  conversationId: string;
+  direction: MessageDirection;
+  destinationHex: string;
+  sourceHex?: string;
+  title?: string;
+  bodyUtf8: string;
+  method: MessageMethod;
+  state: MessageState;
+  detail?: string;
+  sentAtMs?: number;
+  receivedAtMs?: number;
+  updatedAtMs: number;
+}
+
+export interface PeerRecord {
+  destinationHex: string;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  displayName?: string;
+  appData?: string;
+  state: PeerState;
+  lastSeenAtMs: number;
+  announceLastSeenAtMs?: number;
+  lxmfLastSeenAtMs?: number;
+}
+
+export interface ConversationRecord {
+  conversationId: string;
+  peerDestinationHex: string;
+  peerDisplayName?: string;
+  lastMessagePreview?: string;
+  lastMessageAtMs: number;
+  unreadCount: number;
+  lastMessageState?: MessageState;
+}
+
+export type SyncPhase =
+  | "Idle"
+  | "PathRequested"
+  | "LinkEstablishing"
+  | "RequestSent"
+  | "Receiving"
+  | "Complete"
+  | "Failed";
+
+export interface SyncStatus {
+  phase: SyncPhase;
+  activePropagationNodeHex?: string;
+  requestedAtMs?: number;
+  completedAtMs?: number;
+  messagesReceived: number;
+  detail?: string;
+}
+
+export interface SendLxmfRequest {
+  destinationHex: string;
+  bodyUtf8: string;
+  title?: string;
+}
+
 export interface HubDirectoryUpdatedEvent {
   destinations: string[];
   receivedAtMs: number;
@@ -112,9 +199,13 @@ export interface NodeClientEvents {
   statusChanged: StatusChangedEvent;
   announceReceived: AnnounceReceivedEvent;
   peerChanged: PeerChangedEvent;
+  peerResolved: PeerRecord;
   packetReceived: PacketReceivedEvent;
   packetSent: PacketSentEvent;
   lxmfDelivery: LxmfDeliveryEvent;
+  messageReceived: MessageRecord;
+  messageUpdated: MessageRecord;
+  syncUpdated: SyncStatus;
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
   log: NodeLogEvent;
   error: NodeErrorEvent;
@@ -127,8 +218,20 @@ export interface ReticulumNodeClient {
   getStatus(): Promise<NodeStatus>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
+  announceNow(): Promise<void>;
+  requestPeerIdentity(destinationHex: string): Promise<void>;
   sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
+  sendLxmf(request: SendLxmfRequest): Promise<string>;
+  retryLxmf(messageIdHex: string): Promise<void>;
+  cancelLxmf(messageIdHex: string): Promise<void>;
   broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
+  setActivePropagationNode(destinationHex?: string): Promise<void>;
+  requestLxmfSync(limit?: number): Promise<void>;
+  listAnnounces(): Promise<AnnounceRecord[]>;
+  listPeers(): Promise<PeerRecord[]>;
+  listConversations(): Promise<ConversationRecord[]>;
+  listMessages(conversationId?: string): Promise<MessageRecord[]>;
+  getLxmfSyncStatus(): Promise<SyncStatus>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -201,17 +304,33 @@ interface ReticulumNodePlugin {
   getStatus(): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
+  announceNow(): Promise<void>;
+  requestPeerIdentity(options: { destinationHex: string }): Promise<void>;
   send(options: {
     destinationHex: string;
     bytesBase64: string;
     dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
   }): Promise<void>;
+  sendLxmf(options: {
+    destinationHex: string;
+    bodyUtf8: string;
+    title?: string;
+  }): Promise<{ messageIdHex: string }>;
+  retryLxmf(options: { messageIdHex: string }): Promise<void>;
+  cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
     bytesBase64: string;
     dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
   }): Promise<void>;
+  setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
+  requestLxmfSync(options: { limit?: number }): Promise<void>;
+  listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
+  listPeers(): Promise<{ items: Record<string, unknown>[] }>;
+  listConversations(): Promise<{ items: Record<string, unknown>[] }>;
+  listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
+  getLxmfSyncStatus(): Promise<Record<string, unknown>>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -332,6 +451,19 @@ function toAnnounceReceivedEvent(
   };
 }
 
+function toAnnounceRecord(raw: Record<string, unknown>): AnnounceRecord {
+  const event = toAnnounceReceivedEvent(raw);
+  return {
+    ...event,
+    displayName:
+      typeof raw.displayName === "string"
+        ? raw.displayName
+        : typeof raw.display_name === "string"
+          ? raw.display_name
+          : undefined,
+  };
+}
+
 function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
   const changeRaw = (raw.change as Record<string, unknown> | undefined) ?? raw;
   return {
@@ -344,6 +476,48 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
         | string
         | undefined,
     },
+  };
+}
+
+function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
+  return {
+    destinationHex: normalizeHex(
+      String(raw.destinationHex ?? raw.destination_hex ?? ""),
+    ),
+    identityHex:
+      raw.identityHex !== undefined || raw.identity_hex !== undefined
+        ? normalizeHex(String(raw.identityHex ?? raw.identity_hex ?? ""))
+        : undefined,
+    lxmfDestinationHex:
+      raw.lxmfDestinationHex !== undefined || raw.lxmf_destination_hex !== undefined
+        ? normalizeHex(String(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex ?? ""))
+        : undefined,
+    displayName:
+      typeof raw.displayName === "string"
+        ? raw.displayName
+        : typeof raw.display_name === "string"
+          ? raw.display_name
+          : undefined,
+    appData:
+      typeof raw.appData === "string"
+        ? raw.appData
+        : typeof raw.app_data === "string"
+          ? raw.app_data
+          : undefined,
+    state: toPeerState(raw.state),
+    lastSeenAtMs: Number(raw.lastSeenAtMs ?? raw.last_seen_at_ms ?? Date.now()),
+    announceLastSeenAtMs:
+      typeof raw.announceLastSeenAtMs === "number"
+        ? raw.announceLastSeenAtMs
+        : typeof raw.announce_last_seen_at_ms === "number"
+          ? raw.announce_last_seen_at_ms
+          : undefined,
+    lxmfLastSeenAtMs:
+      typeof raw.lxmfLastSeenAtMs === "number"
+        ? raw.lxmfLastSeenAtMs
+        : typeof raw.lxmf_last_seen_at_ms === "number"
+          ? raw.lxmf_last_seen_at_ms
+          : undefined,
   };
 }
 
@@ -459,6 +633,138 @@ function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
   };
 }
 
+function toMessageMethod(raw: unknown): MessageMethod {
+  const value = String(raw ?? "");
+  const valid: MessageMethod[] = ["Direct", "Opportunistic", "Propagated", "Resource"];
+  return valid.includes(value as MessageMethod) ? (value as MessageMethod) : "Direct";
+}
+
+function toMessageState(raw: unknown): MessageState {
+  const value = String(raw ?? "");
+  const valid: MessageState[] = [
+    "Queued",
+    "PathRequested",
+    "LinkEstablishing",
+    "Sending",
+    "SentDirect",
+    "SentToPropagation",
+    "Delivered",
+    "Failed",
+    "TimedOut",
+    "Cancelled",
+    "Received",
+  ];
+  return valid.includes(value as MessageState) ? (value as MessageState) : "Failed";
+}
+
+function toMessageDirection(raw: unknown): MessageDirection {
+  return String(raw ?? "") === "Inbound" ? "Inbound" : "Outbound";
+}
+
+function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
+  return {
+    messageIdHex: normalizeHex(String(raw.messageIdHex ?? raw.message_id_hex ?? "")),
+    conversationId: String(raw.conversationId ?? raw.conversation_id ?? ""),
+    direction: toMessageDirection(raw.direction),
+    destinationHex: normalizeHex(String(raw.destinationHex ?? raw.destination_hex ?? "")),
+    sourceHex:
+      raw.sourceHex !== undefined || raw.source_hex !== undefined
+        ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
+        : undefined,
+    title:
+      typeof raw.title === "string"
+        ? raw.title
+        : undefined,
+    bodyUtf8: String(raw.bodyUtf8 ?? raw.body_utf8 ?? ""),
+    method: toMessageMethod(raw.method),
+    state: toMessageState(raw.state),
+    detail:
+      typeof raw.detail === "string"
+        ? raw.detail
+        : undefined,
+    sentAtMs:
+      typeof raw.sentAtMs === "number"
+        ? raw.sentAtMs
+        : typeof raw.sent_at_ms === "number"
+          ? raw.sent_at_ms
+          : undefined,
+    receivedAtMs:
+      typeof raw.receivedAtMs === "number"
+        ? raw.receivedAtMs
+        : typeof raw.received_at_ms === "number"
+          ? raw.received_at_ms
+          : undefined,
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
+  };
+}
+
+function toConversationRecord(raw: Record<string, unknown>): ConversationRecord {
+  return {
+    conversationId: String(raw.conversationId ?? raw.conversation_id ?? ""),
+    peerDestinationHex: normalizeHex(
+      String(raw.peerDestinationHex ?? raw.peer_destination_hex ?? ""),
+    ),
+    peerDisplayName:
+      typeof raw.peerDisplayName === "string"
+        ? raw.peerDisplayName
+        : typeof raw.peer_display_name === "string"
+          ? raw.peer_display_name
+          : undefined,
+    lastMessagePreview:
+      typeof raw.lastMessagePreview === "string"
+        ? raw.lastMessagePreview
+        : typeof raw.last_message_preview === "string"
+          ? raw.last_message_preview
+          : undefined,
+    lastMessageAtMs: Number(raw.lastMessageAtMs ?? raw.last_message_at_ms ?? Date.now()),
+    unreadCount: Number(raw.unreadCount ?? raw.unread_count ?? 0),
+    lastMessageState:
+      raw.lastMessageState !== undefined || raw.last_message_state !== undefined
+        ? toMessageState(raw.lastMessageState ?? raw.last_message_state)
+        : undefined,
+  };
+}
+
+function toSyncPhase(raw: unknown): SyncPhase {
+  const value = String(raw ?? "");
+  const valid: SyncPhase[] = [
+    "Idle",
+    "PathRequested",
+    "LinkEstablishing",
+    "RequestSent",
+    "Receiving",
+    "Complete",
+    "Failed",
+  ];
+  return valid.includes(value as SyncPhase) ? (value as SyncPhase) : "Idle";
+}
+
+function toSyncStatus(raw: Record<string, unknown>): SyncStatus {
+  return {
+    phase: toSyncPhase(raw.phase),
+    activePropagationNodeHex:
+      raw.activePropagationNodeHex !== undefined || raw.active_propagation_node_hex !== undefined
+        ? normalizeHex(
+            String(raw.activePropagationNodeHex ?? raw.active_propagation_node_hex ?? ""),
+          )
+        : undefined,
+    requestedAtMs:
+      typeof raw.requestedAtMs === "number"
+        ? raw.requestedAtMs
+        : typeof raw.requested_at_ms === "number"
+          ? raw.requested_at_ms
+          : undefined,
+    completedAtMs:
+      typeof raw.completedAtMs === "number"
+        ? raw.completedAtMs
+        : typeof raw.completed_at_ms === "number"
+          ? raw.completed_at_ms
+          : undefined,
+    messagesReceived: Number(raw.messagesReceived ?? raw.messages_received ?? 0),
+    detail: typeof raw.detail === "string" ? raw.detail : undefined,
+  };
+}
+
 function toHubDirectoryUpdatedEvent(
   raw: Record<string, unknown>,
 ): HubDirectoryUpdatedEvent {
@@ -532,9 +838,13 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("statusChanged", toStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);
+      await register("peerResolved", toPeerRecord);
       await register("packetReceived", toPacketReceivedEvent);
       await register("packetSent", toPacketSentEvent);
       await register("lxmfDelivery", toLxmfDeliveryEvent);
+      await register("messageReceived", toMessageRecord);
+      await register("messageUpdated", toMessageRecord);
+      await register("syncUpdated", toSyncStatus);
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
@@ -580,6 +890,18 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async announceNow(): Promise<void> {
+    await this.ready();
+    await this.plugin.announceNow();
+  }
+
+  async requestPeerIdentity(destinationHex: string): Promise<void> {
+    await this.ready();
+    await this.plugin.requestPeerIdentity({
+      destinationHex: normalizeHex(destinationHex),
+    });
+  }
+
   async sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     await this.ready();
     await this.plugin.send({
@@ -590,6 +912,26 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async sendLxmf(request: SendLxmfRequest): Promise<string> {
+    await this.ready();
+    const result = await this.plugin.sendLxmf({
+      destinationHex: normalizeHex(request.destinationHex),
+      bodyUtf8: request.bodyUtf8,
+      title: request.title,
+    });
+    return normalizeHex(String(result.messageIdHex ?? ""));
+  }
+
+  async retryLxmf(messageIdHex: string): Promise<void> {
+    await this.ready();
+    await this.plugin.retryLxmf({ messageIdHex: normalizeHex(messageIdHex) });
+  }
+
+  async cancelLxmf(messageIdHex: string): Promise<void> {
+    await this.ready();
+    await this.plugin.cancelLxmf({ messageIdHex: normalizeHex(messageIdHex) });
+  }
+
   async broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
     await this.ready();
     await this.plugin.broadcast({
@@ -597,6 +939,47 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
     });
+  }
+
+  async setActivePropagationNode(destinationHex?: string): Promise<void> {
+    await this.ready();
+    await this.plugin.setActivePropagationNode({
+      destinationHex: destinationHex ? normalizeHex(destinationHex) : undefined,
+    });
+  }
+
+  async requestLxmfSync(limit?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.requestLxmfSync({ limit });
+  }
+
+  async listAnnounces(): Promise<AnnounceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listAnnounces();
+    return Array.isArray(result.items) ? result.items.map(toAnnounceRecord) : [];
+  }
+
+  async listPeers(): Promise<PeerRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPeers();
+    return Array.isArray(result.items) ? result.items.map(toPeerRecord) : [];
+  }
+
+  async listConversations(): Promise<ConversationRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listConversations();
+    return Array.isArray(result.items) ? result.items.map(toConversationRecord) : [];
+  }
+
+  async listMessages(conversationId?: string): Promise<MessageRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listMessages({ conversationId });
+    return Array.isArray(result.items) ? result.items.map(toMessageRecord) : [];
+  }
+
+  async getLxmfSyncStatus(): Promise<SyncStatus> {
+    await this.ready();
+    return toSyncStatus(await this.plugin.getLxmfSyncStatus());
   }
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
@@ -713,6 +1096,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async announceNow(): Promise<void> {}
+
+  async requestPeerIdentity(_destinationHex: string): Promise<void> {}
+
   async sendBytes(destinationHex: string, bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     const normalized = normalizeHex(destinationHex);
     this.emitter.emit("packetSent", {
@@ -721,6 +1108,30 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       outcome: this.connected.has(normalized) ? "SentDirect" : "DroppedNoRoute",
     });
   }
+
+  async sendLxmf(request: SendLxmfRequest): Promise<string> {
+    const destinationHex = normalizeHex(request.destinationHex);
+    const now = Date.now();
+    const messageIdHex = randomHex32();
+    this.emitter.emit("messageUpdated", {
+      messageIdHex,
+      conversationId: destinationHex,
+      direction: "Outbound",
+      destinationHex,
+      title: request.title,
+      bodyUtf8: request.bodyUtf8,
+      method: "Direct",
+      state: this.connected.has(destinationHex) ? "Delivered" : "Failed",
+      detail: this.connected.has(destinationHex) ? "web mock delivery" : "web mock missing route",
+      sentAtMs: now,
+      updatedAtMs: now,
+    });
+    return messageIdHex;
+  }
+
+  async retryLxmf(_messageIdHex: string): Promise<void> {}
+
+  async cancelLxmf(_messageIdHex: string): Promise<void> {}
 
   async broadcastBytes(bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     for (const destinationHex of this.connected) {
@@ -739,6 +1150,39 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       level,
       message: `Web runtime log level set to ${level}.`,
     });
+  }
+
+  async setActivePropagationNode(_destinationHex?: string): Promise<void> {}
+
+  async requestLxmfSync(_limit?: number): Promise<void> {
+    this.emitter.emit("syncUpdated", {
+      phase: "Failed",
+      messagesReceived: 0,
+      detail: "Propagation sync is not available in the web runtime.",
+    });
+  }
+
+  async listAnnounces(): Promise<AnnounceRecord[]> {
+    return [];
+  }
+
+  async listPeers(): Promise<PeerRecord[]> {
+    return [];
+  }
+
+  async listConversations(): Promise<ConversationRecord[]> {
+    return [];
+  }
+
+  async listMessages(_conversationId?: string): Promise<MessageRecord[]> {
+    return [];
+  }
+
+  async getLxmfSyncStatus(): Promise<SyncStatus> {
+    return {
+      phase: "Idle",
+      messagesReceived: 0,
+    };
   }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
@@ -911,6 +1355,12 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async announceNow(): Promise<void> {
+    this.emitAnnounce(this.status.appDestinationHex, this.capabilities, this.status.identityHex, "app");
+  }
+
+  async requestPeerIdentity(_destinationHex: string): Promise<void> {}
+
   async sendBytes(destinationHex: string, bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     this.emitter.emit("packetSent", {
       destinationHex: normalizeHex(destinationHex),
@@ -918,6 +1368,44 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       outcome: "SentDirect",
     });
   }
+
+  async sendLxmf(request: SendLxmfRequest): Promise<string> {
+    const destinationHex = normalizeHex(request.destinationHex);
+    const now = Date.now();
+    const messageIdHex = randomHex32();
+    this.emitter.emit("messageUpdated", {
+      messageIdHex,
+      conversationId: destinationHex,
+      direction: "Outbound",
+      destinationHex,
+      title: request.title,
+      bodyUtf8: request.bodyUtf8,
+      method: "Direct",
+      state: "SentDirect",
+      sentAtMs: now,
+      updatedAtMs: now,
+    });
+    window.setTimeout(() => {
+      this.emitter.emit("messageUpdated", {
+        messageIdHex,
+        conversationId: destinationHex,
+        direction: "Outbound",
+        destinationHex,
+        title: request.title,
+        bodyUtf8: request.bodyUtf8,
+        method: "Direct",
+        state: "Delivered",
+        detail: "mock transport receipt",
+        sentAtMs: now,
+        updatedAtMs: Date.now(),
+      });
+    }, 300);
+    return messageIdHex;
+  }
+
+  async retryLxmf(_messageIdHex: string): Promise<void> {}
+
+  async cancelLxmf(_messageIdHex: string): Promise<void> {}
 
   async broadcastBytes(bytes: Uint8Array, _options?: PacketSendOptions): Promise<void> {
     for (const destinationHex of this.connected) {
@@ -939,6 +1427,39 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       level,
       message: `Mock log level set to ${level}`,
     });
+  }
+
+  async setActivePropagationNode(_destinationHex?: string): Promise<void> {}
+
+  async requestLxmfSync(_limit?: number): Promise<void> {
+    this.emitter.emit("syncUpdated", {
+      phase: "Failed",
+      messagesReceived: 0,
+      detail: "Propagation sync is not available in the mock runtime.",
+    });
+  }
+
+  async listAnnounces(): Promise<AnnounceRecord[]> {
+    return [];
+  }
+
+  async listPeers(): Promise<PeerRecord[]> {
+    return [];
+  }
+
+  async listConversations(): Promise<ConversationRecord[]> {
+    return [];
+  }
+
+  async listMessages(_conversationId?: string): Promise<MessageRecord[]> {
+    return [];
+  }
+
+  async getLxmfSyncStatus(): Promise<SyncStatus> {
+    return {
+      phase: "Idle",
+      messagesReceived: 0,
+    };
   }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {

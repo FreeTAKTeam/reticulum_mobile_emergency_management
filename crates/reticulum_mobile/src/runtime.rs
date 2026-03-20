@@ -8,9 +8,12 @@ use fs_err as fs;
 #[cfg(feature = "legacy-lxmf-runtime")]
 use log::error;
 use log::{debug, info};
+use lxmf::announce::{
+    display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
+};
 use lxmf::message::Message as LxmfMessage;
-#[cfg(feature = "legacy-lxmf-runtime")]
 use lxmf::message::WireMessage as LxmfWireMessage;
+use lxmf_sdk::messaging as sdkmsg;
 use rand_core::OsRng;
 use regex::Regex;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
@@ -22,15 +25,20 @@ use reticulum::iface::tcp_client::TcpClient;
 use reticulum::packet::LXMF_MAX_PAYLOAD;
 use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 use reticulum::resource::ResourceEventKind;
-use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport, TransportConfig};
+use reticulum::transport::{
+    DeliveryReceipt, ReceiptHandler, SendPacketOutcome as RnsSendOutcome, Transport,
+    TransportConfig,
+};
 use rmpv::Value as MsgPackValue;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    HubMode, LxmfDeliveryStatus, LxmfDeliveryUpdate, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerState, SendOutcome,
+    AnnounceRecord, ConversationRecord, HubMode, LxmfDeliveryStatus, LxmfDeliveryUpdate,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
+    NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, SendLxmfRequest, SendOutcome,
+    SyncPhase, SyncStatus,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -75,22 +83,6 @@ fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {
 
 fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
-}
-
-fn normalize_display_name(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.chars().any(char::is_control) {
-        return None;
-    }
-    let normalized: String = trimmed.chars().take(64).collect();
-    if normalized.is_empty() {
-        None
-    } else {
-        Some(normalized)
-    }
 }
 
 fn announce_destination_kind(desc: &DestinationDesc) -> &'static str {
@@ -157,6 +149,197 @@ fn send_outcome_to_udl(outcome: RnsSendOutcome) -> SendOutcome {
     }
 }
 
+fn from_sdk_peer_state(state: sdkmsg::PeerState) -> PeerState {
+    match state {
+        sdkmsg::PeerState::Connecting => PeerState::Connecting {},
+        sdkmsg::PeerState::Connected => PeerState::Connected {},
+        sdkmsg::PeerState::Disconnected => PeerState::Disconnected {},
+    }
+}
+
+fn to_sdk_message_method(method: MessageMethod) -> sdkmsg::MessageMethod {
+    match method {
+        MessageMethod::Direct {} => sdkmsg::MessageMethod::Direct,
+        MessageMethod::Opportunistic {} => sdkmsg::MessageMethod::Opportunistic,
+        MessageMethod::Propagated {} => sdkmsg::MessageMethod::Propagated,
+        MessageMethod::Resource {} => sdkmsg::MessageMethod::Resource,
+    }
+}
+
+fn from_sdk_message_method(method: sdkmsg::MessageMethod) -> MessageMethod {
+    match method {
+        sdkmsg::MessageMethod::Direct => MessageMethod::Direct {},
+        sdkmsg::MessageMethod::Opportunistic => MessageMethod::Opportunistic {},
+        sdkmsg::MessageMethod::Propagated => MessageMethod::Propagated {},
+        sdkmsg::MessageMethod::Resource => MessageMethod::Resource {},
+    }
+}
+
+fn to_sdk_message_state(state: MessageState) -> sdkmsg::MessageState {
+    match state {
+        MessageState::Queued {} => sdkmsg::MessageState::Queued,
+        MessageState::PathRequested {} => sdkmsg::MessageState::PathRequested,
+        MessageState::LinkEstablishing {} => sdkmsg::MessageState::LinkEstablishing,
+        MessageState::Sending {} => sdkmsg::MessageState::Sending,
+        MessageState::SentDirect {} => sdkmsg::MessageState::SentDirect,
+        MessageState::SentToPropagation {} => sdkmsg::MessageState::SentToPropagation,
+        MessageState::Delivered {} => sdkmsg::MessageState::Delivered,
+        MessageState::Failed {} => sdkmsg::MessageState::Failed,
+        MessageState::TimedOut {} => sdkmsg::MessageState::TimedOut,
+        MessageState::Cancelled {} => sdkmsg::MessageState::Cancelled,
+        MessageState::Received {} => sdkmsg::MessageState::Received,
+    }
+}
+
+fn from_sdk_message_state(state: sdkmsg::MessageState) -> MessageState {
+    match state {
+        sdkmsg::MessageState::Queued => MessageState::Queued {},
+        sdkmsg::MessageState::PathRequested => MessageState::PathRequested {},
+        sdkmsg::MessageState::LinkEstablishing => MessageState::LinkEstablishing {},
+        sdkmsg::MessageState::Sending => MessageState::Sending {},
+        sdkmsg::MessageState::SentDirect => MessageState::SentDirect {},
+        sdkmsg::MessageState::SentToPropagation => MessageState::SentToPropagation {},
+        sdkmsg::MessageState::Delivered => MessageState::Delivered {},
+        sdkmsg::MessageState::Failed => MessageState::Failed {},
+        sdkmsg::MessageState::TimedOut => MessageState::TimedOut {},
+        sdkmsg::MessageState::Cancelled => MessageState::Cancelled {},
+        sdkmsg::MessageState::Received => MessageState::Received {},
+    }
+}
+
+fn to_sdk_message_direction(direction: MessageDirection) -> sdkmsg::MessageDirection {
+    match direction {
+        MessageDirection::Inbound {} => sdkmsg::MessageDirection::Inbound,
+        MessageDirection::Outbound {} => sdkmsg::MessageDirection::Outbound,
+    }
+}
+
+fn from_sdk_message_direction(direction: sdkmsg::MessageDirection) -> MessageDirection {
+    match direction {
+        sdkmsg::MessageDirection::Inbound => MessageDirection::Inbound {},
+        sdkmsg::MessageDirection::Outbound => MessageDirection::Outbound {},
+    }
+}
+
+fn from_sdk_sync_phase(phase: sdkmsg::SyncPhase) -> SyncPhase {
+    match phase {
+        sdkmsg::SyncPhase::Idle => SyncPhase::Idle {},
+        sdkmsg::SyncPhase::PathRequested => SyncPhase::PathRequested {},
+        sdkmsg::SyncPhase::LinkEstablishing => SyncPhase::LinkEstablishing {},
+        sdkmsg::SyncPhase::RequestSent => SyncPhase::RequestSent {},
+        sdkmsg::SyncPhase::Receiving => SyncPhase::Receiving {},
+        sdkmsg::SyncPhase::Complete => SyncPhase::Complete {},
+        sdkmsg::SyncPhase::Failed => SyncPhase::Failed {},
+    }
+}
+
+fn to_sdk_announce_record(record: AnnounceRecord) -> sdkmsg::AnnounceRecord {
+    sdkmsg::AnnounceRecord {
+        destination_hex: record.destination_hex,
+        identity_hex: record.identity_hex,
+        destination_kind: record.destination_kind,
+        app_data: record.app_data,
+        display_name: record.display_name,
+        hops: record.hops,
+        interface_hex: record.interface_hex,
+        received_at_ms: record.received_at_ms,
+    }
+}
+
+fn from_sdk_announce_record(record: sdkmsg::AnnounceRecord) -> AnnounceRecord {
+    AnnounceRecord {
+        destination_hex: record.destination_hex,
+        identity_hex: record.identity_hex,
+        destination_kind: record.destination_kind,
+        app_data: record.app_data,
+        display_name: record.display_name,
+        hops: record.hops,
+        interface_hex: record.interface_hex,
+        received_at_ms: record.received_at_ms,
+    }
+}
+
+fn to_sdk_message_record(record: MessageRecord) -> sdkmsg::MessageRecord {
+    sdkmsg::MessageRecord {
+        message_id_hex: record.message_id_hex,
+        conversation_id: record.conversation_id,
+        direction: to_sdk_message_direction(record.direction),
+        destination_hex: record.destination_hex,
+        source_hex: record.source_hex,
+        title: record.title,
+        body_utf8: record.body_utf8,
+        method: to_sdk_message_method(record.method),
+        state: to_sdk_message_state(record.state),
+        detail: record.detail,
+        sent_at_ms: record.sent_at_ms,
+        received_at_ms: record.received_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    }
+}
+
+fn from_sdk_message_record(record: sdkmsg::MessageRecord) -> MessageRecord {
+    MessageRecord {
+        message_id_hex: record.message_id_hex,
+        conversation_id: record.conversation_id,
+        direction: from_sdk_message_direction(record.direction),
+        destination_hex: record.destination_hex,
+        source_hex: record.source_hex,
+        title: record.title,
+        body_utf8: record.body_utf8,
+        method: from_sdk_message_method(record.method),
+        state: from_sdk_message_state(record.state),
+        detail: record.detail,
+        sent_at_ms: record.sent_at_ms,
+        received_at_ms: record.received_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    }
+}
+
+fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
+    PeerRecord {
+        destination_hex: record.destination_hex,
+        identity_hex: record.identity_hex,
+        lxmf_destination_hex: record.lxmf_destination_hex,
+        display_name: record.display_name,
+        app_data: record.app_data,
+        state: from_sdk_peer_state(record.state),
+        last_seen_at_ms: record.last_seen_at_ms,
+        announce_last_seen_at_ms: record.announce_last_seen_at_ms,
+        lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+    }
+}
+
+fn from_sdk_conversation_record(record: sdkmsg::ConversationRecord) -> ConversationRecord {
+    ConversationRecord {
+        conversation_id: record.conversation_id,
+        peer_destination_hex: record.peer_destination_hex,
+        peer_display_name: record.peer_display_name,
+        last_message_preview: record.last_message_preview,
+        last_message_at_ms: record.last_message_at_ms,
+        unread_count: record.unread_count,
+        last_message_state: record.last_message_state.map(from_sdk_message_state),
+    }
+}
+
+fn from_sdk_sync_status(status: sdkmsg::SyncStatus) -> SyncStatus {
+    SyncStatus {
+        phase: from_sdk_sync_phase(status.phase),
+        active_propagation_node_hex: status.active_propagation_node_hex,
+        requested_at_ms: status.requested_at_ms,
+        completed_at_ms: status.completed_at_ms,
+        messages_received: status.messages_received,
+        detail: status.detail,
+    }
+}
+
+fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest {
+    sdkmsg::SendMessageRequest {
+        destination_hex: request.destination_hex.clone(),
+        body_utf8: request.body_utf8.clone(),
+        title: request.title.clone(),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MissionSyncMetadata {
     pub(crate) correlation_id: Option<String>,
@@ -220,12 +403,46 @@ struct PendingLxmfDelivery {
 }
 
 #[derive(Debug, Clone)]
+struct PendingLxmfAcknowledgement {
+    source_hex: String,
+    detail: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RegisteredPendingLxmfDelivery {
+    pending: PendingLxmfDelivery,
+    buffered_ack: Option<PendingLxmfAcknowledgement>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct LxmfSendReport {
     pub(crate) outcome: RnsSendOutcome,
     pub(crate) message_id_hex: String,
     pub(crate) resolved_destination_hex: String,
     pub(crate) metadata: Option<MissionSyncMetadata>,
     pub(crate) track_delivery_timeout: bool,
+    pub(crate) used_resource: bool,
+    pub(crate) receipt_hash_hex: Option<String>,
+}
+
+struct RuntimeReceiptBridge {
+    receipt_message_ids: Arc<Mutex<HashMap<String, String>>>,
+    tx: mpsc::UnboundedSender<String>,
+}
+
+impl ReceiptHandler for RuntimeReceiptBridge {
+    fn on_receipt(&self, receipt: &DeliveryReceipt) {
+        let packet_hash_hex = hex::encode(receipt.message_id);
+        let Some(message_id_hex) = self
+            .receipt_message_ids
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.remove(&packet_hash_hex))
+        else {
+            return;
+        };
+        let _ = self.tx.send(message_id_hex);
+    }
 }
 
 fn is_event_mission_name(name: &str) -> bool {
@@ -402,15 +619,6 @@ fn emit_lxmf_delivery_with_source(
     });
 }
 
-fn encode_delivery_display_name_app_data(display_name: &str) -> Option<Vec<u8>> {
-    let normalized = normalize_display_name(display_name)?;
-    let peer_data = MsgPackValue::Array(vec![
-        MsgPackValue::Binary(normalized.into_bytes()),
-        MsgPackValue::Nil,
-    ]);
-    rmp_serde::to_vec(&peer_data).ok()
-}
-
 fn create_transport_data_packet(destination: AddressHash, bytes: &[u8]) -> Packet {
     let mut packet = Packet::default();
     packet.header.propagation_type = PropagationType::Transport;
@@ -454,8 +662,91 @@ async fn send_transport_packet_with_path_retry(
     last_outcome
 }
 
+fn conversation_id_for(destination_hex: &str) -> String {
+    sdkmsg::MessagingStore::conversation_id_for(destination_hex)
+}
+
+async fn connected_destination_hexes(state: &NodeRuntimeState) -> Vec<String> {
+    state.connected_peers
+        .lock()
+        .await
+        .iter()
+        .map(address_hash_to_hex)
+        .collect::<Vec<_>>()
+}
+
+async fn snapshot_peer_records(state: &NodeRuntimeState) -> Vec<PeerRecord> {
+    let connected = connected_destination_hexes(state).await;
+    state
+        .messaging
+        .lock()
+        .await
+        .list_peers(connected.iter().map(String::as_str))
+        .into_iter()
+        .map(from_sdk_peer_record)
+        .collect()
+}
+
+async fn emit_peer_resolved(state: &NodeRuntimeState, bus: &EventBus, identity_hex: &str) {
+    let connected = connected_destination_hexes(state).await;
+    if let Some(peer) = state
+        .messaging
+        .lock()
+        .await
+        .peer_for_identity(identity_hex, connected.iter().map(String::as_str))
+        .map(from_sdk_peer_record)
+    {
+        bus.emit(NodeEvent::PeerResolved { peer });
+    }
+}
+
+async fn upsert_message_record(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    message: MessageRecord,
+    emit_received: bool,
+) {
+    state.messaging.lock().await.upsert_message(to_sdk_message_record(message.clone()));
+
+    if emit_received {
+        bus.emit(NodeEvent::MessageReceived {
+            message: message.clone(),
+        });
+    }
+    bus.emit(NodeEvent::MessageUpdated { message });
+}
+
+async fn message_records_snapshot(
+    state: &NodeRuntimeState,
+    conversation_id: Option<&str>,
+) -> Vec<MessageRecord> {
+    state
+        .messaging
+        .lock()
+        .await
+        .list_messages(conversation_id)
+        .into_iter()
+        .map(from_sdk_message_record)
+        .collect()
+}
+
+async fn conversation_records_snapshot(state: &NodeRuntimeState) -> Vec<ConversationRecord> {
+    let connected = connected_destination_hexes(state).await;
+    state
+        .messaging
+        .lock()
+        .await
+        .list_conversations(connected.iter().map(String::as_str))
+        .into_iter()
+        .map(from_sdk_conversation_record)
+        .collect()
+}
+
 pub enum Command {
     Stop {
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    AnnounceNow {
         resp: cb::Sender<Result<(), NodeError>>,
     },
     ConnectPeer {
@@ -476,6 +767,46 @@ pub enum Command {
         bytes: Vec<u8>,
         resp: cb::Sender<Result<(), NodeError>>,
     },
+    RequestPeerIdentity {
+        destination_hex: String,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    SendLxmf {
+        request: SendLxmfRequest,
+        resp: cb::Sender<Result<String, NodeError>>,
+    },
+    RetryLxmf {
+        message_id_hex: String,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    CancelLxmf {
+        message_id_hex: String,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    SetActivePropagationNode {
+        destination_hex: Option<String>,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    RequestLxmfSync {
+        limit: Option<u32>,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
+    ListAnnounces {
+        resp: cb::Sender<Result<Vec<AnnounceRecord>, NodeError>>,
+    },
+    ListPeers {
+        resp: cb::Sender<Result<Vec<PeerRecord>, NodeError>>,
+    },
+    ListConversations {
+        resp: cb::Sender<Result<Vec<ConversationRecord>, NodeError>>,
+    },
+    ListMessages {
+        conversation_id: Option<String>,
+        resp: cb::Sender<Result<Vec<MessageRecord>, NodeError>>,
+    },
+    GetLxmfSyncStatus {
+        resp: cb::Sender<Result<SyncStatus, NodeError>>,
+    },
     SetAnnounceCapabilities {
         capability_string: String,
         resp: cb::Sender<Result<(), NodeError>>,
@@ -493,10 +824,14 @@ struct NodeRuntimeState {
     identity: PrivateIdentity,
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
+    pending_lxmf_acknowledgements:
+        Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
+    messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     sdk: Arc<RuntimeLxmfSdk>,
 }
 
@@ -686,6 +1021,7 @@ async fn send_lxmf_message(
         .await
         .data_packet(&wire)
         .map_err(|_| NodeError::LxmfPacketBuildError {})?;
+    let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
     let outcome = state.transport.send_packet_with_outcome(packet).await;
 
     Ok(LxmfSendReport {
@@ -694,13 +1030,15 @@ async fn send_lxmf_message(
         resolved_destination_hex: address_hash_to_hex(&remote_desc.address_hash),
         metadata,
         track_delivery_timeout: true,
+        used_resource: false,
+        receipt_hash_hex: Some(receipt_hash_hex),
     })
 }
 
 async fn register_pending_lxmf_delivery(
     state: &NodeRuntimeState,
     report: &LxmfSendReport,
-) -> Option<PendingLxmfDelivery> {
+) -> Option<RegisteredPendingLxmfDelivery> {
     if !report.track_delivery_timeout {
         return None;
     }
@@ -721,8 +1059,16 @@ async fn register_pending_lxmf_delivery(
         .pending_lxmf_deliveries
         .lock()
         .await
-        .insert(tracking_key, pending.clone());
-    Some(pending)
+        .insert(tracking_key.clone(), pending.clone());
+    let buffered_ack = state
+        .pending_lxmf_acknowledgements
+        .lock()
+        .await
+        .remove(&tracking_key);
+    Some(RegisteredPendingLxmfDelivery {
+        pending,
+        buffered_ack,
+    })
 }
 
 async fn emit_received_payload(
@@ -735,13 +1081,19 @@ async fn emit_received_payload(
 ) {
     if let Ok(message) = LxmfMessage::from_wire(payload.as_slice()) {
         let source_hex = message.source_hash.map(hex::encode);
+        let body_utf8 = String::from_utf8_lossy(message.content.as_slice()).to_string();
+        let title = if message.title.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(message.title.as_slice()).to_string())
+        };
         let fields_bytes = message
             .fields
             .and_then(|value| rmp_serde::to_vec(&value).ok());
-        if let Some(metadata) = fields_bytes
+        let metadata = fields_bytes
             .as_deref()
-            .and_then(parse_mission_sync_metadata)
-        {
+            .and_then(parse_mission_sync_metadata);
+        if let Some(metadata) = metadata.as_ref() {
             if metadata.is_event_related() {
                 info!(
                     "[lxmf][events] received kind={} name={} source={} destination={} event_uid={} mission_uid={} correlation={}",
@@ -755,6 +1107,28 @@ async fn emit_received_payload(
                 );
             }
             ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), &metadata).await;
+        }
+        if !metadata.as_ref().is_some_and(MissionSyncMetadata::is_event_related) {
+            let peer_hex = source_hex.clone().unwrap_or_else(|| destination_hex.clone());
+            let message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
+                .map(|wire| hex::encode(wire.message_id()))
+                .unwrap_or_else(|_| hex::encode(destination_hex.as_bytes()));
+            let record = MessageRecord {
+                message_id_hex,
+                conversation_id: conversation_id_for(peer_hex.as_str()),
+                direction: MessageDirection::Inbound {},
+                destination_hex: peer_hex.clone(),
+                source_hex: source_hex.clone(),
+                title,
+                body_utf8,
+                method: MessageMethod::Direct {},
+                state: MessageState::Received {},
+                detail: None,
+                sent_at_ms: None,
+                received_at_ms: Some(now_ms()),
+                updated_at_ms: now_ms(),
+            };
+            upsert_message_record(state, bus, record, true).await;
         }
         sdk.record_packet_received(
             &destination_hex,
@@ -819,6 +1193,26 @@ async fn ack_pending_lxmf_delivery(
     drop(guard);
 
     let Some(pending) = matched else {
+        if let Some(tracking_key) = metadata.tracking_key().map(ToOwned::to_owned) {
+            state
+                .pending_lxmf_acknowledgements
+                .lock()
+                .await
+                .insert(
+                    tracking_key.clone(),
+                    PendingLxmfAcknowledgement {
+                        source_hex: source_hex.to_string(),
+                        detail: detail.clone(),
+                    },
+                );
+            info!(
+                "[lxmf][events] buffered acknowledgement source={} command={} correlation={} detail={}",
+                source_hex,
+                metadata.command_type.as_deref().unwrap_or("-"),
+                metadata.correlation_id.as_deref().unwrap_or("-"),
+                detail.as_deref().unwrap_or("-"),
+            );
+        }
         return;
     };
     if pending.destination_hex != source_hex {
@@ -1061,6 +1455,14 @@ pub async fn run_node(
     }
 
     let mut transport = Transport::new(transport_cfg);
+    let receipt_message_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+    let (receipt_tx, mut receipt_rx) = mpsc::unbounded_channel::<String>();
+    transport
+        .set_receipt_handler(Box::new(RuntimeReceiptBridge {
+            receipt_message_ids: receipt_message_ids.clone(),
+            tx: receipt_tx,
+        }))
+        .await;
 
     for endpoint in &config.tcp_clients {
         let endpoint = endpoint.trim();
@@ -1099,6 +1501,10 @@ pub async fn run_node(
         Arc::new(TokioMutex::new(HashSet::new()));
     let pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
+    let pending_lxmf_acknowledgements: Arc<
+        TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>,
+    > = Arc::new(TokioMutex::new(HashMap::new()));
+    let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::default()));
     let sdk = Arc::new(RuntimeLxmfSdk::new(
         identity.address_hash().to_hex_string(),
         SdkTransportState {
@@ -1114,9 +1520,12 @@ pub async fn run_node(
         identity: identity.clone(),
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
+        connected_peers: connected_peers.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
+        pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
+        messaging: messaging.clone(),
         sdk: sdk.clone(),
     };
 
@@ -1131,6 +1540,45 @@ pub async fn run_node(
         guard.running = true;
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
+        });
+    }
+
+    // Transport delivery receipts.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        let sdk = sdk.clone();
+        tokio::spawn(async move {
+            while let Some(message_id_hex) = receipt_rx.recv().await {
+                let maybe_record = state
+                    .messaging
+                    .lock()
+                    .await
+                    .update_message(
+                        message_id_hex.as_str(),
+                        sdkmsg::MessageState::Delivered,
+                        Some("transport receipt".to_string()),
+                        now_ms(),
+                    )
+                    .map(from_sdk_message_record);
+
+                if let Some(record) = maybe_record {
+                    sdk.record_delivery_acknowledged(
+                        &record.message_id_hex,
+                        &record.destination_hex,
+                        record.source_hex.as_deref(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        record.detail.as_deref(),
+                    );
+                    bus.emit(NodeEvent::MessageUpdated {
+                        message: record.clone(),
+                    });
+                }
+            }
         });
     }
 
@@ -1163,6 +1611,7 @@ pub async fn run_node(
         let bus = bus.clone();
         let sdk = sdk.clone();
         let known_destinations = known_destinations.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             let mut rx = transport.recv_announces().await;
             loop {
@@ -1176,9 +1625,27 @@ pub async fn run_node(
                         let destination_hex = address_hash_to_hex(&desc.address_hash);
                         let identity_hex = desc.identity.address_hash.to_hex_string();
                         let destination_kind = announce_destination_kind(&desc).to_string();
-                        let app_data = String::from_utf8(event.app_data.as_slice().to_vec())
-                            .unwrap_or_else(|_| hex::encode(event.app_data.as_slice()));
+                        let app_data_bytes = event.app_data.as_slice().to_vec();
+                        let app_data = String::from_utf8(app_data_bytes.clone())
+                            .unwrap_or_else(|_| hex::encode(app_data_bytes.as_slice()));
+                        let display_name = if destination_kind == "lxmf_delivery" {
+                            display_name_from_delivery_app_data(app_data_bytes.as_slice())
+                        } else {
+                            None
+                        };
                         let interface_hex = hex::encode(event.interface);
+                        state.messaging.lock().await.record_announce(to_sdk_announce_record(
+                            AnnounceRecord {
+                                destination_hex: destination_hex.clone(),
+                                identity_hex: identity_hex.clone(),
+                                destination_kind: destination_kind.clone(),
+                                app_data: app_data.clone(),
+                                display_name: display_name.clone(),
+                                hops: event.hops,
+                                interface_hex: interface_hex.clone(),
+                                received_at_ms: now_ms(),
+                            },
+                        ));
                         sdk.record_announce_received(
                             &destination_hex,
                             &identity_hex,
@@ -1189,13 +1656,14 @@ pub async fn run_node(
                         );
                         bus.emit(NodeEvent::AnnounceReceived {
                             destination_hex,
-                            identity_hex,
+                            identity_hex: identity_hex.clone(),
                             destination_kind,
                             app_data,
                             hops: event.hops,
                             interface_hex,
                             received_at_ms: now_ms(),
                         });
+                        emit_peer_resolved(&state, &bus, &identity_hex).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -1358,6 +1826,7 @@ pub async fn run_node(
         let transport = transport.clone();
         let bus = bus.clone();
         let sdk = sdk.clone();
+        let connected_peers = connected_peers.clone();
         tokio::spawn(async move {
             let mut rx = transport.out_link_events();
             loop {
@@ -1366,6 +1835,7 @@ pub async fn run_node(
                         let destination_hex = address_hash_to_hex(&event.address_hash);
                         match event.event {
                             LinkEvent::Activated => {
+                                connected_peers.lock().await.insert(event.address_hash);
                                 sdk.record_peer_changed(
                                     &destination_hex,
                                     PeerState::Connected {},
@@ -1380,6 +1850,7 @@ pub async fn run_node(
                                 })
                             }
                             LinkEvent::Closed => {
+                                connected_peers.lock().await.remove(&event.address_hash);
                                 sdk.record_peer_changed(
                                     &destination_hex,
                                     PeerState::Disconnected {},
@@ -1442,8 +1913,36 @@ pub async fn run_node(
                 let _ = resp.send(Ok(()));
                 break;
             }
+            Command::AnnounceNow { resp } => {
+                let caps = announce_capabilities.lock().await.clone();
+                transport
+                    .send_announce(&app_destination, Some(caps.as_bytes()))
+                    .await;
+                transport
+                    .send_announce(
+                        &lxmf_destination,
+                        encode_delivery_display_name_app_data(config.name.as_str()).as_deref(),
+                    )
+                    .await;
+                let _ = resp.send(Ok(()));
+            }
             Command::SetLogLevel { level } => {
                 crate::logger::NodeLogger::global().set_level(level);
+            }
+            Command::RequestPeerIdentity {
+                destination_hex,
+                resp,
+            } => {
+                let result = async {
+                    let destination = parse_address_hash(destination_hex.as_str())?;
+                    transport.request_path(&destination, None, None).await;
+                    let desc = ensure_destination_desc(&state, destination, None).await?;
+                    let identity_hex = desc.identity.address_hash.to_hex_string();
+                    emit_peer_resolved(&state, &bus, identity_hex.as_str()).await;
+                    Ok::<(), NodeError>(())
+                }
+                .await;
+                let _ = resp.send(result);
             }
             Command::SetAnnounceCapabilities {
                 capability_string,
@@ -1554,7 +2053,13 @@ pub async fn run_node(
                             Some(
                                 state
                                     .sdk
-                                    .send_lxmf(dest, &bytes, fields_bytes.clone(), metadata.clone())
+                                    .send_lxmf(
+                                        dest,
+                                        &bytes,
+                                        None,
+                                        fields_bytes.clone(),
+                                        metadata.clone(),
+                                    )
                                     .await?,
                             )
                         }
@@ -1589,12 +2094,13 @@ pub async fn run_node(
                             }
                         }
 
-                        if let Some(pending) = register_pending_lxmf_delivery(
+                        if let Some(registered) = register_pending_lxmf_delivery(
                             &state,
                             report,
                         )
                         .await
                         {
+                            let pending = &registered.pending;
                             if matches!(
                                 report.outcome,
                                 RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
@@ -1621,6 +2127,62 @@ pub async fn run_node(
                                     pending.command_type.as_deref().unwrap_or("-"),
                                     pending.correlation_id.as_deref().unwrap_or("-"),
                                 );
+                                if let Some(buffered_ack) = registered.buffered_ack {
+                                    let tracking_key = pending
+                                        .correlation_id
+                                        .as_deref()
+                                        .or(pending.command_id.as_deref())
+                                        .map(ToOwned::to_owned);
+                                    if buffered_ack.source_hex == pending.destination_hex {
+                                        if let Some(tracking_key) = tracking_key.as_deref() {
+                                            state
+                                                .pending_lxmf_deliveries
+                                                .lock()
+                                                .await
+                                                .remove(tracking_key);
+                                        }
+                                        state.sdk.record_delivery_acknowledged(
+                                            &pending.message_id_hex,
+                                            &pending.destination_hex,
+                                            Some(buffered_ack.source_hex.as_str()),
+                                            pending.correlation_id.as_deref(),
+                                            pending.command_id.as_deref(),
+                                            pending.command_type.as_deref(),
+                                            pending.event_uid.as_deref(),
+                                            pending.mission_uid.as_deref(),
+                                            buffered_ack.detail.as_deref(),
+                                        );
+                                        emit_lxmf_delivery_with_source(
+                                            &bus,
+                                            pending,
+                                            Some(buffered_ack.source_hex.clone()),
+                                            LxmfDeliveryStatus::Acknowledged {},
+                                            buffered_ack.detail.clone(),
+                                        );
+                                        info!(
+                                            "[lxmf][events] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
+                                            pending.message_id_hex,
+                                            pending.destination_hex,
+                                            pending.command_type.as_deref().unwrap_or("-"),
+                                            pending.correlation_id.as_deref().unwrap_or("-"),
+                                            buffered_ack.detail.as_deref().unwrap_or("-"),
+                                        );
+                                    } else {
+                                        if let Some(tracking_key) = tracking_key {
+                                            state
+                                                .pending_lxmf_acknowledgements
+                                                .lock()
+                                                .await
+                                                .insert(tracking_key, buffered_ack.clone());
+                                        }
+                                        info!(
+                                            "[lxmf][events] buffered acknowledgement source mismatch message_id={} destination={} source={}",
+                                            pending.message_id_hex,
+                                            pending.destination_hex,
+                                            buffered_ack.source_hex,
+                                        );
+                                    }
+                                }
                             } else {
                                 let failure_detail = format!("{mapped:?}");
                                 {
@@ -1672,6 +2234,219 @@ pub async fn run_node(
                 }
                 .await;
                 let _ = resp.send(result);
+            }
+            Command::SendLxmf { request, resp } => {
+                let result = async {
+                    let destination = parse_address_hash(request.destination_hex.as_str())?;
+                    let body_bytes = request.body_utf8.as_bytes().to_vec();
+                        let report = state
+                          .sdk
+                          .send_lxmf(
+                              destination,
+                              body_bytes.as_slice(),
+                              request.title.clone(),
+                              None,
+                              None,
+                          )
+                          .await?;
+                    let method = if report.used_resource {
+                        MessageMethod::Resource {}
+                    } else {
+                        MessageMethod::Direct {}
+                    };
+                    let state_value = if matches!(
+                        report.outcome,
+                        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                    ) {
+                        MessageState::SentDirect {}
+                    } else {
+                        MessageState::Failed {}
+                    };
+                    let detail = if matches!(state_value, MessageState::Failed {}) {
+                        Some(format!("{:?}", send_outcome_to_udl(report.outcome)))
+                    } else {
+                        None
+                    };
+                    let conversation_id = conversation_id_for(report.resolved_destination_hex.as_str());
+                    let record = MessageRecord {
+                        message_id_hex: report.message_id_hex.clone(),
+                        conversation_id,
+                        direction: MessageDirection::Outbound {},
+                        destination_hex: report.resolved_destination_hex.clone(),
+                        source_hex: Some(address_hash_to_hex(
+                            &state.lxmf_destination.lock().await.desc.address_hash,
+                        )),
+                        title: request.title.clone(),
+                        body_utf8: request.body_utf8.clone(),
+                        method,
+                        state: state_value,
+                        detail: detail.clone(),
+                        sent_at_ms: Some(now_ms()),
+                        received_at_ms: None,
+                        updated_at_ms: now_ms(),
+                    };
+                    upsert_message_record(&state, &bus, record, false).await;
+                    state.messaging.lock().await.store_outbound(sdkmsg::StoredOutboundMessage {
+                        request: to_sdk_send_request(&request),
+                        message_id_hex: report.message_id_hex.clone(),
+                    });
+                    if let Some(receipt_hash_hex) = report.receipt_hash_hex.as_ref() {
+                        if let Ok(mut guard) = receipt_message_ids.lock() {
+                            guard.insert(receipt_hash_hex.clone(), report.message_id_hex.clone());
+                        }
+                    }
+                    Ok::<String, NodeError>(report.message_id_hex)
+                }
+                .await;
+                let _ = resp.send(result);
+            }
+            Command::RetryLxmf {
+                message_id_hex,
+                resp,
+            } => {
+                let result = async {
+                    let outbound = state
+                        .messaging
+                        .lock()
+                        .await
+                        .outbound(message_id_hex.as_str())
+                        .ok_or(NodeError::InvalidConfig {})?;
+                    let destination = parse_address_hash(outbound.request.destination_hex.as_str())?;
+                    let report = state
+                        .sdk
+                        .send_lxmf(
+                            destination,
+                            outbound.request.body_utf8.as_bytes(),
+                            outbound.request.title.clone(),
+                            None,
+                            None,
+                        )
+                        .await?;
+                    let retried = MessageRecord {
+                        message_id_hex: report.message_id_hex.clone(),
+                        conversation_id: conversation_id_for(
+                            report.resolved_destination_hex.as_str(),
+                        ),
+                        direction: MessageDirection::Outbound {},
+                        destination_hex: report.resolved_destination_hex.clone(),
+                        source_hex: Some(address_hash_to_hex(
+                            &state.lxmf_destination.lock().await.desc.address_hash,
+                        )),
+                        title: outbound.request.title.clone(),
+                        body_utf8: outbound.request.body_utf8.clone(),
+                        method: if report.used_resource {
+                            MessageMethod::Resource {}
+                        } else {
+                            MessageMethod::Direct {}
+                        },
+                        state: MessageState::SentDirect {},
+                        detail: Some(format!("retry of {}", outbound.message_id_hex)),
+                        sent_at_ms: Some(now_ms()),
+                        received_at_ms: None,
+                        updated_at_ms: now_ms(),
+                    };
+                    upsert_message_record(&state, &bus, retried, false).await;
+                    state.messaging.lock().await.store_outbound(sdkmsg::StoredOutboundMessage {
+                        request: outbound.request,
+                        message_id_hex: report.message_id_hex.clone(),
+                    });
+                    Ok::<(), NodeError>(())
+                }
+                .await;
+                let _ = resp.send(result);
+            }
+            Command::CancelLxmf {
+                message_id_hex,
+                resp,
+            } => {
+                let result = async {
+                    let updated = state
+                        .messaging
+                        .lock()
+                        .await
+                        .update_message(
+                            message_id_hex.as_str(),
+                            sdkmsg::MessageState::Cancelled,
+                            Some("cancelled locally".to_string()),
+                            now_ms(),
+                        )
+                        .map(from_sdk_message_record)
+                        .ok_or(NodeError::InvalidConfig {})?;
+                    upsert_message_record(&state, &bus, updated, false).await;
+                    Ok::<(), NodeError>(())
+                }
+                .await;
+                let _ = resp.send(result);
+            }
+            Command::SetActivePropagationNode {
+                destination_hex,
+                resp,
+            } => {
+                let status_update = from_sdk_sync_status(
+                    state
+                        .messaging
+                        .lock()
+                        .await
+                        .set_active_propagation_node(destination_hex),
+                );
+                bus.emit(NodeEvent::SyncUpdated {
+                    status: status_update,
+                });
+                let _ = resp.send(Ok(()));
+            }
+            Command::RequestLxmfSync { limit, resp } => {
+                let requested_at_ms = now_ms();
+                let status_update = from_sdk_sync_status(state.messaging.lock().await.update_sync_status(
+                    |status| {
+                        status.phase = sdkmsg::SyncPhase::Failed;
+                        status.requested_at_ms = Some(requested_at_ms);
+                        status.completed_at_ms = Some(now_ms());
+                        status.messages_received = 0;
+                        status.detail = Some(match limit {
+                            Some(value) => format!(
+                                "Propagation sync is not implemented in the mobile runtime yet (requested limit {value})."
+                            ),
+                            None => {
+                                "Propagation sync is not implemented in the mobile runtime yet."
+                                    .to_string()
+                            }
+                        });
+                    },
+                ));
+                bus.emit(NodeEvent::SyncUpdated {
+                    status: status_update,
+                });
+                let _ = resp.send(Err(NodeError::InternalError {}));
+            }
+            Command::ListAnnounces { resp } => {
+                let records = state
+                    .messaging
+                    .lock()
+                    .await
+                    .list_announces()
+                    .into_iter()
+                    .map(from_sdk_announce_record)
+                    .collect::<Vec<_>>();
+                let _ = resp.send(Ok(records));
+            }
+            Command::ListPeers { resp } => {
+                let _ = resp.send(Ok(snapshot_peer_records(&state).await));
+            }
+            Command::ListConversations { resp } => {
+                let _ = resp.send(Ok(conversation_records_snapshot(&state).await));
+            }
+            Command::ListMessages {
+                conversation_id,
+                resp,
+            } => {
+                let _ = resp.send(Ok(
+                    message_records_snapshot(&state, conversation_id.as_deref()).await,
+                ));
+            }
+            Command::GetLxmfSyncStatus { resp } => {
+                let _ = resp.send(Ok(from_sdk_sync_status(
+                    state.messaging.lock().await.sync_status(),
+                )));
             }
             Command::BroadcastBytes { bytes, resp } => {
                 let result = async {

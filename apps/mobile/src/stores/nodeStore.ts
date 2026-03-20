@@ -1,10 +1,13 @@
 import {
   DEFAULT_NODE_CONFIG,
+  type PeerRecord,
+  type SyncStatus,
   createReticulumNodeClient,
   type AnnounceReceivedEvent,
   type HubDirectoryUpdatedEvent,
   type LxmfDeliveryEvent,
   type LogLevel,
+  type MessageRecord,
   type NodeConfig,
   type NodeErrorEvent,
   type NodeLogEvent,
@@ -43,6 +46,8 @@ import { runtimeProfile } from "../utils/runtimeProfile";
 
 const SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
+const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
+const PEER_PRESENCE_TICK_MS = 15_000;
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -50,6 +55,11 @@ const EMPTY_STATUS: NodeStatus = {
   identityHex: "",
   appDestinationHex: "",
   lxmfDestinationHex: "",
+};
+
+const EMPTY_SYNC_STATUS: SyncStatus = {
+  phase: "Idle",
+  messagesReceived: 0,
 };
 
 const DEFAULT_SETTINGS: NodeUiSettings = {
@@ -85,10 +95,11 @@ interface UiLogLine {
 
 type PacketListener = (event: PacketReceivedEvent) => void;
 type LxmfDeliveryListener = (event: LxmfDeliveryEvent) => void;
+type MessageListener = (message: MessageRecord) => void;
 type DedicatedFields = Record<string, string>;
 type EventPeerRoute = {
   appDestinationHex: string;
-  lxmfDestinationHex?: string;
+  lxmfDestinationHex: string;
   identityHex?: string;
   label?: string;
   announcedName?: string;
@@ -257,12 +268,16 @@ export const useNodeStore = defineStore("node", () => {
   const logs = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
+  const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const initialized = ref(false);
+  const presenceNow = ref(nowMs());
 
   const client = shallowRef<ReticulumNodeClient | null>(null);
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
   const packetListeners = new Set<PacketListener>();
   const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
+  const messageListeners = new Set<MessageListener>();
+  let presenceTickerId: number | null = null;
 
   function appendLog(level: string, message: string): void {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
@@ -406,6 +421,47 @@ export const useNodeStore = defineStore("node", () => {
     });
   }
 
+  function upsertResolvedPeer(peer: PeerRecord): void {
+    const destination = normalizeDestinationHex(peer.destinationHex);
+    if (!isValidDestinationHex(destination) || isLocalPeerDestination(destination)) {
+      return;
+    }
+
+    const identityHex = normalizeDestinationHex(peer.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
+    if (isValidDestinationHex(identityHex)) {
+      appDestinationByIdentity[identityHex] = destination;
+    }
+    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
+      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
+    }
+
+    const saved = savedByDestination[destination];
+    upsertDiscovered(
+      destination,
+      {
+        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex)
+          ? lxmfDestinationHex
+          : undefined,
+        announcedName: peer.displayName?.trim() || undefined,
+        label: saved?.label ?? undefined,
+        appData: peer.appData,
+        announceLastSeenAt: peer.announceLastSeenAtMs,
+        lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
+        lastSeenAt: peer.lastSeenAtMs,
+        state:
+          peer.state === "Connected"
+            ? "connected"
+            : peer.state === "Connecting"
+              ? "connecting"
+              : "disconnected",
+        verifiedCapability: matchesEmergencyCapabilities(peer.appData ?? ""),
+      },
+      "announce",
+    );
+  }
+
   function describePeerState(destinationRaw: string): string {
     const destination = normalizeDestinationHex(destinationRaw);
     const peer = discoveredByDestination[destination];
@@ -470,6 +526,7 @@ export const useNodeStore = defineStore("node", () => {
         status.value = { ...event.status };
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
+        presenceNow.value = event.receivedAtMs;
         const identityHex = normalizeDestinationHex(event.identityHex ?? "");
         if (event.destinationKind === "lxmf_delivery") {
           if (isValidDestinationHex(identityHex)) {
@@ -511,6 +568,7 @@ export const useNodeStore = defineStore("node", () => {
             hops: event.hops,
             interfaceHex: event.interfaceHex,
             label: saved?.label,
+            announceLastSeenAt: event.receivedAtMs,
             lastSeenAt: event.receivedAtMs,
             verifiedCapability,
           },
@@ -518,6 +576,7 @@ export const useNodeStore = defineStore("node", () => {
         );
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
+        presenceNow.value = nowMs();
         if (event.change.state === "Connecting") {
           setPeerState(event.change.destinationHex, "connecting");
         } else if (event.change.state === "Connected") {
@@ -534,7 +593,12 @@ export const useNodeStore = defineStore("node", () => {
           `[peers] peerChanged destination=${normalizeDestinationHex(event.change.destinationHex)} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(event.change.destinationHex)}.`,
         );
       }),
+      nodeClient.on("peerResolved", (peer: PeerRecord) => {
+        presenceNow.value = peer.lastSeenAtMs;
+        upsertResolvedPeer(peer);
+      }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
+        presenceNow.value = event.receivedAtMs;
         for (const destination of event.destinations) {
           const existing = discoveredByDestination[destination];
           const saved = savedByDestination[destination];
@@ -560,6 +624,19 @@ export const useNodeStore = defineStore("node", () => {
         for (const listener of lxmfDeliveryListeners) {
           listener(event);
         }
+      }),
+      nodeClient.on("messageReceived", (message: MessageRecord) => {
+        for (const listener of messageListeners) {
+          listener(message);
+        }
+      }),
+      nodeClient.on("messageUpdated", (message: MessageRecord) => {
+        for (const listener of messageListeners) {
+          listener(message);
+        }
+      }),
+      nodeClient.on("syncUpdated", (statusUpdate: SyncStatus) => {
+        syncStatus.value = { ...statusUpdate };
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
@@ -600,6 +677,26 @@ export const useNodeStore = defineStore("node", () => {
     return latest;
   }
 
+  async function refreshMessagingState(): Promise<void> {
+    if (!client.value || !status.value.running) {
+      syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      return;
+    }
+
+    try {
+      const [peers, nextSyncStatus] = await Promise.all([
+        client.value.listPeers(),
+        client.value.getLxmfSyncStatus(),
+      ]);
+      for (const peer of peers) {
+        upsertResolvedPeer(peer);
+      }
+      syncStatus.value = { ...nextSyncStatus };
+    } catch (error: unknown) {
+      appendLog("Debug", `Messaging snapshot refresh skipped: ${errorMessage(error)}`);
+    }
+  }
+
   async function init(): Promise<void> {
     if (initialized.value) {
       return;
@@ -608,6 +705,11 @@ export const useNodeStore = defineStore("node", () => {
 
     client.value = buildClient();
     bindClientEvents(client.value);
+    if (presenceTickerId === null) {
+      presenceTickerId = window.setInterval(() => {
+        presenceNow.value = nowMs();
+      }, PEER_PRESENCE_TICK_MS);
+    }
     await configureClientLogging();
 
     for (const savedPeer of Object.values(savedByDestination)) {
@@ -623,6 +725,7 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     await refreshStatusSnapshot();
+    await refreshMessagingState();
   }
 
   async function startNode(): Promise<void> {
@@ -635,6 +738,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await refreshMessagingState();
       await configureClientLogging();
       appendLog("Info", "Node started.");
 
@@ -662,6 +766,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.stop();
       appendLog("Info", "Node stopped.");
+      syncStatus.value = { ...EMPTY_SYNC_STATUS };
 
       for (const destination of Object.keys(discoveredByDestination)) {
         setPeerState(destination, "disconnected");
@@ -680,6 +785,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await refreshMessagingState();
       await configureClientLogging();
       appendLog("Info", "Node restarted with updated settings.");
     } catch (error: unknown) {
@@ -897,6 +1003,36 @@ export const useNodeStore = defineStore("node", () => {
     };
   }
 
+  function onMessage(listener: MessageListener): () => void {
+    messageListeners.add(listener);
+    return () => {
+      messageListeners.delete(listener);
+    };
+  }
+
+  function hasFreshPresence(lastSeenAt?: number): boolean {
+    return typeof lastSeenAt === "number"
+      && Number.isFinite(lastSeenAt)
+      && (presenceNow.value - lastSeenAt) <= PEER_ONLINE_FRESHNESS_MS;
+  }
+
+  function peerDisplayState(peer: Pick<DiscoveredPeer, "state">): PeerConnectionState {
+    return peer.state;
+  }
+
+  function peerPresenceState(peer: Pick<DiscoveredPeer, "announceLastSeenAt">): "online" | "offline" {
+    return hasFreshPresence(peer.announceLastSeenAt) ? "online" : "offline";
+  }
+
+  function peerHasEventRoute(
+    peer: Pick<DiscoveredPeer, "state" | "lxmfDestinationHex" | "lxmfLastSeenAt">,
+  ): boolean {
+    if (!isValidDestinationHex(peer.lxmfDestinationHex ?? "")) {
+      return false;
+    }
+    return peer.state === "connected" || hasFreshPresence(peer.lxmfLastSeenAt);
+  }
+
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
@@ -914,12 +1050,19 @@ export const useNodeStore = defineStore("node", () => {
       .map((peer) => peer.destination),
   );
 
+  const connectedLinkDestinations = computed(() =>
+    discoveredPeers.value
+      .filter((peer) => peer.state === "connected")
+      .map((peer) => peer.destination),
+  );
+
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
     discoveredPeers.value
       .filter((peer) => peer.state === "connected")
+      .filter((peer) => peerHasEventRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
-        lxmfDestinationHex: peer.lxmfDestinationHex,
+        lxmfDestinationHex: peer.lxmfDestinationHex!,
         identityHex: peer.identityHex,
         label: peer.label,
         announcedName: peer.announcedName,
@@ -1005,6 +1148,76 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  async function sendLxmf(
+    destinationHex: string,
+    bodyUtf8: string,
+    title?: string,
+  ): Promise<string> {
+    if (!client.value) {
+      throw captureActionError(
+        `LXMF send failed (${destinationHex})`,
+        new Error("Node client is not initialized."),
+      );
+    }
+    try {
+      logUi(
+        "Debug",
+        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength}.`,
+      );
+      return await client.value.sendLxmf({
+        destinationHex,
+        bodyUtf8,
+        title,
+      });
+    } catch (error: unknown) {
+      throw captureActionError(`LXMF send failed (${destinationHex})`, error);
+    }
+  }
+
+  async function announceNow(): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    try {
+      await client.value.announceNow();
+    } catch (error: unknown) {
+      throw captureActionError("Announce now failed", error);
+    }
+  }
+
+  async function requestPeerIdentity(destinationHex: string): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    try {
+      await client.value.requestPeerIdentity(destinationHex);
+    } catch (error: unknown) {
+      throw captureActionError(`Peer identity request failed (${destinationHex})`, error);
+    }
+  }
+
+  async function setActivePropagationNode(destinationHex?: string): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    try {
+      await client.value.setActivePropagationNode(destinationHex);
+    } catch (error: unknown) {
+      throw captureActionError("Set active propagation node failed", error);
+    }
+  }
+
+  async function requestLxmfSync(limit?: number): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    try {
+      await client.value.requestLxmfSync(limit);
+    } catch (error: unknown) {
+      throw captureActionError("LXMF sync request failed", error);
+    }
+  }
+
   async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
     await broadcastBytes(body, { dedicatedFields });
@@ -1038,6 +1251,7 @@ export const useNodeStore = defineStore("node", () => {
   return {
     settings,
     status,
+    syncStatus,
     logs,
     lastError,
     lastHubRefreshAt,
@@ -1046,10 +1260,13 @@ export const useNodeStore = defineStore("node", () => {
     discoveredPeers,
     savedPeers,
     connectedDestinations,
+    connectedLinkDestinations,
     connectedEventPeerRoutes,
     telemetryDestinations,
     savedDestinations,
     ready,
+    peerDisplayState,
+    peerPresenceState,
     init,
     startNode,
     stopNode,
@@ -1070,7 +1287,13 @@ export const useNodeStore = defineStore("node", () => {
     logUi,
     onPacket,
     onLxmfDelivery,
+    onMessage,
+    announceNow,
+    requestPeerIdentity,
     sendBytes,
+    sendLxmf,
+    setActivePropagationNode,
+    requestLxmfSync,
     broadcastBytes,
     broadcastJson,
     sendJson,

@@ -11,6 +11,11 @@ const routes = [
     component: () => import("./views/ActionMessagesView.vue"),
   },
   {
+    path: "/inbox",
+    name: "inbox",
+    component: () => import("./views/InboxView.vue"),
+  },
+  {
     path: "/messages/help",
     name: "message-status-help",
     component: () => import("./views/MessageStatusHelpView.vue"),

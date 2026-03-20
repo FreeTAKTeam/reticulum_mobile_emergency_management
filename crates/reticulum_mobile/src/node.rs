@@ -10,7 +10,10 @@ use tokio::sync::mpsc;
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::runtime::{load_or_create_identity, run_node, Command};
-use crate::types::{LogLevel, NodeConfig, NodeError, NodeEvent, NodeStatus};
+use crate::types::{
+    AnnounceRecord, ConversationRecord, LogLevel, MessageRecord, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, PeerRecord, SendLxmfRequest, SyncStatus,
+};
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
@@ -246,6 +249,201 @@ impl Node {
         .map_err(|_| NodeError::NotRunning {})?;
         resp_rx
             .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn announce_now(&self) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::AnnounceNow { resp: resp_tx })
+            .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn request_peer_identity(&self, destination_hex: String) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::RequestPeerIdentity {
+            destination_hex,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::SendLxmf {
+            request,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn retry_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::RetryLxmf {
+            message_id_hex,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::CancelLxmf {
+            message_id_hex,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn set_active_propagation_node(
+        &self,
+        destination_hex: Option<String>,
+    ) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::SetActivePropagationNode {
+            destination_hex,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn request_lxmf_sync(&self, limit: Option<u32>) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::RequestLxmfSync {
+            limit,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::ListAnnounces { resp: resp_tx })
+            .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn list_peers(&self) -> Result<Vec<PeerRecord>, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::ListPeers { resp: resp_tx })
+            .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::ListConversations { resp: resp_tx })
+            .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn list_messages(
+        &self,
+        conversation_id: Option<String>,
+    ) -> Result<Vec<MessageRecord>, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::ListMessages {
+            conversation_id,
+            resp: resp_tx,
+        })
+        .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        tx.send(Command::GetLxmfSyncStatus { resp: resp_tx })
+            .map_err(|_| NodeError::NotRunning {})?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 

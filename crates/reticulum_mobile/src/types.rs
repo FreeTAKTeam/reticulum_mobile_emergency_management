@@ -1,6 +1,7 @@
+use serde::Serialize;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum LogLevel {
     Trace {},
     Debug {},
@@ -9,21 +10,21 @@ pub enum LogLevel {
     Error {},
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum HubMode {
     Disabled {},
     RchLxmf {},
     RchHttp {},
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PeerState {
     Connecting {},
     Connected {},
     Disconnected {},
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SendOutcome {
     SentDirect {},
     SentBroadcast {},
@@ -33,12 +34,52 @@ pub enum SendOutcome {
     DroppedNoRoute {},
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum LxmfDeliveryStatus {
     Sent {},
     Acknowledged {},
     Failed {},
     TimedOut {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MessageMethod {
+    Direct {},
+    Opportunistic {},
+    Propagated {},
+    Resource {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MessageState {
+    Queued {},
+    PathRequested {},
+    LinkEstablishing {},
+    Sending {},
+    SentDirect {},
+    SentToPropagation {},
+    Delivered {},
+    Failed {},
+    TimedOut {},
+    Cancelled {},
+    Received {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MessageDirection {
+    Inbound {},
+    Outbound {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum SyncPhase {
+    Idle {},
+    PathRequested {},
+    LinkEstablishing {},
+    RequestSent {},
+    Receiving {},
+    Complete {},
+    Failed {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -71,7 +112,7 @@ pub enum NodeError {
     InternalError {},
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeConfig {
     pub name: String,
     pub storage_dir: Option<String>,
@@ -86,7 +127,7 @@ pub struct NodeConfig {
     pub hub_refresh_interval_seconds: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeStatus {
     pub running: bool,
     pub name: String,
@@ -95,14 +136,14 @@ pub struct NodeStatus {
     pub lxmf_destination_hex: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PeerChange {
     pub destination_hex: String,
     pub state: PeerState,
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LxmfDeliveryUpdate {
     pub message_id_hex: String,
     pub destination_hex: String,
@@ -116,6 +157,76 @@ pub struct LxmfDeliveryUpdate {
     pub detail: Option<String>,
     pub sent_at_ms: u64,
     pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnnounceRecord {
+    pub destination_hex: String,
+    pub identity_hex: String,
+    pub destination_kind: String,
+    pub app_data: String,
+    pub display_name: Option<String>,
+    pub hops: u8,
+    pub interface_hex: String,
+    pub received_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerRecord {
+    pub destination_hex: String,
+    pub identity_hex: Option<String>,
+    pub lxmf_destination_hex: Option<String>,
+    pub display_name: Option<String>,
+    pub app_data: Option<String>,
+    pub state: PeerState,
+    pub last_seen_at_ms: u64,
+    pub announce_last_seen_at_ms: Option<u64>,
+    pub lxmf_last_seen_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationRecord {
+    pub conversation_id: String,
+    pub peer_destination_hex: String,
+    pub peer_display_name: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub last_message_at_ms: u64,
+    pub unread_count: u32,
+    pub last_message_state: Option<MessageState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageRecord {
+    pub message_id_hex: String,
+    pub conversation_id: String,
+    pub direction: MessageDirection,
+    pub destination_hex: String,
+    pub source_hex: Option<String>,
+    pub title: Option<String>,
+    pub body_utf8: String,
+    pub method: MessageMethod,
+    pub state: MessageState,
+    pub detail: Option<String>,
+    pub sent_at_ms: Option<u64>,
+    pub received_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncStatus {
+    pub phase: SyncPhase,
+    pub active_propagation_node_hex: Option<String>,
+    pub requested_at_ms: Option<u64>,
+    pub completed_at_ms: Option<u64>,
+    pub messages_received: u32,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SendLxmfRequest {
+    pub destination_hex: String,
+    pub body_utf8: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +259,18 @@ pub enum NodeEvent {
     },
     LxmfDelivery {
         update: LxmfDeliveryUpdate,
+    },
+    PeerResolved {
+        peer: PeerRecord,
+    },
+    MessageReceived {
+        message: MessageRecord,
+    },
+    MessageUpdated {
+        message: MessageRecord,
+    },
+    SyncUpdated {
+        status: SyncStatus,
     },
     HubDirectoryUpdated {
         destinations: Vec<String>,

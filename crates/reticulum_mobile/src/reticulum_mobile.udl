@@ -22,6 +22,34 @@ enum SendOutcome {
 
 enum LxmfDeliveryStatus { "Sent", "Acknowledged", "Failed", "TimedOut" };
 
+enum MessageMethod { "Direct", "Opportunistic", "Propagated", "Resource" };
+
+enum MessageState {
+  "Queued",
+  "PathRequested",
+  "LinkEstablishing",
+  "Sending",
+  "SentDirect",
+  "SentToPropagation",
+  "Delivered",
+  "Failed",
+  "TimedOut",
+  "Cancelled",
+  "Received"
+};
+
+enum MessageDirection { "Inbound", "Outbound" };
+
+enum SyncPhase {
+  "Idle",
+  "PathRequested",
+  "LinkEstablishing",
+  "RequestSent",
+  "Receiving",
+  "Complete",
+  "Failed"
+};
+
 // Error surface.
 
 [Error]
@@ -100,6 +128,70 @@ dictionary LxmfDeliveryUpdate {
   u64 updated_at_ms;
 };
 
+dictionary AnnounceRecord {
+  string destination_hex;
+  string identity_hex;
+  string destination_kind;
+  string app_data;
+  string? display_name;
+  u8 hops;
+  string interface_hex;
+  u64 received_at_ms;
+};
+
+dictionary PeerRecord {
+  string destination_hex;
+  string? identity_hex;
+  string? lxmf_destination_hex;
+  string? display_name;
+  string? app_data;
+  PeerState state;
+  u64 last_seen_at_ms;
+  u64? announce_last_seen_at_ms;
+  u64? lxmf_last_seen_at_ms;
+};
+
+dictionary ConversationRecord {
+  string conversation_id;
+  string peer_destination_hex;
+  string? peer_display_name;
+  string? last_message_preview;
+  u64 last_message_at_ms;
+  u32 unread_count;
+  MessageState? last_message_state;
+};
+
+dictionary MessageRecord {
+  string message_id_hex;
+  string conversation_id;
+  MessageDirection direction;
+  string destination_hex;
+  string? source_hex;
+  string? title;
+  string body_utf8;
+  MessageMethod method;
+  MessageState state;
+  string? detail;
+  u64? sent_at_ms;
+  u64? received_at_ms;
+  u64 updated_at_ms;
+};
+
+dictionary SyncStatus {
+  SyncPhase phase;
+  string? active_propagation_node_hex;
+  u64? requested_at_ms;
+  u64? completed_at_ms;
+  u32 messages_received;
+  string? detail;
+};
+
+dictionary SendLxmfRequest {
+  string destination_hex;
+  string body_utf8;
+  string? title;
+};
+
 // Event stream from the node to the UI.
 [Enum]
 interface NodeEvent {
@@ -117,6 +209,10 @@ interface NodeEvent {
   PacketReceived(string destination_hex, string? source_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
   PacketSent(string destination_hex, sequence<u8> bytes, SendOutcome outcome);
   LxmfDelivery(LxmfDeliveryUpdate update);
+  PeerResolved(PeerRecord peer);
+  MessageReceived(MessageRecord message);
+  MessageUpdated(MessageRecord message);
+  SyncUpdated(SyncStatus status);
   HubDirectoryUpdated(sequence<string> destinations, u64 received_at_ms);
   Log(LogLevel level, string message);
   Error(string code, string message);
@@ -148,6 +244,31 @@ interface Node {
   void send_bytes(string destination_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
   [Throws=NodeError]
   void broadcast_bytes(sequence<u8> bytes);
+  [Throws=NodeError]
+  void announce_now();
+  [Throws=NodeError]
+  void request_peer_identity(string destination_hex);
+  [Throws=NodeError]
+  string send_lxmf(SendLxmfRequest request);
+  [Throws=NodeError]
+  void retry_lxmf(string message_id_hex);
+  [Throws=NodeError]
+  void cancel_lxmf(string message_id_hex);
+  [Throws=NodeError]
+  void set_active_propagation_node(string? destination_hex);
+  [Throws=NodeError]
+  void request_lxmf_sync(u32? limit);
+
+  [Throws=NodeError]
+  sequence<AnnounceRecord> list_announces();
+  [Throws=NodeError]
+  sequence<PeerRecord> list_peers();
+  [Throws=NodeError]
+  sequence<ConversationRecord> list_conversations();
+  [Throws=NodeError]
+  sequence<MessageRecord> list_messages(string? conversation_id);
+  [Throws=NodeError]
+  SyncStatus get_lxmf_sync_status();
 
   [Throws=NodeError]
   void set_announce_capabilities(string capability_string);

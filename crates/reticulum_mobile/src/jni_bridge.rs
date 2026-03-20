@@ -11,8 +11,9 @@ use serde_json::json;
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    HubMode, LogLevel, LxmfDeliveryStatus, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerState,
-    SendOutcome,
+    HubMode, LogLevel, LxmfDeliveryStatus, MessageDirection, MessageMethod, MessageState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, PeerState, SendLxmfRequest, SendOutcome,
+    SyncPhase,
 };
 
 const RESULT_OK: jint = 0;
@@ -53,6 +54,38 @@ struct SendInput {
     destination_hex: String,
     bytes_base64: String,
     fields_base64: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendLxmfInput {
+    destination_hex: String,
+    body_utf8: String,
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageIdInput {
+    message_id_hex: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OptionalDestinationInput {
+    destination_hex: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncRequestInput {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageListInput {
+    conversation_id: Option<String>,
 }
 
 fn bridge_state() -> &'static Mutex<BridgeState> {
@@ -237,6 +270,50 @@ fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
     }
 }
 
+fn message_method_to_str(method: MessageMethod) -> &'static str {
+    match method {
+        MessageMethod::Direct {} => "Direct",
+        MessageMethod::Opportunistic {} => "Opportunistic",
+        MessageMethod::Propagated {} => "Propagated",
+        MessageMethod::Resource {} => "Resource",
+    }
+}
+
+fn message_state_to_str(state: MessageState) -> &'static str {
+    match state {
+        MessageState::Queued {} => "Queued",
+        MessageState::PathRequested {} => "PathRequested",
+        MessageState::LinkEstablishing {} => "LinkEstablishing",
+        MessageState::Sending {} => "Sending",
+        MessageState::SentDirect {} => "SentDirect",
+        MessageState::SentToPropagation {} => "SentToPropagation",
+        MessageState::Delivered {} => "Delivered",
+        MessageState::Failed {} => "Failed",
+        MessageState::TimedOut {} => "TimedOut",
+        MessageState::Cancelled {} => "Cancelled",
+        MessageState::Received {} => "Received",
+    }
+}
+
+fn message_direction_to_str(direction: MessageDirection) -> &'static str {
+    match direction {
+        MessageDirection::Inbound {} => "Inbound",
+        MessageDirection::Outbound {} => "Outbound",
+    }
+}
+
+fn sync_phase_to_str(phase: SyncPhase) -> &'static str {
+    match phase {
+        SyncPhase::Idle {} => "Idle",
+        SyncPhase::PathRequested {} => "PathRequested",
+        SyncPhase::LinkEstablishing {} => "LinkEstablishing",
+        SyncPhase::RequestSent {} => "RequestSent",
+        SyncPhase::Receiving {} => "Receiving",
+        SyncPhase::Complete {} => "Complete",
+        SyncPhase::Failed {} => "Failed",
+    }
+}
+
 fn log_level_to_str(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Trace {} => "Trace",
@@ -334,6 +411,67 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "updatedAtMs": update.updated_at_ms
             }),
         ),
+        NodeEvent::PeerResolved { peer } => (
+            "peerResolved",
+            json!({
+                "destinationHex": peer.destination_hex,
+                "identityHex": peer.identity_hex,
+                "lxmfDestinationHex": peer.lxmf_destination_hex,
+                "displayName": peer.display_name,
+                "appData": peer.app_data,
+                "state": peer_state_to_str(peer.state),
+                "lastSeenAtMs": peer.last_seen_at_ms,
+                "announceLastSeenAtMs": peer.announce_last_seen_at_ms,
+                "lxmfLastSeenAtMs": peer.lxmf_last_seen_at_ms
+            }),
+        ),
+        NodeEvent::MessageReceived { message } => (
+            "messageReceived",
+            json!({
+                "messageIdHex": message.message_id_hex,
+                "conversationId": message.conversation_id,
+                "direction": message_direction_to_str(message.direction),
+                "destinationHex": message.destination_hex,
+                "sourceHex": message.source_hex,
+                "title": message.title,
+                "bodyUtf8": message.body_utf8,
+                "method": message_method_to_str(message.method),
+                "state": message_state_to_str(message.state),
+                "detail": message.detail,
+                "sentAtMs": message.sent_at_ms,
+                "receivedAtMs": message.received_at_ms,
+                "updatedAtMs": message.updated_at_ms
+            }),
+        ),
+        NodeEvent::MessageUpdated { message } => (
+            "messageUpdated",
+            json!({
+                "messageIdHex": message.message_id_hex,
+                "conversationId": message.conversation_id,
+                "direction": message_direction_to_str(message.direction),
+                "destinationHex": message.destination_hex,
+                "sourceHex": message.source_hex,
+                "title": message.title,
+                "bodyUtf8": message.body_utf8,
+                "method": message_method_to_str(message.method),
+                "state": message_state_to_str(message.state),
+                "detail": message.detail,
+                "sentAtMs": message.sent_at_ms,
+                "receivedAtMs": message.received_at_ms,
+                "updatedAtMs": message.updated_at_ms
+            }),
+        ),
+        NodeEvent::SyncUpdated { status } => (
+            "syncUpdated",
+            json!({
+                "phase": sync_phase_to_str(status.phase),
+                "activePropagationNodeHex": status.active_propagation_node_hex,
+                "requestedAtMs": status.requested_at_ms,
+                "completedAtMs": status.completed_at_ms,
+                "messagesReceived": status.messages_received,
+                "detail": status.detail
+            }),
+        ),
         NodeEvent::HubDirectoryUpdated {
             destinations,
             received_at_ms,
@@ -375,6 +513,17 @@ fn ok_result() -> jint {
 fn err_result(code: impl Into<String>, message: impl Into<String>) -> jint {
     set_last_error(code, message);
     RESULT_ERR
+}
+
+fn ok_json_result<T: Serialize>(env: &mut JNIEnv, value: &T) -> jstring {
+    clear_last_error();
+    match serde_json::to_string(value) {
+        Ok(payload) => make_jstring_or_null(env, payload),
+        Err(e) => {
+            set_last_error("InternalError", format!("JSON serialization failed: {e}"));
+            ptr::null_mut()
+        }
+    }
 }
 
 #[no_mangle]
@@ -569,6 +718,56 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_disconne
 }
 
 #[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_announceNow(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.announce_now() {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestPeerIdentity(
+    mut env: JNIEnv,
+    _class: JClass,
+    destination_hex: JString,
+) -> jint {
+    let destination = match jstring_to_rust(&mut env, destination_hex) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.request_peer_identity(destination) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson(
     mut env: JNIEnv,
     _class: JClass,
@@ -618,6 +817,184 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
                 node_error_code(&err),
                 err
             );
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmfJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: SendLxmfInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", format!("invalid lxmf payload: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.send_lxmf(SendLxmfRequest {
+        destination_hex: payload.destination_hex,
+        body_utf8: payload.body_utf8,
+        title: payload.title,
+    }) {
+        Ok(message_id_hex) => ok_json_result(&mut env, &json!({ "messageIdHex": message_id_hex })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_retryLxmfJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: MessageIdInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid retry payload: {e}")),
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.retry_lxmf(payload.message_id_hex) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_cancelLxmfJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: MessageIdInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid cancel payload: {e}")),
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.cancel_lxmf(payload.message_id_hex) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setActivePropagationNodeJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: OptionalDestinationInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result("InvalidConfig", format!("invalid propagation node payload: {e}"))
+        }
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.set_active_propagation_node(payload.destination_hex) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestLxmfSyncJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SyncRequestInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid sync payload: {e}")),
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => return err_result("NotRunning", "node not initialized"),
+    };
+    match node.request_lxmf_sync(payload.limit) {
+        Ok(_) => ok_result(),
+        Err(err) => {
             set_last_node_error(err);
             RESULT_ERR
         }
@@ -723,6 +1100,162 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshH
         Err(err) => {
             set_last_node_error(err);
             RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnnouncesJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.list_announces() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listPeersJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.list_peers() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConversationsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.list_conversations() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMessagesJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: MessageListInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", format!("invalid message list payload: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.list_messages(payload.conversation_id) {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfSyncStatusJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.get_lxmf_sync_status() {
+        Ok(status) => ok_json_result(&mut env, &status),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
         }
     }
 }

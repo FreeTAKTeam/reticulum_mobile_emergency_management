@@ -61,6 +61,7 @@ export interface DiscoveredPeer {
   destination: string;
   identityHex?: string;
   lxmfDestinationHex?: string;
+  announceLastSeenAt?: number;
   lxmfLastSeenAt?: number;
   label?: string;
   announcedName?: string;

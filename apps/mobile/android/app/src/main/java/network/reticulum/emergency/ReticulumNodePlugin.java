@@ -165,6 +165,93 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void sendLxmf(PluginCall call) {
+        String destinationHex = call.getString("destinationHex");
+        String bodyUtf8 = call.getString("bodyUtf8", "");
+        String title = call.getString("title");
+        if (destinationHex == null || destinationHex.isEmpty()) {
+            call.reject("destinationHex is required.");
+            return;
+        }
+
+        JSObject payload = new JSObject();
+        payload.put("destinationHex", destinationHex);
+        payload.put("bodyUtf8", bodyUtf8);
+        if (title != null && !title.isEmpty()) {
+            payload.put("title", title);
+        }
+
+        String raw = ReticulumBridge.sendLxmfJson(payload.toString());
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to send LXMF message.");
+            return;
+        }
+        resolveJson(call, raw, "Native LXMF send JSON parse failed.");
+    }
+
+    @PluginMethod
+    public void retryLxmf(PluginCall call) {
+        String messageIdHex = call.getString("messageIdHex");
+        if (messageIdHex == null || messageIdHex.isEmpty()) {
+            call.reject("messageIdHex is required.");
+            return;
+        }
+
+        JSObject payload = new JSObject();
+        payload.put("messageIdHex", messageIdHex);
+        int result = ReticulumBridge.retryLxmfJson(payload.toString());
+        if (result != 0) {
+            rejectFromNative(call, "Failed to retry LXMF message.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void cancelLxmf(PluginCall call) {
+        String messageIdHex = call.getString("messageIdHex");
+        if (messageIdHex == null || messageIdHex.isEmpty()) {
+            call.reject("messageIdHex is required.");
+            return;
+        }
+
+        JSObject payload = new JSObject();
+        payload.put("messageIdHex", messageIdHex);
+        int result = ReticulumBridge.cancelLxmfJson(payload.toString());
+        if (result != 0) {
+            rejectFromNative(call, "Failed to cancel LXMF message.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void announceNow(PluginCall call) {
+        int result = ReticulumBridge.announceNow();
+        if (result != 0) {
+            rejectFromNative(call, "Failed to send announce.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void requestPeerIdentity(PluginCall call) {
+        String destinationHex = call.getString("destinationHex");
+        if (destinationHex == null || destinationHex.isEmpty()) {
+            call.reject("destinationHex is required.");
+            return;
+        }
+
+        int result = ReticulumBridge.requestPeerIdentity(destinationHex);
+        if (result != 0) {
+            rejectFromNative(call, "Failed to request peer identity.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
     public void broadcast(PluginCall call) {
         String bytesBase64 = call.getString("bytesBase64");
         String fieldsBase64 = call.getString("fieldsBase64");
@@ -229,6 +316,87 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
         call.resolve();
+    }
+
+    @PluginMethod
+    public void setActivePropagationNode(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("destinationHex", call.getString("destinationHex"));
+        int result = ReticulumBridge.setActivePropagationNodeJson(payload.toString());
+        if (result != 0) {
+            rejectFromNative(call, "Failed to set active propagation node.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void requestLxmfSync(PluginCall call) {
+        JSObject payload = new JSObject();
+        Integer limit = call.getInt("limit");
+        if (limit != null) {
+            payload.put("limit", limit);
+        } else {
+            payload.put("limit", null);
+        }
+        int result = ReticulumBridge.requestLxmfSyncJson(payload.toString());
+        if (result != 0) {
+            rejectFromNative(call, "Failed to request LXMF sync.");
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void listAnnounces(PluginCall call) {
+        String raw = ReticulumBridge.listAnnouncesJson();
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to list announces.");
+            return;
+        }
+        resolveJson(call, raw, "Native announce list JSON parse failed.");
+    }
+
+    @PluginMethod
+    public void listPeers(PluginCall call) {
+        String raw = ReticulumBridge.listPeersJson();
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to list peers.");
+            return;
+        }
+        resolveJson(call, raw, "Native peer list JSON parse failed.");
+    }
+
+    @PluginMethod
+    public void listConversations(PluginCall call) {
+        String raw = ReticulumBridge.listConversationsJson();
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to list conversations.");
+            return;
+        }
+        resolveJson(call, raw, "Native conversation list JSON parse failed.");
+    }
+
+    @PluginMethod
+    public void listMessages(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("conversationId", call.getString("conversationId"));
+        String raw = ReticulumBridge.listMessagesJson(payload.toString());
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to list messages.");
+            return;
+        }
+        resolveJson(call, raw, "Native message list JSON parse failed.");
+    }
+
+    @PluginMethod
+    public void getLxmfSyncStatus(PluginCall call) {
+        String raw = ReticulumBridge.getLxmfSyncStatusJson();
+        if (raw == null || raw.isEmpty()) {
+            rejectFromNative(call, "Failed to get LXMF sync status.");
+            return;
+        }
+        resolveJson(call, raw, "Native sync status JSON parse failed.");
     }
 
     @PluginMethod
@@ -338,6 +506,14 @@ public class ReticulumNodePlugin extends Plugin {
             Log.e(TAG, "rejectFromNative code=" + code + " message=" + message);
             Logger.error(TAG, "Native error [" + code + "]: " + message, new Exception(message));
             call.reject(message, code);
+        } catch (JSONException ex) {
+            call.reject(fallbackMessage, ex);
+        }
+    }
+
+    private void resolveJson(PluginCall call, String raw, String fallbackMessage) {
+        try {
+            call.resolve(new JSObject(raw));
         } catch (JSONException ex) {
             call.reject(fallbackMessage, ex);
         }
