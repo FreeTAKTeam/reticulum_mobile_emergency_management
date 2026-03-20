@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
+import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer } from "../types/domain";
 
 const props = defineProps<{
@@ -22,11 +23,20 @@ watch(
   },
 );
 
+const nodeStore = useNodeStore();
+const effectiveState = computed(() => nodeStore.peerDisplayState(props.peer));
+const announceLabel = computed(() => {
+  const presence = nodeStore.peerPresenceState(props.peer);
+  if (effectiveState.value === "connected") {
+    return presence === "online" ? "Announce current" : "Announce stale";
+  }
+  return presence === "online" ? "Discovered" : "No recent announce";
+});
 const stateLabel = computed(() => {
-  if (props.peer.state === "connected") {
+  if (effectiveState.value === "connected") {
     return "Connected";
   }
-  if (props.peer.state === "connecting") {
+  if (effectiveState.value === "connecting") {
     return "Connecting";
   }
   return "Disconnected";
@@ -41,7 +51,7 @@ const stateLabel = computed(() => {
         {{ props.peer.announcedName }}
       </p>
       <p class="details">
-        {{ stateLabel }} | last seen {{ new Date(props.peer.lastSeenAt).toLocaleTimeString() }}
+        {{ stateLabel }} | {{ announceLabel }} | last seen {{ new Date(props.peer.lastSeenAt).toLocaleTimeString() }}
       </p>
       <p class="details" v-if="props.peer.hops !== undefined">
         {{ props.peer.hops }} hops | {{ props.peer.verifiedCapability ? "verified" : "unverified" }}

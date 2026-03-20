@@ -35,7 +35,7 @@ type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
 type ReplicationPeer = {
   appDestinationHex: string;
-  lxmfDestinationHex?: string;
+  lxmfDestinationHex: string;
   identityHex?: string;
   label: string;
   announcedName?: string;
@@ -437,6 +437,61 @@ function missionResponseMatches(
   return result.correlation_id === expected.correlationId || result.command_id === expected.commandId;
 }
 
+function missionCompletionEventType(commandType: string): string | null {
+  switch (commandType) {
+    case "mission.registry.mission.upsert":
+      return "mission.registry.mission.upserted";
+    case "mission.registry.log_entry.upsert":
+      return "mission.registry.log_entry.upserted";
+    default:
+      return null;
+  }
+}
+
+function missionEventMatches(
+  expected: {
+    correlationId: string;
+    commandId: string;
+    commandType: string;
+    eventUid?: string;
+    missionUid?: string;
+  },
+  event: MissionEventEnvelope | null,
+): event is MissionEventEnvelope {
+  if (!event) {
+    return false;
+  }
+
+  const expectedEventType = missionCompletionEventType(expected.commandType);
+  if (!expectedEventType || event.event_type !== expectedEventType) {
+    return false;
+  }
+
+  const meta = event.meta ?? {};
+  const metaCorrelationId = asTrimmedString(meta.correlation_id);
+  const metaCommandId = asTrimmedString(meta.command_id);
+  if (metaCorrelationId || metaCommandId) {
+    return metaCorrelationId === expected.correlationId || metaCommandId === expected.commandId;
+  }
+
+  if (expected.commandType === "mission.registry.mission.upsert") {
+    const missionUid = asTrimmedString(event.payload.mission_uid ?? event.payload.uid);
+    return Boolean(missionUid && missionUid === expected.missionUid);
+  }
+
+  if (expected.commandType === "mission.registry.log_entry.upsert") {
+    const eventUid = asTrimmedString(event.payload.entry_uid ?? event.payload.entryUid);
+    const missionUid = asTrimmedString(event.payload.mission_uid ?? event.payload.missionUid);
+    return Boolean(
+      eventUid
+      && eventUid === expected.eventUid
+      && (!expected.missionUid || missionUid === expected.missionUid),
+    );
+  }
+
+  return false;
+}
+
 function missionResponseDetail(result: MissionResponsePayload): string {
   if (result.status === "rejected") {
     return result.reason?.trim() || result.reason_code;
@@ -661,7 +716,7 @@ export const useEventsStore = defineStore("events", () => {
   }
 
   function formatPeerRoute(peer: ReplicationPeer): string {
-    return `${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}${peer.identityHex ? ` identity=${peer.identityHex}` : ""})`;
+    return `${peer.label} (app=${peer.appDestinationHex} lxmf=${peer.lxmfDestinationHex}${peer.identityHex ? ` identity=${peer.identityHex}` : ""})`;
   }
 
   function isEventDelivery(event: LxmfDeliveryEvent): boolean {
@@ -700,9 +755,10 @@ export const useEventsStore = defineStore("events", () => {
         if (logMissing) {
           nodeStore.logUi(
             "Debug",
-            `[events] peer ${label} has no tracked LXMF delivery destination yet; sending will use app destination ${peer.appDestinationHex}.`,
+            `[events] peer ${label} is connected on app destination ${peer.appDestinationHex} but has no tracked LXMF delivery destination yet; skipping event fanout until LXMF route is known.`,
           );
         }
+        continue;
       }
       deliverable.push({
         appDestinationHex: peer.appDestinationHex,
@@ -787,9 +843,8 @@ export const useEventsStore = defineStore("events", () => {
           return;
         }
 
-        const destinationMatches = normalizeHex(event.destinationHex) === normalizeHex(peer.appDestinationHex)
-          || normalizeHex(event.destinationHex) === normalizeHex(peer.lxmfDestinationHex);
-        if (!destinationMatches && peer.lxmfDestinationHex) {
+        const destinationMatches = normalizeHex(event.destinationHex) === normalizeHex(peer.lxmfDestinationHex);
+        if (!destinationMatches) {
           return;
         }
 
@@ -819,11 +874,29 @@ export const useEventsStore = defineStore("events", () => {
 
       unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
         const missionSync = parseMissionSyncFields(packet.fieldsBase64);
-        if (!missionResponseMatches(expected, missionSync?.result ?? null)) {
+        const matchingResult = missionResponseMatches(expected, missionSync?.result ?? null)
+          ? missionSync?.result ?? null
+          : null;
+        const matchingEvent = missionEventMatches(expected, missionSync?.event ?? null)
+          ? missionSync?.event ?? null
+          : null;
+
+        if (!matchingResult && !matchingEvent) {
           return;
         }
 
-        const result = missionSync!.result!;
+        if (matchingEvent) {
+          nodeStore.logUi(
+            "Debug",
+            `[events] ${expected.stage} completion event ${matchingEvent.event_type} received from ${formatPeerRoute(peer)}.`,
+          );
+        }
+
+        if (!matchingResult) {
+          return;
+        }
+
+        const result = matchingResult;
         if (result.status === "accepted") {
           nodeStore.logUi(
             "Debug",
@@ -849,7 +922,6 @@ export const useEventsStore = defineStore("events", () => {
           "Debug",
           `[events] ${expected.stage} result received from ${formatPeerRoute(peer)}.`,
         );
-        finish(() => resolve());
       });
 
       timeoutId = setTimeout(() => {
@@ -903,7 +975,7 @@ export const useEventsStore = defineStore("events", () => {
     });
 
     try {
-      await sendMissionCommand(peer.appDestinationHex, command);
+      await sendMissionCommand(peer.lxmfDestinationHex, command);
     } catch (error: unknown) {
       tracker.cancel();
       throw new EventReplicationError(
@@ -930,7 +1002,7 @@ export const useEventsStore = defineStore("events", () => {
     if (!sourceIdentity) {
       return;
     }
-    const routeSuffix = peer.appDestinationHex.slice(0, 8);
+    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
     const correlationId = createMissionTrackingId("mission-upsert", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`);
     await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
       commandId: createMissionTrackingId("mission-upsert-command", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`),
@@ -981,7 +1053,7 @@ export const useEventsStore = defineStore("events", () => {
     const failures = (await Promise.all(peers.map(async (peer) => {
       try {
         await ensureDefaultMission(peer);
-        const routeSuffix = peer.appDestinationHex.slice(0, 8);
+        const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
         const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
         await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
           commandId: createMissionTrackingId("log-upsert-command", `${eventUid}-${routeSuffix}`),
@@ -1017,7 +1089,7 @@ export const useEventsStore = defineStore("events", () => {
     }
   }
 
-  async function hydrateDestination(destination: string): Promise<void> {
+  async function hydrateDestination(peer: ReplicationPeer): Promise<void> {
     if (!BACKGROUND_MISSION_HYDRATION_ENABLED) {
       return;
     }
@@ -1026,11 +1098,8 @@ export const useEventsStore = defineStore("events", () => {
     if (!sourceIdentity) {
       return;
     }
-    await ensureDefaultMission({
-      appDestinationHex: destination,
-      label: destination,
-    });
-    await requestEventList(destination);
+    await ensureDefaultMission(peer);
+    await requestEventList(peer.lxmfDestinationHex);
   }
 
   function resultPayloadEvents(result: MissionResultPayload | null, event: MissionEventEnvelope | null): EventRecord[] {
@@ -1086,6 +1155,11 @@ export const useEventsStore = defineStore("events", () => {
           sourceDisplayName: localDisplayName,
           eventType: "mission.registry.mission.upserted",
           payload: missionPayload,
+          topics: [missionUid],
+          meta: {
+            command_id: command.command_id,
+            correlation_id: command.correlation_id,
+          },
         }),
       );
       return;
@@ -1137,6 +1211,10 @@ export const useEventsStore = defineStore("events", () => {
           eventType: "mission.registry.log_entry.upserted",
           payload: buildMissionPayload(stored),
           topics: [...stored.topics],
+          meta: {
+            command_id: command.command_id,
+            correlation_id: command.correlation_id,
+          },
         }),
       );
       if (outcome !== "ignored") {
@@ -1177,6 +1255,10 @@ export const useEventsStore = defineStore("events", () => {
           eventType: "mission.registry.log_entry.listed",
           payload,
           topics: [DEFAULT_R3AKT_MISSION_UID],
+          meta: {
+            command_id: command.command_id,
+            correlation_id: command.correlation_id,
+          },
         }),
       );
       return;
@@ -1361,7 +1443,10 @@ export const useEventsStore = defineStore("events", () => {
     watch(
       () => ({
         identity: nodeStore.status.identityHex.trim().toLowerCase(),
-        destinations: replicationPeers(false).map((peer) => peer.appDestinationHex),
+        peers: replicationPeers(false).map((peer) => ({
+          appDestinationHex: peer.appDestinationHex,
+          lxmfDestinationHex: peer.lxmfDestinationHex,
+        })),
       }),
       (current, previous) => {
         if (!current.identity) {
@@ -1378,13 +1463,13 @@ export const useEventsStore = defineStore("events", () => {
           return;
         }
         const previousDestinations = previous?.identity
-          ? new Set(previous.destinations)
+          ? new Set(previous.peers.map((peer) => peer.lxmfDestinationHex))
           : new Set<string>();
-        for (const destination of current.destinations) {
-          if (previousDestinations.has(destination)) {
+        for (const peer of replicationPeers(false)) {
+          if (previousDestinations.has(peer.lxmfDestinationHex)) {
             continue;
           }
-          void hydrateDestination(destination);
+          void hydrateDestination(peer);
         }
       },
       { immediate: true, deep: true },
