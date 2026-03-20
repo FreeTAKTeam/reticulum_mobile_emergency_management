@@ -21,6 +21,19 @@ import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
 import { computed, reactive, ref, shallowRef } from "vue";
 
+import {
+  bootstrapHubRegistry,
+  buildHubRegistryBootstrapProfile,
+  clearHubRegistryLinkage,
+  loadHubRegistryLinkage,
+  matchesHubRegistryProfile,
+  saveHubRegistryLinkage,
+  type HubRegistrationStatus,
+  type HubRegistryBootstrapProfile,
+  type HubRegistryCommandTransport,
+  type HubRegistryLinkage,
+} from "../services/hubRegistryBootstrap";
+import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
 import type {
   DiscoveredPeer,
   NodeUiSettings,
@@ -48,6 +61,7 @@ const SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
+const EMPTY_BYTES = new Uint8Array(0);
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -61,6 +75,14 @@ const EMPTY_SYNC_STATUS: SyncStatus = {
   phase: "Idle",
   messagesReceived: 0,
 };
+
+interface HubRegistrationSnapshot {
+  status: HubRegistrationStatus;
+  linkage?: HubRegistryLinkage;
+  lastAttemptAt?: number;
+  lastReadyAt?: number;
+  lastError?: string;
+}
 
 const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
@@ -269,6 +291,11 @@ export const useNodeStore = defineStore("node", () => {
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
+  const hubRegistration = reactive<HubRegistrationSnapshot>({
+    status: settings.hub.mode === "Disabled" ? "disabled" : "pending",
+    linkage: loadHubRegistryLinkage() ?? undefined,
+    lastReadyAt: loadHubRegistryLinkage()?.updatedAt,
+  });
   const initialized = ref(false);
   const presenceNow = ref(nowMs());
 
@@ -277,6 +304,7 @@ export const useNodeStore = defineStore("node", () => {
   const packetListeners = new Set<PacketListener>();
   const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
   const messageListeners = new Set<MessageListener>();
+  let hubRegistryBootstrapInFlight: Promise<void> | null = null;
   let presenceTickerId: number | null = null;
 
   function appendLog(level: string, message: string): void {
@@ -500,6 +528,161 @@ export const useNodeStore = defineStore("node", () => {
     });
   }
 
+  function currentHubBootstrapProfile(): HubRegistryBootstrapProfile | null {
+    return buildHubRegistryBootstrapProfile({
+      callsign: settings.displayName,
+      localIdentityHex: status.value.identityHex,
+      hubIdentityHash: settings.hub.identityHash,
+    });
+  }
+
+  function setHubRegistrationPending(lastErrorValue?: string): void {
+    hubRegistration.status = settings.hub.mode === "Disabled" ? "disabled" : "pending";
+    if (lastErrorValue !== undefined) {
+      hubRegistration.lastError = lastErrorValue.trim();
+    } else {
+      hubRegistration.lastError = "";
+    }
+  }
+
+  function setHubRegistrationReady(linkage: HubRegistryLinkage): void {
+    hubRegistration.status = "ready";
+    hubRegistration.linkage = { ...linkage };
+    hubRegistration.lastReadyAt = nowMs();
+    hubRegistration.lastError = "";
+    saveHubRegistryLinkage(linkage);
+  }
+
+  function setHubRegistrationError(error: unknown): void {
+    hubRegistration.status = settings.hub.mode === "Disabled" ? "disabled" : "error";
+    hubRegistration.lastError = errorMessage(error);
+    hubRegistration.lastAttemptAt = nowMs();
+  }
+
+  function clearHubRegistrationError(): void {
+    if (hubRegistration.status === "error") {
+      hubRegistration.status = "pending";
+    }
+    hubRegistration.lastError = "";
+  }
+
+  function reconcileHubRegistrationState(): void {
+    if (settings.hub.mode === "Disabled") {
+      hubRegistration.status = "disabled";
+      hubRegistration.lastError = "";
+      return;
+    }
+
+    const storedLinkage = loadHubRegistryLinkage();
+    hubRegistration.linkage = storedLinkage ?? undefined;
+
+    if (!storedLinkage) {
+      setHubRegistrationPending("Hub registry linkage has not been established yet.");
+      return;
+    }
+
+    const profile = currentHubBootstrapProfile();
+    if (!profile) {
+      setHubRegistrationPending("Hub registry bootstrap is waiting on a node identity and hub destination.");
+      return;
+    }
+
+    if (matchesHubRegistryProfile(storedLinkage, profile)) {
+      hubRegistration.status = "ready";
+      hubRegistration.lastError = "";
+      hubRegistration.lastReadyAt = storedLinkage.updatedAt ?? nowMs();
+      return;
+    }
+
+    setHubRegistrationPending("Stored hub linkage does not match the current callsign, team color, or identity.");
+  }
+
+  function buildHubRegistryTransport(): HubRegistryCommandTransport {
+    return {
+      sendCommand: async (destinationHex: string, command) => {
+        await sendBytes(destinationHex, EMPTY_BYTES, {
+          fieldsBase64: buildMissionCommandFieldsBase64([command]),
+        });
+      },
+      onPacket: (listener) => onPacket(listener),
+    };
+  }
+
+  async function bootstrapHubRegistration(force = false): Promise<void> {
+    if (settings.hub.mode === "Disabled") {
+      reconcileHubRegistrationState();
+      return;
+    }
+
+    if (hubRegistryBootstrapInFlight && !force) {
+      return hubRegistryBootstrapInFlight;
+    }
+
+    const profile = currentHubBootstrapProfile();
+    if (!profile) {
+      setHubRegistrationPending(
+        "Hub registry bootstrap is waiting on a callsign, node identity, or hub destination.",
+      );
+      return;
+    }
+
+    const storedLinkage = loadHubRegistryLinkage();
+    if (!force && storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
+      setHubRegistrationReady(storedLinkage);
+      return;
+    }
+
+    if (!status.value.running) {
+      setHubRegistrationPending("Hub registry bootstrap will run after the node is started.");
+      return;
+    }
+
+    clearHubRegistrationError();
+    hubRegistration.lastAttemptAt = nowMs();
+    hubRegistration.lastError = "";
+    hubRegistration.status = "pending";
+
+    const transport = buildHubRegistryTransport();
+    const bootstrapPromise = bootstrapHubRegistry(profile, transport)
+      .then((linkage) => {
+        setHubRegistrationReady(linkage);
+        appendLog(
+          "Info",
+          `Hub registry linkage ready: team=${linkage.teamUid} member=${linkage.teamMemberUid}.`,
+        );
+      })
+      .catch((error: unknown) => {
+        setHubRegistrationError(error);
+        throw error;
+      })
+      .finally(() => {
+        hubRegistryBootstrapInFlight = null;
+      });
+
+    hubRegistryBootstrapInFlight = bootstrapPromise;
+    return bootstrapPromise;
+  }
+
+  async function refreshHubRegistrationState(attemptBootstrap = false): Promise<void> {
+    reconcileHubRegistrationState();
+    if (!attemptBootstrap || settings.hub.mode === "Disabled") {
+      return;
+    }
+
+    const profile = currentHubBootstrapProfile();
+    if (!profile || !status.value.running) {
+      return;
+    }
+
+    const storedLinkage = loadHubRegistryLinkage();
+    if (storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
+      setHubRegistrationReady(storedLinkage);
+      return;
+    }
+
+    await bootstrapHubRegistration();
+  }
+
   async function configureClientLogging(): Promise<void> {
     if (!client.value) {
       return;
@@ -524,6 +707,7 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = { ...event.status };
+        void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         presenceNow.value = event.receivedAtMs;
@@ -726,6 +910,7 @@ export const useNodeStore = defineStore("node", () => {
 
     await refreshStatusSnapshot();
     await refreshMessagingState();
+    await refreshHubRegistrationState(status.value.running && settings.hub.mode !== "Disabled");
   }
 
   async function startNode(): Promise<void> {
@@ -739,6 +924,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshHubRegistrationState(true);
       await configureClientLogging();
       appendLog("Info", "Node started.");
 
@@ -767,6 +953,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.stop();
       appendLog("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      await refreshHubRegistrationState(false);
 
       for (const destination of Object.keys(discoveredByDestination)) {
         setPeerState(destination, "disconnected");
@@ -786,6 +973,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshHubRegistrationState(true);
       await configureClientLogging();
       appendLog("Info", "Node restarted with updated settings.");
     } catch (error: unknown) {
@@ -853,6 +1041,13 @@ export const useNodeStore = defineStore("node", () => {
     } catch (error: unknown) {
       throw captureActionError("Hub directory refresh failed", error);
     }
+  }
+
+  async function forgetHubRegistryLinkage(): Promise<void> {
+    clearHubRegistryLinkage();
+    hubRegistration.linkage = undefined;
+    hubRegistration.lastReadyAt = undefined;
+    setHubRegistrationPending("Hub registry linkage cleared.");
   }
 
   async function setAnnounceCapabilities(capabilityString: string): Promise<void> {
@@ -945,6 +1140,7 @@ export const useNodeStore = defineStore("node", () => {
       };
     }
     persistSettings();
+    void refreshHubRegistrationState(settings.hub.mode !== "Disabled");
   }
 
   function getSavedPeerList(): PeerListV1 {
@@ -1078,6 +1274,31 @@ export const useNodeStore = defineStore("node", () => {
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
   const ready = computed(() => status.value.running);
+  const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
+  const hubRegistrationReady = computed(
+    () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),
+  );
+  const hubRegistrationPending = computed(() => hubRegistration.status === "pending");
+  const hubRegistrationSummary = computed(() => {
+    switch (hubRegistration.status) {
+      case "disabled":
+        return "Hub sync disabled";
+      case "ready":
+        if (!hubRegistration.linkage) {
+          return "Hub registration ready";
+        }
+        return `Ready | team=${hubRegistration.linkage.teamUid.slice(0, 10)}... member=${hubRegistration.linkage.teamMemberUid.slice(0, 10)}...`;
+      case "error":
+        return hubRegistration.lastError?.trim()
+          ? `Error | ${hubRegistration.lastError.trim()}`
+          : "Hub registration error";
+      case "pending":
+      default:
+        return hubRegistration.lastError?.trim()
+          ? `Pending | ${hubRegistration.lastError.trim()}`
+          : "Pending hub registration";
+    }
+  });
 
   function notReadyMessage(action: string): string {
     return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
@@ -1242,6 +1463,7 @@ export const useNodeStore = defineStore("node", () => {
       bindClientEvents(client.value);
       await configureClientLogging();
       status.value = { ...EMPTY_STATUS };
+      await refreshHubRegistrationState(false);
       appendLog("Info", "Node client recreated.");
     } catch (error: unknown) {
       throw captureActionError("Recreate client failed", error);
@@ -1252,6 +1474,11 @@ export const useNodeStore = defineStore("node", () => {
     settings,
     status,
     syncStatus,
+    hubRegistration,
+    hubBootstrapProfile,
+    hubRegistrationReady,
+    hubRegistrationPending,
+    hubRegistrationSummary,
     logs,
     lastError,
     lastHubRefreshAt,
@@ -1276,6 +1503,9 @@ export const useNodeStore = defineStore("node", () => {
     connectAllSaved,
     disconnectAllSaved,
     refreshHubDirectory,
+    refreshHubRegistrationState,
+    bootstrapHubRegistration,
+    forgetHubRegistryLinkage,
     setAnnounceCapabilities,
     savePeer,
     unsavePeer,

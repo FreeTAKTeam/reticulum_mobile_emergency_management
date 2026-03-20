@@ -1,6 +1,9 @@
+mod announce_compat;
 mod event_bus;
 mod jni_bridge;
 mod logger;
+mod mission_sync;
+mod messaging_compat;
 mod node;
 mod runtime;
 mod sdk_bridge;

@@ -8,12 +8,13 @@ use fs_err as fs;
 #[cfg(feature = "legacy-lxmf-runtime")]
 use log::error;
 use log::{debug, info};
-use lxmf::announce::{
+use crate::announce_compat::{
     display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
 };
+use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
+use crate::messaging_compat as sdkmsg;
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
-use lxmf_sdk::messaging as sdkmsg;
 use rand_core::OsRng;
 use regex::Regex;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
@@ -29,6 +30,7 @@ use reticulum::transport::{
     DeliveryReceipt, ReceiptHandler, SendPacketOutcome as RnsSendOutcome, Transport,
     TransportConfig,
 };
+#[cfg(test)]
 use rmpv::Value as MsgPackValue;
 use tokio::sync::{mpsc, Mutex as TokioMutex};
 
@@ -340,56 +342,6 @@ fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest 
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct MissionSyncMetadata {
-    pub(crate) correlation_id: Option<String>,
-    pub(crate) command_id: Option<String>,
-    pub(crate) command_type: Option<String>,
-    pub(crate) result_status: Option<String>,
-    pub(crate) event_type: Option<String>,
-    pub(crate) event_uid: Option<String>,
-    pub(crate) mission_uid: Option<String>,
-}
-
-impl MissionSyncMetadata {
-    pub(crate) fn tracking_key(&self) -> Option<&str> {
-        self.correlation_id
-            .as_deref()
-            .or(self.command_id.as_deref())
-    }
-
-    pub(crate) fn primary_kind(&self) -> &'static str {
-        if self.command_type.is_some() {
-            "command"
-        } else if self.result_status.is_some() {
-            "result"
-        } else if self.event_type.is_some() {
-            "event"
-        } else {
-            "message"
-        }
-    }
-
-    pub(crate) fn primary_name(&self) -> Option<&str> {
-        self.command_type
-            .as_deref()
-            .or(self.event_type.as_deref())
-            .or(self.result_status.as_deref())
-    }
-
-    pub(crate) fn is_event_related(&self) -> bool {
-        self.command_type
-            .as_deref()
-            .is_some_and(is_event_mission_name)
-            || self
-                .event_type
-                .as_deref()
-                .is_some_and(is_event_mission_name)
-            || self.event_uid.is_some()
-            || self.mission_uid.is_some()
-    }
-}
-
 #[derive(Debug, Clone)]
 struct PendingLxmfDelivery {
     message_id_hex: String,
@@ -398,6 +350,9 @@ struct PendingLxmfDelivery {
     command_id: Option<String>,
     command_type: Option<String>,
     event_uid: Option<String>,
+    eam_uid: Option<String>,
+    team_member_uid: Option<String>,
+    team_uid: Option<String>,
     mission_uid: Option<String>,
     sent_at_ms: u64,
 }
@@ -443,129 +398,6 @@ impl ReceiptHandler for RuntimeReceiptBridge {
         };
         let _ = self.tx.send(message_id_hex);
     }
-}
-
-fn is_event_mission_name(name: &str) -> bool {
-    matches!(
-        name,
-        "mission.registry.mission.upsert"
-            | "mission.registry.mission.upserted"
-            | "mission.registry.log_entry.upsert"
-            | "mission.registry.log_entry.upserted"
-            | "mission.registry.log_entry.list"
-            | "mission.registry.log_entry.listed"
-    )
-}
-
-fn msgpack_get_indexed<'a>(value: &'a MsgPackValue, key: i64) -> Option<&'a MsgPackValue> {
-    let entries = match value {
-        MsgPackValue::Map(entries) => entries,
-        _ => return None,
-    };
-    let key_string = key.to_string();
-
-    for (entry_key, entry_value) in entries {
-        match entry_key {
-            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => {
-                return Some(entry_value)
-            }
-            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
-                return Some(entry_value)
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn msgpack_get_named<'a>(value: &'a MsgPackValue, keys: &[&str]) -> Option<&'a MsgPackValue> {
-    let entries = match value {
-        MsgPackValue::Map(entries) => entries,
-        _ => return None,
-    };
-
-    for wanted in keys {
-        for (entry_key, entry_value) in entries {
-            if matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
-            {
-                return Some(entry_value);
-            }
-        }
-    }
-    None
-}
-
-fn msgpack_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::String(value) => value.as_str().map(ToOwned::to_owned),
-        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
-        _ => None,
-    }
-}
-
-fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<MissionSyncMetadata> {
-    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
-    let mut metadata = MissionSyncMetadata::default();
-
-    if let Some(commands) = msgpack_get_indexed(&fields, LXMF_FIELD_COMMANDS) {
-        if let MsgPackValue::Array(entries) = commands {
-            if let Some(first) = entries.first() {
-                metadata.command_id =
-                    msgpack_get_named(first, &["command_id"]).and_then(msgpack_string);
-                metadata.correlation_id =
-                    msgpack_get_named(first, &["correlation_id"]).and_then(msgpack_string);
-                metadata.command_type =
-                    msgpack_get_named(first, &["command_type"]).and_then(msgpack_string);
-                if let Some(args) = msgpack_get_named(first, &["args"]) {
-                    metadata.event_uid = msgpack_get_named(args, &["entry_uid", "entryUid", "uid"])
-                        .and_then(msgpack_string);
-                    metadata.mission_uid =
-                        msgpack_get_named(args, &["mission_uid", "missionUid", "uid"])
-                            .and_then(msgpack_string);
-                }
-            }
-        }
-    }
-
-    if let Some(result) = msgpack_get_indexed(&fields, LXMF_FIELD_RESULTS) {
-        metadata.command_id = metadata
-            .command_id
-            .or_else(|| msgpack_get_named(result, &["command_id"]).and_then(msgpack_string));
-        metadata.correlation_id = metadata
-            .correlation_id
-            .or_else(|| msgpack_get_named(result, &["correlation_id"]).and_then(msgpack_string));
-        metadata.result_status = msgpack_get_named(result, &["status"]).and_then(msgpack_string);
-    }
-
-    if let Some(event) = msgpack_get_indexed(&fields, LXMF_FIELD_EVENT) {
-        metadata.event_type = msgpack_get_named(event, &["event_type"]).and_then(msgpack_string);
-        metadata.event_uid = metadata
-            .event_uid
-            .or_else(|| msgpack_get_named(event, &["event_id"]).and_then(msgpack_string));
-        if let Some(payload) = msgpack_get_named(event, &["payload"]) {
-            metadata.event_uid = metadata.event_uid.or_else(|| {
-                msgpack_get_named(payload, &["entry_uid", "entryUid", "uid"])
-                    .and_then(msgpack_string)
-            });
-            metadata.mission_uid = metadata.mission_uid.or_else(|| {
-                msgpack_get_named(payload, &["mission_uid", "missionUid", "uid"])
-                    .and_then(msgpack_string)
-            });
-        }
-    }
-
-    if metadata.command_id.is_none()
-        && metadata.correlation_id.is_none()
-        && metadata.command_type.is_none()
-        && metadata.result_status.is_none()
-        && metadata.event_type.is_none()
-        && metadata.event_uid.is_none()
-        && metadata.mission_uid.is_none()
-    {
-        return None;
-    }
-
-    Some(metadata)
 }
 
 fn emit_lxmf_delivery(
@@ -1000,10 +832,10 @@ async fn send_lxmf_message(
 
     if let Some(metadata) = metadata
         .as_ref()
-        .filter(|metadata| metadata.is_event_related())
+        .filter(|metadata| metadata.is_mission_related())
     {
         info!(
-            "[lxmf][events] attempting send requested_destination={} resolved_destination={} kind={} name={} message_id={} event_uid={} mission_uid={} correlation={}",
+            "[lxmf][mission] attempting send requested_destination={} resolved_destination={} kind={} name={} message_id={} event_uid={} mission_uid={} correlation={}",
             address_hash_to_hex(&destination),
             address_hash_to_hex(&remote_desc.address_hash),
             metadata.primary_kind(),
@@ -1051,6 +883,9 @@ async fn register_pending_lxmf_delivery(
         command_id: metadata.command_id.clone(),
         command_type: metadata.command_type.clone(),
         event_uid: metadata.event_uid.clone(),
+        eam_uid: metadata.eam_uid.clone(),
+        team_member_uid: metadata.team_member_uid.clone(),
+        team_uid: metadata.team_uid.clone(),
         mission_uid: metadata.mission_uid.clone(),
         sent_at_ms: now_ms(),
     };
@@ -1094,9 +929,9 @@ async fn emit_received_payload(
             .as_deref()
             .and_then(parse_mission_sync_metadata);
         if let Some(metadata) = metadata.as_ref() {
-            if metadata.is_event_related() {
+            if metadata.is_mission_related() {
                 info!(
-                    "[lxmf][events] received kind={} name={} source={} destination={} event_uid={} mission_uid={} correlation={}",
+                    "[lxmf][mission] received kind={} name={} source={} destination={} event_uid={} mission_uid={} correlation={}",
                     metadata.primary_kind(),
                     metadata.primary_name().unwrap_or("-"),
                     source_hex.as_deref().unwrap_or("-"),
@@ -1108,7 +943,10 @@ async fn emit_received_payload(
             }
             ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), &metadata).await;
         }
-        if !metadata.as_ref().is_some_and(MissionSyncMetadata::is_event_related) {
+        if !metadata
+            .as_ref()
+            .is_some_and(MissionSyncMetadata::is_mission_related)
+        {
             let peer_hex = source_hex.clone().unwrap_or_else(|| destination_hex.clone());
             let message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
                 .map(|wire| hex::encode(wire.message_id()))
@@ -1169,11 +1007,7 @@ async fn ack_pending_lxmf_delivery(
         return;
     };
 
-    let detail = metadata
-        .result_status
-        .clone()
-        .or_else(|| metadata.event_type.clone())
-        .or_else(|| metadata.command_type.clone());
+    let detail = metadata.ack_detail().map(ToOwned::to_owned);
     let mut guard = state.pending_lxmf_deliveries.lock().await;
     let mut matched: Option<PendingLxmfDelivery> = None;
 
@@ -1206,7 +1040,7 @@ async fn ack_pending_lxmf_delivery(
                     },
                 );
             info!(
-                "[lxmf][events] buffered acknowledgement source={} command={} correlation={} detail={}",
+                "[lxmf][mission] buffered acknowledgement source={} command={} correlation={} detail={}",
                 source_hex,
                 metadata.command_type.as_deref().unwrap_or("-"),
                 metadata.correlation_id.as_deref().unwrap_or("-"),
@@ -1250,7 +1084,7 @@ async fn ack_pending_lxmf_delivery(
         detail.clone(),
     );
     info!(
-        "[lxmf][events] acknowledged message_id={} destination={} command={} correlation={} detail={}",
+        "[lxmf][mission] acknowledged message_id={} destination={} command={} correlation={} detail={}",
         pending.message_id_hex,
         pending.destination_hex,
         pending.command_type.as_deref().unwrap_or("-"),
@@ -1810,7 +1644,7 @@ pub async fn run_node(
                         Some("ack timeout".to_string()),
                     );
                     info!(
-                        "[lxmf][events] timed out message_id={} destination={} command={} correlation={}",
+                        "[lxmf][mission] timed out message_id={} destination={} command={} correlation={}",
                         pending.message_id_hex,
                         pending.destination_hex,
                         pending.command_type.as_deref().unwrap_or("-"),
@@ -2080,9 +1914,9 @@ pub async fn run_node(
 
                     if let Some(report) = lxmf_report.as_ref() {
                         if let Some(metadata) = report.metadata.as_ref() {
-                            if metadata.is_event_related() {
+                            if metadata.is_mission_related() {
                                 info!(
-                                    "[lxmf][events] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
+                                    "[lxmf][mission] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
                                     metadata.primary_kind(),
                                     metadata.primary_name().unwrap_or("-"),
                                     report.resolved_destination_hex.as_str(),
@@ -2121,7 +1955,7 @@ pub async fn run_node(
                                     None,
                                 );
                                 info!(
-                                    "[lxmf][events] sent message_id={} destination={} command={} correlation={}",
+                                    "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
                                     pending.message_id_hex,
                                     pending.destination_hex,
                                     pending.command_type.as_deref().unwrap_or("-"),
@@ -2160,7 +1994,7 @@ pub async fn run_node(
                                             buffered_ack.detail.clone(),
                                         );
                                         info!(
-                                            "[lxmf][events] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
+                                            "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
                                             pending.message_id_hex,
                                             pending.destination_hex,
                                             pending.command_type.as_deref().unwrap_or("-"),
@@ -2176,7 +2010,7 @@ pub async fn run_node(
                                                 .insert(tracking_key, buffered_ack.clone());
                                         }
                                         info!(
-                                            "[lxmf][events] buffered acknowledgement source mismatch message_id={} destination={} source={}",
+                                            "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
                                             pending.message_id_hex,
                                             pending.destination_hex,
                                             buffered_ack.source_hex,
@@ -2212,7 +2046,7 @@ pub async fn run_node(
                                     Some(failure_detail.clone()),
                                 );
                                 info!(
-                                    "[lxmf][events] failed message_id={} destination={} command={} correlation={} outcome={:?}",
+                                    "[lxmf][mission] failed message_id={} destination={} command={} correlation={} outcome={:?}",
                                     pending.message_id_hex,
                                     pending.destination_hex,
                                     pending.command_type.as_deref().unwrap_or("-"),
@@ -2588,7 +2422,7 @@ mod tests {
         );
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
-        assert!(metadata.is_event_related());
+        assert!(metadata.is_mission_related());
     }
 
     #[test]
@@ -2644,7 +2478,7 @@ mod tests {
         );
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
-        assert!(metadata.is_event_related());
+        assert!(metadata.is_mission_related());
     }
 
     #[test]
@@ -2725,6 +2559,6 @@ mod tests {
         );
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("mission-1"));
-        assert!(metadata.is_event_related());
+        assert!(metadata.is_mission_related());
     }
 }

@@ -1,4 +1,150 @@
 export type EamStatus = "Red" | "Yellow" | "Green" | "Unknown";
+export type EamWireStatus = Exclude<EamStatus, "Unknown">;
+
+export const EAM_COMMAND_TYPES = [
+  "mission.registry.eam.list",
+  "mission.registry.eam.upsert",
+  "mission.registry.eam.get",
+  "mission.registry.eam.latest",
+  "mission.registry.eam.delete",
+  "mission.registry.eam.team.summary",
+] as const;
+
+export const EAM_EVENT_TYPES = [
+  "mission.registry.eam.listed",
+  "mission.registry.eam.upserted",
+  "mission.registry.eam.retrieved",
+  "mission.registry.eam.latest_retrieved",
+  "mission.registry.eam.deleted",
+  "mission.registry.eam.team_summary.retrieved",
+] as const;
+
+export type EamCommandType = (typeof EAM_COMMAND_TYPES)[number];
+export type EamEventType = (typeof EAM_EVENT_TYPES)[number];
+
+export interface EamSource {
+  rns_identity: string;
+  display_name?: string;
+}
+
+export interface EamStatusFields {
+  security_status?: EamWireStatus;
+  capability_status?: EamWireStatus;
+  preparedness_status?: EamWireStatus;
+  medical_status?: EamWireStatus;
+  mobility_status?: EamWireStatus;
+  comms_status?: EamWireStatus;
+}
+
+export interface EamRecord extends EamStatusFields {
+  eam_uid?: string;
+  callsign: string;
+  team_member_uid: string;
+  team_uid: string;
+  reported_by?: string;
+  reported_at?: string;
+  overall_status?: EamWireStatus;
+  notes?: string;
+  confidence?: number;
+  ttl_seconds?: number;
+  source?: EamSource;
+}
+
+export interface EamCommandContext {
+  eam_uid?: string;
+  callsign?: string;
+  team_uid?: string;
+  team_member_uid?: string;
+}
+
+export interface EamListCommandArgs extends EamCommandContext {
+  limit?: number;
+  offset?: number;
+  include_deleted?: boolean;
+}
+
+export interface EamUpsertCommandArgs extends EamStatusFields {
+  callsign: string;
+  team_member_uid: string;
+  team_uid: string;
+  eam_uid?: string;
+  reported_by?: string;
+  reported_at?: string;
+  notes?: string;
+  confidence?: number;
+  ttl_seconds?: number;
+  source?: EamSource;
+}
+
+export interface EamGetCommandArgs extends EamCommandContext {}
+
+export interface EamLatestCommandArgs extends EamCommandContext {}
+
+export interface EamDeleteCommandArgs extends EamCommandContext {}
+
+export interface EamTeamSummaryCommandArgs {
+  team_uid: string;
+  team_member_uid?: string;
+  callsign?: string;
+}
+
+export interface EamListResult {
+  eams: EamRecord[];
+}
+
+export interface EamEntityResult {
+  eam: EamRecord | null;
+}
+
+export interface EamDeleteResult {
+  eam: EamRecord | null;
+  status?: "deleted" | "not_found";
+  eam_uid?: string;
+  callsign?: string;
+}
+
+export interface EamTeamSummary {
+  team_uid: string;
+  team_name?: string;
+  total?: number;
+  active_total?: number;
+  deleted_total?: number;
+  overall_status?: EamWireStatus;
+  by_status?: Partial<Record<EamWireStatus, number>>;
+  updated_at?: string;
+  [key: string]: unknown;
+}
+
+export interface EamTeamSummaryResult {
+  summary: EamTeamSummary;
+}
+
+export interface EamCommandArgsByType {
+  "mission.registry.eam.list": EamListCommandArgs;
+  "mission.registry.eam.upsert": EamUpsertCommandArgs;
+  "mission.registry.eam.get": EamGetCommandArgs;
+  "mission.registry.eam.latest": EamLatestCommandArgs;
+  "mission.registry.eam.delete": EamDeleteCommandArgs;
+  "mission.registry.eam.team.summary": EamTeamSummaryCommandArgs;
+}
+
+export interface EamResultByCommandType {
+  "mission.registry.eam.list": EamListResult;
+  "mission.registry.eam.upsert": EamEntityResult;
+  "mission.registry.eam.get": EamEntityResult;
+  "mission.registry.eam.latest": EamEntityResult;
+  "mission.registry.eam.delete": EamDeleteResult;
+  "mission.registry.eam.team.summary": EamTeamSummaryResult;
+}
+
+export interface EamEventPayloadByType {
+  "mission.registry.eam.listed": EamListResult;
+  "mission.registry.eam.upserted": EamEntityResult;
+  "mission.registry.eam.retrieved": EamEntityResult;
+  "mission.registry.eam.latest_retrieved": EamEntityResult;
+  "mission.registry.eam.deleted": EamDeleteResult;
+  "mission.registry.eam.team_summary.retrieved": EamTeamSummaryResult;
+}
 
 export interface ActionMessage {
   callsign: string;
@@ -12,6 +158,19 @@ export interface ActionMessage {
   notes?: string;
   updatedAt: number;
   deletedAt?: number;
+  eamUid?: string;
+  teamMemberUid?: string;
+  teamUid?: string;
+  reportedAt?: string;
+  reportedBy?: string;
+  overallStatus?: EamWireStatus;
+  confidence?: number;
+  ttlSeconds?: number;
+  source?: EamSource;
+  syncState?: "draft" | "syncing" | "synced" | "error";
+  syncError?: string;
+  draftCreatedAt?: number;
+  lastSyncedAt?: number;
 }
 
 export interface EventSource {

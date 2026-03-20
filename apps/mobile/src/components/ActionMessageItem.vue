@@ -32,6 +32,16 @@ const overallBand = computed(() => getOverallStatusBand(overallScore.value));
 const ringOffset = computed(() => 276.46 - ((276.46 * overallScore.value) / 100));
 const toggleLabel = computed(() => (isExpanded.value ? "Hide statuses" : "Show statuses"));
 const overallTitle = computed(() => `Overall readiness ${overallScore.value}% (${overallBand.value})`);
+const syncLabel = computed(() => {
+  if (!props.message.syncState || props.message.syncState === "synced") {
+    return "";
+  }
+  return props.message.syncState === "draft"
+    ? "Draft"
+    : props.message.syncState === "syncing"
+      ? "Syncing"
+      : "Sync error";
+});
 
 function toggleStatuses(): void {
   isExpanded.value = !isExpanded.value;
@@ -80,7 +90,10 @@ function cycleStatus(field: ActionMessageStatusField): void {
               </button>
             </div>
           </div>
-          <p class="group">Team: {{ formattedTeam }}</p>
+          <p class="group">
+            Team: {{ formattedTeam }}
+            <span v-if="syncLabel" class="sync-chip">{{ syncLabel }}</span>
+          </p>
         </div>
 
         <div class="overall" :style="{ '--overall-color': overallColor }" :title="overallTitle">
@@ -186,6 +199,20 @@ function cycleStatus(field: ActionMessageStatusField): void {
   font-family: var(--font-body);
   font-size: 0.96rem;
   margin: 0.22rem 0 0;
+}
+
+.sync-chip {
+  background: rgb(47 64 105 / 78%);
+  border: 1px solid rgb(112 147 220 / 38%);
+  border-radius: 999px;
+  color: #d0deff;
+  display: inline-block;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  margin-left: 0.45rem;
+  padding: 0.1rem 0.45rem;
+  text-transform: uppercase;
 }
 
 .overall {

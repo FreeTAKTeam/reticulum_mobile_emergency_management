@@ -107,6 +107,7 @@ const hubSummary = computed(() => {
   }
   return `${form.hubMode} | ${form.hubIdentityHash.slice(0, 10)}...`;
 });
+const hubRegistrationSummary = computed(() => nodeStore.hubRegistrationSummary);
 
 const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved peers`);
 const nodeControlSummary = computed(() =>
@@ -547,6 +548,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <p v-if="hubAnnounceCandidates.length === 0" class="section-note">
           No announce entries exposing Hub capability have been seen yet.
         </p>
+        <p class="section-note">
+          Hub registration: {{ hubRegistrationSummary }}
+        </p>
 
         <div class="actions">
           <button type="button" @click="applySettings">Save Hub Settings</button>
@@ -555,6 +559,18 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub refresh requested.')"
           >
             Refresh Now
+          </button>
+          <button
+            type="button"
+            @click="runNodeAction(() => nodeStore.bootstrapHubRegistration(true), 'Hub registration requested.')"
+          >
+            Register Team Member
+          </button>
+          <button
+            type="button"
+            @click="runNodeAction(() => nodeStore.forgetHubRegistryLinkage(), 'Hub registration cleared.')"
+          >
+            Clear Registration
           </button>
         </div>
       </div>

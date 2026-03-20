@@ -28,7 +28,15 @@ const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
 const teamColorPrompt = R3AKT_TEAM_COLORS.join(", ");
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
 const appReady = computed(() => nodeStore.ready);
-const readinessHint = "Node is not ready yet. Wait for the top-right status to show Ready.";
+const draftModeActive = computed(
+  () => nodeStore.settings.hub.mode !== "Disabled" && !nodeStore.hubRegistrationReady,
+);
+const canManageMessages = computed(() => appReady.value || draftModeActive.value);
+const readinessHint = computed(() =>
+  draftModeActive.value
+    ? "Hub registration is still pending. Messages are saved as local drafts and replay automatically once registration completes."
+    : "Node is not ready yet. Wait for the top-right status to show Ready.",
+);
 
 const createForm = reactive({
   callsign: defaultCallSign.value,
@@ -51,6 +59,9 @@ function resetCreateForm(): void {
 }
 
 function ensureReady(action: string): boolean {
+  if (draftModeActive.value) {
+    return true;
+  }
   try {
     nodeStore.assertReadyForOutbound(action);
     return true;
@@ -139,6 +150,9 @@ function deleteMessage(callsign: string): void {
       </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
+        <span v-if="messagesStore.draftCount > 0" class="badge badge-warning">
+          {{ messagesStore.draftCount }} Draft
+        </span>
         <button
           class="help-trigger"
           type="button"
@@ -152,9 +166,9 @@ function deleteMessage(callsign: string): void {
           type="button"
           aria-label="Add message"
           :aria-expanded="isCreateFormVisible"
-          :aria-disabled="!appReady"
-          :disabled="!appReady"
-          :title="appReady ? 'Add message' : readinessHint"
+          :aria-disabled="!canManageMessages"
+          :disabled="!canManageMessages"
+          :title="canManageMessages ? 'Add message' : readinessHint"
           @click="toggleCreateForm"
         >
           +
@@ -162,24 +176,32 @@ function deleteMessage(callsign: string): void {
       </div>
     </header>
 
+    <p v-if="draftModeActive" class="sync-banner">
+      {{ nodeStore.hubRegistrationSummary }} Pending drafts replay automatically in creation order.
+    </p>
+
     <form v-show="isCreateFormVisible" class="create-form" @submit.prevent="createMessage">
       <input
         v-model="createForm.callsign"
         type="text"
         placeholder="Call Sign"
         aria-label="Call Sign"
-        :disabled="!appReady"
+        :disabled="!canManageMessages"
       />
       <select
         v-model="createForm.groupName"
         aria-label="Team color"
-        :disabled="!appReady"
+        :disabled="!canManageMessages"
       >
         <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
           {{ option.label }}
         </option>
       </select>
-      <button type="submit" :disabled="!appReady" :title="appReady ? 'Add message' : readinessHint">
+      <button
+        type="submit"
+        :disabled="!canManageMessages"
+        :title="canManageMessages ? 'Add message' : readinessHint"
+      >
         Add message
       </button>
     </form>
@@ -245,6 +267,22 @@ p {
   letter-spacing: 0.08em;
   padding: 0.46rem 0.8rem;
   text-transform: uppercase;
+}
+
+.badge-warning {
+  background: rgb(82 56 5 / 82%);
+  border-color: rgb(255 196 76 / 65%);
+  color: #ffd36e;
+}
+
+.sync-banner {
+  background: rgb(34 45 77 / 62%);
+  border: 1px solid rgb(105 141 214 / 35%);
+  border-radius: 12px;
+  color: #bbd3ff;
+  font-family: var(--font-body);
+  margin: 0;
+  padding: 0.8rem 0.95rem;
 }
 
 .create-toggle {

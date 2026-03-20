@@ -23,7 +23,8 @@ use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::runtime::{lxmf_private_identity, LxmfSendReport, MissionSyncMetadata};
+use crate::mission_sync::MissionSyncMetadata;
+use crate::runtime::{lxmf_private_identity, LxmfSendReport};
 use crate::types::{NodeError, PeerState};
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
