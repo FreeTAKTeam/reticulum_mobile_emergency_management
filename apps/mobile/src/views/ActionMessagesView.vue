@@ -25,7 +25,6 @@ const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
   label: formatR3aktTeamColorLabel(value),
 }));
-const teamColorPrompt = R3AKT_TEAM_COLORS.join(", ");
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
 const appReady = computed(() => nodeStore.ready);
 const draftModeActive = computed(
@@ -43,10 +42,16 @@ const createForm = reactive({
   groupName: DEFAULT_R3AKT_TEAM_COLOR,
 });
 const isCreateFormVisible = shallowRef(false);
+const editingCallsign = shallowRef<string | null>(null);
 
 const messages = computed(() => messagesStore.messages);
+const submitLabel = computed(() => (editingCallsign.value ? "Save message" : "Add message"));
+const submitTitle = computed(() => (editingCallsign.value ? "Save message" : "Add message"));
 
 watch(defaultCallSign, (next, previous) => {
+  if (editingCallsign.value) {
+    return;
+  }
   const current = createForm.callsign.trim();
   if (!current || current === previous) {
     createForm.callsign = next;
@@ -56,6 +61,7 @@ watch(defaultCallSign, (next, previous) => {
 function resetCreateForm(): void {
   createForm.callsign = defaultCallSign.value;
   createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
+  editingCallsign.value = null;
 }
 
 function ensureReady(action: string): boolean {
@@ -74,6 +80,9 @@ function toggleCreateForm(): void {
   if (!isCreateFormVisible.value && !ensureReady("send messages")) {
     return;
   }
+  if (isCreateFormVisible.value) {
+    resetCreateForm();
+  }
   isCreateFormVisible.value = !isCreateFormVisible.value;
 }
 
@@ -89,16 +98,36 @@ async function createMessage(): Promise<void> {
   if (!callsign) {
     return;
   }
-  await messagesStore.upsertLocal({
-    callsign,
-    groupName: normalizeR3aktTeamColor(createForm.groupName, DEFAULT_R3AKT_TEAM_COLOR),
-    securityStatus: "Unknown",
-    capabilityStatus: "Unknown",
-    preparednessStatus: "Unknown",
-    medicalStatus: "Unknown",
-    mobilityStatus: "Unknown",
-    commsStatus: "Unknown",
-  });
+  const normalizedGroupName = normalizeR3aktTeamColor(
+    createForm.groupName,
+    DEFAULT_R3AKT_TEAM_COLOR,
+  );
+  const originalCallsign = editingCallsign.value;
+  const existing = originalCallsign
+    ? messages.value.find((message) => message.callsign === originalCallsign)
+    : undefined;
+
+  await messagesStore.upsertLocal(
+    existing
+      ? {
+          ...existing,
+          callsign,
+          groupName: normalizedGroupName,
+        }
+      : {
+          callsign,
+          groupName: normalizedGroupName,
+          securityStatus: "Unknown",
+          capabilityStatus: "Unknown",
+          preparednessStatus: "Unknown",
+          medicalStatus: "Unknown",
+          mobilityStatus: "Unknown",
+          commsStatus: "Unknown",
+        },
+  );
+  if (existing && originalCallsign && originalCallsign !== callsign) {
+    await messagesStore.deleteLocal(originalCallsign);
+  }
   resetCreateForm();
   isCreateFormVisible.value = false;
 }
@@ -111,19 +140,10 @@ function editMessage(callsign: string): void {
   if (!message) {
     return;
   }
-  const nextGroup = window.prompt(
-    `Update team color (${teamColorPrompt})`,
-    normalizeR3aktTeamColor(message.groupName),
-  );
-  if (nextGroup === null) {
-    return;
-  }
-  messagesStore
-    .upsertLocal({
-      ...message,
-      groupName: normalizeR3aktTeamColor(nextGroup, normalizeR3aktTeamColor(message.groupName)),
-    })
-    .catch(() => undefined);
+  createForm.callsign = message.callsign;
+  createForm.groupName = normalizeR3aktTeamColor(message.groupName);
+  editingCallsign.value = message.callsign;
+  isCreateFormVisible.value = true;
 }
 
 function cycleMessage(callsign: string, field: keyof ActionMessage | string): void {
@@ -146,7 +166,7 @@ function deleteMessage(callsign: string): void {
     <header class="view-header">
       <div>
         <h1>Emergency Action Messages</h1>
-        <p>Monitor status updates from field teams and dispatch support.</p>
+        <p>Status updates from field members.</p>
       </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
@@ -200,9 +220,9 @@ function deleteMessage(callsign: string): void {
       <button
         type="submit"
         :disabled="!canManageMessages"
-        :title="canManageMessages ? 'Add message' : readinessHint"
+        :title="canManageMessages ? submitTitle : readinessHint"
       >
-        Add message
+        {{ submitLabel }}
       </button>
     </form>
 

@@ -2,7 +2,6 @@
 import { computed, ref } from "vue";
 
 import PeerRow from "../components/PeerRow.vue";
-import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer, SavedPeer } from "../types/domain";
 
@@ -92,13 +91,6 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
     feedback.value = error instanceof Error ? error.message : String(error);
   }
 }
-
-async function exportSaved(): Promise<void> {
-  const payload = JSON.stringify(nodeStore.getSavedPeerList(), null, 2);
-  await copyToClipboard(payload);
-  await shareText("PeerListV1", payload);
-  feedback.value = "Saved peers exported to clipboard/share.";
-}
 </script>
 
 <template>
@@ -128,30 +120,6 @@ async function exportSaved(): Promise<void> {
         />
         Show only capability-verified peers
       </label>
-    </section>
-
-    <section class="panel">
-      <div class="section-header">
-        <h2>Directory (Hub)</h2>
-        <p>
-          Mode: {{ nodeStore.settings.hub.mode }} | Last refresh:
-          {{
-            nodeStore.lastHubRefreshAt
-              ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString()
-              : "never"
-          }}
-        </p>
-      </div>
-      <div class="actions">
-        <button
-          type="button"
-          @click="
-            runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')
-          "
-        >
-          Refresh hub list
-        </button>
-      </div>
     </section>
 
     <section class="panel">
@@ -203,7 +171,6 @@ async function exportSaved(): Promise<void> {
           >
             Disconnect all
           </button>
-          <button type="button" @click="exportSaved">Export</button>
         </div>
         <div v-if="filteredSaved.length > 0" class="saved-list">
           <article v-for="peer in filteredSaved" :key="peer.destination" class="saved-item">
@@ -229,6 +196,30 @@ async function exportSaved(): Promise<void> {
         </div>
         <p v-else class="saved-empty">No saved peers yet.</p>
         <p v-if="feedback" class="feedback">{{ feedback }}</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-header">
+        <h2>Directory (Hub)</h2>
+        <p>
+          Mode: {{ nodeStore.settings.hub.mode }} | Last refresh:
+          {{
+            nodeStore.lastHubRefreshAt
+              ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString()
+              : "never"
+          }}
+        </p>
+      </div>
+      <div class="actions">
+        <button
+          type="button"
+          @click="
+            runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')
+          "
+        >
+          Refresh hub list
+        </button>
       </div>
     </section>
   </section>

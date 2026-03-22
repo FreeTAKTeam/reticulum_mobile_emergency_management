@@ -83,7 +83,7 @@ async function deleteEvent(uid: string): Promise<void> {
     <header class="view-header">
       <div>
         <h1>Events</h1>
-        <p>Live replicated incident feed across connected peers.</p>
+        <p>Replicated Logs feed.</p>
       </div>
       <div class="header-actions">
         <span class="badge"># {{ events.length }} EVT</span>

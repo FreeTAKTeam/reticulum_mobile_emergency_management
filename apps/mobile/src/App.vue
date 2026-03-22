@@ -39,10 +39,10 @@ onMounted(async () => {
 const tabItems = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/inbox", label: "Inbox", icon: "inbox" },
+  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
   { path: "/peers", label: "Peers", icon: "peers" },
-  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -132,10 +132,10 @@ function isTabActive(path: string): boolean {
               viewBox="0 0 24 24"
               fill="none"
             >
-              <path
-                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
-              />
-              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
+              <path d="M8 4.5h6l4 4v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
+              <path d="M14 4.5v4h4" />
+              <path d="M9 12h6" />
+              <path d="M9 15.5h6" />
             </svg>
             <svg
               v-else-if="tab.icon === 'dashboard'"

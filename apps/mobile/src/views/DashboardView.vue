@@ -64,7 +64,7 @@ const ringMetrics = computed(() =>
     <header class="view-header">
       <div>
         <h1>Emergency Ops Dashboard</h1>
-        <p>Status-weighted readiness from active action messages.</p>
+        <p>Readiness from All messages.</p>
       </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
@@ -74,7 +74,7 @@ const ringMetrics = computed(() =>
     </header>
 
     <section class="panel">
-      <h2>Operational Status</h2>
+      <h2>Team Status</h2>
       <div class="rings">
         <article class="ring-card" v-for="ring in ringMetrics" :key="ring.key">
           <svg viewBox="0 0 120 120">
@@ -146,8 +146,33 @@ h1 {
 }
 
 .badge-button {
+  box-shadow:
+    inset 0 1px 0 rgb(186 236 255 / 8%),
+    0 8px 18px rgb(3 24 56 / 18%);
   cursor: pointer;
   min-height: 0;
+  touch-action: manipulation;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.badge-button:active {
+  background: linear-gradient(118deg, #0b4d7d, #106f90);
+  border-color: rgb(86 197 255 / 72%);
+  box-shadow:
+    inset 0 1px 0 rgb(224 248 255 / 14%),
+    0 4px 10px rgb(3 18 40 / 20%);
+  color: #dff8ff;
+  transform: translateY(1px) scale(0.985);
+}
+
+.badge-button:focus-visible {
+  outline: 2px solid rgb(111 219 255 / 70%);
+  outline-offset: 2px;
 }
 
 .panel {

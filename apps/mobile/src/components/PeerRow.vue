@@ -25,13 +25,25 @@ watch(
 
 const nodeStore = useNodeStore();
 const effectiveState = computed(() => nodeStore.peerDisplayState(props.peer));
+const livePresenceSeenAt = computed(() => nodeStore.peerPresenceTimestamp(props.peer));
+const cachedPresenceSeenAt = computed(() => nodeStore.peerCachedPresenceTimestamp(props.peer));
 const announceLabel = computed(() => {
   const presence = nodeStore.peerPresenceState(props.peer);
   if (effectiveState.value === "connected") {
     return presence === "online" ? "Announce current" : "Announce stale";
   }
-  return presence === "online" ? "Discovered" : "No recent announce";
+  if (presence === "online") {
+    return "Discovered";
+  }
+  return cachedPresenceSeenAt.value ? "Announce cached" : "No recent announce";
 });
+const lastSeenLabel = computed(() =>
+  livePresenceSeenAt.value
+    ? new Date(livePresenceSeenAt.value).toLocaleTimeString()
+    : cachedPresenceSeenAt.value
+      ? `cached ${new Date(cachedPresenceSeenAt.value).toLocaleTimeString()}`
+      : "never",
+);
 const stateLabel = computed(() => {
   if (effectiveState.value === "connected") {
     return "Connected";
@@ -51,7 +63,7 @@ const stateLabel = computed(() => {
         {{ props.peer.announcedName }}
       </p>
       <p class="details">
-        {{ stateLabel }} | {{ announceLabel }} | last seen {{ new Date(props.peer.lastSeenAt).toLocaleTimeString() }}
+        {{ stateLabel }} | {{ announceLabel }} | last seen {{ lastSeenLabel }}
       </p>
       <p class="details" v-if="props.peer.hops !== undefined">
         {{ props.peer.hops }} hops | {{ props.peer.verifiedCapability ? "verified" : "unverified" }}

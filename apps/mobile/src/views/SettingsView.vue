@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef, watch } from "vue";
+import { computed, reactive, ref, useTemplateRef } from "vue";
 
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
@@ -14,11 +14,6 @@ interface KnownTcpServerOption {
 }
 
 interface HubAnnounceCandidate {
-  destination: string;
-  label: string;
-}
-
-interface PropagationPeerOption {
   destination: string;
   label: string;
 }
@@ -54,7 +49,6 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
-const selectedPropagationPeerHex = ref("");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 const showLegacyHubHttpFields = computed(() => form.hubMode === "RchHttp");
@@ -117,31 +111,6 @@ const hubSummary = computed(() => {
   return `${form.hubMode} | ${form.hubIdentityHash.slice(0, 10)}...`;
 });
 const hubRegistrationSummary = computed(() => nodeStore.hubRegistrationSummary);
-const propagationPeerOptions = computed<PropagationPeerOption[]>(() => {
-  const options = new Map<string, string>();
-
-  for (const peer of nodeStore.savedPeers) {
-    options.set(peer.destination, peer.label || peer.destination);
-  }
-
-  for (const peer of nodeStore.discoveredPeers) {
-    if (!options.has(peer.destination)) {
-      options.set(
-        peer.destination,
-        peer.announcedName || peer.label || peer.destination,
-      );
-    }
-  }
-
-  if (activePropagationNodeHex.value && !options.has(activePropagationNodeHex.value)) {
-    options.set(activePropagationNodeHex.value, activePropagationNodeHex.value);
-  }
-
-  return [...options.entries()]
-    .map(([destination, label]) => ({ destination, label }))
-    .sort((left, right) => left.label.localeCompare(right.label));
-});
-
 const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved peers`);
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
@@ -151,11 +120,25 @@ const activePropagationNodeLabel = computed(() => {
     return "None";
   }
 
-  return (
-    propagationPeerOptions.value.find(
-      (peer) => peer.destination === activePropagationNodeHex.value,
-    )?.label ?? activePropagationNodeHex.value
-  );
+  const discoveredPeer = nodeStore.discoveredByDestination[activePropagationNodeHex.value];
+  if (discoveredPeer) {
+    return discoveredPeer.announcedName || discoveredPeer.label || activePropagationNodeHex.value;
+  }
+
+  const savedPeer = nodeStore.savedByDestination[activePropagationNodeHex.value];
+  return savedPeer?.label || activePropagationNodeHex.value;
+});
+const propagationSelectionSummary = computed(() => {
+  if (!activePropagationNodeHex.value) {
+    return "No propagation relay has been announced yet.";
+  }
+  if (
+    nodeStore.bestPropagationNodeHex
+    && nodeStore.bestPropagationNodeHex === activePropagationNodeHex.value
+  ) {
+    return "Auto-selected from announced Hub-capable relays.";
+  }
+  return "Active propagation relay is synced from runtime state.";
 });
 
 const telemetryStatusText = computed(() => {
@@ -181,14 +164,6 @@ const telemetrySummary = computed(() => {
 
   return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
-
-watch(
-  activePropagationNodeHex,
-  (value) => {
-    selectedPropagationPeerHex.value = value;
-  },
-  { immediate: true },
-);
 
 function normalizeTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
@@ -336,17 +311,6 @@ function importPeerList(): void {
   }
 }
 
-async function applyPropagationPeer(): Promise<void> {
-  try {
-    await nodeStore.setActivePropagationNode(selectedPropagationPeerHex.value || undefined);
-    runtimeFeedback.value = selectedPropagationPeerHex.value
-      ? "Active propagation peer updated."
-      : "Active propagation peer cleared.";
-  } catch (error: unknown) {
-    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
 function openPeerListFilePicker(): void {
   peerListFileInput.value?.click();
 }
@@ -482,22 +446,12 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             <input :value="activePropagationNodeLabel" class="readonly-input" type="text" readonly />
           </label>
           <label>
-            Propagation peer
-            <select v-model="selectedPropagationPeerHex">
-              <option value="">None</option>
-              <option
-                v-for="peer in propagationPeerOptions"
-                :key="peer.destination"
-                :value="peer.destination"
-              >
-                {{ peer.label }}
-              </option>
-            </select>
+            Selection mode
+            <input :value="propagationSelectionSummary" class="readonly-input" type="text" readonly />
           </label>
         </div>
 
         <div class="actions">
-          <button type="button" @click="applyPropagationPeer">Set Propagation</button>
           <button type="button" @click="applySettings">Save</button>
           <button
             type="button"
@@ -694,7 +648,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         />
         <div class="actions">
           <button type="button" @click="openPeerListFilePicker">Load JSON File</button>
-          <button type="button" @click="exportPeerList">Export + Share</button>
+          <button type="button" @click="exportPeerList">Export</button>
         </div>
         <label class="full">
           Import JSON

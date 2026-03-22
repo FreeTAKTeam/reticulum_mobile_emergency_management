@@ -260,11 +260,11 @@ function normalizeEamRecord(value: unknown): EamRecord | null {
   }
 
   const callsign = pickString(record, "callsign");
-  const teamMemberUid = pickString(record, "team_member_uid", "teamMemberUid");
-  const teamUid = pickString(record, "team_uid", "teamUid");
-  if (!callsign || !teamMemberUid || !teamUid) {
+  if (!callsign) {
     return null;
   }
+  const teamMemberUid = pickString(record, "team_member_uid", "teamMemberUid") ?? "";
+  const teamUid = pickString(record, "team_uid", "teamUid") ?? "";
 
   const source = normalizeSource(record.source);
   const statusFields = normalizeStatusFields(record);
@@ -433,11 +433,11 @@ function normalizeEamCommandArgs<T extends EamCommandType>(
       } as EamCommandArgsByType[T];
     case "mission.registry.eam.upsert": {
       const callsign = pickString(record, "callsign");
-      const teamMemberUid = pickString(record, "team_member_uid", "teamMemberUid");
-      const teamUid = pickString(record, "team_uid", "teamUid");
-      if (!callsign || !teamMemberUid || !teamUid) {
+      if (!callsign) {
         return null;
       }
+      const teamMemberUid = pickString(record, "team_member_uid", "teamMemberUid") ?? "";
+      const teamUid = pickString(record, "team_uid", "teamUid") ?? "";
 
       const source = normalizeSource(record.source);
       return {

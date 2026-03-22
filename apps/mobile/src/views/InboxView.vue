@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef } from "vue";
+import { computed, onMounted, shallowRef, watch } from "vue";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
@@ -20,7 +20,19 @@ onMounted(() => {
   messagingStore.init();
   messagesStore.init();
   messagesStore.initReplication();
+  if (nodeStore.ready) {
+    void nodeStore.requestLxmfSync();
+  }
 });
+
+watch(
+  () => nodeStore.ready,
+  (isReady, wasReady) => {
+    if (isReady && !wasReady) {
+      void nodeStore.requestLxmfSync();
+    }
+  },
+);
 
 const selectedConversation = computed(() => messagingStore.selectedConversation);
 const activeConversationId = computed(() =>

@@ -1,5 +1,6 @@
 import {
   DEFAULT_NODE_CONFIG,
+  type AnnounceRecord,
   type PeerRecord,
   type SyncStatus,
   createReticulumNodeClient,
@@ -19,7 +20,7 @@ import {
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
-import { computed, reactive, ref, shallowRef } from "vue";
+import { computed, reactive, ref, shallowRef, watch } from "vue";
 
 import {
   bootstrapHubRegistry,
@@ -52,6 +53,7 @@ import {
   matchesEmergencyCapabilities,
   normalizeDisplayName,
   normalizeDestinationHex,
+  parseCapabilityTokens,
   parsePeerListV1,
   TELEMETRY_CAPABILITY,
 } from "../utils/peers";
@@ -159,6 +161,54 @@ function sleep(ms: number): Promise<void> {
 function activePropagationNodeHex(status: SyncStatus): string | undefined {
   const candidate = status.activePropagationNodeHex?.trim();
   return candidate ? candidate : undefined;
+}
+
+function peerExposesPropagationCapability(appData?: string): boolean {
+  return parseCapabilityTokens(appData ?? "").some(
+    (token) => token === "hub" || token.endsWith("hub"),
+  );
+}
+
+function connectionRank(state: PeerConnectionState): number {
+  switch (state) {
+    case "connected":
+      return 2;
+    case "connecting":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function comparePropagationCandidates(
+  left: DiscoveredPeer,
+  right: DiscoveredPeer,
+  preferredDestination?: string,
+): number {
+  const leftPreferred = preferredDestination && left.destination === preferredDestination ? 1 : 0;
+  const rightPreferred = preferredDestination && right.destination === preferredDestination ? 1 : 0;
+  if (leftPreferred !== rightPreferred) {
+    return rightPreferred - leftPreferred;
+  }
+
+  const byConnection = connectionRank(right.state) - connectionRank(left.state);
+  if (byConnection !== 0) {
+    return byConnection;
+  }
+
+  const leftHops = typeof left.hops === "number" ? left.hops : Number.MAX_SAFE_INTEGER;
+  const rightHops = typeof right.hops === "number" ? right.hops : Number.MAX_SAFE_INTEGER;
+  if (leftHops !== rightHops) {
+    return leftHops - rightHops;
+  }
+
+  const leftSeenAt = Math.max(left.announceLastSeenAt ?? 0, left.lxmfLastSeenAt ?? 0);
+  const rightSeenAt = Math.max(right.announceLastSeenAt ?? 0, right.lxmfLastSeenAt ?? 0);
+  if (leftSeenAt !== rightSeenAt) {
+    return rightSeenAt - leftSeenAt;
+  }
+
+  return left.destination.localeCompare(right.destination);
 }
 
 function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
@@ -294,6 +344,8 @@ export const useNodeStore = defineStore("node", () => {
   const savedByDestination = reactive<Record<string, SavedPeer>>(loadSavedPeers());
   const appDestinationByIdentity = reactive<Record<string, string>>({});
   const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
+  const livePresenceByDestination = reactive<Record<string, number>>({});
+  const liveLxmfPresenceByIdentity = reactive<Record<string, number>>({});
   const logs = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
@@ -311,7 +363,9 @@ export const useNodeStore = defineStore("node", () => {
   const packetListeners = new Set<PacketListener>();
   const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
   const messageListeners = new Set<MessageListener>();
+  const identityResolutionInFlight = new Set<string>();
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
+  let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
 
   function appendLog(level: string, message: string): void {
@@ -473,6 +527,18 @@ export const useNodeStore = defineStore("node", () => {
       ...patch,
       destination,
       sources,
+      identityHex: patch.identityHex ?? base.identityHex,
+      lxmfDestinationHex: patch.lxmfDestinationHex ?? base.lxmfDestinationHex,
+      announceLastSeenAt: patch.announceLastSeenAt ?? base.announceLastSeenAt,
+      lxmfLastSeenAt: patch.lxmfLastSeenAt ?? base.lxmfLastSeenAt,
+      announcedName: patch.announcedName ?? base.announcedName,
+      label: patch.label ?? base.label,
+      appData: patch.appData ?? base.appData,
+      hops: patch.hops ?? base.hops,
+      interfaceHex: patch.interfaceHex ?? base.interfaceHex,
+      lastError: Object.prototype.hasOwnProperty.call(patch, "lastError")
+        ? patch.lastError
+        : base.lastError,
       lastSeenAt: patch.lastSeenAt ?? base.lastSeenAt,
     };
   }
@@ -511,7 +577,6 @@ export const useNodeStore = defineStore("node", () => {
     upsertDiscovered(destination, {
       state: stateValue,
       lastError: lastErrorValue,
-      lastSeenAt: nowMs(),
     });
   }
 
@@ -528,6 +593,12 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
       lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
+    }
+    if (isValidDestinationHex(identityHex) && typeof liveLxmfPresenceByIdentity[identityHex] === "number") {
+      livePresenceByDestination[destination] = Math.max(
+        livePresenceByDestination[destination] ?? 0,
+        liveLxmfPresenceByIdentity[identityHex],
+      );
     }
 
     const saved = savedByDestination[destination];
@@ -581,6 +652,208 @@ export const useNodeStore = defineStore("node", () => {
 
   function persistSettings(): void {
     saveSettings(settings);
+  }
+
+  function recordLivePresence(
+    destinationKind: "app" | "lxmf_delivery" | "other",
+    destinationHex: string,
+    identityHex: string | undefined,
+    receivedAtMs: number,
+  ): void {
+    if (destinationKind === "lxmf_delivery") {
+      if (isValidDestinationHex(identityHex ?? "")) {
+        const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
+        liveLxmfPresenceByIdentity[normalizedIdentity] = Math.max(
+          liveLxmfPresenceByIdentity[normalizedIdentity] ?? 0,
+          receivedAtMs,
+        );
+        const appDestinationHex = appDestinationByIdentity[normalizedIdentity];
+        if (isValidDestinationHex(appDestinationHex)) {
+          livePresenceByDestination[appDestinationHex] = Math.max(
+            livePresenceByDestination[appDestinationHex] ?? 0,
+            receivedAtMs,
+          );
+        }
+      }
+      return;
+    }
+
+    if (!isValidDestinationHex(destinationHex)) {
+      return;
+    }
+    livePresenceByDestination[destinationHex] = Math.max(
+      livePresenceByDestination[destinationHex] ?? 0,
+      receivedAtMs,
+    );
+    if (isValidDestinationHex(identityHex ?? "")) {
+      const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
+      const lxmfSeenAt = liveLxmfPresenceByIdentity[normalizedIdentity];
+      if (typeof lxmfSeenAt === "number") {
+        livePresenceByDestination[destinationHex] = Math.max(
+          livePresenceByDestination[destinationHex],
+          lxmfSeenAt,
+        );
+      }
+    }
+  }
+
+  function applyAnnounceUpdate(
+    event: AnnounceReceivedEvent | AnnounceRecord,
+    source: "live" | "snapshot" = "live",
+  ): void {
+    presenceNow.value = event.receivedAtMs;
+    const identityHex = normalizeDestinationHex(event.identityHex ?? "");
+    if (source === "live") {
+      recordLivePresence(
+        event.destinationKind,
+        normalizeDestinationHex(event.destinationHex),
+        identityHex,
+        event.receivedAtMs,
+      );
+    }
+    if (event.destinationKind === "lxmf_delivery") {
+      if (isValidDestinationHex(identityHex)) {
+        lxmfDestinationByIdentity[identityHex] = event.destinationHex;
+        const appDestinationHex = appDestinationByIdentity[identityHex];
+        if (isValidDestinationHex(appDestinationHex)) {
+          upsertDiscovered(appDestinationHex, {
+            identityHex,
+            lxmfDestinationHex: event.destinationHex,
+            lxmfLastSeenAt: event.receivedAtMs,
+            lastSeenAt: event.receivedAtMs,
+          });
+        }
+      }
+      return;
+    }
+
+    const saved = savedByDestination[event.destinationHex];
+    const announcedName = extractAnnouncedName(event.appData)
+      ?? ("displayName" in event && typeof event.displayName === "string"
+        ? event.displayName.trim()
+        : undefined);
+    const capabilityText = extractAnnounceCapabilityText(event.appData);
+    const verifiedCapability = matchesEmergencyCapabilities(event.appData);
+    const knownLxmfDestination = isValidDestinationHex(identityHex)
+      ? lxmfDestinationByIdentity[identityHex]
+      : undefined;
+    if (isValidDestinationHex(identityHex)) {
+      appDestinationByIdentity[identityHex] = event.destinationHex;
+    }
+    upsertDiscovered(
+      event.destinationHex,
+      {
+        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+        lxmfDestinationHex: isValidDestinationHex(knownLxmfDestination ?? "")
+          ? knownLxmfDestination
+          : undefined,
+        lxmfLastSeenAt: isValidDestinationHex(knownLxmfDestination ?? "")
+          ? event.receivedAtMs
+          : undefined,
+        announcedName,
+        appData: capabilityText || undefined,
+        hops: event.hops,
+        interfaceHex: event.interfaceHex,
+        label: saved?.label,
+        announceLastSeenAt: event.receivedAtMs,
+        lastSeenAt: event.receivedAtMs,
+        verifiedCapability,
+      },
+      "announce",
+    );
+  }
+
+  async function refreshAnnounceState(): Promise<void> {
+    if (!client.value || !status.value.running) {
+      return;
+    }
+    try {
+      const announces = await client.value.listAnnounces();
+      for (const announce of announces) {
+        applyAnnounceUpdate(announce, "snapshot");
+      }
+    } catch (error: unknown) {
+      appendLog("Debug", `Announce snapshot refresh skipped: ${errorMessage(error)}`);
+    }
+  }
+
+  function scheduleDiscoveryRefresh(reason: string, delayMs = 2_000): void {
+    window.setTimeout(() => {
+      void refreshAnnounceState()
+        .then(() => {
+          appendLog("Debug", `[announce] refreshed discovery after ${reason}.`);
+        })
+        .catch(() => undefined);
+    }, delayMs);
+  }
+
+  async function quietlyAnnounce(reason: string): Promise<void> {
+    if (!client.value || !status.value.running) {
+      return;
+    }
+    try {
+      await client.value.announceNow();
+      appendLog("Debug", `[announce] queued ${reason}.`);
+      scheduleDiscoveryRefresh(reason);
+    } catch (error: unknown) {
+      appendLog("Debug", `[announce] skipped ${reason}: ${errorMessage(error)}`);
+    }
+  }
+
+  function scheduleAnnounce(reason: string, delayMs = 1_500): void {
+    window.setTimeout(() => {
+      void quietlyAnnounce(reason);
+    }, delayMs);
+  }
+
+  function scheduleAnnounceBurst(reason: string, delaysMs: number[]): void {
+    for (const delayMs of delaysMs) {
+      scheduleAnnounce(`${reason} +${delayMs}ms`, delayMs);
+    }
+  }
+
+  async function resolvePeerIdentityIfNeeded(
+    destinationRaw: string,
+    reason: string,
+  ): Promise<void> {
+    const destination = normalizeDestinationHex(destinationRaw);
+    if (!client.value || !status.value.running || !isValidDestinationHex(destination)) {
+      return;
+    }
+    if (isLocalPeerDestination(destination) || identityResolutionInFlight.has(destination)) {
+      return;
+    }
+
+    const peer = discoveredByDestination[destination];
+    if (
+      peer
+      && isValidDestinationHex(peer.identityHex ?? "")
+      && isValidDestinationHex(peer.lxmfDestinationHex ?? "")
+    ) {
+      return;
+    }
+
+    identityResolutionInFlight.add(destination);
+    try {
+      logUi("Debug", `[peers] requesting identity destination=${destination} reason=${reason}.`);
+      await client.value.requestPeerIdentity(destination);
+      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
+    } catch (error: unknown) {
+      appendLog(
+        "Debug",
+        `[peers] identity request failed destination=${destination} reason=${reason}: ${errorMessage(error)}.`,
+      );
+    } finally {
+      identityResolutionInFlight.delete(destination);
+    }
+  }
+
+  async function resolveSavedPeerIdentities(reason: string): Promise<void> {
+    await Promise.allSettled(
+      Object.values(savedByDestination).map((peer) =>
+        resolvePeerIdentityIfNeeded(peer.destination, reason),
+      ),
+    );
   }
 
   function buildClient(): ReticulumNodeClient {
@@ -776,54 +1049,7 @@ export const useNodeStore = defineStore("node", () => {
         void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        presenceNow.value = event.receivedAtMs;
-        const identityHex = normalizeDestinationHex(event.identityHex ?? "");
-        if (event.destinationKind === "lxmf_delivery") {
-          if (isValidDestinationHex(identityHex)) {
-            lxmfDestinationByIdentity[identityHex] = event.destinationHex;
-            const appDestinationHex = appDestinationByIdentity[identityHex];
-            if (isValidDestinationHex(appDestinationHex)) {
-              upsertDiscovered(appDestinationHex, {
-                identityHex,
-                lxmfDestinationHex: event.destinationHex,
-                lxmfLastSeenAt: event.receivedAtMs,
-              });
-            }
-          }
-          return;
-        }
-
-        const saved = savedByDestination[event.destinationHex];
-        const announcedName = extractAnnouncedName(event.appData);
-        const capabilityText = extractAnnounceCapabilityText(event.appData);
-        const verifiedCapability = matchesEmergencyCapabilities(event.appData);
-        const knownLxmfDestination = isValidDestinationHex(identityHex)
-          ? lxmfDestinationByIdentity[identityHex]
-          : undefined;
-        if (isValidDestinationHex(identityHex)) {
-          appDestinationByIdentity[identityHex] = event.destinationHex;
-        }
-        upsertDiscovered(
-          event.destinationHex,
-          {
-            identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-            lxmfDestinationHex: isValidDestinationHex(knownLxmfDestination ?? "")
-              ? knownLxmfDestination
-              : undefined,
-            lxmfLastSeenAt: isValidDestinationHex(knownLxmfDestination ?? "")
-              ? event.receivedAtMs
-              : undefined,
-            announcedName,
-            appData: capabilityText || undefined,
-            hops: event.hops,
-            interfaceHex: event.interfaceHex,
-            label: saved?.label,
-            announceLastSeenAt: event.receivedAtMs,
-            lastSeenAt: event.receivedAtMs,
-            verifiedCapability,
-          },
-          "announce",
-        );
+        applyAnnounceUpdate(event);
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
         presenceNow.value = nowMs();
@@ -831,6 +1057,10 @@ export const useNodeStore = defineStore("node", () => {
           setPeerState(event.change.destinationHex, "connecting");
         } else if (event.change.state === "Connected") {
           setPeerState(event.change.destinationHex, "connected");
+          void resolvePeerIdentityIfNeeded(event.change.destinationHex, "peer-connected");
+          void quietlyAnnounce(
+            `after peer-connected ${normalizeDestinationHex(event.change.destinationHex).slice(0, 8)}`,
+          );
         } else {
           setPeerState(
             event.change.destinationHex,
@@ -975,7 +1205,7 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     await refreshStatusSnapshot();
-    await refreshMessagingState();
+    await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
     await refreshHubRegistrationState(status.value.running && settings.hub.mode !== "Disabled");
   }
 
@@ -989,9 +1219,11 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
-      await refreshMessagingState();
+      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
       await refreshHubRegistrationState(true);
       await configureClientLogging();
+      await quietlyAnnounce("after start");
+      scheduleAnnounceBurst("after start burst", [1_500, 5_000, 10_000]);
       appendLog("Info", "Node started.");
 
       if (settings.hub.mode !== "Disabled") {
@@ -1004,6 +1236,7 @@ export const useNodeStore = defineStore("node", () => {
         await connectAllSaved().catch((error: unknown) => {
           appendLog("Warn", `Auto connect failed: ${errorMessage(error)}`);
         });
+        await resolveSavedPeerIdentities("auto-connect after start");
       }
     } catch (error: unknown) {
       throw captureActionError("Start node failed", error);
@@ -1038,10 +1271,25 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
-      await refreshMessagingState();
+      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
       await refreshHubRegistrationState(true);
       await configureClientLogging();
+      await quietlyAnnounce("after restart");
+      scheduleAnnounceBurst("after restart burst", [1_500, 5_000, 10_000]);
       appendLog("Info", "Node restarted with updated settings.");
+
+      if (settings.hub.mode !== "Disabled") {
+        await refreshHubDirectory().catch((error: unknown) => {
+          appendLog("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
+        });
+      }
+
+      if (settings.autoConnectSaved) {
+        await connectAllSaved().catch((error: unknown) => {
+          appendLog("Warn", `Auto connect failed after restart: ${errorMessage(error)}`);
+        });
+        await resolveSavedPeerIdentities("auto-connect after restart");
+      }
     } catch (error: unknown) {
       throw captureActionError("Restart node failed", error);
     }
@@ -1086,14 +1334,26 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function connectAllSaved(): Promise<void> {
-    for (const peer of Object.values(savedByDestination)) {
-      await connectPeer(peer.destination);
+    const results = await Promise.allSettled(
+      Object.values(savedByDestination).map((peer) => connectPeer(peer.destination)),
+    );
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => errorMessage(result.reason));
+    if (failures.length > 0) {
+      throw new Error(failures.join("; "));
     }
   }
 
   async function disconnectAllSaved(): Promise<void> {
-    for (const peer of Object.values(savedByDestination)) {
-      await disconnectPeer(peer.destination);
+    const results = await Promise.allSettled(
+      Object.values(savedByDestination).map((peer) => disconnectPeer(peer.destination)),
+    );
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => errorMessage(result.reason));
+    if (failures.length > 0) {
+      throw new Error(failures.join("; "));
     }
   }
 
@@ -1278,28 +1538,55 @@ export const useNodeStore = defineStore("node", () => {
       && (presenceNow.value - lastSeenAt) <= PEER_ONLINE_FRESHNESS_MS;
   }
 
+  function peerPresenceTimestamp(
+    peer: Pick<DiscoveredPeer, "destination">,
+  ): number | undefined {
+    const seenAt = livePresenceByDestination[peer.destination];
+    return seenAt > 0 ? seenAt : undefined;
+  }
+
+  function peerCachedPresenceTimestamp(
+    peer: Pick<DiscoveredPeer, "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
+  ): number | undefined {
+    const announceSeenAt = typeof peer.announceLastSeenAt === "number" ? peer.announceLastSeenAt : 0;
+    const lxmfSeenAt = typeof peer.lxmfLastSeenAt === "number" ? peer.lxmfLastSeenAt : 0;
+    const seenAt = Math.max(announceSeenAt, lxmfSeenAt, peer.lastSeenAt ?? 0);
+    return seenAt > 0 ? seenAt : undefined;
+  }
+
   function peerDisplayState(peer: Pick<DiscoveredPeer, "state">): PeerConnectionState {
     return peer.state;
   }
 
-  function peerPresenceState(peer: Pick<DiscoveredPeer, "announceLastSeenAt">): "online" | "offline" {
-    return hasFreshPresence(peer.announceLastSeenAt) ? "online" : "offline";
+  function peerPresenceState(
+    peer: Pick<DiscoveredPeer, "destination">,
+  ): "online" | "offline" {
+    return hasFreshPresence(peerPresenceTimestamp(peer)) ? "online" : "offline";
   }
 
   function peerHasEventRoute(
-    peer: Pick<DiscoveredPeer, "state" | "lxmfDestinationHex" | "lxmfLastSeenAt">,
+    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "state">,
   ): boolean {
     if (!isValidDestinationHex(peer.lxmfDestinationHex ?? "")) {
       return false;
     }
-    return peer.state === "connected" || hasFreshPresence(peer.lxmfLastSeenAt);
+    if (peer.state === "connected") {
+      return true;
+    }
+    return hasFreshPresence(peerPresenceTimestamp(peer));
   }
 
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
       .filter((peer) => !isLocalPeer(peer))
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+      .sort((a, b) => {
+        const byPresence = (peerPresenceTimestamp(b) ?? 0) - (peerPresenceTimestamp(a) ?? 0);
+        if (byPresence !== 0) {
+          return byPresence;
+        }
+        return b.lastSeenAt - a.lastSeenAt;
+      }),
   );
 
   const savedPeers = computed(() =>
@@ -1320,7 +1607,6 @@ export const useNodeStore = defineStore("node", () => {
 
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
     discoveredPeers.value
-      .filter((peer) => peer.state === "connected")
       .filter((peer) => peerHasEventRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1332,6 +1618,23 @@ export const useNodeStore = defineStore("node", () => {
   );
 
   const communicationReadyPeerCount = computed(() => connectedEventPeerRoutes.value.length);
+  const propagationCandidateDestinations = computed(() => {
+    const preferredDestination = normalizeDestinationHex(settings.hub.identityHash ?? "");
+    return Object.values(discoveredByDestination)
+      .filter((peer) => peer.sources.includes("announce"))
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peerExposesPropagationCapability(peer.appData))
+      .filter((peer) => hasFreshPresence(peerPresenceTimestamp(peer)))
+      .sort((left, right) =>
+        comparePropagationCandidates(
+          left,
+          right,
+          isValidDestinationHex(preferredDestination) ? preferredDestination : undefined,
+        ),
+      )
+      .map((peer) => peer.destination);
+  });
+  const bestPropagationNodeHex = computed(() => propagationCandidateDestinations.value[0]);
 
   const telemetryDestinations = computed(() =>
     Object.values(discoveredByDestination)
@@ -1367,6 +1670,34 @@ export const useNodeStore = defineStore("node", () => {
           : "Pending hub registration";
     }
   });
+
+  async function syncAutoPropagationNode(reason: string): Promise<void> {
+    if (!client.value || propagationSelectionInFlight) {
+      return;
+    }
+
+    const desiredDestination = status.value.running ? bestPropagationNodeHex.value : undefined;
+    const currentDestination = activePropagationNodeHex(syncStatus.value);
+    if (desiredDestination === currentDestination) {
+      return;
+    }
+
+    propagationSelectionInFlight = true;
+    try {
+      await client.value.setActivePropagationNode(desiredDestination);
+      appendLog(
+        "Debug",
+        `[propagation] auto-selected relay=${desiredDestination ?? "none"} reason=${reason}.`,
+      );
+    } catch (error: unknown) {
+      appendLog(
+        "Warn",
+        `[propagation] auto-selection failed reason=${reason}: ${errorMessage(error)}.`,
+      );
+    } finally {
+      propagationSelectionInFlight = false;
+    }
+  }
 
   function notReadyMessage(action: string): string {
     return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
@@ -1514,6 +1845,19 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  watch(
+    [ready, bestPropagationNodeHex],
+    ([isRunning, candidate]) => {
+      const reason = isRunning
+        ? candidate
+          ? "best-candidate-updated"
+          : "no-candidate-available"
+        : "node-not-running";
+      void syncAutoPropagationNode(reason);
+    },
+    { immediate: true },
+  );
+
   async function requestLxmfSync(limit?: number): Promise<void> {
     if (!client.value) {
       return;
@@ -1576,10 +1920,13 @@ export const useNodeStore = defineStore("node", () => {
     connectedLinkDestinations,
     connectedEventPeerRoutes,
     communicationReadyPeerCount,
+    bestPropagationNodeHex,
     telemetryDestinations,
     savedDestinations,
     ready,
     peerDisplayState,
+    peerPresenceTimestamp,
+    peerCachedPresenceTimestamp,
     peerPresenceState,
     init,
     startNode,

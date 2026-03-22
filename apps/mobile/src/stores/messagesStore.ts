@@ -77,6 +77,7 @@ type EamTrackingExpectation = {
   eamUid?: string;
   callsign?: string;
   teamUid?: string;
+  resolveOnAccepted?: boolean;
 };
 type PeerFailure = {
   peer: ReplicationPeer;
@@ -284,6 +285,25 @@ export const useMessagesStore = defineStore("messages", () => {
     );
   }
 
+  function presentId(value: string | undefined): string | undefined {
+    const normalized = value?.trim();
+    return normalized ? normalized : undefined;
+  }
+
+  function resolvedTeamUid(message: Pick<ActionMessage, "groupName" | "teamUid">): string {
+    return presentId(message.teamUid)
+      || presentId(nodeStore.hubRegistration.linkage?.teamUid)
+      || fallbackTeamUid(message);
+  }
+
+  function resolvedTeamMemberUid(
+    message: Pick<ActionMessage, "callsign" | "groupName" | "teamMemberUid">,
+  ): string {
+    return presentId(message.teamMemberUid)
+      || presentId(nodeStore.hubRegistration.linkage?.teamMemberUid)
+      || fallbackTeamMemberUid(message);
+  }
+
   function eamTopics(teamUid?: string): string[] {
     return teamUid ? [teamUid, "eam"] : ["eam"];
   }
@@ -351,8 +371,8 @@ export const useMessagesStore = defineStore("messages", () => {
     return {
       eam_uid: message.eamUid,
       callsign: message.callsign,
-      team_member_uid: message.teamMemberUid ?? fallbackTeamMemberUid(message),
-      team_uid: message.teamUid ?? fallbackTeamUid(message),
+      team_member_uid: resolvedTeamMemberUid(message),
+      team_uid: resolvedTeamUid(message),
       reported_by: message.reportedBy ?? (localCallsign() || undefined),
       reported_at: message.reportedAt ?? new Date(message.updatedAt).toISOString(),
       overall_status: message.overallStatus,
@@ -508,8 +528,8 @@ export const useMessagesStore = defineStore("messages", () => {
     return normalizeMessage({
       ...next,
       updatedAt,
-      teamMemberUid: next.teamMemberUid ?? linkage?.teamMemberUid,
-      teamUid: next.teamUid ?? linkage?.teamUid,
+      teamMemberUid: presentId(next.teamMemberUid) || presentId(linkage?.teamMemberUid),
+      teamUid: presentId(next.teamUid) || presentId(linkage?.teamUid),
       reportedAt: next.reportedAt ?? new Date(updatedAt).toISOString(),
       reportedBy: next.reportedBy ?? (localCallsign() || undefined),
       source: next.source ?? (
@@ -567,8 +587,8 @@ export const useMessagesStore = defineStore("messages", () => {
   function replicationPayload(message: ActionMessage): ActionMessage {
     return normalizeMessage({
       ...message,
-      teamMemberUid: message.teamMemberUid ?? nodeStore.hubRegistration.linkage?.teamMemberUid ?? fallbackTeamMemberUid(message),
-      teamUid: message.teamUid ?? nodeStore.hubRegistration.linkage?.teamUid ?? fallbackTeamUid(message),
+      teamMemberUid: resolvedTeamMemberUid(message),
+      teamUid: resolvedTeamUid(message),
       syncState: message.syncState === "draft" ? "draft" : "syncing",
       syncError: undefined,
     });
@@ -803,6 +823,9 @@ export const useMessagesStore = defineStore("messages", () => {
           return;
         }
         if (event.status === "Sent" || event.status === "Acknowledged") {
+          if (event.status === "Acknowledged" && expected.resolveOnAccepted) {
+            finish(resolve);
+          }
           return;
         }
         const detail = event.detail?.trim() || "delivery failed";
@@ -821,6 +844,9 @@ export const useMessagesStore = defineStore("messages", () => {
           return;
         }
         if (matchingResult?.status === "accepted") {
+          if (expected.resolveOnAccepted) {
+            finish(resolve);
+          }
           return;
         }
         if (matchingResult?.status === "rejected") {
@@ -886,6 +912,7 @@ export const useMessagesStore = defineStore("messages", () => {
         eamUid: args.eam_uid,
         callsign: args.callsign,
         teamUid: args.team_uid,
+        resolveOnAccepted: true,
       },
     );
   }
@@ -898,8 +925,8 @@ export const useMessagesStore = defineStore("messages", () => {
     const args: EamCommandArgsByType["mission.registry.eam.delete"] = {
       eam_uid: message.eamUid,
       callsign: message.callsign,
-      team_uid: message.teamUid ?? fallbackTeamUid(message),
-      team_member_uid: message.teamMemberUid ?? fallbackTeamMemberUid(message),
+      team_uid: resolvedTeamUid(message),
+      team_member_uid: resolvedTeamMemberUid(message),
     };
     const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
     const commandId = createTrackingId("eam-delete-command", `${message.callsign}-${routeSuffix}`);
@@ -921,6 +948,7 @@ export const useMessagesStore = defineStore("messages", () => {
         eamUid: args.eam_uid,
         callsign: args.callsign,
         teamUid: args.team_uid,
+        resolveOnAccepted: true,
       },
     );
   }
@@ -989,6 +1017,7 @@ export const useMessagesStore = defineStore("messages", () => {
           } else {
             await fanoutUpsert(payload);
           }
+          markMessageState(message.callsign, "synced");
           nodeStore.logUi("Info", `[eam] retry submitted for ${message.callsign}.`);
         } catch (error: unknown) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -1156,8 +1185,8 @@ export const useMessagesStore = defineStore("messages", () => {
     await requestCommand("mission.registry.eam.get", {
       eam_uid: existing?.eamUid,
       callsign,
-      team_uid: existing?.teamUid ?? linkage?.teamUid,
-      team_member_uid: existing?.teamMemberUid ?? linkage?.teamMemberUid,
+      team_uid: presentId(existing?.teamUid) || presentId(linkage?.teamUid),
+      team_member_uid: presentId(existing?.teamMemberUid) || presentId(linkage?.teamMemberUid),
     });
   }
 
@@ -1190,11 +1219,12 @@ export const useMessagesStore = defineStore("messages", () => {
         try {
           await fanoutUpsert(normalizeMessage({
             ...draft,
-            teamMemberUid: draft.teamMemberUid ?? nodeStore.hubRegistration.linkage?.teamMemberUid,
-            teamUid: draft.teamUid ?? nodeStore.hubRegistration.linkage?.teamUid,
+            teamMemberUid: resolvedTeamMemberUid(draft),
+            teamUid: resolvedTeamUid(draft),
             syncState: "syncing",
             syncError: undefined,
           }));
+          markMessageState(draft.callsign, "synced");
         } catch (error: unknown) {
           markMessageState(draft.callsign, "error", error instanceof Error ? error.message : String(error));
           break;
@@ -1218,6 +1248,7 @@ export const useMessagesStore = defineStore("messages", () => {
     }
     try {
       await fanoutUpsert(message);
+      markMessageState(message.callsign, "synced");
     } catch (error: unknown) {
       markMessageState(message.callsign, "error", error instanceof Error ? error.message : String(error));
       throw error;
