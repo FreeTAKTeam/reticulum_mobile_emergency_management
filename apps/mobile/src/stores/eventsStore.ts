@@ -1138,6 +1138,13 @@ export const useEventsStore = defineStore("events", () => {
   }
 
   async function handleMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
+    if (
+      !command.command_type.startsWith("mission.registry.mission.")
+      && !command.command_type.startsWith("mission.registry.log_entry.")
+    ) {
+      return;
+    }
+
     const localIdentity = localSourceIdentity();
     const localDisplayName = localCallsign() || undefined;
     const accepted = createMissionAcceptedPayload({

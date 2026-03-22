@@ -78,6 +78,10 @@ type EamTrackingExpectation = {
   callsign?: string;
   teamUid?: string;
 };
+type PeerFailure = {
+  peer: ReplicationPeer;
+  detail: string;
+};
 
 function nowMs(): number {
   return Date.now();
@@ -574,6 +578,71 @@ export const useMessagesStore = defineStore("messages", () => {
     return error instanceof Error ? error.message : String(error);
   }
 
+  function describePeerFailures(failures: PeerFailure[]): string {
+    return failures
+      .map(({ peer, detail }) => `${formatPeerRoute(peer)}: ${detail}`)
+      .join("; ");
+  }
+
+  async function sendAcrossPeers(
+    action: string,
+    peers: ReplicationPeer[],
+    send: (peer: ReplicationPeer) => Promise<void>,
+  ): Promise<void> {
+    if (peers.length === 0) {
+      throw new Error(`[eam] ${action} has no deliverable LXMF routes.`);
+    }
+
+    return await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let completed = 0;
+      let successCount = 0;
+      const failures: PeerFailure[] = [];
+
+      const finalize = () => {
+        if (completed !== peers.length) {
+          return;
+        }
+
+        if (successCount === 0) {
+          const summary = describePeerFailures(failures);
+          if (!settled) {
+            settled = true;
+            reject(new Error(`[eam] ${action} failed for all ${peers.length} route(s): ${summary}`));
+          }
+          return;
+        }
+
+        if (failures.length > 0) {
+          nodeStore.logUi(
+            "Warn",
+            `[eam] ${action} completed on ${successCount}/${peers.length} route(s). Failed routes: ${describePeerFailures(failures)}`,
+          );
+        }
+      };
+
+      for (const peer of peers) {
+        void send(peer)
+          .then(() => {
+            successCount += 1;
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          })
+          .catch((error: unknown) => {
+            const detail = errorMessage(error);
+            failures.push({ peer, detail });
+            nodeStore.logUi("Warn", `[eam] ${action} failed for ${formatPeerRoute(peer)}: ${detail}`);
+          })
+          .finally(() => {
+            completed += 1;
+            finalize();
+          });
+      }
+    });
+  }
+
   function isTimeoutError(error: unknown): boolean {
     return errorMessage(error).trim().toLowerCase().includes("timeout");
   }
@@ -862,9 +931,9 @@ export const useMessagesStore = defineStore("messages", () => {
       throw new Error("No deliverable LXMF route is available for EAM sync.");
     }
     const payload = replicationPayload(message);
-    for (const peer of peers) {
+    await sendAcrossPeers(`mission.registry.eam.upsert for ${payload.callsign}`, peers, async (peer) => {
       await sendUpsertToPeer(peer, payload);
-    }
+    });
   }
 
   async function fanoutDelete(message: ActionMessage): Promise<void> {
@@ -873,9 +942,9 @@ export const useMessagesStore = defineStore("messages", () => {
       return;
     }
     const payload = replicationPayload(message);
-    for (const peer of peers) {
+    await sendAcrossPeers(`mission.registry.eam.delete for ${payload.callsign}`, peers, async (peer) => {
       await sendDeleteToPeer(peer, payload);
-    }
+    });
   }
 
   async function retryErroredMessages(): Promise<void> {
@@ -942,7 +1011,7 @@ export const useMessagesStore = defineStore("messages", () => {
     if (peers.length === 0 || !sourceIdentity) {
       return;
     }
-    for (const peer of peers) {
+    await sendAcrossPeers(commandType, peers, async (peer) => {
       const command = createRequestCommandForPeer(peer, commandType, args, sourceIdentity);
       if (command) {
         await sendEamCommandAwaitingDelivery(peer, command, {
@@ -954,7 +1023,7 @@ export const useMessagesStore = defineStore("messages", () => {
           teamUid: "team_uid" in args ? asTrimmedString((args as Record<string, unknown>).team_uid) : undefined,
         });
       }
-    }
+    });
   }
 
   function createRequestCommandForPeer<T extends EamCommandType>(
