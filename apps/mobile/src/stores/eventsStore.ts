@@ -28,8 +28,8 @@ import { useNodeStore } from "./nodeStore";
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const EVENT_TYPE_KEYWORD_PREFIX = "r3akt:event-type:";
-const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 35_000;
-const BACKGROUND_MISSION_HYDRATION_ENABLED = false;
+const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
+const BACKGROUND_MISSION_HYDRATION_ENABLED = true;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
@@ -640,6 +640,7 @@ export const useEventsStore = defineStore("events", () => {
   const initialized = ref(false);
   const replicationInitialized = ref(false);
   const nodeStore = useNodeStore();
+  const peerSyncInFlight = new Set<string>();
 
   function persist(): void {
     saveEvents(byUid);
@@ -997,24 +998,6 @@ export const useEventsStore = defineStore("events", () => {
     });
   }
 
-  async function ensureDefaultMission(peer: ReplicationPeer): Promise<void> {
-    const sourceIdentity = localSourceIdentity();
-    if (!sourceIdentity) {
-      return;
-    }
-    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
-    const correlationId = createMissionTrackingId("mission-upsert", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`);
-    await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
-      commandId: createMissionTrackingId("mission-upsert-command", `${DEFAULT_R3AKT_MISSION_UID}-${routeSuffix}`),
-      sourceIdentity,
-      sourceDisplayName: localCallsign() || undefined,
-      commandType: "mission.registry.mission.upsert",
-      args: buildDefaultMissionPayload(),
-      correlationId,
-      topics: [DEFAULT_R3AKT_MISSION_UID],
-    }), "mission.registry.mission.upsert");
-  }
-
   async function requestEventList(destination: string): Promise<void> {
     const sourceIdentity = localSourceIdentity();
     if (!sourceIdentity) {
@@ -1032,6 +1015,36 @@ export const useEventsStore = defineStore("events", () => {
     }));
   }
 
+  async function replicateLogUpsertToPeer(
+    peer: ReplicationPeer,
+    record: EventRecord,
+    options?: {
+      logLevel?: "Info" | "Debug";
+      verb?: "replicated" | "replayed";
+    },
+  ): Promise<void> {
+    const sourceIdentity = localSourceIdentity();
+    if (!sourceIdentity) {
+      return;
+    }
+    const eventUid = getEventUid(record);
+    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
+    const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
+    await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
+      commandId: createMissionTrackingId("log-upsert-command", `${eventUid}-${routeSuffix}`),
+      sourceIdentity: record.source.rns_identity || sourceIdentity,
+      sourceDisplayName: record.source.display_name ?? (localCallsign() || undefined),
+      commandType: getEventMissionCommandType(record),
+      args: buildMissionPayload(record),
+      correlationId,
+      topics: [...record.topics],
+    }), "mission.registry.log_entry.upsert");
+    nodeStore.logUi(
+      options?.logLevel ?? "Info",
+      `[events] ${options?.verb ?? "replicated"} ${eventUid} to ${formatPeerRoute(peer)}.`,
+    );
+  }
+
   async function fanoutLogUpsert(record: EventRecord): Promise<void> {
     const peers = replicationPeers(true);
     if (peers.length === 0) {
@@ -1044,30 +1057,10 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
 
-    const sourceIdentity = localSourceIdentity();
-    if (!sourceIdentity) {
-      return;
-    }
-
     const eventUid = getEventUid(record);
     const failures = (await Promise.all(peers.map(async (peer) => {
       try {
-        await ensureDefaultMission(peer);
-        const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
-        const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
-        await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
-          commandId: createMissionTrackingId("log-upsert-command", `${eventUid}-${routeSuffix}`),
-          sourceIdentity: record.source.rns_identity || sourceIdentity,
-          sourceDisplayName: record.source.display_name ?? (localCallsign() || undefined),
-          commandType: getEventMissionCommandType(record),
-          args: buildMissionPayload(record),
-          correlationId,
-          topics: [...record.topics],
-        }), "mission.registry.log_entry.upsert");
-        nodeStore.logUi(
-          "Info",
-          `[events] replicated ${eventUid} to ${formatPeerRoute(peer)}.`,
-        );
+        await replicateLogUpsertToPeer(peer, record);
         return null;
       } catch (error: unknown) {
         nodeStore.logUi(
@@ -1098,8 +1091,35 @@ export const useEventsStore = defineStore("events", () => {
     if (!sourceIdentity) {
       return;
     }
-    await ensureDefaultMission(peer);
     await requestEventList(peer.lxmfDestinationHex);
+  }
+
+  async function syncPeerEvents(peer: ReplicationPeer): Promise<void> {
+    const destination = normalizeHex(peer.lxmfDestinationHex);
+    if (!destination || peerSyncInFlight.has(destination)) {
+      return;
+    }
+
+    peerSyncInFlight.add(destination);
+    try {
+      const localEvents = snapshotEvents()
+        .sort((a, b) => getEventUpdatedAt(a) - getEventUpdatedAt(b));
+      if (localEvents.length > 0) {
+        nodeStore.logUi(
+          "Debug",
+          `[events] replaying ${localEvents.length} local event(s) to ${formatPeerRoute(peer)} before hydration.`,
+        );
+      }
+      for (const record of localEvents) {
+        await replicateLogUpsertToPeer(peer, record, {
+          logLevel: "Debug",
+          verb: "replayed",
+        });
+      }
+      await requestEventList(peer.lxmfDestinationHex);
+    } finally {
+      peerSyncInFlight.delete(destination);
+    }
   }
 
   function resultPayloadEvents(result: MissionResultPayload | null, event: MissionEventEnvelope | null): EventRecord[] {
@@ -1334,7 +1354,6 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
     replicationInitialized.value = true;
-    let hydrationSuppressedLogged = false;
 
     const decoder = new TextDecoder();
     nodeStore.onPacket((event: PacketReceivedEvent) => {
@@ -1452,16 +1471,6 @@ export const useEventsStore = defineStore("events", () => {
         if (!current.identity) {
           return;
         }
-        if (!BACKGROUND_MISSION_HYDRATION_ENABLED) {
-          if (!hydrationSuppressedLogged) {
-            hydrationSuppressedLogged = true;
-            nodeStore.logUi(
-              "Debug",
-              "[events] background mission hydration is disabled in this worktree; connected peers will not be auto-hydrated.",
-            );
-          }
-          return;
-        }
         const previousDestinations = previous?.identity
           ? new Set(previous.peers.map((peer) => peer.lxmfDestinationHex))
           : new Set<string>();
@@ -1469,7 +1478,12 @@ export const useEventsStore = defineStore("events", () => {
           if (previousDestinations.has(peer.lxmfDestinationHex)) {
             continue;
           }
-          void hydrateDestination(peer);
+          void syncPeerEvents(peer).catch((error: unknown) => {
+            nodeStore.logUi(
+              "Warn",
+              `[events] peer sync failed for ${formatPeerRoute(peer)}: ${errorMessage(error)}`,
+            );
+          });
         }
       },
       { immediate: true, deep: true },

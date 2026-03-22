@@ -52,10 +52,12 @@ const runningTitle = computed(() =>
     ? "App ready to send and receive events or messages."
     : "App is still starting. Sending stays blocked until the node is ready.",
 );
-const connectedPeerCount = computed(() => nodeStore.connectedLinkDestinations.length);
+const connectedPeerCount = computed(() => nodeStore.communicationReadyPeerCount);
 const connectedPeerCountTitle = computed(() => {
   const count = connectedPeerCount.value;
-  return count === 1 ? "1 connected link" : `${count} connected links`;
+  return count === 1
+    ? "1 communication-ready peer"
+    : `${count} communication-ready peers`;
 });
 
 function isTabActive(path: string): boolean {
@@ -77,7 +79,7 @@ function isTabActive(path: string): boolean {
           <span
             class="peer-count"
             data-testid="connected-peer-count"
-            aria-label="Connected peers"
+            aria-label="Communication-ready peers"
             :title="connectedPeerCountTitle"
           >
             {{ connectedPeerCount }}

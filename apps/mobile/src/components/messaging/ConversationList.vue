@@ -16,10 +16,19 @@ defineProps<{
 const emit = defineEmits<{
   select: [conversationId: string];
 }>();
+
+function hasReadablePeerName(displayName: string, destinationHex: string): boolean {
+  const normalizedName = displayName.trim();
+  const normalizedDestination = destinationHex.trim();
+  return normalizedName.length > 0 && normalizedName.toLowerCase() !== normalizedDestination.toLowerCase();
+}
 </script>
 
 <template>
   <aside class="conversation-list">
+    <p v-if="items.length === 0" class="conversation-empty">
+      No conversations yet. Discover a peer or receive an LXMF message to start a thread.
+    </p>
     <button
       v-for="item in items"
       :key="item.conversationId"
@@ -33,7 +42,12 @@ const emit = defineEmits<{
         <span class="conversation-time">{{ new Date(item.updatedAtMs).toLocaleTimeString() }}</span>
       </div>
       <p class="conversation-preview">{{ item.preview }}</p>
-      <p class="conversation-destination">{{ item.destinationHex }}</p>
+      <p
+        v-if="!hasReadablePeerName(item.displayName, item.destinationHex)"
+        class="conversation-destination"
+      >
+        {{ item.destinationHex }}
+      </p>
       <span class="conversation-state">{{ item.state }}</span>
     </button>
   </aside>
@@ -43,6 +57,16 @@ const emit = defineEmits<{
 .conversation-list {
   display: grid;
   gap: 0.55rem;
+}
+
+.conversation-empty {
+  background: rgb(5 20 44 / 54%);
+  border: 1px dashed rgb(73 119 184 / 28%);
+  border-radius: 14px;
+  color: #8ea8d1;
+  font-family: var(--font-body);
+  margin: 0;
+  padding: 1rem;
 }
 
 .conversation-item {

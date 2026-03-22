@@ -190,6 +190,7 @@ dictionary SendLxmfRequest {
   string destination_hex;
   string body_utf8;
   string? title;
+  boolean use_propagation_node;
 };
 
 // Event stream from the node to the UI.
@@ -241,7 +242,12 @@ interface Node {
   void disconnect_peer(string destination_hex);
 
   [Throws=NodeError]
-  void send_bytes(string destination_hex, sequence<u8> bytes, sequence<u8>? fields_bytes);
+  void send_bytes(
+    string destination_hex,
+    sequence<u8> bytes,
+    sequence<u8>? fields_bytes,
+    boolean use_propagation_node
+  );
   [Throws=NodeError]
   void broadcast_bytes(sequence<u8> bytes);
   [Throws=NodeError]

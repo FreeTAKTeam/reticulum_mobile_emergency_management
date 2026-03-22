@@ -15,10 +15,18 @@ const isCreateFormVisible = shallowRef(false);
 const configuredCallsign = computed(() => nodeStore.settings.displayName.trim() || "Unset");
 const readinessHint = "Node is not ready yet. Wait for the top-right status to show Ready.";
 
-const createForm = reactive({
-  type: "Incident",
-  summary: "",
-});
+function createDefaultFormState(): { type: string; summary: string } {
+  return {
+    type: "Incident",
+    summary: "",
+  };
+}
+
+const createForm = reactive(createDefaultFormState());
+
+function resetCreateForm(): void {
+  Object.assign(createForm, createDefaultFormState());
+}
 
 function ensureReady(action: string): boolean {
   try {
@@ -56,7 +64,7 @@ async function createEvent(): Promise<void> {
       type: createForm.type.trim() || "Incident",
       summary: createForm.summary.trim(),
     });
-    createForm.summary = "";
+    resetCreateForm();
     isCreateFormVisible.value = false;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

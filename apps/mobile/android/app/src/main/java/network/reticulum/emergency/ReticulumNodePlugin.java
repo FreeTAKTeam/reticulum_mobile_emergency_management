@@ -128,6 +128,7 @@ public class ReticulumNodePlugin extends Plugin {
         String destinationHex = call.getString("destinationHex");
         String bytesBase64 = call.getString("bytesBase64");
         String fieldsBase64 = call.getString("fieldsBase64");
+        boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
@@ -143,6 +144,9 @@ public class ReticulumNodePlugin extends Plugin {
         if (fieldsBase64 != null && !fieldsBase64.isEmpty()) {
             payload.put("fieldsBase64", fieldsBase64);
         }
+        if (usePropagationNode) {
+            payload.put("usePropagationNode", true);
+        }
 
         Log.d(
             TAG,
@@ -152,6 +156,8 @@ public class ReticulumNodePlugin extends Plugin {
                 + bytesBase64.length()
                 + " fieldsBase64Present="
                 + (fieldsBase64 != null && !fieldsBase64.isEmpty())
+                + " usePropagationNode="
+                + usePropagationNode
         );
 
         int result = ReticulumBridge.sendJson(payload.toString());
@@ -169,6 +175,7 @@ public class ReticulumNodePlugin extends Plugin {
         String destinationHex = call.getString("destinationHex");
         String bodyUtf8 = call.getString("bodyUtf8", "");
         String title = call.getString("title");
+        boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
@@ -179,6 +186,9 @@ public class ReticulumNodePlugin extends Plugin {
         payload.put("bodyUtf8", bodyUtf8);
         if (title != null && !title.isEmpty()) {
             payload.put("title", title);
+        }
+        if (usePropagationNode) {
+            payload.put("usePropagationNode", true);
         }
 
         String raw = ReticulumBridge.sendLxmfJson(payload.toString());

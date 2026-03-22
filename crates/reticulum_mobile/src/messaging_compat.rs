@@ -116,6 +116,8 @@ pub struct SendMessageRequest {
     pub destination_hex: String,
     pub body_utf8: String,
     pub title: Option<String>,
+    #[serde(default)]
+    pub use_propagation_node: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

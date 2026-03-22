@@ -26,13 +26,21 @@ const TELEMETRY_KIND_FIELD = `${TELEMETRY_FIELD_PREFIX}kind`;
 const TELEMETRY_UPSERT_KIND = "upsert";
 const TELEMETRY_DELETE_KIND = "delete";
 
+const LXMF_FIELD_ICON_APPEARANCE = 0x04;
 const LXMF_FIELD_TELEMETRY = 0x02;
 const LXMF_FIELD_TELEMETRY_STREAM = 0x03;
 const LXMF_FIELD_COMMANDS = 0x09;
+const LXMF_FIELD_RESULTS = 0x0A;
+const LXMF_FIELD_EVENT = 0x0D;
+const LXMF_FIELD_THREAD = 0x08;
+const LXMF_FIELD_GROUP = 0x0B;
 const TELEMETRY_REQUEST_COMMAND = 1;
 const SID_TIME = 0x01;
 const SID_LOCATION = 0x02;
 const MAX_LOCATION_ALTITUDE = 42_949_672.95;
+
+type TelemetryIconAppearance = [string, Uint8Array, Uint8Array];
+type TelemetryStreamEntry = [Uint8Array, number, Uint8Array, TelemetryIconAppearance];
 
 type TelemetryReplicationMessage =
   | {
@@ -370,6 +378,10 @@ function hexToBytes(hex: string): Uint8Array | null {
   return out;
 }
 
+function buildTelemetryIconAppearance(): TelemetryIconAppearance {
+  return ["person", new Uint8Array([0, 0, 0]), new Uint8Array([255, 255, 255])];
+}
+
 function buildTelemetryPayload(position: TelemetryPosition): Uint8Array {
   const updatedAtSeconds = toUnixSeconds(position.updatedAt);
   const payload = new Map<number, unknown>([
@@ -402,7 +414,38 @@ function buildTelemetrySnapshotRequestFieldsBase64(requestedAt: number): string 
   return encodeBytesToBase64(Uint8Array.from(pack(fields)));
 }
 
-function buildTelemetryStreamFieldsBase64(entries: Array<[Uint8Array, number, Uint8Array]>): string {
+function relayStandardFields(sourceFields: unknown): Map<number, unknown> {
+  const fields = new Map<number, unknown>();
+  const thread = getMapValue(sourceFields, LXMF_FIELD_THREAD);
+  if (thread !== undefined) {
+    fields.set(LXMF_FIELD_THREAD, thread);
+  }
+  const group = getMapValue(sourceFields, LXMF_FIELD_GROUP);
+  if (group !== undefined) {
+    fields.set(LXMF_FIELD_GROUP, group);
+  }
+  return fields;
+}
+
+function buildTelemetryResponseFieldsBase64(options: {
+  entries: TelemetryStreamEntry[];
+  sourceFields?: unknown;
+  requestedAtMs?: number;
+}): string {
+  const fields = relayStandardFields(options.sourceFields);
+  fields.set(LXMF_FIELD_RESULTS, "");
+  fields.set(LXMF_FIELD_EVENT, {
+    event_type: "rch.telemetry.response",
+    status: "ok",
+    ts: toUnixSeconds(options.requestedAtMs ?? Date.now()),
+    source: "rch",
+  });
+  fields.set(LXMF_FIELD_ICON_APPEARANCE, buildTelemetryIconAppearance());
+  fields.set(LXMF_FIELD_TELEMETRY_STREAM, options.entries);
+  return encodeBytesToBase64(Uint8Array.from(pack(fields)));
+}
+
+function buildTelemetryStreamFieldsBase64(entries: TelemetryStreamEntry[]): string {
   const fields = new Map<number, unknown>([[LXMF_FIELD_TELEMETRY_STREAM, entries]]);
   return encodeBytesToBase64(Uint8Array.from(pack(fields)));
 }
@@ -644,16 +687,25 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     return (next.accuracy ?? Number.POSITIVE_INFINITY) <= accuracyThreshold;
   }
 
-  function buildCompatibleSnapshotResponse(): string {
+  function buildCompatibleSnapshotResponse(event: PacketReceivedEvent): string {
     const localHex = nodeStore.status.lxmfDestinationHex.trim().toLowerCase();
     const localHash = hexToBytes(localHex);
     const position = lastLocalFix.value;
-    if (!localHash || !position) {
-      return buildTelemetryStreamFieldsBase64([]);
+    const entries: TelemetryStreamEntry[] = [];
+    if (localHash && position) {
+      entries.push([
+        localHash,
+        toUnixSeconds(position.updatedAt),
+        buildTelemetryPayload(position),
+        buildTelemetryIconAppearance(),
+      ]);
     }
-    return buildTelemetryStreamFieldsBase64([
-      [localHash, toUnixSeconds(position.updatedAt), buildTelemetryPayload(position)],
-    ]);
+
+    return buildTelemetryResponseFieldsBase64({
+      entries,
+      sourceFields: parseLxmfFields(event.fieldsBase64),
+      requestedAtMs: Date.now(),
+    });
   }
 
   function parseCompatibleTelemetryMessage(
@@ -931,7 +983,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         }
         nodeStore
           .sendBytes(event.sourceHex, EMPTY_BYTES, {
-            fieldsBase64: buildCompatibleSnapshotResponse(),
+            fieldsBase64: buildCompatibleSnapshotResponse(event),
           })
           .catch(() => undefined);
         return;

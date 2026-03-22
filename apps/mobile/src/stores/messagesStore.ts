@@ -47,6 +47,7 @@ import { useNodeStore } from "./nodeStore";
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
+const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationPeer = {
@@ -68,6 +69,14 @@ type EamFilterArgs = {
   callsign?: string;
   team_uid?: string;
   team_member_uid?: string;
+};
+type EamTrackingExpectation = {
+  commandId: string;
+  correlationId: string;
+  commandType: EamCommandType;
+  eamUid?: string;
+  callsign?: string;
+  teamUid?: string;
 };
 
 function nowMs(): number {
@@ -228,7 +237,9 @@ export const useMessagesStore = defineStore("messages", () => {
   const initialized = ref(false);
   const replicationInitialized = ref(false);
   const replayInFlight = ref(false);
+  const recoveryInFlight = ref(false);
   const nodeStore = useNodeStore();
+  const peerSyncInFlight = new Set<string>();
 
   function persist(): void {
     saveMessages(byCallsign);
@@ -326,6 +337,10 @@ export const useMessagesStore = defineStore("messages", () => {
       nodeStore.logUi("Debug", "[eam] no deliverable LXMF routes are available.");
     }
     return peers;
+  }
+
+  function formatPeerRoute(peer: ReplicationPeer): string {
+    return `${peer.label} (app=${peer.appDestinationHex} lxmf=${peer.lxmfDestinationHex}${peer.identityHex ? ` identity=${peer.identityHex}` : ""})`;
   }
 
   function toEamRecord(message: ActionMessage): EamRecord {
@@ -545,36 +560,270 @@ export const useMessagesStore = defineStore("messages", () => {
     };
   }
 
-  async function fanoutUpsert(message: ActionMessage): Promise<void> {
-    const peers = replicationPeers(true);
-    if (peers.length === 0) {
-      throw new Error("No deliverable LXMF route is available for EAM sync.");
+  function replicationPayload(message: ActionMessage): ActionMessage {
+    return normalizeMessage({
+      ...message,
+      teamMemberUid: message.teamMemberUid ?? nodeStore.hubRegistration.linkage?.teamMemberUid ?? fallbackTeamMemberUid(message),
+      teamUid: message.teamUid ?? nodeStore.hubRegistration.linkage?.teamUid ?? fallbackTeamUid(message),
+      syncState: message.syncState === "draft" ? "draft" : "syncing",
+      syncError: undefined,
+    });
+  }
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function isTimeoutError(error: unknown): boolean {
+    return errorMessage(error).trim().toLowerCase().includes("timeout");
+  }
+
+  function eventTypeForCommand(commandType: EamCommandType): EamEventEnvelope["event_type"] {
+    switch (commandType) {
+      case "mission.registry.eam.list":
+        return "mission.registry.eam.listed";
+      case "mission.registry.eam.upsert":
+        return "mission.registry.eam.upserted";
+      case "mission.registry.eam.get":
+        return "mission.registry.eam.retrieved";
+      case "mission.registry.eam.latest":
+        return "mission.registry.eam.latest_retrieved";
+      case "mission.registry.eam.delete":
+        return "mission.registry.eam.deleted";
+      case "mission.registry.eam.team.summary":
+        return "mission.registry.eam.team_summary.retrieved";
+      default:
+        return "mission.registry.eam.upserted";
     }
+  }
+
+  function responseDetail(result: EamResponsePayload): string {
+    if (result.status === "accepted") {
+      return "accepted";
+    }
+    if (result.status === "rejected") {
+      return result.reason || result.reason_code || "rejected";
+    }
+    return "result received";
+  }
+
+  function matchesTrackingIdentity(
+    expected: EamTrackingExpectation,
+    commandId?: string,
+    correlationId?: string,
+  ): boolean {
+    return Boolean(
+      (commandId && commandId === expected.commandId)
+      || (correlationId && correlationId === expected.correlationId),
+    );
+  }
+
+  function payloadMatchesExpectation(
+    expected: EamTrackingExpectation,
+    payload: unknown,
+  ): boolean {
+    const record = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : null;
+    if (!record) {
+      return false;
+    }
+    if (expected.eamUid) {
+      const payloadEamUid = asTrimmedString(record.eam_uid)
+        ?? (record.eam && typeof record.eam === "object"
+          ? asTrimmedString((record.eam as Record<string, unknown>).eam_uid)
+          : undefined);
+      if (payloadEamUid === expected.eamUid) {
+        return true;
+      }
+    }
+    if (expected.callsign) {
+      const payloadCallsign = asTrimmedString(record.callsign)
+        ?? (record.eam && typeof record.eam === "object"
+          ? asTrimmedString((record.eam as Record<string, unknown>).callsign)
+          : undefined);
+      if (payloadCallsign?.toLowerCase() === expected.callsign.toLowerCase()) {
+        return true;
+      }
+    }
+    if (expected.teamUid) {
+      const payloadTeamUid = asTrimmedString(record.team_uid)
+        ?? (record.eam && typeof record.eam === "object"
+          ? asTrimmedString((record.eam as Record<string, unknown>).team_uid)
+          : undefined)
+        ?? (record.summary && typeof record.summary === "object"
+          ? asTrimmedString((record.summary as Record<string, unknown>).team_uid)
+          : undefined);
+      if (payloadTeamUid === expected.teamUid) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function responseMatchesExpectation(
+    expected: EamTrackingExpectation,
+    result: EamResponsePayload | null,
+  ): boolean {
+    if (!result) {
+      return false;
+    }
+    if (matchesTrackingIdentity(expected, result.command_id, result.correlation_id)) {
+      return true;
+    }
+    if (result.status !== "result") {
+      return false;
+    }
+    return payloadMatchesExpectation(expected, result.result);
+  }
+
+  function eventMatchesExpectation(
+    expected: EamTrackingExpectation,
+    event: EamEventEnvelope | null,
+  ): boolean {
+    if (!event || event.event_type !== eventTypeForCommand(expected.commandType)) {
+      return false;
+    }
+    const meta = event.meta && typeof event.meta === "object" ? event.meta : undefined;
+    if (
+      matchesTrackingIdentity(
+        expected,
+        asTrimmedString(meta?.command_id),
+        asTrimmedString(meta?.correlation_id),
+      )
+    ) {
+      return true;
+    }
+    return payloadMatchesExpectation(expected, event.payload);
+  }
+
+  function createEamDeliveryTracker(peer: ReplicationPeer, expected: EamTrackingExpectation): {
+    promise: Promise<void>;
+    cancel: () => void;
+  } {
+    let settled = false;
+    let timeoutId: number | undefined;
+    let unsubscribePacket: () => void = () => undefined;
+    let unsubscribeDelivery: () => void = () => undefined;
+
+    const finish = (callback?: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      unsubscribePacket();
+      unsubscribeDelivery();
+      callback?.();
+    };
+
+    const promise = new Promise<void>((resolve, reject) => {
+      unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
+        if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
+          return;
+        }
+        if (event.commandType && event.commandType !== expected.commandType) {
+          return;
+        }
+        if (
+          !matchesTrackingIdentity(expected, event.commandId, event.correlationId)
+          && !event.commandType
+        ) {
+          return;
+        }
+        if (event.status === "Sent" || event.status === "Acknowledged") {
+          return;
+        }
+        const detail = event.detail?.trim() || "delivery failed";
+        finish(() => reject(new Error(`[eam] ${expected.commandType} failed for ${formatPeerRoute(peer)}: ${detail}`)));
+      });
+
+      unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
+        const missionSync = parseEamMissionSyncFields(packet.fieldsBase64);
+        const matchingResult = responseMatchesExpectation(expected, missionSync?.result ?? null)
+          ? missionSync?.result ?? null
+          : null;
+        const matchingEvent = eventMatchesExpectation(expected, missionSync?.event ?? null)
+          ? missionSync?.event ?? null
+          : null;
+        if (!matchingResult && !matchingEvent) {
+          return;
+        }
+        if (matchingResult?.status === "accepted") {
+          return;
+        }
+        if (matchingResult?.status === "rejected") {
+          const detail = responseDetail(matchingResult);
+          finish(() => reject(new Error(`[eam] ${expected.commandType} rejected by ${formatPeerRoute(peer)}: ${detail}`)));
+          return;
+        }
+        finish(resolve);
+      });
+
+      timeoutId = window.setTimeout(() => {
+        finish(() => reject(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`)));
+      }, LXMF_DELIVERY_WAIT_TIMEOUT_MS);
+    });
+
+    return { promise, cancel: () => finish() };
+  }
+
+  async function sendEamCommandAwaitingDelivery(
+    peer: ReplicationPeer,
+    command: EamCommandEnvelope,
+    expected: EamTrackingExpectation,
+  ): Promise<void> {
+    const tracker = createEamDeliveryTracker(peer, expected);
+    try {
+      await sendEamCommand(peer.lxmfDestinationHex, command);
+    } catch (error: unknown) {
+      if (!isTimeoutError(error)) {
+        tracker.cancel();
+        throw error;
+      }
+      nodeStore.logUi(
+        "Warn",
+        `[eam] native send timed out for ${expected.commandType} to ${formatPeerRoute(peer)}; waiting for mission result/event before failing.`,
+      );
+    }
+    await tracker.promise;
+  }
+
+  async function sendUpsertToPeer(peer: ReplicationPeer, message: ActionMessage): Promise<void> {
     const sourceIdentity = localSourceIdentity();
     if (!sourceIdentity) {
       throw new Error("A local Reticulum identity is required before sending EAM messages.");
     }
     const args = commandArgsForMessage(message);
-    for (const peer of peers) {
-      const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
-      await sendEamCommand(
-        peer.lxmfDestinationHex,
-        createEamUpsertCommandEnvelope({
-          commandId: createTrackingId("eam-upsert-command", `${message.callsign}-${routeSuffix}`),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args,
-          correlationId: createTrackingId("eam-upsert", `${message.callsign}-${routeSuffix}`),
-          topics: eamTopics(args.team_uid),
-        }),
-      );
-    }
+    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
+    const commandId = createTrackingId("eam-upsert-command", `${message.callsign}-${routeSuffix}`);
+    const correlationId = createTrackingId("eam-upsert", `${message.callsign}-${routeSuffix}`);
+    await sendEamCommandAwaitingDelivery(
+      peer,
+      createEamUpsertCommandEnvelope({
+        commandId,
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args,
+        correlationId,
+        topics: eamTopics(args.team_uid),
+      }),
+      {
+        commandId,
+        correlationId,
+        commandType: "mission.registry.eam.upsert",
+        eamUid: args.eam_uid,
+        callsign: args.callsign,
+        teamUid: args.team_uid,
+      },
+    );
   }
 
-  async function fanoutDelete(message: ActionMessage): Promise<void> {
-    const peers = replicationPeers(true);
+  async function sendDeleteToPeer(peer: ReplicationPeer, message: ActionMessage): Promise<void> {
     const sourceIdentity = localSourceIdentity();
-    if (peers.length === 0 || !sourceIdentity) {
+    if (!sourceIdentity) {
       return;
     }
     const args: EamCommandArgsByType["mission.registry.eam.delete"] = {
@@ -583,19 +832,104 @@ export const useMessagesStore = defineStore("messages", () => {
       team_uid: message.teamUid ?? fallbackTeamUid(message),
       team_member_uid: message.teamMemberUid ?? fallbackTeamMemberUid(message),
     };
+    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
+    const commandId = createTrackingId("eam-delete-command", `${message.callsign}-${routeSuffix}`);
+    const correlationId = createTrackingId("eam-delete", `${message.callsign}-${routeSuffix}`);
+    await sendEamCommandAwaitingDelivery(
+      peer,
+      createEamDeleteCommandEnvelope({
+        commandId,
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args,
+        correlationId,
+        topics: eamTopics(args.team_uid),
+      }),
+      {
+        commandId,
+        correlationId,
+        commandType: "mission.registry.eam.delete",
+        eamUid: args.eam_uid,
+        callsign: args.callsign,
+        teamUid: args.team_uid,
+      },
+    );
+  }
+
+  async function fanoutUpsert(message: ActionMessage): Promise<void> {
+    const peers = replicationPeers(true);
+    if (peers.length === 0) {
+      throw new Error("No deliverable LXMF route is available for EAM sync.");
+    }
+    const payload = replicationPayload(message);
     for (const peer of peers) {
-      const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
-      await sendEamCommand(
-        peer.lxmfDestinationHex,
-        createEamDeleteCommandEnvelope({
-          commandId: createTrackingId("eam-delete-command", `${message.callsign}-${routeSuffix}`),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args,
-          correlationId: createTrackingId("eam-delete", `${message.callsign}-${routeSuffix}`),
-          topics: eamTopics(args.team_uid),
-        }),
+      await sendUpsertToPeer(peer, payload);
+    }
+  }
+
+  async function fanoutDelete(message: ActionMessage): Promise<void> {
+    const peers = replicationPeers(true);
+    if (peers.length === 0) {
+      return;
+    }
+    const payload = replicationPayload(message);
+    for (const peer of peers) {
+      await sendDeleteToPeer(peer, payload);
+    }
+  }
+
+  async function retryErroredMessages(): Promise<void> {
+    if (recoveryInFlight.value) {
+      return;
+    }
+
+    const erroredMessages = Object.values(byCallsign)
+      .filter((message) => message.syncState === "error")
+      .sort((a, b) => (a.draftCreatedAt ?? a.updatedAt) - (b.draftCreatedAt ?? b.updatedAt));
+
+    if (erroredMessages.length === 0) {
+      return;
+    }
+
+    const peers = replicationPeers(true);
+    const sourceIdentity = localSourceIdentity();
+    if (peers.length === 0 || !sourceIdentity) {
+      nodeStore.logUi(
+        "Debug",
+        peers.length === 0
+          ? "[eam] retry skipped; no deliverable LXMF routes are available yet."
+          : "[eam] retry skipped; local Reticulum identity is not ready yet.",
       );
+      return;
+    }
+
+    recoveryInFlight.value = true;
+    try {
+      nodeStore.logUi(
+        "Debug",
+        `[eam] retrying ${erroredMessages.length} failed item(s) across ${peers.length} route(s).`,
+      );
+
+      for (const message of erroredMessages) {
+        markMessageState(message.callsign, "syncing");
+        const payload = replicationPayload(message);
+
+        try {
+          if (payload.deletedAt) {
+            await fanoutDelete(payload);
+          } else {
+            await fanoutUpsert(payload);
+          }
+          nodeStore.logUi("Info", `[eam] retry submitted for ${message.callsign}.`);
+        } catch (error: unknown) {
+          const detail = error instanceof Error ? error.message : String(error);
+          markMessageState(message.callsign, "error", detail);
+          nodeStore.logUi("Warn", `[eam] retry failed for ${message.callsign}: ${detail}`);
+          break;
+        }
+      }
+    } finally {
+      recoveryInFlight.value = false;
     }
   }
 
@@ -609,48 +943,123 @@ export const useMessagesStore = defineStore("messages", () => {
       return;
     }
     for (const peer of peers) {
-      const suffix = `${commandType.split(".").at(-1) ?? "eam"}-${peer.lxmfDestinationHex.slice(0, 8)}`;
-      let command: EamCommandEnvelope<T> | null = null;
-      if (commandType === "mission.registry.eam.list") {
-        command = createEamListCommandEnvelope({
-          commandId: createTrackingId("eam-list-command", suffix),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args: args as EamCommandArgsByType["mission.registry.eam.list"],
-          correlationId: createTrackingId("eam-list", suffix),
-          topics: eamTopics((args as { team_uid?: string }).team_uid),
-        }) as EamCommandEnvelope<T>;
-      } else if (commandType === "mission.registry.eam.get") {
-        command = createEamGetCommandEnvelope({
-          commandId: createTrackingId("eam-get-command", suffix),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args: args as EamCommandArgsByType["mission.registry.eam.get"],
-          correlationId: createTrackingId("eam-get", suffix),
-          topics: eamTopics((args as { team_uid?: string }).team_uid),
-        }) as EamCommandEnvelope<T>;
-      } else if (commandType === "mission.registry.eam.latest") {
-        command = createEamLatestCommandEnvelope({
-          commandId: createTrackingId("eam-latest-command", suffix),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args: args as EamCommandArgsByType["mission.registry.eam.latest"],
-          correlationId: createTrackingId("eam-latest", suffix),
-          topics: eamTopics((args as { team_uid?: string }).team_uid),
-        }) as EamCommandEnvelope<T>;
-      } else if (commandType === "mission.registry.eam.team.summary") {
-        command = createEamTeamSummaryCommandEnvelope({
-          commandId: createTrackingId("eam-team-summary-command", suffix),
-          sourceIdentity,
-          sourceDisplayName: localCallsign() || undefined,
-          args: args as EamCommandArgsByType["mission.registry.eam.team.summary"],
-          correlationId: createTrackingId("eam-team-summary", suffix),
-          topics: eamTopics((args as { team_uid?: string }).team_uid),
-        }) as EamCommandEnvelope<T>;
-      }
+      const command = createRequestCommandForPeer(peer, commandType, args, sourceIdentity);
       if (command) {
-        await sendEamCommand(peer.lxmfDestinationHex, command);
+        await sendEamCommandAwaitingDelivery(peer, command, {
+          commandId: command.command_id,
+          correlationId: command.correlation_id ?? command.command_id,
+          commandType,
+          eamUid: "eam_uid" in args ? asTrimmedString((args as Record<string, unknown>).eam_uid) : undefined,
+          callsign: "callsign" in args ? asTrimmedString((args as Record<string, unknown>).callsign) : undefined,
+          teamUid: "team_uid" in args ? asTrimmedString((args as Record<string, unknown>).team_uid) : undefined,
+        });
       }
+    }
+  }
+
+  function createRequestCommandForPeer<T extends EamCommandType>(
+    peer: ReplicationPeer,
+    commandType: T,
+    args: EamCommandArgsByType[T],
+    sourceIdentity = localSourceIdentity(),
+  ): EamCommandEnvelope<T> | null {
+    if (!sourceIdentity) {
+      return null;
+    }
+    const suffix = `${commandType.split(".").at(-1) ?? "eam"}-${peer.lxmfDestinationHex.slice(0, 8)}`;
+    if (commandType === "mission.registry.eam.list") {
+      return createEamListCommandEnvelope({
+        commandId: createTrackingId("eam-list-command", suffix),
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args: args as EamCommandArgsByType["mission.registry.eam.list"],
+        correlationId: createTrackingId("eam-list", suffix),
+        topics: eamTopics((args as { team_uid?: string }).team_uid),
+      }) as EamCommandEnvelope<T>;
+    }
+    if (commandType === "mission.registry.eam.get") {
+      return createEamGetCommandEnvelope({
+        commandId: createTrackingId("eam-get-command", suffix),
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args: args as EamCommandArgsByType["mission.registry.eam.get"],
+        correlationId: createTrackingId("eam-get", suffix),
+        topics: eamTopics((args as { team_uid?: string }).team_uid),
+      }) as EamCommandEnvelope<T>;
+    }
+    if (commandType === "mission.registry.eam.latest") {
+      return createEamLatestCommandEnvelope({
+        commandId: createTrackingId("eam-latest-command", suffix),
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args: args as EamCommandArgsByType["mission.registry.eam.latest"],
+        correlationId: createTrackingId("eam-latest", suffix),
+        topics: eamTopics((args as { team_uid?: string }).team_uid),
+      }) as EamCommandEnvelope<T>;
+    }
+    if (commandType === "mission.registry.eam.team.summary") {
+      return createEamTeamSummaryCommandEnvelope({
+        commandId: createTrackingId("eam-team-summary-command", suffix),
+        sourceIdentity,
+        sourceDisplayName: localCallsign() || undefined,
+        args: args as EamCommandArgsByType["mission.registry.eam.team.summary"],
+        correlationId: createTrackingId("eam-team-summary", suffix),
+        topics: eamTopics((args as { team_uid?: string }).team_uid),
+      }) as EamCommandEnvelope<T>;
+    }
+    return null;
+  }
+
+  async function requestListFromPeer(peer: ReplicationPeer): Promise<void> {
+    const linkage = nodeStore.hubRegistration.linkage;
+    const command = createRequestCommandForPeer(peer, "mission.registry.eam.list", {
+      team_uid: linkage?.teamUid,
+      team_member_uid: linkage?.teamMemberUid,
+      include_deleted: false,
+    });
+    if (command) {
+      await sendEamCommandAwaitingDelivery(peer, command, {
+        commandId: command.command_id,
+        correlationId: command.correlation_id ?? command.command_id,
+        commandType: "mission.registry.eam.list",
+        teamUid: linkage?.teamUid,
+      });
+    }
+  }
+
+  async function syncPeerMessages(peer: ReplicationPeer): Promise<void> {
+    const destination = normalizeHex(peer.lxmfDestinationHex);
+    if (!destination || peerSyncInFlight.has(destination)) {
+      return;
+    }
+
+    const sourceIdentity = localSourceIdentity();
+    if (!sourceIdentity) {
+      return;
+    }
+
+    peerSyncInFlight.add(destination);
+    try {
+      const localMessages = snapshotMessages()
+        .filter((message) => message.syncState !== "draft")
+        .sort((a, b) => a.updatedAt - b.updatedAt);
+      if (localMessages.length > 0) {
+        nodeStore.logUi(
+          "Debug",
+          `[eam] replaying ${localMessages.length} local item(s) to ${peer.label} before hydration.`,
+        );
+      }
+      for (const message of localMessages) {
+        const payload = replicationPayload(message);
+        if (payload.deletedAt) {
+          await sendDeleteToPeer(peer, payload);
+          continue;
+        }
+        await sendUpsertToPeer(peer, payload);
+      }
+      await requestListFromPeer(peer);
+    } finally {
+      peerSyncInFlight.delete(destination);
     }
   }
 
@@ -1094,6 +1503,37 @@ export const useMessagesStore = defineStore("messages", () => {
       }
       nodeStore.logUi(event.status === "TimedOut" ? "Warn" : "Error", `[eam] ${event.status.toLowerCase()} ${event.commandType} to ${event.destinationHex} (${detail}).`);
     });
+
+    watch(
+      () => ({
+        identity: nodeStore.status.identityHex.trim().toLowerCase(),
+        peers: replicationPeers(false).map((peer) => ({
+          appDestinationHex: peer.appDestinationHex,
+          lxmfDestinationHex: peer.lxmfDestinationHex,
+        })),
+      }),
+      (current, previous) => {
+        if (!current.identity) {
+          return;
+        }
+        void retryErroredMessages().catch(() => undefined);
+        const previousDestinations = previous?.identity
+          ? new Set(previous.peers.map((peer) => peer.lxmfDestinationHex))
+          : new Set<string>();
+        for (const peer of replicationPeers(false)) {
+          if (previousDestinations.has(peer.lxmfDestinationHex)) {
+            continue;
+          }
+          void syncPeerMessages(peer).catch((error: unknown) => {
+            nodeStore.logUi(
+              "Warn",
+              `[eam] peer sync failed for ${peer.label}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        }
+      },
+      { immediate: true, deep: true },
+    );
 
     watch(
       () => nodeStore.hubRegistrationReady,

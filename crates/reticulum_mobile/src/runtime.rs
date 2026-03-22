@@ -339,6 +339,7 @@ fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest 
         destination_hex: request.destination_hex.clone(),
         body_utf8: request.body_utf8.clone(),
         title: request.title.clone(),
+        use_propagation_node: request.use_propagation_node,
     }
 }
 
@@ -377,6 +378,7 @@ pub(crate) struct LxmfSendReport {
     pub(crate) metadata: Option<MissionSyncMetadata>,
     pub(crate) track_delivery_timeout: bool,
     pub(crate) used_resource: bool,
+    pub(crate) used_propagation_node: bool,
     pub(crate) receipt_hash_hex: Option<String>,
 }
 
@@ -578,9 +580,7 @@ pub enum Command {
     Stop {
         resp: cb::Sender<Result<(), NodeError>>,
     },
-    AnnounceNow {
-        resp: cb::Sender<Result<(), NodeError>>,
-    },
+    AnnounceNow {},
     ConnectPeer {
         destination_hex: String,
         resp: cb::Sender<Result<(), NodeError>>,
@@ -593,6 +593,7 @@ pub enum Command {
         destination_hex: String,
         bytes: Vec<u8>,
         fields_bytes: Option<Vec<u8>>,
+        use_propagation_node: bool,
         resp: cb::Sender<Result<(), NodeError>>,
     },
     BroadcastBytes {
@@ -665,6 +666,7 @@ struct NodeRuntimeState {
         Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     sdk: Arc<RuntimeLxmfSdk>,
+    active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
 }
 
 async fn ensure_destination_desc(
@@ -1339,6 +1341,8 @@ pub async fn run_node(
         TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>,
     > = Arc::new(TokioMutex::new(HashMap::new()));
     let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::default()));
+    let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
+        Arc::new(TokioMutex::new(None));
     let sdk = Arc::new(RuntimeLxmfSdk::new(
         identity.address_hash().to_hex_string(),
         SdkTransportState {
@@ -1347,6 +1351,7 @@ pub async fn run_node(
             lxmf_destination: lxmf_destination.clone(),
             known_destinations: known_destinations.clone(),
             out_links: out_links.clone(),
+            active_propagation_node_hex: active_propagation_node_hex.clone(),
         },
     ));
 
@@ -1361,6 +1366,7 @@ pub async fn run_node(
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
         messaging: messaging.clone(),
         sdk: sdk.clone(),
+        active_propagation_node_hex: active_propagation_node_hex.clone(),
     };
 
     if let Err(err) = sdk.start().await {
@@ -1747,7 +1753,7 @@ pub async fn run_node(
                 let _ = resp.send(Ok(()));
                 break;
             }
-            Command::AnnounceNow { resp } => {
+            Command::AnnounceNow {} => {
                 let caps = announce_capabilities.lock().await.clone();
                 transport
                     .send_announce(&app_destination, Some(caps.as_bytes()))
@@ -1758,7 +1764,6 @@ pub async fn run_node(
                         encode_delivery_display_name_app_data(config.name.as_str()).as_deref(),
                     )
                     .await;
-                let _ = resp.send(Ok(()));
             }
             Command::SetLogLevel { level } => {
                 crate::logger::NodeLogger::global().set_level(level);
@@ -1870,6 +1875,7 @@ pub async fn run_node(
                 destination_hex,
                 bytes,
                 fields_bytes,
+                use_propagation_node,
                 resp,
             } => {
                 let result = async {
@@ -1893,6 +1899,7 @@ pub async fn run_node(
                                         None,
                                         fields_bytes.clone(),
                                         metadata.clone(),
+                                        use_propagation_node,
                                     )
                                     .await?,
                             )
@@ -2073,22 +2080,32 @@ pub async fn run_node(
                 let result = async {
                     let destination = parse_address_hash(request.destination_hex.as_str())?;
                     let body_bytes = request.body_utf8.as_bytes().to_vec();
-                        let report = state
-                          .sdk
-                          .send_lxmf(
-                              destination,
-                              body_bytes.as_slice(),
-                              request.title.clone(),
-                              None,
-                              None,
-                          )
-                          .await?;
-                    let method = if report.used_resource {
+                    let report = state
+                        .sdk
+                        .send_lxmf(
+                            destination,
+                            body_bytes.as_slice(),
+                            request.title.clone(),
+                            None,
+                            None,
+                            request.use_propagation_node,
+                        )
+                        .await?;
+                    let method = if report.used_propagation_node {
+                        MessageMethod::Propagated {}
+                    } else if report.used_resource {
                         MessageMethod::Resource {}
                     } else {
                         MessageMethod::Direct {}
                     };
-                    let state_value = if matches!(
+                    let state_value = if report.used_propagation_node
+                        && matches!(
+                            report.outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        )
+                    {
+                        MessageState::SentToPropagation {}
+                    } else if matches!(
                         report.outcome,
                         RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
                     ) {
@@ -2154,8 +2171,19 @@ pub async fn run_node(
                             outbound.request.title.clone(),
                             None,
                             None,
+                            outbound.request.use_propagation_node,
                         )
                         .await?;
+                    let retried_state = if report.used_propagation_node
+                        && matches!(
+                            report.outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        )
+                    {
+                        MessageState::SentToPropagation {}
+                    } else {
+                        MessageState::SentDirect {}
+                    };
                     let retried = MessageRecord {
                         message_id_hex: report.message_id_hex.clone(),
                         conversation_id: conversation_id_for(
@@ -2168,12 +2196,14 @@ pub async fn run_node(
                         )),
                         title: outbound.request.title.clone(),
                         body_utf8: outbound.request.body_utf8.clone(),
-                        method: if report.used_resource {
+                        method: if report.used_propagation_node {
+                            MessageMethod::Propagated {}
+                        } else if report.used_resource {
                             MessageMethod::Resource {}
                         } else {
                             MessageMethod::Direct {}
                         },
-                        state: MessageState::SentDirect {},
+                        state: retried_state,
                         detail: Some(format!("retry of {}", outbound.message_id_hex)),
                         sent_at_ms: Some(now_ms()),
                         received_at_ms: None,
@@ -2216,6 +2246,7 @@ pub async fn run_node(
                 destination_hex,
                 resp,
             } => {
+                *state.active_propagation_node_hex.lock().await = destination_hex.clone();
                 let status_update = from_sdk_sync_status(
                     state
                         .messaging

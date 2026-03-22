@@ -54,6 +54,8 @@ struct SendInput {
     destination_hex: String,
     bytes_base64: String,
     fields_base64: Option<String>,
+    #[serde(default)]
+    use_propagation_node: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +64,8 @@ struct SendLxmfInput {
     destination_hex: String,
     body_utf8: String,
     title: Option<String>,
+    #[serde(default)]
+    use_propagation_node: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -806,7 +810,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         Some(v) => v,
         None => return err_result("NotRunning", "node not initialized"),
     };
-    match node.send_bytes(payload.destination_hex, bytes, fields_bytes) {
+    match node.send_bytes(
+        payload.destination_hex,
+        bytes,
+        fields_bytes,
+        payload.use_propagation_node,
+    ) {
         Ok(_) => {
             log::debug!("jni sendJson result=ok");
             ok_result()
@@ -862,6 +871,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmf
         destination_hex: payload.destination_hex,
         body_utf8: payload.body_utf8,
         title: payload.title,
+        use_propagation_node: payload.use_propagation_node,
     }) {
         Ok(message_id_hex) => ok_json_result(&mut env, &json!({ "messageIdHex": message_id_hex })),
         Err(err) => {

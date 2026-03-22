@@ -2,6 +2,7 @@
 import { computed } from "vue";
 
 import { useMessagesStore } from "../stores/messagesStore";
+import { useNodeStore } from "../stores/nodeStore";
 import {
   ACTION_MESSAGE_STATUS_CONFIG,
   getOverallRingColor,
@@ -11,7 +12,24 @@ import {
 } from "../utils/actionMessageStatus";
 
 const messagesStore = useMessagesStore();
+const nodeStore = useNodeStore();
 messagesStore.init();
+
+async function announceNow(): Promise<void> {
+  try {
+    await nodeStore.announceNow();
+  } catch {
+    // nodeStore already records the failure for the status surface
+  }
+}
+
+async function requestSync(): Promise<void> {
+  try {
+    await nodeStore.requestLxmfSync();
+  } catch {
+    // current runtime reports sync failure through store state
+  }
+}
 
 function averageScoreFor(field: ActionMessageStatusField): number {
   const messages = messagesStore.messages;
@@ -50,6 +68,8 @@ const ringMetrics = computed(() =>
       </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
+        <button type="button" class="badge badge-button" @click="announceNow">Announce</button>
+        <button type="button" class="badge badge-button" @click="requestSync">Sync</button>
       </div>
     </header>
 
@@ -116,11 +136,18 @@ h1 {
   border: 1px solid rgb(73 173 255 / 62%);
   border-radius: 999px;
   color: #64beff;
+  display: inline-flex;
   font-family: var(--font-ui);
   font-size: 0.92rem;
+  justify-content: center;
   letter-spacing: 0.08em;
   padding: 0.46rem 0.8rem;
   text-transform: uppercase;
+}
+
+.badge-button {
+  cursor: pointer;
+  min-height: 0;
 }
 
 .panel {

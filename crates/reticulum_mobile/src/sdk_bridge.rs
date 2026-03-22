@@ -17,8 +17,13 @@ use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDesti
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::packet::LXMF_MAX_PAYLOAD;
+use reticulum::packet::{
+    ContextFlag, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
+    PacketDataBuffer, PacketType, PropagationType,
+};
 use reticulum::resource::ResourceEventKind;
 use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport};
+use rand_core::OsRng;
 use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
@@ -52,6 +57,15 @@ fn sdk_transport(message: impl Into<String>) -> SdkError {
         lxmf_sdk::error_code::INTERNAL,
         lxmf_sdk::ErrorCategory::Transport,
         message,
+    )
+}
+
+fn lxmf_identity(
+    identity: &reticulum::identity::Identity,
+) -> lxmf::identity::Identity {
+    lxmf::identity::Identity::new_from_slices(
+        identity.public_key_bytes(),
+        identity.verifying_key_bytes(),
     )
 }
 
@@ -192,6 +206,7 @@ const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
 const EXT_FIELDS_BASE64: &str = "reticulum.fields_base64";
 const EXT_RAW_BYTES_BASE64: &str = "reticulum.raw_bytes_base64";
+const EXT_USE_PROPAGATION_NODE: &str = "reticulum.use_propagation_node";
 const EVENT_PACKET_RECEIVED: &str = "reticulum.packet_received";
 const EVENT_ANNOUNCE_RECEIVED: &str = "reticulum.announce_received";
 const EVENT_PEER_CHANGED: &str = "reticulum.peer_changed";
@@ -205,6 +220,7 @@ pub(crate) struct SdkTransportState {
     pub(crate) lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     pub(crate) known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     pub(crate) out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
+    pub(crate) active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
 }
 
 struct CompatBackendState {
@@ -535,6 +551,7 @@ struct CompatSendReport {
     message_id_hex: String,
     resolved_destination_hex: String,
     used_resource: bool,
+    used_propagation_node: bool,
     receipt_hash_hex: Option<String>,
 }
 
@@ -583,6 +600,7 @@ impl RuntimeLxmfSdk {
         title: Option<String>,
         fields_bytes: Option<Vec<u8>>,
         metadata: Option<MissionSyncMetadata>,
+        use_propagation_node: bool,
     ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .client
@@ -612,6 +630,9 @@ impl RuntimeLxmfSdk {
                 EXT_FIELDS_BASE64,
                 json!(BASE64_STANDARD.encode(fields_bytes)),
             );
+        }
+        if use_propagation_node {
+            request = request.with_extension(EXT_USE_PROPAGATION_NODE, json!(true));
         }
         if let Some(correlation_id) = metadata
             .as_ref()
@@ -658,6 +679,7 @@ impl RuntimeLxmfSdk {
             metadata,
             track_delivery_timeout: !report.used_resource,
             used_resource: report.used_resource,
+            used_propagation_node: report.used_propagation_node,
             receipt_hash_hex: report.receipt_hash_hex,
         })
     }
@@ -848,6 +870,11 @@ async fn compat_send_lxmf(
                 .map_err(|_| sdk_validation("invalid fields base64"))
         })
         .transpose()?;
+    let use_propagation_node = req
+        .extensions
+        .get(EXT_USE_PROPAGATION_NODE)
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
 
     let remote_desc = resolve_lxmf_destination_desc(&state, destination)
         .await
@@ -896,6 +923,18 @@ async fn compat_send_lxmf(
     let message_id_hex = LxmfWireMessage::unpack(&wire)
         .map(|wire| hex::encode(wire.message_id()))
         .map_err(|_| sdk_internal("failed to unpack lxmf message id"))?;
+
+    if use_propagation_node {
+        return compat_send_lxmf_via_propagation(
+            &state,
+            &remote_desc,
+            wire.as_slice(),
+            requested_destination_hex.as_str(),
+            resolved_destination_hex.as_str(),
+            message_id_hex.as_str(),
+        )
+        .await;
+    }
 
     let link = ensure_lxmf_output_link(&state, remote_desc)
         .await
@@ -956,6 +995,7 @@ async fn compat_send_lxmf(
                                 message_id_hex,
                                 resolved_destination_hex,
                                 used_resource: true,
+                                used_propagation_node: false,
                                 receipt_hash_hex: None,
                             });
                         }
@@ -983,7 +1023,83 @@ async fn compat_send_lxmf(
         message_id_hex,
         resolved_destination_hex,
         used_resource: false,
+        used_propagation_node: false,
         receipt_hash_hex: Some(receipt_hash_hex),
+    })
+}
+
+async fn compat_send_lxmf_via_propagation(
+    state: &SdkTransportState,
+    remote_desc: &DestinationDesc,
+    wire: &[u8],
+    requested_destination_hex: &str,
+    resolved_destination_hex: &str,
+    message_id_hex: &str,
+) -> Result<CompatSendReport, SdkError> {
+    let relay_hex = state
+        .active_propagation_node_hex
+        .lock()
+        .await
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| sdk_transport("no active propagation relay selected"))?;
+    let relay_hash = parse_address_hash(relay_hex.as_str())
+        .map_err(|_| sdk_validation("invalid active propagation relay hash"))?;
+    let relay_desc = resolve_lxmf_destination_desc(state, relay_hash)
+        .await
+        .map_err(|_| sdk_transport("failed to resolve propagation relay"))?;
+    let propagated_payload = LxmfWireMessage::unpack(wire)
+        .map_err(|_| sdk_internal("failed to unpack lxmf wire message"))?
+        .pack_propagation_with_rng(
+            &lxmf_identity(&remote_desc.identity),
+            crate::runtime::now_ms() as f64 / 1000.0,
+            OsRng,
+        )
+        .map_err(|_| sdk_internal("failed to encode propagated lxmf payload"))?;
+
+    let mut relay_data = PacketDataBuffer::new();
+    relay_data
+        .write(propagated_payload.as_slice())
+        .map_err(|_| sdk_transport("propagated relay payload too large"))?;
+    let relay_packet = Packet {
+        header: Header {
+            ifac_flag: IfacFlag::Open,
+            header_type: HeaderType::Type1,
+            context_flag: ContextFlag::Unset,
+            propagation_type: PropagationType::Broadcast,
+            destination_type: DestinationType::Single,
+            packet_type: PacketType::Data,
+            hops: 0,
+        },
+        ifac: None,
+        destination: relay_desc.address_hash,
+        transport: None,
+        context: PacketContext::None,
+        data: relay_data,
+    };
+    let outcome = state.transport.send_packet_with_outcome(relay_packet).await;
+    if !matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast) {
+        return Err(sdk_transport(format!(
+            "propagated relay send failed: {outcome:?}"
+        )));
+    }
+
+    info!(
+        "[lxmf][events][sdk] propagated relay send requested_destination={} resolved_destination={} relay_destination={} message_id={}",
+        requested_destination_hex,
+        resolved_destination_hex,
+        relay_desc.address_hash.to_hex_string(),
+        message_id_hex,
+    );
+
+    Ok(CompatSendReport {
+        outcome,
+        message_id_hex: message_id_hex.to_string(),
+        resolved_destination_hex: resolved_destination_hex.to_string(),
+        used_resource: false,
+        used_propagation_node: true,
+        receipt_hash_hex: None,
     })
 }
 
@@ -1248,6 +1364,7 @@ mod tests {
             message_id_hex: "msg-1".to_string(),
             resolved_destination_hex: "dest-1".to_string(),
             used_resource: true,
+            used_propagation_node: false,
             receipt_hash_hex: None,
         };
         {

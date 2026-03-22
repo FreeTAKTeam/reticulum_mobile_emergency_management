@@ -95,6 +95,7 @@ export interface PacketReceivedEvent {
 export interface PacketSendOptions {
   dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
+  usePropagationNode?: boolean;
 }
 
 export interface PacketSentEvent {
@@ -178,6 +179,7 @@ export interface SendLxmfRequest {
   destinationHex: string;
   bodyUtf8: string;
   title?: string;
+  usePropagationNode?: boolean;
 }
 
 export interface HubDirectoryUpdatedEvent {
@@ -311,11 +313,13 @@ interface ReticulumNodePlugin {
     bytesBase64: string;
     dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
+    usePropagationNode?: boolean;
   }): Promise<void>;
   sendLxmf(options: {
     destinationHex: string;
     bodyUtf8: string;
     title?: string;
+    usePropagationNode?: boolean;
   }): Promise<{ messageIdHex: string }>;
   retryLxmf(options: { messageIdHex: string }): Promise<void>;
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
@@ -909,6 +913,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       bytesBase64: encodeBytesToBase64(bytes),
       dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
+      usePropagationNode: options?.usePropagationNode,
     });
   }
 
@@ -918,6 +923,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       destinationHex: normalizeHex(request.destinationHex),
       bodyUtf8: request.bodyUtf8,
       title: request.title,
+      usePropagationNode: request.usePropagationNode,
     });
     return normalizeHex(String(result.messageIdHex ?? ""));
   }

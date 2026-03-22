@@ -216,6 +216,7 @@ impl Node {
         destination_hex: String,
         bytes: Vec<u8>,
         fields_bytes: Option<Vec<u8>>,
+        use_propagation_node: bool,
     ) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
@@ -227,6 +228,7 @@ impl Node {
             destination_hex,
             bytes,
             fields_bytes,
+            use_propagation_node,
             resp: resp_tx,
         })
         .map_err(|_| NodeError::NotRunning {})?;
@@ -258,12 +260,8 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::AnnounceNow { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(Duration::from_secs(10))
-            .unwrap_or(Err(NodeError::Timeout {}))
+        tx.send(Command::AnnounceNow {})
+            .map_err(|_| NodeError::NotRunning {})
     }
 
     pub fn request_peer_identity(&self, destination_hex: String) -> Result<(), NodeError> {
@@ -529,5 +527,479 @@ impl EventSubscription {
 
     pub fn close(&self) {
         self.closed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::mission_sync::parse_mission_sync_metadata;
+    use crate::HubMode;
+    use rmpv::Value as MsgPackValue;
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::{Arc, OnceLock};
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify};
+
+    static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    struct TcpRelayHandle {
+        addr: SocketAddr,
+        shutdown: Arc<Notify>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl TcpRelayHandle {
+        async fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind relay listener");
+            let addr = listener.local_addr().expect("relay local addr");
+            let shutdown = Arc::new(Notify::new());
+            let clients: Arc<AsyncMutex<HashMap<usize, mpsc::UnboundedSender<Vec<u8>>>>> =
+                Arc::new(AsyncMutex::new(HashMap::new()));
+            let next_client_id = Arc::new(AtomicUsize::new(1));
+
+            let task = {
+                let shutdown = shutdown.clone();
+                let clients = clients.clone();
+                let next_client_id = next_client_id.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = shutdown.notified() => break,
+                            accepted = listener.accept() => {
+                                let Ok((stream, _peer)) = accepted else {
+                                    break;
+                                };
+                                let client_id = next_client_id.fetch_add(1, AtomicOrdering::Relaxed);
+                                let (mut read_half, mut write_half) = stream.into_split();
+                                let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                                clients.lock().await.insert(client_id, tx);
+
+                                let writer_clients = clients.clone();
+                                tokio::spawn(async move {
+                                    while let Some(chunk) = rx.recv().await {
+                                        if write_half.write_all(chunk.as_slice()).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    writer_clients.lock().await.remove(&client_id);
+                                });
+
+                                let reader_clients = clients.clone();
+                                tokio::spawn(async move {
+                                    let mut buf = vec![0u8; 4096];
+                                    loop {
+                                        let read = match read_half.read(&mut buf).await {
+                                            Ok(0) => break,
+                                            Ok(n) => n,
+                                            Err(_) => break,
+                                        };
+                                        let chunk = buf[..read].to_vec();
+                                        let mut guard = reader_clients.lock().await;
+                                        let mut dead_clients = Vec::new();
+                                        for (peer_id, sender) in guard.iter() {
+                                            if *peer_id == client_id {
+                                                continue;
+                                            }
+                                            if sender.send(chunk.clone()).is_err() {
+                                                dead_clients.push(*peer_id);
+                                            }
+                                        }
+                                        for peer_id in dead_clients {
+                                            guard.remove(&peer_id);
+                                        }
+                                    }
+                                    reader_clients.lock().await.remove(&client_id);
+                                });
+                            }
+                        }
+                    }
+                })
+            };
+
+            Self {
+                addr,
+                shutdown,
+                task,
+            }
+        }
+
+        fn address(&self) -> String {
+            self.addr.to_string()
+        }
+
+        async fn shutdown(self) {
+            self.shutdown.notify_waiters();
+            let _ = self.task.await;
+        }
+    }
+
+    fn test_lock() -> &'static AsyncMutex<()> {
+        TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "reticulum_mobile_e2e_{}_{}_{}",
+            name,
+            std::process::id(),
+            stamp
+        ))
+    }
+
+    fn prepare_storage_dir(name: &str) -> PathBuf {
+        let dir = unique_test_dir(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create storage dir");
+        dir
+    }
+
+    fn build_config(name: &str, storage_dir: &Path, relay_addr: &str) -> NodeConfig {
+        NodeConfig {
+            name: name.to_string(),
+            storage_dir: Some(storage_dir.to_string_lossy().to_string()),
+            tcp_clients: vec![relay_addr.to_string()],
+            broadcast: true,
+            announce_interval_seconds: 1,
+            announce_capabilities: "e2e-test".to_string(),
+            hub_mode: HubMode::Disabled {},
+            hub_identity_hash: None,
+            hub_api_base_url: None,
+            hub_api_key: None,
+            hub_refresh_interval_seconds: 0,
+        }
+    }
+
+    fn wait_for_event<F>(
+        subscription: &Arc<EventSubscription>,
+        timeout: Duration,
+        mut predicate: F,
+    ) -> Option<NodeEvent>
+    where
+        F: FnMut(&NodeEvent) -> bool,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let timeout_ms = remaining
+                .as_millis()
+                .min(u32::MAX as u128)
+                .max(1) as u32;
+            if let Some(event) = subscription.next(timeout_ms.min(250)) {
+                if predicate(&event) {
+                    return Some(event);
+                }
+            }
+        }
+    }
+
+    fn msgpack_map(entries: Vec<(&str, MsgPackValue)>) -> MsgPackValue {
+        MsgPackValue::Map(
+            entries
+                .into_iter()
+                .map(|(key, value)| (MsgPackValue::from(key), value))
+                .collect(),
+        )
+    }
+
+    fn mission_command_fields(
+        command_id: &str,
+        correlation_id: &str,
+        command_type: &str,
+        args: Vec<(&str, MsgPackValue)>,
+    ) -> Vec<u8> {
+        let fields = msgpack_map(vec![(
+            "9",
+            MsgPackValue::Array(vec![msgpack_map(vec![
+                ("command_id", MsgPackValue::from(command_id)),
+                ("correlation_id", MsgPackValue::from(correlation_id)),
+                ("command_type", MsgPackValue::from(command_type)),
+                ("args", msgpack_map(args)),
+            ])]),
+        )]);
+        rmp_serde::to_vec(&fields).expect("msgpack command fields")
+    }
+
+    fn mission_event_fields(
+        event_type: &str,
+        event_uid: &str,
+        payload: Vec<(&str, MsgPackValue)>,
+    ) -> Vec<u8> {
+        let fields = msgpack_map(vec![(
+            "13",
+            MsgPackValue::Map(vec![
+                (MsgPackValue::from("event_type"), MsgPackValue::from(event_type)),
+                (MsgPackValue::from("event_id"), MsgPackValue::from(event_uid)),
+                (MsgPackValue::from("payload"), msgpack_map(payload)),
+            ]),
+        )]);
+        rmp_serde::to_vec(&fields).expect("msgpack event fields")
+    }
+
+    async fn start_node_pair(test_name: &str) -> (TcpRelayHandle, Node, Node) {
+        let relay = TcpRelayHandle::start().await;
+
+        let node_a_storage = prepare_storage_dir(&format!("{test_name}_a"));
+        let node_b_storage = prepare_storage_dir(&format!("{test_name}_b"));
+
+        let node_a = Node::new();
+        node_a
+            .start(build_config(
+                &format!("{test_name}-a"),
+                node_a_storage.as_path(),
+                relay.address().as_str(),
+            ))
+            .expect("start node a");
+
+        let node_b = Node::new();
+        node_b
+            .start(build_config(
+                &format!("{test_name}-b"),
+                node_b_storage.as_path(),
+                relay.address().as_str(),
+            ))
+            .expect("start node b");
+
+        node_a.announce_now().expect("announce node a");
+        node_b.announce_now().expect("announce node b");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let node_b_lxmf_destination_hex = node_b.get_status().lxmf_destination_hex;
+        node_a
+            .request_peer_identity(node_b_lxmf_destination_hex.clone())
+            .expect("resolve node b");
+
+        (relay, node_a, node_b)
+    }
+
+    async fn stop_node(node: Node) {
+        let _ = tokio::task::spawn_blocking(move || node.stop()).await;
+    }
+
+    fn assert_packet_received(
+        event: NodeEvent,
+        expected_source_hex: &str,
+        expected_body: &str,
+        expected_fields: Option<&[u8]>,
+    ) {
+        match event {
+            NodeEvent::MessageReceived { message } => {
+                assert_eq!(message.source_hex.as_deref(), Some(expected_source_hex));
+                assert_eq!(message.body_utf8, expected_body);
+            }
+            NodeEvent::PacketReceived {
+                source_hex,
+                bytes,
+                fields_bytes,
+                ..
+            } => {
+                assert_eq!(source_hex.as_deref(), Some(expected_source_hex));
+                assert_eq!(bytes.as_slice(), expected_body.as_bytes());
+                match (expected_fields, fields_bytes.as_deref()) {
+                    (None, None) => {}
+                    (Some(expected), Some(actual)) => {
+                        assert_eq!(actual, expected);
+                    }
+                    (None, Some(_)) => panic!("unexpected mission fields"),
+                    (Some(_), None) => panic!("expected mission fields"),
+                }
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_chat_message_is_received_by_peer() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("chat").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let body = "chat: hello from node a";
+        let subscription = node_b.subscribe_events();
+        let message_id = node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: body.to_string(),
+                title: Some("chat".to_string()),
+                use_propagation_node: false,
+            })
+            .expect("send chat message");
+        let event = wait_for_event(&subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == body)
+        })
+        .expect("node b received chat message");
+
+        assert_packet_received(event, &node_a_status.lxmf_destination_hex, body, None);
+        assert!(!message_id.is_empty());
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_emergency_message_is_received_as_mission_packet() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("emergency").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let body = "emergency: request medevac";
+        let fields = mission_command_fields(
+            "cmd-eam-123",
+            "corr-eam-123",
+            "mission.registry.eam.upsert",
+            vec![
+                ("eam_uid", MsgPackValue::from("eam-123")),
+                ("team_member_uid", MsgPackValue::from("member-1")),
+                ("team_uid", MsgPackValue::from("team-1")),
+                ("mission_uid", MsgPackValue::from("mission-1")),
+            ],
+        );
+        let subscription = node_b.subscribe_events();
+        node_a
+            .send_bytes(
+                node_b_status.lxmf_destination_hex.clone(),
+                body.as_bytes().to_vec(),
+                Some(fields.clone()),
+                false,
+            )
+            .expect("send emergency packet");
+
+        let event = wait_for_event(&subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::PacketReceived { bytes, .. } if bytes.as_slice() == body.as_bytes())
+        })
+        .expect("node b received emergency packet");
+
+        assert_packet_received(
+            event,
+            &node_a_status.lxmf_destination_hex,
+            body,
+            Some(fields.as_slice()),
+        );
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_event_is_received_as_mission_packet() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("event").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let body = "event: checkpoint reached";
+        let fields = mission_event_fields(
+            "mission.registry.log_entry.upserted",
+            "event-123",
+            vec![
+                ("entry_uid", MsgPackValue::from("event-123")),
+                ("mission_uid", MsgPackValue::from("mission-1")),
+                ("content", MsgPackValue::from("Checkpoint reached")),
+            ],
+        );
+        let subscription = node_b.subscribe_events();
+        node_a
+            .send_bytes(
+                node_b_status.lxmf_destination_hex.clone(),
+                body.as_bytes().to_vec(),
+                Some(fields.clone()),
+                false,
+            )
+            .expect("send event packet");
+
+        let event = wait_for_event(&subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::PacketReceived { bytes, .. } if bytes.as_slice() == body.as_bytes())
+        })
+        .expect("node b received event packet");
+
+        assert_packet_received(
+            event,
+            &node_a_status.lxmf_destination_hex,
+            body,
+            Some(fields.as_slice()),
+        );
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("event metadata");
+        assert_eq!(
+            metadata.event_type.as_deref(),
+            Some("mission.registry.log_entry.upserted")
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some("event-123"));
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_telemetry_is_received_as_mission_packet() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("telemetry").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let body = "telemetry: position sample";
+        let fields = mission_command_fields(
+            "cmd-telemetry-123",
+            "corr-telemetry-123",
+            "mission.registry.telemetry.upsert",
+            vec![
+                ("event_uid", MsgPackValue::from("telemetry-123")),
+                ("team_member_uid", MsgPackValue::from("member-1")),
+                ("team_uid", MsgPackValue::from("team-1")),
+                ("mission_uid", MsgPackValue::from("mission-1")),
+            ],
+        );
+        let subscription = node_b.subscribe_events();
+        node_a
+            .send_bytes(
+                node_b_status.lxmf_destination_hex.clone(),
+                body.as_bytes().to_vec(),
+                Some(fields.clone()),
+                false,
+            )
+            .expect("send telemetry packet");
+
+        let event = wait_for_event(&subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::PacketReceived { bytes, .. } if bytes.as_slice() == body.as_bytes())
+        })
+        .expect("node b received telemetry packet");
+
+        assert_packet_received(
+            event,
+            &node_a_status.lxmf_destination_hex,
+            body,
+            Some(fields.as_slice()),
+        );
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("telemetry metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.telemetry.upsert")
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some("telemetry-123"));
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
     }
 }

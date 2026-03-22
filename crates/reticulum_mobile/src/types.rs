@@ -227,6 +227,7 @@ pub struct SendLxmfRequest {
     pub destination_hex: String,
     pub body_utf8: String,
     pub title: Option<String>,
+    pub use_propagation_node: bool,
 }
 
 #[derive(Debug, Clone)]

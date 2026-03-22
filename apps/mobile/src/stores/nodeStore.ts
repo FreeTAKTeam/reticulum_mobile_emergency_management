@@ -62,6 +62,8 @@ const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
+const LXMF_SEND_ATTEMPTS = 3;
+const LXMF_SEND_RETRY_DELAY_MS = 250;
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -152,6 +154,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function activePropagationNodeHex(status: SyncStatus): string | undefined {
+  const candidate = status.activePropagationNodeHex?.trim();
+  return candidate ? candidate : undefined;
 }
 
 function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
@@ -367,6 +374,65 @@ export const useNodeStore = defineStore("node", () => {
       return error.message;
     }
     return String(error);
+  }
+
+  async function retryLxmfSend<T>(
+    action: string,
+    destinationHex: string,
+    send: (attempt: number) => Promise<T>,
+    sendViaPropagation?: () => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= LXMF_SEND_ATTEMPTS; attempt += 1) {
+      try {
+        appendLog(
+          "Debug",
+          `${action} attempt ${attempt}/${LXMF_SEND_ATTEMPTS} destination=${destinationHex}.`,
+        );
+        return await send(attempt);
+      } catch (error: unknown) {
+        lastError = error;
+        const message = errorMessage(error);
+        if (attempt >= LXMF_SEND_ATTEMPTS) {
+          break;
+        }
+
+        appendLog(
+          "Warn",
+          `${action} attempt ${attempt}/${LXMF_SEND_ATTEMPTS} failed destination=${destinationHex}: ${message}. Retrying.`,
+        );
+        await sleep(LXMF_SEND_RETRY_DELAY_MS * attempt);
+      }
+    }
+
+    const propagationNodeHex = activePropagationNodeHex(syncStatus.value);
+    if (propagationNodeHex && sendViaPropagation) {
+      try {
+        appendLog(
+          "Warn",
+          `${action} direct delivery exhausted after ${LXMF_SEND_ATTEMPTS} attempts destination=${destinationHex}. Switching to propagation relay ${propagationNodeHex}.`,
+        );
+        return await sendViaPropagation();
+      } catch (error: unknown) {
+        lastError = error;
+        appendLog(
+          "Error",
+          `${action} propagation fallback failed destination=${destinationHex} relay=${propagationNodeHex}: ${errorMessage(error)}.`,
+        );
+      }
+    } else if (lastError) {
+      appendLog(
+        "Error",
+        `${action} failed after ${LXMF_SEND_ATTEMPTS} direct attempts destination=${destinationHex}: ${errorMessage(lastError)}.`,
+      );
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new Error(`${action} failed after ${LXMF_SEND_ATTEMPTS} attempts.`);
   }
 
   function captureActionError(action: string, error: unknown): Error {
@@ -1265,6 +1331,8 @@ export const useNodeStore = defineStore("node", () => {
       })),
   );
 
+  const communicationReadyPeerCount = computed(() => connectedEventPeerRoutes.value.length);
+
   const telemetryDestinations = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => peer.sources.includes("announce"))
@@ -1348,7 +1416,8 @@ export const useNodeStore = defineStore("node", () => {
     bytes: Uint8Array,
     options?: PacketSendOptions,
   ): Promise<void> {
-    if (!client.value) {
+    const nodeClient = client.value;
+    if (!nodeClient) {
       throw captureActionError(
         `Send failed (${destinationHex})`,
         new Error("Node client is not initialized."),
@@ -1359,7 +1428,14 @@ export const useNodeStore = defineStore("node", () => {
         "Debug",
         `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
       );
-      await client.value.sendBytes(destinationHex, bytes, options);
+      await retryLxmfSend("Send", destinationHex, async () => {
+        await nodeClient.sendBytes(destinationHex, bytes, options);
+      }, async () => {
+        await nodeClient.sendBytes(destinationHex, bytes, {
+          ...options,
+          usePropagationNode: true,
+        });
+      });
       logUi(
         "Debug",
         `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
@@ -1374,7 +1450,8 @@ export const useNodeStore = defineStore("node", () => {
     bodyUtf8: string,
     title?: string,
   ): Promise<string> {
-    if (!client.value) {
+    const nodeClient = client.value;
+    if (!nodeClient) {
       throw captureActionError(
         `LXMF send failed (${destinationHex})`,
         new Error("Node client is not initialized."),
@@ -1385,10 +1462,19 @@ export const useNodeStore = defineStore("node", () => {
         "Debug",
         `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength}.`,
       );
-      return await client.value.sendLxmf({
-        destinationHex,
-        bodyUtf8,
-        title,
+      return await retryLxmfSend("LXMF send", destinationHex, async () => {
+        return await nodeClient.sendLxmf({
+          destinationHex,
+          bodyUtf8,
+          title,
+        });
+      }, async () => {
+        return await nodeClient.sendLxmf({
+          destinationHex,
+          bodyUtf8,
+          title,
+          usePropagationNode: true,
+        });
       });
     } catch (error: unknown) {
       throw captureActionError(`LXMF send failed (${destinationHex})`, error);
@@ -1489,6 +1575,7 @@ export const useNodeStore = defineStore("node", () => {
     connectedDestinations,
     connectedLinkDestinations,
     connectedEventPeerRoutes,
+    communicationReadyPeerCount,
     telemetryDestinations,
     savedDestinations,
     ready,
