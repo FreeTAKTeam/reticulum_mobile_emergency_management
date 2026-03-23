@@ -442,24 +442,48 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
   };
 }
 
-function toPeerState(raw: unknown): PeerState {
-  const value = String(raw ?? "");
-  if (value === "Connecting" || value === "Connected" || value === "Disconnected") {
-    return value;
+function enumVariantName(raw: unknown): string {
+  if (typeof raw === "string") {
+    return raw.trim();
   }
-  return "Disconnected";
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return "";
+  }
+  const variants = Object.keys(raw as Record<string, unknown>).filter((key) => key.trim().length > 0);
+  return variants.length === 1 ? variants[0]!.trim() : "";
+}
+
+function toPeerState(raw: unknown): PeerState {
+  const value = enumVariantName(raw);
+  switch (value.toLowerCase()) {
+    case "connecting":
+      return "Connecting";
+    case "connected":
+      return "Connected";
+    case "disconnected":
+      return "Disconnected";
+    default:
+      return "Disconnected";
+  }
 }
 
 function toPeerManagementState(raw: unknown): PeerManagementState {
-  return String(raw ?? "") === "Managed" ? "Managed" : "Unmanaged";
+  return enumVariantName(raw).toLowerCase() === "managed" ? "Managed" : "Unmanaged";
 }
 
 function toPeerAvailabilityState(raw: unknown): PeerAvailabilityState {
-  const value = String(raw ?? "");
-  if (value === "Discovered" || value === "Resolved" || value === "Ready" || value === "Unseen") {
-    return value;
+  switch (enumVariantName(raw).toLowerCase()) {
+    case "discovered":
+      return "Discovered";
+    case "resolved":
+      return "Resolved";
+    case "ready":
+      return "Ready";
+    case "unseen":
+      return "Unseen";
+    default:
+      return "Unseen";
   }
-  return "Unseen";
 }
 
 function toSendOutcome(raw: unknown): SendOutcome {

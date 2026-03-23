@@ -349,6 +349,7 @@ export const useMessagesStore = defineStore("messages", () => {
       if (
         !appDestinationHex
         || !lxmfDestinationHex
+        || appDestinationHex === lxmfDestinationHex
         || appDestinationHex === localAppDestination
         || appDestinationHex === localLxmfDestination
         || lxmfDestinationHex === localAppDestination
@@ -865,12 +866,15 @@ async function sendEamCommand(
 
   function createEamDeliveryTracker(peer: ReplicationPeer, expected: EamTrackingExpectation): {
     promise: Promise<void>;
+    arm: () => void;
     cancel: () => void;
   } {
     let settled = false;
     let timeoutId: number | undefined;
     let unsubscribePacket: () => void = () => undefined;
     let unsubscribeDelivery: () => void = () => undefined;
+    let rejectPromise: ((reason?: unknown) => void) | undefined;
+    const timeoutMs = expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS;
 
     const finish = (callback?: () => void): void => {
       if (settled) {
@@ -886,6 +890,7 @@ async function sendEamCommand(
     };
 
     const promise = new Promise<void>((resolve, reject) => {
+      rejectPromise = reject;
       unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
         if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
           return;
@@ -947,12 +952,18 @@ async function sendEamCommand(
         finish(resolve);
       });
 
-      timeoutId = window.setTimeout(() => {
-        finish(() => reject(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`)));
-      }, expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS);
     });
 
-    return { promise, cancel: () => finish() };
+    const arm = (): void => {
+      if (settled || timeoutId !== undefined) {
+        return;
+      }
+      timeoutId = window.setTimeout(() => {
+        finish(() => rejectPromise?.(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`)));
+      }, timeoutMs);
+    };
+
+    return { promise, arm, cancel: () => finish() };
   }
 
 async function sendEamCommandAwaitingDelivery(
@@ -970,6 +981,7 @@ async function sendEamCommandAwaitingDelivery(
         `[eam] ${expected.commandType} direct attempt ${attempt}/3 to ${peer.label}.`,
       );
       await sendEamCommand(peer.lxmfDestinationHex, command, "direct");
+      tracker.arm();
       await tracker.promise;
       return;
     } catch (error: unknown) {
@@ -994,6 +1006,7 @@ async function sendEamCommandAwaitingDelivery(
         `[eam] ${expected.commandType} direct attempts exhausted for ${peer.label}; retrying via propagation ${nodeStore.bestPropagationNodeHex}.`,
       );
       await sendEamCommand(peer.lxmfDestinationHex, command, "propagation");
+      tracker.arm();
       await tracker.promise;
       return;
     } catch (error: unknown) {

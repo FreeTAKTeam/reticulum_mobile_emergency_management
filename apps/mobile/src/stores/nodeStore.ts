@@ -1803,20 +1803,33 @@ export const useNodeStore = defineStore("node", () => {
     return peer.state;
   }
 
-  function peerPresenceState(
-    peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
-  ): "online" | "offline" {
-    return peer.activeLink || peer.availabilityState === "ready" ? "online" : "offline";
-  }
+function peerPresenceState(
+  peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
+): "online" | "offline" {
+  return peer.activeLink || peer.availabilityState === "ready" ? "online" : "offline";
+}
 
-  function peerHasEventRoute(
-    peer: Pick<DiscoveredPeer, "lxmfDestinationHex" | "availabilityState">,
-  ): boolean {
-    if (!isValidDestinationHex(peer.lxmfDestinationHex ?? "")) {
-      return false;
-    }
-    return peer.availabilityState === "ready";
+function peerCanAcceptMissionTraffic(
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "availabilityState" | "appData">,
+): boolean {
+  const appDestinationHex = normalizeDestinationHex(peer.destination);
+  const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
+  if (
+    peer.availabilityState !== "ready"
+    || !isValidDestinationHex(appDestinationHex)
+    || !isValidDestinationHex(lxmfDestinationHex)
+    || appDestinationHex === lxmfDestinationHex
+  ) {
+    return false;
   }
+  return matchesEmergencyCapabilities(peer.appData ?? "");
+}
+
+function peerHasEventRoute(
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "availabilityState" | "appData">,
+): boolean {
+  return peerCanAcceptMissionTraffic(peer);
+}
 
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
@@ -1834,7 +1847,7 @@ export const useNodeStore = defineStore("node", () => {
   const communicationReadyPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peer.availabilityState === "ready")
+      .filter((peer) => peerCanAcceptMissionTraffic(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 

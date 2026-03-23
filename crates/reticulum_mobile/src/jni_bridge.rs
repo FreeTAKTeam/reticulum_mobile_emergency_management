@@ -13,7 +13,7 @@ use crate::node::{EventSubscription, Node};
 use crate::types::{
     HubMode, LogLevel, LxmfDeliveryStatus, MessageDirection, MessageMethod, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerManagementState,
-    PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
+    PeerChange, PeerRecord, PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
 };
 
 const RESULT_OK: jint = 0;
@@ -270,6 +270,47 @@ fn peer_availability_state_to_str(state: PeerAvailabilityState) -> &'static str 
     }
 }
 
+fn peer_change_json(change: &PeerChange) -> serde_json::Value {
+    json!({
+        "destinationHex": change.destination_hex,
+        "identityHex": change.identity_hex,
+        "lxmfDestinationHex": change.lxmf_destination_hex,
+        "displayName": change.display_name,
+        "appData": change.app_data,
+        "state": peer_state_to_str(change.state),
+        "managementState": peer_management_state_to_str(change.management_state),
+        "availabilityState": peer_availability_state_to_str(change.availability_state),
+        "activeLink": change.active_link,
+        "lastError": change.last_error,
+        "lastResolutionError": change.last_resolution_error,
+        "lastResolutionAttemptAtMs": change.last_resolution_attempt_at_ms,
+        "lastReadyAtMs": change.last_ready_at_ms,
+        "lastSeenAtMs": change.last_seen_at_ms,
+        "announceLastSeenAtMs": change.announce_last_seen_at_ms,
+        "lxmfLastSeenAtMs": change.lxmf_last_seen_at_ms
+    })
+}
+
+fn peer_record_json(peer: &PeerRecord) -> serde_json::Value {
+    json!({
+        "destinationHex": peer.destination_hex,
+        "identityHex": peer.identity_hex,
+        "lxmfDestinationHex": peer.lxmf_destination_hex,
+        "displayName": peer.display_name,
+        "appData": peer.app_data,
+        "state": peer_state_to_str(peer.state),
+        "managementState": peer_management_state_to_str(peer.management_state),
+        "availabilityState": peer_availability_state_to_str(peer.availability_state),
+        "activeLink": peer.active_link,
+        "lastResolutionError": peer.last_resolution_error,
+        "lastResolutionAttemptAtMs": peer.last_resolution_attempt_at_ms,
+        "lastReadyAtMs": peer.last_ready_at_ms,
+        "lastSeenAtMs": peer.last_seen_at_ms,
+        "announceLastSeenAtMs": peer.announce_last_seen_at_ms,
+        "lxmfLastSeenAtMs": peer.lxmf_last_seen_at_ms
+    })
+}
+
 fn send_outcome_to_str(outcome: SendOutcome) -> &'static str {
     match outcome {
         SendOutcome::SentDirect {} => "SentDirect",
@@ -381,24 +422,7 @@ fn event_to_wire_json(event: NodeEvent) -> String {
         NodeEvent::PeerChanged { change } => (
             "peerChanged",
             json!({
-                "change": {
-                    "destinationHex": change.destination_hex,
-                    "identityHex": change.identity_hex,
-                    "lxmfDestinationHex": change.lxmf_destination_hex,
-                    "displayName": change.display_name,
-                    "appData": change.app_data,
-                    "state": peer_state_to_str(change.state),
-                    "managementState": peer_management_state_to_str(change.management_state),
-                    "availabilityState": peer_availability_state_to_str(change.availability_state),
-                    "activeLink": change.active_link,
-                    "lastError": change.last_error,
-                    "lastResolutionError": change.last_resolution_error,
-                    "lastResolutionAttemptAtMs": change.last_resolution_attempt_at_ms,
-                    "lastReadyAtMs": change.last_ready_at_ms,
-                    "lastSeenAtMs": change.last_seen_at_ms,
-                    "announceLastSeenAtMs": change.announce_last_seen_at_ms,
-                    "lxmfLastSeenAtMs": change.lxmf_last_seen_at_ms
-                }
+                "change": peer_change_json(&change)
             }),
         ),
         NodeEvent::PacketReceived {
@@ -446,23 +470,7 @@ fn event_to_wire_json(event: NodeEvent) -> String {
         ),
         NodeEvent::PeerResolved { peer } => (
             "peerResolved",
-            json!({
-                "destinationHex": peer.destination_hex,
-                "identityHex": peer.identity_hex,
-                "lxmfDestinationHex": peer.lxmf_destination_hex,
-                "displayName": peer.display_name,
-                "appData": peer.app_data,
-                "state": peer_state_to_str(peer.state),
-                "managementState": peer_management_state_to_str(peer.management_state),
-                "availabilityState": peer_availability_state_to_str(peer.availability_state),
-                "activeLink": peer.active_link,
-                "lastResolutionError": peer.last_resolution_error,
-                "lastResolutionAttemptAtMs": peer.last_resolution_attempt_at_ms,
-                "lastReadyAtMs": peer.last_ready_at_ms,
-                "lastSeenAtMs": peer.last_seen_at_ms,
-                "announceLastSeenAtMs": peer.announce_last_seen_at_ms,
-                "lxmfLastSeenAtMs": peer.lxmf_last_seen_at_ms
-            }),
+            peer_record_json(&peer),
         ),
         NodeEvent::MessageReceived { message } => (
             "messageReceived",
@@ -1197,7 +1205,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listPeer
         }
     };
     match node.list_peers() {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({
+                "items": items.iter().map(peer_record_json).collect::<Vec<_>>()
+            }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
