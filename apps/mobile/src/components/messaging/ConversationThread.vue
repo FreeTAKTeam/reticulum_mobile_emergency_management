@@ -5,6 +5,7 @@ import type { MessageRecord } from "@reticulum/node-client";
 const props = defineProps<{
   destinationHex?: string;
   displayName?: string;
+  showBackButton?: boolean;
   targetStatus?: string;
   targetTeam?: string;
   targetLatitude?: string;
@@ -13,6 +14,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  back: [];
   send: [bodyUtf8: string];
 }>();
 
@@ -43,26 +45,39 @@ function submit(): void {
 <template>
   <section class="thread">
     <header v-if="displayName || destinationHex" class="target-card">
-      <div class="target-card-main">
-        <div class="target-avatar" aria-hidden="true">
-          <svg class="target-avatar-icon" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="8" r="3.25" />
-            <path d="M5 18.25c1.9-3 4.2-4.5 7-4.5s5.1 1.5 7 4.5" />
-          </svg>
-        </div>
-        <div class="target-copy">
-          <h2 class="thread-title">{{ displayName || destinationHex || "Select a conversation" }}</h2>
-          <p class="target-team">{{ visibleTargetTeam }}</p>
-          <div class="target-status-block">
-            <p class="target-label">Emergency Status</p>
-            <p class="target-status">{{ visibleTargetStatus }}</p>
+      <div class="target-card-top">
+        <div class="target-card-main">
+          <div class="target-avatar" aria-hidden="true">
+            <svg class="target-avatar-icon" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="8" r="3.25" />
+              <path d="M5 18.25c1.9-3 4.2-4.5 7-4.5s5.1 1.5 7 4.5" />
+            </svg>
+          </div>
+          <div class="target-copy">
+            <h2 class="thread-title">{{ displayName || destinationHex || "Select a conversation" }}</h2>
+            <p class="target-team">{{ visibleTargetTeam }}</p>
+            <div class="target-status-block">
+              <p class="target-label">Status</p>
+              <p class="target-status">{{ visibleTargetStatus }}</p>
+            </div>
+            <div v-if="hasTargetPosition" class="target-coordinates">
+              <p v-if="targetLatitude" class="target-position-value">{{ targetLatitude }}</p>
+              <p v-if="targetLongitude" class="target-position-value">{{ targetLongitude }}</p>
+            </div>
           </div>
         </div>
-      </div>
-      <div v-if="hasTargetPosition" class="target-position">
-        <p class="target-label">Position</p>
-        <p v-if="targetLatitude" class="target-position-value">{{ targetLatitude }}</p>
-        <p v-if="targetLongitude" class="target-position-value">{{ targetLongitude }}</p>
+        <button
+          v-if="showBackButton"
+          type="button"
+          class="thread-back-button"
+          aria-label="Back"
+          title="Back"
+          @click="emit('back')"
+        >
+          <svg class="thread-back-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M15.5 5.5 9 12l6.5 6.5" />
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -70,45 +85,47 @@ function submit(): void {
       <h2 class="thread-title">Select a conversation</h2>
     </header>
 
-    <div class="thread-body">
-      <article
-        v-for="message in messages"
-        :key="message.messageIdHex"
-        class="bubble"
-        :class="{ outbound: message.direction === 'Outbound' }"
-      >
-        <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
-        <p class="bubble-content">{{ message.bodyUtf8 }}</p>
-        <div class="bubble-meta">
-          <span>{{ message.state }}</span>
-          <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
-        </div>
-      </article>
-      <p v-if="messages.length === 0" class="thread-empty">
-        No messages yet for this conversation.
-      </p>
-    </div>
+    <section class="thread-panel">
+      <div class="thread-body">
+        <article
+          v-for="message in messages"
+          :key="message.messageIdHex"
+          class="bubble"
+          :class="{ outbound: message.direction === 'Outbound' }"
+        >
+          <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
+          <p class="bubble-content">{{ message.bodyUtf8 }}</p>
+          <div class="bubble-meta">
+            <span>{{ message.state }}</span>
+            <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
+          </div>
+        </article>
+        <p v-if="messages.length === 0" class="thread-empty">
+          No messages yet for this conversation.
+        </p>
+      </div>
 
-    <form class="composer" @submit.prevent="submit">
-      <textarea
-        v-model="draft"
-        class="composer-input"
-        rows="4"
-        placeholder="Write an LXMF message"
-      />
-      <button
-        type="submit"
-        class="composer-send"
-        :aria-label="'Send message'"
-        :disabled="!canSend"
-        title="Send message"
-      >
-        <svg class="composer-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 12 20 4l-4 16-4.5-5.5z" />
-          <path d="M20 4 10.5 14.5" />
-        </svg>
-      </button>
-    </form>
+      <form class="composer" @submit.prevent="submit">
+        <textarea
+          v-model="draft"
+          class="composer-input"
+          rows="3"
+          placeholder="Write an LXMF message"
+        />
+        <button
+          type="submit"
+          class="composer-send"
+          :aria-label="'Send message'"
+          :disabled="!canSend"
+          title="Send message"
+        >
+          <svg class="composer-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 12 20 4l-4 16-4.5-5.5z" />
+            <path d="M20 4 10.5 14.5" />
+          </svg>
+        </button>
+      </form>
+    </section>
   </section>
 </template>
 
@@ -116,6 +133,8 @@ function submit(): void {
 .thread {
   display: grid;
   gap: 0.85rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
 }
 
@@ -130,6 +149,7 @@ function submit(): void {
 .target-team,
 .target-label,
 .target-status,
+.target-coordinates,
 .target-position-value,
 .thread-empty,
 .bubble-title,
@@ -148,6 +168,13 @@ function submit(): void {
   gap: 0.95rem;
   grid-template-columns: minmax(0, 1fr) auto;
   padding: 1rem;
+}
+
+.target-card-top {
+  align-items: start;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .target-card-main {
@@ -176,6 +203,37 @@ function submit(): void {
   stroke-linejoin: round;
   stroke-width: 1.8;
   width: 1.8rem;
+}
+
+.thread-back-button {
+  align-items: center;
+  align-self: start;
+  background: rgb(5 18 40 / 88%);
+  border: 1px solid rgb(90 150 225 / 28%);
+  border-radius: 10px;
+  box-shadow: 0 0 14px rgb(20 240 255 / 10%);
+  color: #9ee2ff;
+  cursor: pointer;
+  display: none;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+}
+
+.thread-back-button:active {
+  background: rgb(7 33 66 / 96%);
+  border-color: rgb(120 227 255 / 32%);
+  transform: translateY(1px) scale(0.985);
+}
+
+.thread-back-icon {
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.1;
+  width: 1rem;
 }
 
 .target-copy {
@@ -217,6 +275,12 @@ function submit(): void {
   font-size: 0.94rem;
 }
 
+.target-coordinates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+}
+
 .thread-subtitle,
 .bubble-meta,
 .thread-empty,
@@ -226,21 +290,24 @@ function submit(): void {
   font-size: 0.78rem;
 }
 
-.target-position {
-  background: rgb(7 24 52 / 72%);
-  border: 1px solid rgb(90 150 225 / 20%);
-  border-radius: 14px;
+.thread-panel {
+  background:
+    linear-gradient(180deg, rgb(8 22 48 / 92%), rgb(5 16 37 / 96%));
+  border: 1px solid rgb(72 114 184 / 26%);
+  border-radius: 18px;
   display: grid;
-  gap: 0.18rem;
-  min-width: 8.5rem;
-  padding: 0.75rem 0.85rem;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .thread-body {
   display: grid;
   gap: 0.65rem;
-  min-height: 18rem;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.9rem;
 }
 
 .bubble {
@@ -280,8 +347,13 @@ function submit(): void {
 }
 
 .composer {
+  align-items: end;
+  background: rgb(4 15 34 / 94%);
+  border-top: 1px solid rgb(72 114 184 / 24%);
   display: grid;
-  gap: 0.65rem;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.85rem 0.9rem 0.9rem;
 }
 
 .composer-input {
@@ -290,8 +362,10 @@ function submit(): void {
   border-radius: 14px;
   color: #dff2ff;
   font-family: var(--font-body);
+  min-height: 3rem;
+  max-height: 7rem;
   padding: 0.8rem 0.88rem;
-  resize: vertical;
+  resize: none;
 }
 
 .composer-send {
@@ -303,11 +377,10 @@ function submit(): void {
   color: #032748;
   cursor: pointer;
   display: inline-flex;
-  height: 2.75rem;
+  height: 2.35rem;
   justify-content: center;
-  justify-self: end;
   padding: 0;
-  width: 2.75rem;
+  width: 2.35rem;
 }
 
 .composer-send:active {
@@ -333,10 +406,64 @@ function submit(): void {
 @media (max-width: 720px) {
   .target-card {
     grid-template-columns: 1fr;
+    padding: 0.85rem;
   }
 
-  .target-position {
-    min-width: 0;
+  .target-card-top {
+    gap: 0.65rem;
+  }
+
+  .target-card-main {
+    gap: 0.7rem;
+  }
+
+  .target-avatar {
+    height: 3.35rem;
+    width: 3.35rem;
+  }
+
+  .target-avatar-icon {
+    height: 1.45rem;
+    width: 1.45rem;
+  }
+
+  .thread-title {
+    font-size: 1.12rem;
+  }
+
+  .target-team {
+    font-size: 0.9rem;
+  }
+
+  .thread-back-button {
+    display: inline-flex;
+    height: 1.95rem;
+    width: 1.95rem;
+  }
+
+  .thread-back-icon {
+    height: 0.92rem;
+    width: 0.92rem;
+  }
+
+  .thread-panel {
+    min-height: 0;
+  }
+
+  .composer {
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 0.75rem;
+  }
+
+  .composer-input {
+    min-height: 2.9rem;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .composer-send {
+    height: 2.15rem;
+    width: 2.15rem;
   }
 }
 </style>

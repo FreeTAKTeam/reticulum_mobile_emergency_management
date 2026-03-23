@@ -155,31 +155,15 @@ async function send(bodyUtf8: string): Promise<void> {
 </script>
 
 <template>
-  <section class="view">
+  <section class="view" :class="`pane-${mobilePane}`">
     <header class="view-header">
-      <div>
+      <div class="view-heading">
         <h1 class="view-title">Inbox</h1>
-      </div>
-      <div class="view-actions">
-        <p class="view-status">
-          {{ nodeStore.ready ? "Node ready" : "Node not ready" }}
+        <p class="sync-line header-sync-line">
+          Sync status: <strong>{{ syncStatusLabel }}</strong>
         </p>
       </div>
     </header>
-
-    <section class="panel sync-panel">
-      <p class="sync-line">
-        Sync status: <strong>{{ syncStatusLabel }}</strong>
-      </p>
-      <button
-        v-if="mobilePane === 'detail'"
-        type="button"
-        class="pane-toggle mobile-only sync-back-button"
-        @click="showConversationList"
-      >
-        Back
-      </button>
-    </section>
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
@@ -211,11 +195,13 @@ async function send(bodyUtf8: string): Promise<void> {
         <ConversationThread
           :destination-hex="selectedDestinationHex"
           :display-name="selectedPeerDisplayName"
+          :show-back-button="mobilePane === 'detail'"
           :target-status="targetStatusLabel"
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
           :messages="messagingStore.activeMessages"
+          @back="showConversationList"
           @send="send"
         />
       </section>
@@ -227,36 +213,34 @@ async function send(bodyUtf8: string): Promise<void> {
 .view {
   display: grid;
   gap: 1rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .view-header {
-  align-items: end;
+  align-items: baseline;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
 }
 
-.view-actions {
-  align-items: center;
+.view-heading {
+  align-items: baseline;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.65rem;
-  justify-content: flex-end;
+  gap: 0.75rem;
 }
 
 .view-title,
-.view-status {
+.header-sync-line {
   margin: 0;
 }
 
 .view-title {
   font-family: var(--font-headline);
   font-size: clamp(1.9rem, 3vw, 2.8rem);
-}
-
-.view-status {
-  color: #94add3;
-  font-family: var(--font-body);
 }
 
 .panel {
@@ -266,26 +250,20 @@ async function send(bodyUtf8: string): Promise<void> {
   padding: 0.95rem;
 }
 
-.sync-panel {
-  align-items: center;
-  display: flex;
-  gap: 0.75rem;
-  justify-content: space-between;
-}
-
 .sync-line {
   color: #cfe5ff;
   font-family: var(--font-ui);
   margin: 0;
 }
 
-.sync-back-button {
-  flex-shrink: 0;
+.header-sync-line {
+  color: #94add3;
 }
 
 .inbox-panel {
   display: grid;
   gap: 0.9rem;
+  min-height: 0;
 }
 
 .inbox-panel-header {
@@ -322,9 +300,17 @@ async function send(bodyUtf8: string): Promise<void> {
 }
 
 .inbox-layout {
+  align-items: stretch;
   display: grid;
   gap: 1rem;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.detail-panel {
+  height: 100%;
+  min-height: 0;
 }
 
 .pane-toggle {
@@ -352,6 +338,10 @@ async function send(bodyUtf8: string): Promise<void> {
 }
 
 @media (max-width: 900px) {
+  .pane-detail .view-header {
+    display: none;
+  }
+
   .inbox-layout {
     grid-template-columns: 1fr;
   }

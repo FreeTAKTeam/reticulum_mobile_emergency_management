@@ -55,8 +55,14 @@ function hasReadablePeerName(displayName: string, destinationHex: string): boole
 
 <style scoped>
 .conversation-list {
+  align-content: start;
   display: grid;
   gap: 0.55rem;
+  grid-auto-rows: max-content;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.1rem;
 }
 
 .conversation-empty {

@@ -1162,9 +1162,8 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
 
   async requestLxmfSync(_limit?: number): Promise<void> {
     this.emitter.emit("syncUpdated", {
-      phase: "Failed",
+      phase: "Idle",
       messagesReceived: 0,
-      detail: "Propagation sync is not available in the web runtime.",
     });
   }
 
@@ -1439,9 +1438,8 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async requestLxmfSync(_limit?: number): Promise<void> {
     this.emitter.emit("syncUpdated", {
-      phase: "Failed",
+      phase: "Idle",
       messagesReceived: 0,
-      detail: "Propagation sync is not available in the mock runtime.",
     });
   }
 

@@ -47,6 +47,10 @@ function displayNameForDestination(destinationHex: string, nodeStore: ReturnType
   return peer?.label ?? peer?.announcedName ?? destinationHex;
 }
 
+function isVisibleChatMessage(message: MessageRecord): boolean {
+  return message.bodyUtf8.trim().length > 0;
+}
+
 export const useMessagingStore = defineStore("messaging", () => {
   const nodeStore = useNodeStore();
   const byMessageId = ref<StoredMessages>({});
@@ -64,7 +68,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       [message.messageIdHex]: cloneMessage(message),
     };
     persist();
-    if (!selectedConversationId.value) {
+    if (!selectedConversationId.value && isVisibleChatMessage(message)) {
       selectedConversationId.value = message.conversationId;
     }
   }
@@ -96,6 +100,7 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   const messages = computed(() =>
     Object.values(byMessageId.value)
+      .filter((message) => isVisibleChatMessage(message))
       .sort((left, right) => {
         const leftTime = left.receivedAtMs ?? left.sentAtMs ?? left.updatedAtMs;
         const rightTime = right.receivedAtMs ?? right.sentAtMs ?? right.updatedAtMs;
