@@ -3,7 +3,9 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Disabled" | "RchLxmf" | "RchHttp";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
-export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "other";
+export type PeerManagementState = "Unmanaged" | "Managed";
+export type PeerAvailabilityState = "Unseen" | "Discovered" | "Resolved" | "Ready";
+export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type SendOutcome =
   | "SentDirect"
   | "SentBroadcast"
@@ -51,8 +53,21 @@ export interface NodeStatus {
 
 export interface PeerChange {
   destinationHex: string;
-  state: PeerState;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  displayName?: string;
+  appData?: string;
+  state?: PeerState;
+  managementState?: PeerManagementState;
+  availabilityState?: PeerAvailabilityState;
+  activeLink?: boolean;
   lastError?: string;
+  lastResolutionError?: string;
+  lastResolutionAttemptAtMs?: number;
+  lastReadyAtMs?: number;
+  lastSeenAtMs?: number;
+  announceLastSeenAtMs?: number;
+  lxmfLastSeenAtMs?: number;
 }
 
 export interface StatusChangedEvent {
@@ -142,6 +157,12 @@ export interface PeerRecord {
   displayName?: string;
   appData?: string;
   state: PeerState;
+  managementState: PeerManagementState;
+  availabilityState: PeerAvailabilityState;
+  activeLink: boolean;
+  lastResolutionError?: string;
+  lastResolutionAttemptAtMs?: number;
+  lastReadyAtMs?: number;
   lastSeenAtMs: number;
   announceLastSeenAtMs?: number;
   lxmfLastSeenAtMs?: number;
@@ -251,7 +272,7 @@ export interface ReticulumNodeClientFactoryOptions {
 
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: "emergency-ops-mobile",
-  tcpClients: ["rmap.world:4242"],
+  tcpClients: [],
   broadcast: true,
   announceIntervalSeconds: 1800,
   announceCapabilities: "R3AKT,EMergencyMessages",
@@ -350,8 +371,28 @@ const ReticulumNodePluginInstance = registerPlugin<ReticulumNodePlugin>(
   "ReticulumNode",
 );
 
-function normalizeHex(value: string): string {
-  return value.trim().toLowerCase();
+function normalizeHex(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+function toOptionalHex(value: unknown): string | undefined {
+  if (!hasValue(value)) {
+    return undefined;
+  }
+  const normalized = normalizeHex(value);
+  return normalized ? normalized : undefined;
+}
+
+function toOptionalNumber(value: unknown): number | undefined {
+  if (!hasValue(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function decodeBase64ToBytes(value: string): Uint8Array {
@@ -409,6 +450,18 @@ function toPeerState(raw: unknown): PeerState {
   return "Disconnected";
 }
 
+function toPeerManagementState(raw: unknown): PeerManagementState {
+  return String(raw ?? "") === "Managed" ? "Managed" : "Unmanaged";
+}
+
+function toPeerAvailabilityState(raw: unknown): PeerAvailabilityState {
+  const value = String(raw ?? "");
+  if (value === "Discovered" || value === "Resolved" || value === "Ready" || value === "Unseen") {
+    return value;
+  }
+  return "Unseen";
+}
+
 function toSendOutcome(raw: unknown): SendOutcome {
   const value = String(raw ?? "");
   const valid: SendOutcome[] = [
@@ -437,7 +490,9 @@ function toAnnounceReceivedEvent(
     raw.destinationKind ?? raw.destination_kind ?? "other",
   );
   const destinationKind: AnnounceDestinationKind =
-    destinationKindRaw === "app" || destinationKindRaw === "lxmf_delivery"
+    destinationKindRaw === "app"
+      || destinationKindRaw === "lxmf_delivery"
+      || destinationKindRaw === "lxmf_propagation"
       ? destinationKindRaw
       : "other";
   return {
@@ -470,15 +525,81 @@ function toAnnounceRecord(raw: Record<string, unknown>): AnnounceRecord {
 
 function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
   const changeRaw = (raw.change as Record<string, unknown> | undefined) ?? raw;
+  const managementStateRaw = hasValue(changeRaw.managementState)
+    ? changeRaw.managementState
+    : changeRaw.management_state;
+  const availabilityStateRaw = hasValue(changeRaw.availabilityState)
+    ? changeRaw.availabilityState
+    : changeRaw.availability_state;
+  const activeLinkRaw = hasValue(changeRaw.activeLink)
+    ? changeRaw.activeLink
+    : changeRaw.active_link;
+  const lastSeenAtMsRaw = hasValue(changeRaw.lastSeenAtMs)
+    ? changeRaw.lastSeenAtMs
+    : changeRaw.last_seen_at_ms;
   return {
     change: {
       destinationHex: normalizeHex(
         String(changeRaw.destinationHex ?? changeRaw.destination_hex ?? ""),
       ),
-      state: toPeerState(changeRaw.state),
+      identityHex: toOptionalHex(
+        hasValue(changeRaw.identityHex) ? changeRaw.identityHex : changeRaw.identity_hex,
+      ),
+      lxmfDestinationHex: toOptionalHex(
+        hasValue(changeRaw.lxmfDestinationHex)
+          ? changeRaw.lxmfDestinationHex
+          : changeRaw.lxmf_destination_hex,
+      ),
+      displayName:
+        typeof changeRaw.displayName === "string"
+          ? changeRaw.displayName
+          : typeof changeRaw.display_name === "string"
+            ? changeRaw.display_name
+            : undefined,
+      appData:
+        typeof changeRaw.appData === "string"
+          ? changeRaw.appData
+          : typeof changeRaw.app_data === "string"
+            ? changeRaw.app_data
+            : undefined,
+      state: hasValue(changeRaw.state) ? toPeerState(changeRaw.state) : undefined,
+      managementState: hasValue(managementStateRaw)
+        ? toPeerManagementState(managementStateRaw)
+        : undefined,
+      availabilityState: hasValue(availabilityStateRaw)
+        ? toPeerAvailabilityState(availabilityStateRaw)
+        : undefined,
+      activeLink: hasValue(activeLinkRaw) ? Boolean(activeLinkRaw) : undefined,
       lastError: (changeRaw.lastError ?? changeRaw.last_error) as
         | string
         | undefined,
+      lastResolutionError:
+        typeof changeRaw.lastResolutionError === "string"
+          ? changeRaw.lastResolutionError
+          : typeof changeRaw.last_resolution_error === "string"
+            ? changeRaw.last_resolution_error
+            : undefined,
+      lastResolutionAttemptAtMs: toOptionalNumber(
+        hasValue(changeRaw.lastResolutionAttemptAtMs)
+          ? changeRaw.lastResolutionAttemptAtMs
+          : changeRaw.last_resolution_attempt_at_ms,
+      ),
+      lastReadyAtMs: toOptionalNumber(
+        hasValue(changeRaw.lastReadyAtMs)
+          ? changeRaw.lastReadyAtMs
+          : changeRaw.last_ready_at_ms,
+      ),
+      lastSeenAtMs: toOptionalNumber(lastSeenAtMsRaw),
+      announceLastSeenAtMs: toOptionalNumber(
+        hasValue(changeRaw.announceLastSeenAtMs)
+          ? changeRaw.announceLastSeenAtMs
+          : changeRaw.announce_last_seen_at_ms,
+      ),
+      lxmfLastSeenAtMs: toOptionalNumber(
+        hasValue(changeRaw.lxmfLastSeenAtMs)
+          ? changeRaw.lxmfLastSeenAtMs
+          : changeRaw.lxmf_last_seen_at_ms,
+      ),
     },
   };
 }
@@ -488,14 +609,12 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
     destinationHex: normalizeHex(
       String(raw.destinationHex ?? raw.destination_hex ?? ""),
     ),
-    identityHex:
-      raw.identityHex !== undefined || raw.identity_hex !== undefined
-        ? normalizeHex(String(raw.identityHex ?? raw.identity_hex ?? ""))
-        : undefined,
-    lxmfDestinationHex:
-      raw.lxmfDestinationHex !== undefined || raw.lxmf_destination_hex !== undefined
-        ? normalizeHex(String(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex ?? ""))
-        : undefined,
+    identityHex: toOptionalHex(
+      hasValue(raw.identityHex) ? raw.identityHex : raw.identity_hex,
+    ),
+    lxmfDestinationHex: toOptionalHex(
+      hasValue(raw.lxmfDestinationHex) ? raw.lxmfDestinationHex : raw.lxmf_destination_hex,
+    ),
     displayName:
       typeof raw.displayName === "string"
         ? raw.displayName
@@ -509,19 +628,36 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
           ? raw.app_data
           : undefined,
     state: toPeerState(raw.state),
-    lastSeenAtMs: Number(raw.lastSeenAtMs ?? raw.last_seen_at_ms ?? Date.now()),
-    announceLastSeenAtMs:
-      typeof raw.announceLastSeenAtMs === "number"
+    managementState: toPeerManagementState(raw.managementState ?? raw.management_state),
+    availabilityState: toPeerAvailabilityState(raw.availabilityState ?? raw.availability_state),
+    activeLink: Boolean(raw.activeLink ?? raw.active_link),
+    lastResolutionError:
+      typeof raw.lastResolutionError === "string"
+        ? raw.lastResolutionError
+        : typeof raw.last_resolution_error === "string"
+          ? raw.last_resolution_error
+          : undefined,
+    lastResolutionAttemptAtMs: toOptionalNumber(
+      hasValue(raw.lastResolutionAttemptAtMs)
+        ? raw.lastResolutionAttemptAtMs
+        : raw.last_resolution_attempt_at_ms,
+    ),
+    lastReadyAtMs: toOptionalNumber(
+      hasValue(raw.lastReadyAtMs) ? raw.lastReadyAtMs : raw.last_ready_at_ms,
+    ),
+    lastSeenAtMs: toOptionalNumber(
+      hasValue(raw.lastSeenAtMs) ? raw.lastSeenAtMs : raw.last_seen_at_ms,
+    ) ?? 0,
+    announceLastSeenAtMs: toOptionalNumber(
+      hasValue(raw.announceLastSeenAtMs)
         ? raw.announceLastSeenAtMs
-        : typeof raw.announce_last_seen_at_ms === "number"
-          ? raw.announce_last_seen_at_ms
-          : undefined,
-    lxmfLastSeenAtMs:
-      typeof raw.lxmfLastSeenAtMs === "number"
+        : raw.announce_last_seen_at_ms,
+    ),
+    lxmfLastSeenAtMs: toOptionalNumber(
+      hasValue(raw.lxmfLastSeenAtMs)
         ? raw.lxmfLastSeenAtMs
-        : typeof raw.lxmf_last_seen_at_ms === "number"
-          ? raw.lxmf_last_seen_at_ms
-          : undefined,
+        : raw.lxmf_last_seen_at_ms,
+    ),
   };
 }
 
@@ -1055,6 +1191,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         change: {
           destinationHex,
           state: "Disconnected",
+          managementState: "Unmanaged",
+          availabilityState: "Unseen",
+          activeLink: false,
+          lastSeenAtMs: Date.now(),
         },
       });
     }
@@ -1080,6 +1220,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connecting",
+        managementState: "Managed",
+        availabilityState: "Unseen",
+        activeLink: false,
+        lastSeenAtMs: Date.now(),
       },
     });
     this.connected.add(normalized);
@@ -1087,6 +1231,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connected",
+        managementState: "Managed",
+        availabilityState: "Ready",
+        activeLink: true,
+        lastSeenAtMs: Date.now(),
       },
     });
   }
@@ -1098,6 +1246,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
+        managementState: "Unmanaged",
+        availabilityState: "Unseen",
+        activeLink: false,
+        lastSeenAtMs: Date.now(),
       },
     });
   }
@@ -1337,6 +1489,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connecting",
+        managementState: "Managed",
+        availabilityState: "Unseen",
+        activeLink: false,
+        lastSeenAtMs: Date.now(),
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -1345,6 +1501,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connected",
+        managementState: "Managed",
+        availabilityState: "Ready",
+        activeLink: true,
+        lastSeenAtMs: Date.now(),
       },
     });
   }
@@ -1356,6 +1516,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
+        managementState: "Unmanaged",
+        availabilityState: "Unseen",
+        activeLink: false,
+        lastSeenAtMs: Date.now(),
       },
     });
   }

@@ -8,7 +8,7 @@ const props = defineProps<{
   value: EamStatus;
 }>();
 
-const visibleLabel = computed(() => props.label.trim());
+const visibleLabel = computed(() => String(props.label ?? "").trim());
 const visibleValue = computed(() => props.value);
 
 const statusMeaning = computed(() => {

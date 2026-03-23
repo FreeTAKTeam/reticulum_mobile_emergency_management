@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
-import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer } from "../types/domain";
 
 const props = defineProps<{
@@ -23,35 +22,38 @@ watch(
   },
 );
 
-const nodeStore = useNodeStore();
-const effectiveState = computed(() => nodeStore.peerDisplayState(props.peer));
-const livePresenceSeenAt = computed(() => nodeStore.peerPresenceTimestamp(props.peer));
-const cachedPresenceSeenAt = computed(() => nodeStore.peerCachedPresenceTimestamp(props.peer));
-const announceLabel = computed(() => {
-  const presence = nodeStore.peerPresenceState(props.peer);
-  if (effectiveState.value === "connected") {
-    return presence === "online" ? "Announce current" : "Announce stale";
-  }
-  if (presence === "online") {
-    return "Discovered";
-  }
-  return cachedPresenceSeenAt.value ? "Announce cached" : "No recent announce";
-});
-const lastSeenLabel = computed(() =>
-  livePresenceSeenAt.value
-    ? new Date(livePresenceSeenAt.value).toLocaleTimeString()
-    : cachedPresenceSeenAt.value
-      ? `cached ${new Date(cachedPresenceSeenAt.value).toLocaleTimeString()}`
-      : "never",
-);
 const stateLabel = computed(() => {
-  if (effectiveState.value === "connected") {
-    return "Connected";
+  switch (props.peer.availabilityState) {
+    case "ready":
+      return "Ready";
+    case "resolved":
+      return "Resolved";
+    case "discovered":
+      return "Seen";
+    default:
+      return "Unseen";
   }
-  if (effectiveState.value === "connecting") {
-    return "Connecting";
+});
+const managementLabel = computed(() =>
+  props.peer.managementState === "managed" ? "Managed" : "Unmanaged",
+);
+const linkLabel = computed(() => (props.peer.activeLink ? "Active link" : "No active link"));
+const lastSeenLabel = computed(() =>
+  props.peer.lastSeenAt ? new Date(props.peer.lastSeenAt).toLocaleTimeString() : "never",
+);
+const resolutionErrorText = computed(() =>
+  typeof props.peer.lastResolutionError === "string"
+    ? props.peer.lastResolutionError.trim()
+    : "",
+);
+const resolutionLabel = computed(() => {
+  if (resolutionErrorText.value) {
+    return `Resolution error: ${resolutionErrorText.value}`;
   }
-  return "Disconnected";
+  if (props.peer.lastResolutionAttemptAt) {
+    return `Resolution tried ${new Date(props.peer.lastResolutionAttemptAt).toLocaleTimeString()}`;
+  }
+  return "No resolution attempts";
 });
 </script>
 
@@ -63,10 +65,13 @@ const stateLabel = computed(() => {
         {{ props.peer.announcedName }}
       </p>
       <p class="details">
-        {{ stateLabel }} | {{ announceLabel }} | last seen {{ lastSeenLabel }}
+        {{ managementLabel }} | {{ stateLabel }} | {{ linkLabel }} | last seen {{ lastSeenLabel }}
       </p>
-      <p class="details" v-if="props.peer.hops !== undefined">
-        {{ props.peer.hops }} hops | {{ props.peer.verifiedCapability ? "verified" : "unverified" }}
+      <p class="details">
+        {{ resolutionLabel }}
+      </p>
+      <p class="details" v-if="props.peer.hops !== undefined || props.peer.verifiedCapability">
+        {{ props.peer.hops !== undefined ? `${props.peer.hops} hops` : "hops unknown" }} | {{ props.peer.verifiedCapability ? "verified" : "unverified" }}
       </p>
     </div>
     <label class="label-input-wrap">
@@ -90,9 +95,9 @@ const stateLabel = computed(() => {
       <button
         class="btn connect"
         type="button"
-        @click="emit('connectToggle', props.peer.destination, props.peer.state !== 'connected')"
+        @click="emit('connectToggle', props.peer.destination, props.peer.managementState !== 'managed')"
       >
-        {{ props.peer.state === "connected" ? "Disconnect" : "Connect" }}
+        {{ props.peer.managementState === "managed" ? "Disconnect" : "Connect" }}
       </button>
     </div>
   </article>

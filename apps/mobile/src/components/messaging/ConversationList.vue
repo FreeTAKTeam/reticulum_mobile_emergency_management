@@ -18,8 +18,8 @@ const emit = defineEmits<{
 }>();
 
 function hasReadablePeerName(displayName: string, destinationHex: string): boolean {
-  const normalizedName = displayName.trim();
-  const normalizedDestination = destinationHex.trim();
+  const normalizedName = String(displayName ?? "").trim();
+  const normalizedDestination = String(destinationHex ?? "").trim();
   return normalizedName.length > 0 && normalizedName.toLowerCase() !== normalizedDestination.toLowerCase();
 }
 </script>

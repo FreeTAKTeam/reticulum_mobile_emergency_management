@@ -7,12 +7,12 @@ const DISPLAY_NAME_TOKEN_PREFIX = "name=";
 const MAX_DISPLAY_NAME_LENGTH = 64;
 export const TELEMETRY_CAPABILITY = "Telemetry";
 
-export function normalizeDestinationHex(value: string): string {
-  return value.trim().toLowerCase();
+export function normalizeDestinationHex(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-export function isValidDestinationHex(value: string): boolean {
-  return DEST_HEX_REGEX.test(value.trim());
+export function isValidDestinationHex(value: unknown): boolean {
+  return typeof value === "string" && DEST_HEX_REGEX.test(value.trim());
 }
 
 function tokenizeAnnounceAppData(appData: string): string[] {

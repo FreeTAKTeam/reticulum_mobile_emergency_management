@@ -39,19 +39,21 @@ use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
     AnnounceRecord, ConversationRecord, HubMode, LxmfDeliveryStatus, LxmfDeliveryUpdate,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
-    NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, SendLxmfRequest, SendOutcome,
-    SyncPhase, SyncStatus,
+    NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
+    PeerState, SendLxmfRequest, SendOutcome, SyncPhase, SyncStatus,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const LXMF_FIELD_COMMANDS: i64 = 0x09;
 const LXMF_FIELD_RESULTS: i64 = 0x0A;
 const LXMF_FIELD_EVENT: i64 = 0x0D;
+const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
-const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
@@ -87,25 +89,57 @@ fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
 }
 
-fn announce_destination_kind(desc: &DestinationDesc) -> &'static str {
-    let app_name = DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1);
-    let lxmf_name = DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1);
+async fn announce_destinations(
+    transport: &Arc<Transport>,
+    app_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    lxmf_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    announce_capabilities: &Arc<TokioMutex<String>>,
+    reason: &str,
+) {
+    let caps = announce_capabilities.lock().await.clone();
+    let app_hex = app_destination.lock().await.desc.address_hash.to_hex_string();
+    let lxmf_hex = lxmf_destination.lock().await.desc.address_hash.to_hex_string();
+    let delivery_app_data = delivery_display_name_app_data(caps.as_str());
+    info!(
+        "[announce] sending reason={} app={} lxmf={}",
+        reason,
+        app_hex,
+        lxmf_hex,
+    );
+    transport
+        .send_announce(app_destination, Some(caps.as_bytes()))
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    transport
+        .send_announce(lxmf_destination, delivery_app_data.as_deref())
+        .await;
+}
 
-    let app_hash = SingleOutputDestination::new(desc.identity.clone(), app_name.clone())
-        .desc
-        .address_hash;
-    if desc.address_hash == app_hash || desc.name.hash == app_name.hash {
-        "app"
-    } else {
-        let lxmf_hash = SingleOutputDestination::new(desc.identity.clone(), lxmf_name.clone())
-            .desc
-            .address_hash;
-        if desc.address_hash == lxmf_hash || desc.name.hash == lxmf_name.hash {
-            "lxmf_delivery"
-        } else {
-            "other"
-        }
+fn delivery_display_name_app_data(capability_string: &str) -> Option<Vec<u8>> {
+    capability_string
+        .split(';')
+        .map(str::trim)
+        .find_map(|token| token.strip_prefix("name="))
+        .and_then(encode_delivery_display_name_app_data)
+}
+
+fn announce_destination_kind_from_name_hash(name_hash: &[u8]) -> &'static str {
+    let app_name = DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1);
+    if name_hash == app_name.as_name_hash_slice() {
+        return "app";
     }
+
+    let lxmf_name = DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1);
+    if name_hash == lxmf_name.as_name_hash_slice() {
+        return "lxmf_delivery";
+    }
+
+    let propagation_name = DestinationName::new(LXMF_PROPAGATION_NAME.0, LXMF_PROPAGATION_NAME.1);
+    if name_hash == propagation_name.as_name_hash_slice() {
+        return "lxmf_propagation";
+    }
+
+    "other"
 }
 
 fn join_url(base: &str, path: &str) -> Result<String, NodeError> {
@@ -156,6 +190,24 @@ fn from_sdk_peer_state(state: sdkmsg::PeerState) -> PeerState {
         sdkmsg::PeerState::Connecting => PeerState::Connecting {},
         sdkmsg::PeerState::Connected => PeerState::Connected {},
         sdkmsg::PeerState::Disconnected => PeerState::Disconnected {},
+    }
+}
+
+fn from_sdk_peer_management_state(state: sdkmsg::PeerManagementState) -> PeerManagementState {
+    match state {
+        sdkmsg::PeerManagementState::Unmanaged => PeerManagementState::Unmanaged {},
+        sdkmsg::PeerManagementState::Managed => PeerManagementState::Managed {},
+    }
+}
+
+fn from_sdk_peer_availability_state(
+    state: sdkmsg::PeerAvailabilityState,
+) -> PeerAvailabilityState {
+    match state {
+        sdkmsg::PeerAvailabilityState::Unseen => PeerAvailabilityState::Unseen {},
+        sdkmsg::PeerAvailabilityState::Discovered => PeerAvailabilityState::Discovered {},
+        sdkmsg::PeerAvailabilityState::Resolved => PeerAvailabilityState::Resolved {},
+        sdkmsg::PeerAvailabilityState::Ready => PeerAvailabilityState::Ready {},
     }
 }
 
@@ -305,9 +357,36 @@ fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
         display_name: record.display_name,
         app_data: record.app_data,
         state: from_sdk_peer_state(record.state),
+        management_state: from_sdk_peer_management_state(record.management_state),
+        availability_state: from_sdk_peer_availability_state(record.availability_state),
+        active_link: record.active_link,
+        last_resolution_error: record.last_resolution_error,
+        last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
+        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+    }
+}
+
+fn from_sdk_peer_change(change: sdkmsg::PeerChange) -> PeerChange {
+    PeerChange {
+        destination_hex: change.destination_hex,
+        identity_hex: change.identity_hex,
+        lxmf_destination_hex: change.lxmf_destination_hex,
+        display_name: change.display_name,
+        app_data: change.app_data,
+        state: from_sdk_peer_state(change.state),
+        management_state: from_sdk_peer_management_state(change.management_state),
+        availability_state: from_sdk_peer_availability_state(change.availability_state),
+        active_link: change.active_link,
+        last_error: change.last_error,
+        last_resolution_error: change.last_resolution_error,
+        last_resolution_attempt_at_ms: change.last_resolution_attempt_at_ms,
+        last_ready_at_ms: change.last_ready_at_ms,
+        last_seen_at_ms: change.last_seen_at_ms,
+        announce_last_seen_at_ms: change.announce_last_seen_at_ms,
+        lxmf_last_seen_at_ms: change.lxmf_last_seen_at_ms,
     }
 }
 
@@ -510,28 +589,315 @@ async fn connected_destination_hexes(state: &NodeRuntimeState) -> Vec<String> {
 }
 
 async fn snapshot_peer_records(state: &NodeRuntimeState) -> Vec<PeerRecord> {
-    let connected = connected_destination_hexes(state).await;
     state
         .messaging
         .lock()
         .await
-        .list_peers(connected.iter().map(String::as_str))
+        .list_peers()
         .into_iter()
         .map(from_sdk_peer_record)
         .collect()
 }
 
-async fn emit_peer_resolved(state: &NodeRuntimeState, bus: &EventBus, identity_hex: &str) {
-    let connected = connected_destination_hexes(state).await;
+async fn refresh_peer_snapshot(state: &NodeRuntimeState) {
+    let peers = snapshot_peer_records(state).await;
+    if let Ok(mut guard) = state.peers_snapshot.lock() {
+        *guard = peers;
+    }
+}
+
+fn refresh_sync_status_snapshot(state: &NodeRuntimeState, status: &SyncStatus) {
+    if let Ok(mut guard) = state.sync_status_snapshot.lock() {
+        *guard = status.clone();
+    }
+}
+
+async fn emit_peer_resolved_for_destination(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    destination_hex: &str,
+) {
+    refresh_peer_snapshot(state).await;
     if let Some(peer) = state
         .messaging
         .lock()
         .await
-        .peer_for_identity(identity_hex, connected.iter().map(String::as_str))
+        .peer_by_destination(destination_hex)
         .map(from_sdk_peer_record)
     {
         bus.emit(NodeEvent::PeerResolved { peer });
     }
+}
+
+async fn emit_peer_changed(state: &NodeRuntimeState, bus: &EventBus, destination_hex: &str) {
+    refresh_peer_snapshot(state).await;
+    if let Some(change) = state
+        .messaging
+        .lock()
+        .await
+        .peer_change_for_destination(destination_hex)
+        .map(from_sdk_peer_change)
+    {
+        bus.emit(NodeEvent::PeerChanged { change });
+    }
+}
+
+async fn canonical_peer_destination_hex(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> String {
+    let normalized_destination = destination_hex.to_ascii_lowercase();
+    let peer = {
+        let messaging = state.messaging.lock().await;
+        messaging
+            .peer_by_destination(normalized_destination.as_str())
+            .or_else(|| {
+                messaging.list_peers().into_iter().find(|peer| {
+                    peer.lxmf_destination_hex.as_deref() == Some(normalized_destination.as_str())
+                        || peer.identity_hex.as_deref() == Some(normalized_destination.as_str())
+                })
+            })
+    };
+    let Some(peer) = peer else {
+        return normalized_destination;
+    };
+    let Some(identity_hex) = peer.identity_hex.clone() else {
+        return peer.destination_hex;
+    };
+    state
+        .messaging
+        .lock()
+        .await
+        .app_destination_for_identity(identity_hex.as_str())
+        .unwrap_or(peer.destination_hex)
+}
+
+fn parse_capability_tokens(app_data: &str) -> Vec<String> {
+    app_data
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn peer_exposes_propagation_capability(peer: &sdkmsg::PeerRecord) -> bool {
+    peer.app_data
+        .as_deref()
+        .map(parse_capability_tokens)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|token| token == "hub" || token.ends_with("hub"))
+}
+
+fn propagation_candidate_sort_key(
+    announce: &sdkmsg::AnnounceRecord,
+    preferred_destination_hex: Option<&str>,
+) -> (u8, u8, u64, String) {
+    let preferred_rank = if preferred_destination_hex
+        .is_some_and(|preferred| preferred == announce.destination_hex)
+    {
+        0
+    } else {
+        1
+    };
+    (
+        preferred_rank,
+        announce.hops,
+        u64::MAX - announce.received_at_ms,
+        announce.destination_hex.clone(),
+    )
+}
+
+async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
+    let (announces, peers) = {
+        let messaging = state.messaging.lock().await;
+        (messaging.list_announces(), messaging.list_peers())
+    };
+    let desired_destination = announces
+        .iter()
+        .filter(|record| record.destination_kind == "lxmf_propagation")
+        .min_by_key(|record| {
+            propagation_candidate_sort_key(
+                record,
+                state.preferred_propagation_node_hex.as_deref(),
+            )
+        })
+        .map(|record| record.destination_hex.clone())
+        .or_else(|| {
+            peers
+                .iter()
+                .filter(|peer| {
+                    matches!(peer.availability_state, sdkmsg::PeerAvailabilityState::Ready)
+                })
+                .filter(|peer| peer_exposes_propagation_capability(peer))
+                .min_by_key(|peer| {
+                    (
+                        if state
+                            .preferred_propagation_node_hex
+                            .as_deref()
+                            .is_some_and(|preferred| preferred == peer.destination_hex)
+                        {
+                            0_u8
+                        } else {
+                            1_u8
+                        },
+                        if peer.active_link { 0_u8 } else { 1_u8 },
+                        u64::MAX - peer.last_ready_at_ms.unwrap_or(0),
+                        u64::MAX - peer.last_seen_at_ms,
+                        peer.destination_hex.clone(),
+                    )
+                })
+                .map(|peer| peer.destination_hex.clone())
+        });
+
+    let mut active_guard = state.active_propagation_node_hex.lock().await;
+    if *active_guard == desired_destination {
+        return;
+    }
+    info!(
+        "[sync] auto propagation relay {}",
+        desired_destination
+            .as_deref()
+            .map(|value| format!("selected {value}"))
+            .unwrap_or_else(|| "cleared".to_string())
+    );
+    *active_guard = desired_destination.clone();
+    drop(active_guard);
+
+    let status = from_sdk_sync_status(
+        state
+            .messaging
+            .lock()
+            .await
+            .set_active_propagation_node(desired_destination),
+    );
+    refresh_sync_status_snapshot(state, &status);
+    bus.emit(NodeEvent::SyncUpdated { status });
+}
+
+async fn resolve_peer_route(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    destination_hex: &str,
+) -> Result<(), NodeError> {
+    let destination = parse_address_hash(destination_hex)?;
+    let attempted_at_ms = now_ms();
+    {
+        let mut messaging = state.messaging.lock().await;
+        messaging.record_resolution_attempt(destination_hex, attempted_at_ms);
+        messaging.record_resolution_error(destination_hex, None);
+    }
+    emit_peer_changed(state, bus, destination_hex).await;
+
+    state.transport.request_path(&destination, None, None).await;
+    let desc = ensure_destination_desc(state, destination, None).await?;
+    let identity_hex = desc.identity.address_hash.to_hex_string();
+    let lxmf_desc = SingleOutputDestination::new(
+        desc.identity.clone(),
+        DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+    )
+    .desc;
+    let lxmf_destination_hex = lxmf_desc.address_hash.to_hex_string();
+    {
+        let mut messaging = state.messaging.lock().await;
+        messaging.record_resolution_result(
+            destination_hex,
+            identity_hex.as_str(),
+            lxmf_destination_hex.as_str(),
+            now_ms(),
+        );
+    }
+    emit_peer_changed(state, bus, destination_hex).await;
+    emit_peer_resolved_for_destination(state, bus, destination_hex).await;
+    sync_auto_propagation_node(state, bus).await;
+    Ok(())
+}
+
+fn spawn_managed_peer_resolution(
+    state: NodeRuntimeState,
+    bus: EventBus,
+    destination_hex: String,
+) {
+    tokio::spawn(async move {
+        let retry_delays_secs = [0_u64, 3, 8, 15, 30];
+        for delay_secs in retry_delays_secs {
+            if delay_secs > 0 {
+                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+            }
+
+            let should_retry = {
+                let messaging = state.messaging.lock().await;
+                if !messaging.is_peer_managed(destination_hex.as_str()) {
+                    false
+                } else {
+                    !matches!(
+                        messaging
+                            .peer_by_destination(destination_hex.as_str())
+                            .map(|peer| peer.availability_state),
+                        Some(sdkmsg::PeerAvailabilityState::Ready)
+                    )
+                }
+            };
+
+            if !should_retry {
+                return;
+            }
+
+            if let Err(err) = resolve_peer_route(&state, &bus, destination_hex.as_str()).await {
+                state
+                    .messaging
+                    .lock()
+                    .await
+                    .record_resolution_error(destination_hex.as_str(), Some(err.to_string()));
+                emit_peer_changed(&state, &bus, destination_hex.as_str()).await;
+            } else {
+                return;
+            }
+        }
+    });
+}
+
+fn spawn_passive_peer_resolution(
+    state: NodeRuntimeState,
+    bus: EventBus,
+    destination_hex: String,
+) {
+    tokio::spawn(async move {
+        let should_resolve = {
+            let messaging = state.messaging.lock().await;
+            match messaging.peer_by_destination(destination_hex.as_str()) {
+                Some(peer) => {
+                    !matches!(
+                        peer.availability_state,
+                        sdkmsg::PeerAvailabilityState::Ready | sdkmsg::PeerAvailabilityState::Resolved
+                    ) && peer.last_resolution_attempt_at_ms.is_none_or(|attempted_at_ms| {
+                        now_ms().saturating_sub(attempted_at_ms)
+                            >= PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS
+                    })
+                }
+                None => false,
+            }
+        };
+        if !should_resolve {
+            return;
+        }
+
+        {
+            let mut inflight = state.peer_resolution_inflight.lock().await;
+            if !inflight.insert(destination_hex.clone()) {
+                return;
+            }
+        }
+
+        let _ = resolve_peer_route(&state, &bus, destination_hex.as_str()).await;
+        state
+            .peer_resolution_inflight
+            .lock()
+            .await
+            .remove(destination_hex.as_str());
+    });
 }
 
 async fn upsert_message_record(
@@ -565,12 +931,11 @@ async fn message_records_snapshot(
 }
 
 async fn conversation_records_snapshot(state: &NodeRuntimeState) -> Vec<ConversationRecord> {
-    let connected = connected_destination_hexes(state).await;
     state
         .messaging
         .lock()
         .await
-        .list_conversations(connected.iter().map(String::as_str))
+        .list_conversations()
         .into_iter()
         .map(from_sdk_conversation_record)
         .collect()
@@ -658,6 +1023,7 @@ struct NodeRuntimeState {
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
+    peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
@@ -665,8 +1031,11 @@ struct NodeRuntimeState {
     pending_lxmf_acknowledgements:
         Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
+    peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
+    sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
+    preferred_propagation_node_hex: Option<String>,
 }
 
 async fn ensure_destination_desc(
@@ -1273,6 +1642,8 @@ pub async fn run_node(
     config: NodeConfig,
     identity: PrivateIdentity,
     status: Arc<Mutex<NodeStatus>>,
+    peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
+    sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     bus: EventBus,
     mut cmd_rx: mpsc::UnboundedReceiver<Command>,
 ) {
@@ -1335,6 +1706,8 @@ pub async fn run_node(
     > = Arc::new(TokioMutex::new(HashMap::new()));
     let connected_peers: Arc<TokioMutex<HashSet<AddressHash>>> =
         Arc::new(TokioMutex::new(HashSet::new()));
+    let peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>> =
+        Arc::new(TokioMutex::new(HashSet::new()));
     let pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
     let pending_lxmf_acknowledgements: Arc<
@@ -1360,13 +1733,20 @@ pub async fn run_node(
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
         connected_peers: connected_peers.clone(),
+        peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
         messaging: messaging.clone(),
+        peers_snapshot: peers_snapshot.clone(),
+        sync_status_snapshot: sync_status_snapshot.clone(),
         sdk: sdk.clone(),
         active_propagation_node_hex: active_propagation_node_hex.clone(),
+        preferred_propagation_node_hex: config
+            .hub_identity_hash
+            .as_ref()
+            .and_then(|value| normalize_hex_32(value)),
     };
 
     if let Err(err) = sdk.start().await {
@@ -1375,6 +1755,13 @@ pub async fn run_node(
             message: err.to_string(),
         });
     }
+
+    refresh_peer_snapshot(&state).await;
+    sync_auto_propagation_node(&state, &bus).await;
+    refresh_sync_status_snapshot(
+        &state,
+        &from_sdk_sync_status(state.messaging.lock().await.sync_status()),
+    );
 
     if let Ok(mut guard) = status.lock() {
         guard.running = true;
@@ -1428,19 +1815,42 @@ pub async fn run_node(
         let app_destination = app_destination.clone();
         let lxmf_destination = lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
-        let lxmf_display_name_app_data = encode_delivery_display_name_app_data(&config.name);
+        tokio::spawn(async move {
+            for delay_secs in [0_u64, 2, 5, 12] {
+                if delay_secs > 0 {
+                    tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                }
+                announce_destinations(
+                    &transport,
+                    &app_destination,
+                    &lxmf_destination,
+                    &announce_capabilities,
+                    "startup-burst",
+                )
+                .await;
+            }
+        });
+    }
+
+    {
+        let transport = transport.clone();
+        let app_destination = app_destination.clone();
+        let lxmf_destination = lxmf_destination.clone();
+        let announce_capabilities = announce_capabilities.clone();
         let interval_secs = config.announce_interval_seconds.max(1);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
+            interval.tick().await;
             loop {
                 interval.tick().await;
-                let caps = announce_capabilities.lock().await.clone();
-                transport
-                    .send_announce(&app_destination, Some(caps.as_bytes()))
-                    .await;
-                transport
-                    .send_announce(&lxmf_destination, lxmf_display_name_app_data.as_deref())
-                    .await;
+                announce_destinations(
+                    &transport,
+                    &app_destination,
+                    &lxmf_destination,
+                    &announce_capabilities,
+                    "periodic",
+                )
+                .await;
             }
         });
     }
@@ -1464,7 +1874,9 @@ pub async fn run_node(
                             .insert(desc.address_hash, desc);
                         let destination_hex = address_hash_to_hex(&desc.address_hash);
                         let identity_hex = desc.identity.address_hash.to_hex_string();
-                        let destination_kind = announce_destination_kind(&desc).to_string();
+                        let destination_kind =
+                            announce_destination_kind_from_name_hash(event.name_hash.as_slice())
+                                .to_string();
                         let app_data_bytes = event.app_data.as_slice().to_vec();
                         let app_data = String::from_utf8(app_data_bytes.clone())
                             .unwrap_or_else(|_| hex::encode(app_data_bytes.as_slice()));
@@ -1474,6 +1886,7 @@ pub async fn run_node(
                             None
                         };
                         let interface_hex = hex::encode(event.interface);
+                        let received_at_ms = now_ms();
                         state.messaging.lock().await.record_announce(to_sdk_announce_record(
                             AnnounceRecord {
                                 destination_hex: destination_hex.clone(),
@@ -1483,7 +1896,7 @@ pub async fn run_node(
                                 display_name: display_name.clone(),
                                 hops: event.hops,
                                 interface_hex: interface_hex.clone(),
-                                received_at_ms: now_ms(),
+                                received_at_ms,
                             },
                         ));
                         sdk.record_announce_received(
@@ -1495,15 +1908,53 @@ pub async fn run_node(
                             &interface_hex,
                         );
                         bus.emit(NodeEvent::AnnounceReceived {
-                            destination_hex,
+                            destination_hex: destination_hex.clone(),
                             identity_hex: identity_hex.clone(),
-                            destination_kind,
+                            destination_kind: destination_kind.clone(),
                             app_data,
                             hops: event.hops,
                             interface_hex,
-                            received_at_ms: now_ms(),
+                            received_at_ms,
                         });
-                        emit_peer_resolved(&state, &bus, &identity_hex).await;
+                        if destination_kind == "app" {
+                            let lxmf_destination_hex = SingleOutputDestination::new(
+                                desc.identity.clone(),
+                                DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+                            )
+                            .desc
+                            .address_hash
+                            .to_hex_string();
+                            state.messaging.lock().await.record_resolution_result(
+                                destination_hex.as_str(),
+                                identity_hex.as_str(),
+                                lxmf_destination_hex.as_str(),
+                                received_at_ms,
+                            );
+                            emit_peer_changed(&state, &bus, &destination_hex).await;
+                            emit_peer_resolved_for_destination(&state, &bus, &destination_hex)
+                                .await;
+                            spawn_passive_peer_resolution(
+                                state.clone(),
+                                bus.clone(),
+                                destination_hex.clone(),
+                            );
+                        } else if destination_kind == "lxmf_delivery" {
+                            let app_destination_hex = state
+                                .messaging
+                                .lock()
+                                .await
+                                .app_destination_for_identity(identity_hex.as_str());
+                            if let Some(app_destination_hex) = app_destination_hex {
+                                emit_peer_changed(&state, &bus, &app_destination_hex).await;
+                                emit_peer_resolved_for_destination(
+                                    &state,
+                                    &bus,
+                                    &app_destination_hex,
+                                )
+                                .await;
+                            }
+                        }
+                        sync_auto_propagation_node(&state, &bus).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -1667,42 +2118,61 @@ pub async fn run_node(
         let bus = bus.clone();
         let sdk = sdk.clone();
         let connected_peers = connected_peers.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             let mut rx = transport.out_link_events();
             loop {
                 match rx.recv().await {
                     Ok(event) => {
                         let destination_hex = address_hash_to_hex(&event.address_hash);
+                        let canonical_destination_hex =
+                            canonical_peer_destination_hex(&state, &destination_hex).await;
                         match event.event {
                             LinkEvent::Activated => {
                                 connected_peers.lock().await.insert(event.address_hash);
-                                sdk.record_peer_changed(
-                                    &destination_hex,
-                                    PeerState::Connected {},
-                                    None,
-                                );
-                                bus.emit(NodeEvent::PeerChanged {
-                                    change: PeerChange {
-                                        destination_hex,
-                                        state: PeerState::Connected {},
-                                        last_error: None,
-                                    },
-                                })
+                                state
+                                    .messaging
+                                    .lock()
+                                    .await
+                                    .set_peer_active_link(&destination_hex, true, now_ms());
+                                let state_name = state
+                                    .messaging
+                                    .lock()
+                                    .await
+                                    .peer_change_for_destination(&canonical_destination_hex)
+                                    .map(from_sdk_peer_change);
+                                if let Some(change) = state_name {
+                                    sdk.record_peer_changed(
+                                        &change.destination_hex,
+                                        change.state,
+                                        change.last_error.as_deref(),
+                                    );
+                                }
+                                emit_peer_changed(&state, &bus, &canonical_destination_hex).await;
+                                sync_auto_propagation_node(&state, &bus).await;
                             }
                             LinkEvent::Closed => {
                                 connected_peers.lock().await.remove(&event.address_hash);
-                                sdk.record_peer_changed(
-                                    &destination_hex,
-                                    PeerState::Disconnected {},
-                                    None,
-                                );
-                                bus.emit(NodeEvent::PeerChanged {
-                                    change: PeerChange {
-                                        destination_hex,
-                                        state: PeerState::Disconnected {},
-                                        last_error: None,
-                                    },
-                                })
+                                state
+                                    .messaging
+                                    .lock()
+                                    .await
+                                    .set_peer_active_link(&destination_hex, false, now_ms());
+                                let state_name = state
+                                    .messaging
+                                    .lock()
+                                    .await
+                                    .peer_change_for_destination(&canonical_destination_hex)
+                                    .map(from_sdk_peer_change);
+                                if let Some(change) = state_name {
+                                    sdk.record_peer_changed(
+                                        &change.destination_hex,
+                                        change.state,
+                                        change.last_error.as_deref(),
+                                    );
+                                }
+                                emit_peer_changed(&state, &bus, &canonical_destination_hex).await;
+                                sync_auto_propagation_node(&state, &bus).await;
                             }
                             LinkEvent::Data(_) => {}
                         }
@@ -1754,16 +2224,14 @@ pub async fn run_node(
                 break;
             }
             Command::AnnounceNow {} => {
-                let caps = announce_capabilities.lock().await.clone();
-                transport
-                    .send_announce(&app_destination, Some(caps.as_bytes()))
-                    .await;
-                transport
-                    .send_announce(
-                        &lxmf_destination,
-                        encode_delivery_display_name_app_data(config.name.as_str()).as_deref(),
-                    )
-                    .await;
+                announce_destinations(
+                    &transport,
+                    &app_destination,
+                    &lxmf_destination,
+                    &announce_capabilities,
+                    "manual",
+                )
+                .await;
             }
             Command::SetLogLevel { level } => {
                 crate::logger::NodeLogger::global().set_level(level);
@@ -1772,15 +2240,15 @@ pub async fn run_node(
                 destination_hex,
                 resp,
             } => {
-                let result = async {
-                    let destination = parse_address_hash(destination_hex.as_str())?;
-                    transport.request_path(&destination, None, None).await;
-                    let desc = ensure_destination_desc(&state, destination, None).await?;
-                    let identity_hex = desc.identity.address_hash.to_hex_string();
-                    emit_peer_resolved(&state, &bus, identity_hex.as_str()).await;
-                    Ok::<(), NodeError>(())
+                let result = resolve_peer_route(&state, &bus, destination_hex.as_str()).await;
+                if let Err(err) = &result {
+                    state
+                        .messaging
+                        .lock()
+                        .await
+                        .record_resolution_error(destination_hex.as_str(), Some(err.to_string()));
+                    emit_peer_changed(&state, &bus, destination_hex.as_str()).await;
                 }
-                .await;
                 let _ = resp.send(result);
             }
             Command::SetAnnounceCapabilities {
@@ -1801,40 +2269,24 @@ pub async fn run_node(
                 let destination_hex_copy = destination_hex.clone();
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    bus.emit(NodeEvent::PeerChanged {
-                        change: PeerChange {
-                            destination_hex: destination_hex.clone(),
-                            state: PeerState::Connecting {},
-                            last_error: None,
-                        },
-                    });
+                    state.messaging.lock().await.mark_peer_managed(&destination_hex, true);
+                    emit_peer_changed(&state, &bus, &destination_hex).await;
                     state
                         .sdk
                         .record_peer_changed(&destination_hex, PeerState::Connecting {}, None);
-                    connected_peers.lock().await.insert(dest);
-                    // Fire a path request in the background; direct send will resolve identity on demand.
                     transport.request_path(&dest, None, None).await;
-                    bus.emit(NodeEvent::PeerChanged {
-                        change: PeerChange {
-                            destination_hex: destination_hex.clone(),
-                            state: PeerState::Connected {},
-                            last_error: None,
-                        },
-                    });
-                    state
-                        .sdk
-                        .record_peer_changed(&destination_hex, PeerState::Connected {}, None);
+                    spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex.clone());
+                    sync_auto_propagation_node(&state, &bus).await;
                     Ok::<(), NodeError>(())
                 }
                 .await;
                 if let Err(err) = &result {
-                    bus.emit(NodeEvent::PeerChanged {
-                        change: PeerChange {
-                            destination_hex: destination_hex_copy.clone(),
-                            state: PeerState::Disconnected {},
-                            last_error: Some(err.to_string()),
-                        },
-                    });
+                    state
+                        .messaging
+                        .lock()
+                        .await
+                        .record_resolution_error(destination_hex_copy.as_str(), Some(err.to_string()));
+                    emit_peer_changed(&state, &bus, &destination_hex_copy).await;
                     state.sdk.record_peer_changed(
                         &destination_hex_copy,
                         PeerState::Disconnected {},
@@ -1849,23 +2301,19 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
+                    state.messaging.lock().await.mark_peer_managed(&destination_hex, false);
                     connected_peers.lock().await.remove(&dest);
                     // Clean up any stale link from older builds if present.
                     if let Some(link) = out_links.lock().await.remove(&dest) {
                         link.lock().await.close();
                     }
-                    bus.emit(NodeEvent::PeerChanged {
-                        change: PeerChange {
-                            destination_hex,
-                            state: PeerState::Disconnected {},
-                            last_error: None,
-                        },
-                    });
+                    emit_peer_changed(&state, &bus, &destination_hex).await;
                     state.sdk.record_peer_changed(
                         &address_hash_to_hex(&dest),
                         PeerState::Disconnected {},
                         None,
                     );
+                    sync_auto_propagation_node(&state, &bus).await;
                     Ok::<(), NodeError>(())
                 }
                 .await;
@@ -1878,8 +2326,14 @@ pub async fn run_node(
                 use_propagation_node,
                 resp,
             } => {
+                let state = state.clone();
+                let bus = bus.clone();
+                let transport = transport.clone();
+                tokio::spawn(async move {
                 let result = async {
-                    let dest = parse_address_hash(&destination_hex)?;
+                    let canonical_destination_hex =
+                        canonical_peer_destination_hex(&state, &destination_hex).await;
+                    let dest = parse_address_hash(&canonical_destination_hex)?;
                     let metadata = fields_bytes
                         .as_deref()
                         .and_then(parse_mission_sync_metadata);
@@ -2075,10 +2529,18 @@ pub async fn run_node(
                 }
                 .await;
                 let _ = resp.send(result);
+                });
             }
             Command::SendLxmf { request, resp } => {
+                let state = state.clone();
+                let bus = bus.clone();
+                let receipt_message_ids = receipt_message_ids.clone();
+                tokio::spawn(async move {
                 let result = async {
-                    let destination = parse_address_hash(request.destination_hex.as_str())?;
+                    let canonical_destination_hex =
+                        canonical_peer_destination_hex(&state, request.destination_hex.as_str())
+                            .await;
+                    let destination = parse_address_hash(canonical_destination_hex.as_str())?;
                     let body_bytes = request.body_utf8.as_bytes().to_vec();
                     let report = state
                         .sdk
@@ -2150,6 +2612,7 @@ pub async fn run_node(
                 }
                 .await;
                 let _ = resp.send(result);
+                });
             }
             Command::RetryLxmf {
                 message_id_hex,
@@ -2162,7 +2625,12 @@ pub async fn run_node(
                         .await
                         .outbound(message_id_hex.as_str())
                         .ok_or(NodeError::InvalidConfig {})?;
-                    let destination = parse_address_hash(outbound.request.destination_hex.as_str())?;
+                    let canonical_destination_hex = canonical_peer_destination_hex(
+                        &state,
+                        outbound.request.destination_hex.as_str(),
+                    )
+                    .await;
+                    let destination = parse_address_hash(canonical_destination_hex.as_str())?;
                     let report = state
                         .sdk
                         .send_lxmf(
@@ -2254,6 +2722,7 @@ pub async fn run_node(
                         .await
                         .set_active_propagation_node(destination_hex),
                 );
+                refresh_sync_status_snapshot(&state, &status_update);
                 bus.emit(NodeEvent::SyncUpdated {
                     status: status_update,
                 });
@@ -2261,27 +2730,27 @@ pub async fn run_node(
             }
             Command::RequestLxmfSync { limit, resp } => {
                 let requested_at_ms = now_ms();
-                let status_update = from_sdk_sync_status(state.messaging.lock().await.update_sync_status(
-                    |status| {
-                        status.phase = sdkmsg::SyncPhase::Failed;
+                let status_update = from_sdk_sync_status(
+                    state.messaging.lock().await.update_sync_status(|status| {
+                        status.phase = sdkmsg::SyncPhase::Idle;
                         status.requested_at_ms = Some(requested_at_ms);
                         status.completed_at_ms = Some(now_ms());
                         status.messages_received = 0;
-                        status.detail = Some(match limit {
-                            Some(value) => format!(
-                                "Propagation sync is not implemented in the mobile runtime yet (requested limit {value})."
-                            ),
-                            None => {
-                                "Propagation sync is not implemented in the mobile runtime yet."
-                                    .to_string()
-                            }
-                        });
-                    },
-                ));
+                        status.detail = None;
+                    }),
+                );
+                refresh_sync_status_snapshot(&state, &status_update);
                 bus.emit(NodeEvent::SyncUpdated {
                     status: status_update,
                 });
-                let _ = resp.send(Err(NodeError::InternalError {}));
+                if let Some(value) = limit {
+                    info!(
+                        "[sync] propagation sync request ignored in mobile runtime requested_limit={value}"
+                    );
+                } else {
+                    info!("[sync] propagation sync request ignored in mobile runtime");
+                }
+                let _ = resp.send(Ok(()));
             }
             Command::ListAnnounces { resp } => {
                 let records = state

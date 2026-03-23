@@ -24,13 +24,14 @@ onMounted(async () => {
     messagesStore.init();
     messagesStore.initReplication();
     eventsStore.init();
-    eventsStore.initReplication();
     telemetryStore.init();
-    telemetryStore.initReplication();
-    await telemetryStore.requestStartupPermission();
 
     await nodeStore.init();
     await nodeStore.startNode();
+
+    eventsStore.initReplication();
+    telemetryStore.initReplication();
+    await telemetryStore.requestStartupPermission();
   } catch (error: unknown) {
     nodeStore.lastError = error instanceof Error ? error.message : String(error);
   }

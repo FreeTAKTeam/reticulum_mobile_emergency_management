@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef, watch } from "vue";
+import { computed, shallowRef } from "vue";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
@@ -16,23 +16,13 @@ const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 const mobilePane = shallowRef<"list" | "detail">("list");
 
-onMounted(() => {
-  messagingStore.init();
-  messagesStore.init();
-  messagesStore.initReplication();
-  if (nodeStore.ready) {
-    void nodeStore.requestLxmfSync();
-  }
-});
+function safeTrim(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
-watch(
-  () => nodeStore.ready,
-  (isReady, wasReady) => {
-    if (isReady && !wasReady) {
-      void nodeStore.requestLxmfSync();
-    }
-  },
-);
+function safeLower(value: unknown): string {
+  return safeTrim(value).toLowerCase();
+}
 
 const selectedConversation = computed(() => messagingStore.selectedConversation);
 const activeConversationId = computed(() =>
@@ -48,14 +38,14 @@ const selectedDestinationHex = computed(() =>
 const hasSelectedConversation = computed(() => selectedConversation.value !== null);
 const conversationCount = computed(() => messagingStore.conversations.length);
 const selectedPeer = computed(() => {
-  const destinationHex = selectedDestinationHex.value.trim().toLowerCase();
+  const destinationHex = safeLower(selectedDestinationHex.value);
   if (!destinationHex) {
     return null;
   }
   return nodeStore.discoveredByDestination[destinationHex]
     ?? Object.values(nodeStore.discoveredByDestination).find((peer) =>
-      peer.destination.trim().toLowerCase() === destinationHex
-      || peer.lxmfDestinationHex?.trim().toLowerCase() === destinationHex,
+      safeLower(peer.destination) === destinationHex
+      || safeLower(peer.lxmfDestinationHex) === destinationHex,
     )
     ?? null;
 });
@@ -65,14 +55,14 @@ const targetLookupNames = computed(() =>
     selectedPeer.value?.label ?? "",
     selectedPeer.value?.announcedName ?? "",
   ]
-    .map((value) => value.trim())
+    .map((value) => safeTrim(value))
     .filter((value) => value.length > 0)
     .map((value) => value.toLowerCase()))],
 );
 const selectedTargetMessage = computed(() =>
   messagesStore.messages.find((message) => {
-    const callsign = message.callsign.trim().toLowerCase();
-    const sourceDisplayName = message.source?.display_name?.trim().toLowerCase() ?? "";
+    const callsign = safeLower(message.callsign);
+    const sourceDisplayName = safeLower(message.source?.display_name);
     return targetLookupNames.value.includes(callsign) || targetLookupNames.value.includes(sourceDisplayName);
   }) ?? null,
 );
@@ -95,7 +85,7 @@ const targetTelemetryPosition = computed(() => {
     selectedTargetMessage.value?.callsign ?? "",
     ...targetLookupNames.value,
   ]
-    .map((value) => value.trim().toLowerCase())
+    .map((value) => safeLower(value))
     .filter((value) => value.length > 0);
 
   for (const key of lookupKeys) {
@@ -109,7 +99,7 @@ const targetTelemetryPosition = computed(() => {
 
 const syncStatusLabel = computed(() => {
   const status = nodeStore.syncStatus;
-  const detail = status.detail?.trim();
+  const detail = safeTrim(status.detail);
   return detail ? `${status.phase}: ${detail}` : status.phase;
 });
 

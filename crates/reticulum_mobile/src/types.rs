@@ -25,6 +25,20 @@ pub enum PeerState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PeerManagementState {
+    Unmanaged {},
+    Managed {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PeerAvailabilityState {
+    Unseen {},
+    Discovered {},
+    Resolved {},
+    Ready {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SendOutcome {
     SentDirect {},
     SentBroadcast {},
@@ -139,8 +153,21 @@ pub struct NodeStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct PeerChange {
     pub destination_hex: String,
+    pub identity_hex: Option<String>,
+    pub lxmf_destination_hex: Option<String>,
+    pub display_name: Option<String>,
+    pub app_data: Option<String>,
     pub state: PeerState,
+    pub management_state: PeerManagementState,
+    pub availability_state: PeerAvailabilityState,
+    pub active_link: bool,
     pub last_error: Option<String>,
+    pub last_resolution_error: Option<String>,
+    pub last_resolution_attempt_at_ms: Option<u64>,
+    pub last_ready_at_ms: Option<u64>,
+    pub last_seen_at_ms: u64,
+    pub announce_last_seen_at_ms: Option<u64>,
+    pub lxmf_last_seen_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,6 +206,12 @@ pub struct PeerRecord {
     pub display_name: Option<String>,
     pub app_data: Option<String>,
     pub state: PeerState,
+    pub management_state: PeerManagementState,
+    pub availability_state: PeerAvailabilityState,
+    pub active_link: bool,
+    pub last_resolution_error: Option<String>,
+    pub last_resolution_attempt_at_ms: Option<u64>,
+    pub last_ready_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
     pub announce_last_seen_at_ms: Option<u64>,
     pub lxmf_last_seen_at_ms: Option<u64>,

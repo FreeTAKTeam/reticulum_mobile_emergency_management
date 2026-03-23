@@ -9,7 +9,16 @@ const MESSAGE_STORAGE_KEY = "reticulum.mobile.inbox.v1";
 type StoredMessages = Record<string, MessageRecord>;
 
 function cloneMessage(message: MessageRecord): MessageRecord {
-  return { ...message };
+  return {
+    ...message,
+    bodyUtf8: typeof message.bodyUtf8 === "string" ? message.bodyUtf8 : "",
+    title: typeof message.title === "string" ? message.title : undefined,
+    detail: typeof message.detail === "string" ? message.detail : undefined,
+  };
+}
+
+function safeMessageBody(message: Pick<MessageRecord, "bodyUtf8">): string {
+  return typeof message.bodyUtf8 === "string" ? message.bodyUtf8.trim() : "";
 }
 
 function loadStoredMessages(): StoredMessages {
@@ -48,7 +57,11 @@ function displayNameForDestination(destinationHex: string, nodeStore: ReturnType
 }
 
 function isVisibleChatMessage(message: MessageRecord): boolean {
-  return message.bodyUtf8.trim().length > 0;
+  return safeMessageBody(message).length > 0;
+}
+
+function isInboundPeerMessage(message: MessageRecord): boolean {
+  return isVisibleChatMessage(message) && message.direction === "Inbound";
 }
 
 export const useMessagingStore = defineStore("messaging", () => {
@@ -121,7 +134,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       }
     >();
 
-    for (const message of messages.value) {
+    for (const message of messages.value.filter((candidate) => isInboundPeerMessage(candidate))) {
       const updatedAtMs = message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs;
       const existing = byConversation.get(message.conversationId);
       if (existing && existing.updatedAtMs > updatedAtMs) {
@@ -131,28 +144,9 @@ export const useMessagingStore = defineStore("messaging", () => {
         conversationId: message.conversationId,
         destinationHex: message.destinationHex,
         displayName: displayNameForDestination(message.destinationHex, nodeStore),
-        preview: message.bodyUtf8.trim().slice(0, 80) || "(empty message)",
+        preview: safeMessageBody(message).slice(0, 80) || "(empty message)",
         updatedAtMs,
         state: message.state,
-      });
-    }
-
-    for (const peer of nodeStore.discoveredPeers) {
-      const destinationHex = peer.lxmfDestinationHex ?? peer.destination;
-      if (!destinationHex) {
-        continue;
-      }
-      const conversationId = destinationHex;
-      if (byConversation.has(conversationId)) {
-        continue;
-      }
-      byConversation.set(conversationId, {
-        conversationId,
-        destinationHex,
-        displayName: peer.label ?? peer.announcedName ?? destinationHex,
-        preview: peer.state === "connected" ? "Ready to message" : "Peer discovered via announce",
-        updatedAtMs: peer.lastSeenAt,
-        state: "Queued",
       });
     }
 

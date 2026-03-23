@@ -201,6 +201,7 @@ fn make_runtime_snapshot(
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
@@ -672,12 +673,16 @@ impl RuntimeLxmfSdk {
             );
         }
 
+        let track_delivery_timeout = metadata
+            .as_ref()
+            .is_some_and(|value| value.command_present && value.tracking_key().is_some());
+
         Ok(LxmfSendReport {
             outcome: report.outcome,
             message_id_hex: report.message_id_hex,
             resolved_destination_hex: report.resolved_destination_hex,
             metadata,
-            track_delivery_timeout: !report.used_resource,
+            track_delivery_timeout,
             used_resource: report.used_resource,
             used_propagation_node: report.used_propagation_node,
             receipt_hash_hex: report.receipt_hash_hex,
@@ -1046,7 +1051,7 @@ async fn compat_send_lxmf_via_propagation(
         .ok_or_else(|| sdk_transport("no active propagation relay selected"))?;
     let relay_hash = parse_address_hash(relay_hex.as_str())
         .map_err(|_| sdk_validation("invalid active propagation relay hash"))?;
-    let relay_desc = resolve_lxmf_destination_desc(state, relay_hash)
+    let relay_desc = resolve_propagation_destination_desc(state, relay_hash)
         .await
         .map_err(|_| sdk_transport("failed to resolve propagation relay"))?;
     let propagated_payload = LxmfWireMessage::unpack(wire)
@@ -1166,6 +1171,21 @@ async fn resolve_lxmf_destination_desc(
     Ok(lxmf_destination.desc)
 }
 
+async fn resolve_propagation_destination_desc(
+    state: &SdkTransportState,
+    destination: AddressHash,
+) -> Result<DestinationDesc, NodeError> {
+    ensure_destination_desc(
+        state,
+        destination,
+        Some(DestinationName::new(
+            LXMF_PROPAGATION_NAME.0,
+            LXMF_PROPAGATION_NAME.1,
+        )),
+    )
+    .await
+}
+
 async fn ensure_lxmf_output_link(
     state: &SdkTransportState,
     desc: DestinationDesc,
@@ -1174,6 +1194,11 @@ async fn ensure_lxmf_output_link(
     const RETRY_DELAY: Duration = Duration::from_millis(500);
 
     for attempt in 0..MAX_ATTEMPTS {
+        state
+            .transport
+            .request_path(&desc.address_hash, None, None)
+            .await;
+
         let link = {
             let mut links = state.out_links.lock().await;
             if let Some(existing) = links.get(&desc.address_hash).cloned() {
@@ -1192,19 +1217,15 @@ async fn ensure_lxmf_output_link(
                 if let Some(stale) = stale {
                     stale.lock().await.close();
                 }
-                if attempt + 1 == MAX_ATTEMPTS {
-                    return Err(err);
-                }
                 info!(
-                    "[lxmf][events][sdk] link activation retry destination={} attempt={} reason={}",
+                    "[lxmf][events][sdk] link activation failed destination={} attempt={} reason={}",
                     desc.address_hash.to_hex_string(),
                     attempt + 1,
                     err,
                 );
-                state
-                    .transport
-                    .request_path(&desc.address_hash, None, None)
-                    .await;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return Err(err);
+                }
                 tokio::time::sleep(RETRY_DELAY).await;
             }
         }

@@ -20,7 +20,7 @@ import {
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
-import { computed, reactive, ref, shallowRef, watch } from "vue";
+import { computed, reactive, ref, shallowRef } from "vue";
 
 import {
   bootstrapHubRegistry,
@@ -66,6 +66,9 @@ const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const LXMF_SEND_ATTEMPTS = 3;
 const LXMF_SEND_RETRY_DELAY_MS = 250;
+const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
+const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
+const AUTO_CONNECT_SERIAL_DELAY_MS = 300;
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -136,6 +139,9 @@ type PacketSendOptions = {
 };
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
+  if (peer.availabilityState === "ready" || peer.activeLink) {
+    return true;
+  }
   if (peer.sources.includes("hub") || peer.sources.includes("import")) {
     return true;
   }
@@ -158,9 +164,72 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
+  return {
+    running: Boolean(value?.running),
+    name: typeof value?.name === "string" ? value.name : "",
+    identityHex: typeof value?.identityHex === "string" ? value.identityHex : "",
+    appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
+    lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
+  };
+}
+
 function activePropagationNodeHex(status: SyncStatus): string | undefined {
-  const candidate = status.activePropagationNodeHex?.trim();
+  const candidate = asTrimmedString(status.activePropagationNodeHex);
   return candidate ? candidate : undefined;
+}
+
+function toUiPeerState(
+  state: PeerRecord["state"] | PeerChangedEvent["change"]["state"] | undefined,
+): PeerConnectionState {
+  if (state === "Connected") {
+    return "connected";
+  }
+  if (state === "Connecting") {
+    return "connecting";
+  }
+  return "disconnected";
+}
+
+function toUiManagementState(
+  state: PeerRecord["managementState"] | PeerChangedEvent["change"]["managementState"] | undefined,
+): DiscoveredPeer["managementState"] {
+  return state === "Managed" ? "managed" : "unmanaged";
+}
+
+function toUiAvailabilityState(
+  state: PeerRecord["availabilityState"] | PeerChangedEvent["change"]["availabilityState"] | undefined,
+): DiscoveredPeer["availabilityState"] {
+  switch (state) {
+    case "Discovered":
+      return "discovered";
+    case "Resolved":
+      return "resolved";
+    case "Ready":
+      return "ready";
+    default:
+      return "unseen";
+  }
+}
+
+function availabilityRank(peer: Pick<DiscoveredPeer, "availabilityState" | "managementState">): number {
+  const availabilityRankValue = (() => {
+    switch (peer.availabilityState) {
+      case "ready":
+        return 4;
+      case "resolved":
+        return 3;
+      case "discovered":
+        return 2;
+      default:
+        return 1;
+    }
+  })();
+  return availabilityRankValue + (peer.managementState === "managed" ? 1 : 0);
 }
 
 function peerExposesPropagationCapability(appData?: string): boolean {
@@ -252,6 +321,17 @@ function normalizeTelemetrySettings(
   };
 }
 
+function normalizeStoredTcpClients(value: unknown): string[] {
+  const tcpClients = Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim())
+    : [...DEFAULT_SETTINGS.tcpClients];
+  const nonEmpty = tcpClients.filter((item) => item.length > 0);
+  if (nonEmpty.length === 1 && nonEmpty[0].toLowerCase() === "rmap.world:4242") {
+    return [];
+  }
+  return nonEmpty;
+}
+
 function loadStoredSettings(): NodeUiSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -275,9 +355,7 @@ function loadStoredSettings(): NodeUiSettings {
         [TELEMETRY_CAPABILITY],
       ),
       clientMode: normalizeClientMode(parsed.clientMode),
-      tcpClients: Array.isArray(parsed.tcpClients)
-        ? parsed.tcpClients.filter((item): item is string => typeof item === "string")
-        : [...DEFAULT_SETTINGS.tcpClients],
+      tcpClients: normalizeStoredTcpClients(parsed.tcpClients),
     };
   } catch {
     return { ...DEFAULT_SETTINGS, telemetry: { ...DEFAULT_SETTINGS.telemetry }, hub: { ...DEFAULT_SETTINGS.hub } };
@@ -364,16 +442,22 @@ export const useNodeStore = defineStore("node", () => {
   const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
   const messageListeners = new Set<MessageListener>();
   const identityResolutionInFlight = new Set<string>();
+  const autoConnectInFlight = new Set<string>();
+  const autoConnectQueue: string[] = [];
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
   let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
+  let messagingRefreshTimerId: number | null = null;
+  const startupSettling = ref(false);
+  const autoConnectQueueActive = ref(false);
+  let deferredMessagingRefreshReason: string | null = null;
 
   function appendLog(level: string, message: string): void {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
   }
 
   function toPluginLogLevel(level: string): LogLevel {
-    switch (level.trim().toLowerCase()) {
+    switch (asTrimmedString(level).toLowerCase()) {
       case "trace":
         return "Trace";
       case "debug":
@@ -398,7 +482,7 @@ export const useNodeStore = defineStore("node", () => {
   function logUi(level: string, message: string): void {
     appendLog(level, message);
     mirrorUiLogToNative(level, message);
-    const normalizedLevel = level.trim().toLowerCase();
+    const normalizedLevel = asTrimmedString(level).toLowerCase();
     if (normalizedLevel === "error") {
       lastError.value = message;
       console.error(`[ui][${level}] ${message}`);
@@ -416,7 +500,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function setLastError(message: string): void {
-    lastError.value = message.trim();
+    lastError.value = asTrimmedString(message);
   }
 
   function clearLastError(): void {
@@ -520,6 +604,9 @@ export const useNodeStore = defineStore("node", () => {
       verifiedCapability: false,
       sources,
       state: "disconnected",
+      managementState: "unmanaged",
+      availabilityState: "unseen",
+      activeLink: false,
     };
 
     discoveredByDestination[destination] = {
@@ -536,9 +623,17 @@ export const useNodeStore = defineStore("node", () => {
       appData: patch.appData ?? base.appData,
       hops: patch.hops ?? base.hops,
       interfaceHex: patch.interfaceHex ?? base.interfaceHex,
+      managementState: patch.managementState ?? base.managementState,
+      availabilityState: patch.availabilityState ?? base.availabilityState,
+      activeLink: patch.activeLink ?? base.activeLink,
       lastError: Object.prototype.hasOwnProperty.call(patch, "lastError")
         ? patch.lastError
         : base.lastError,
+      lastResolutionError: Object.prototype.hasOwnProperty.call(patch, "lastResolutionError")
+        ? patch.lastResolutionError
+        : base.lastResolutionError,
+      lastResolutionAttemptAt: patch.lastResolutionAttemptAt ?? base.lastResolutionAttemptAt,
+      lastReadyAt: patch.lastReadyAt ?? base.lastReadyAt,
       lastSeenAt: patch.lastSeenAt ?? base.lastSeenAt,
     };
   }
@@ -564,6 +659,34 @@ export const useNodeStore = defineStore("node", () => {
     return isValidDestinationHex(localIdentity) && peerIdentity === localIdentity;
   }
 
+  function isLocalDestinationIdentityPair(
+    destinationRaw: string,
+    identityRaw?: string,
+  ): boolean {
+    if (isLocalPeerDestination(destinationRaw)) {
+      return true;
+    }
+    const localIdentity = normalizeDestinationHex(status.value.identityHex ?? "");
+    const peerIdentity = normalizeDestinationHex(identityRaw ?? "");
+    return isValidDestinationHex(localIdentity) && peerIdentity === localIdentity;
+  }
+
+  function resolvePeerLxmfDestinationByIdentity(identityRaw?: string): string | undefined {
+    const identityHex = normalizeDestinationHex(identityRaw ?? "");
+    if (!isValidDestinationHex(identityHex) || identityHex === normalizeDestinationHex(status.value.identityHex ?? "")) {
+      return undefined;
+    }
+
+    const mapped = normalizeDestinationHex(lxmfDestinationByIdentity[identityHex] ?? "");
+    if (isValidDestinationHex(mapped)) {
+      return mapped;
+    }
+
+    return Object.values(discoveredByDestination)
+      .find((peer) => normalizeDestinationHex(peer.identityHex ?? "") === identityHex)
+      ?.lxmfDestinationHex;
+  }
+
   function setPeerState(
     destinationRaw: string,
     stateValue: PeerConnectionState,
@@ -576,13 +699,14 @@ export const useNodeStore = defineStore("node", () => {
 
     upsertDiscovered(destination, {
       state: stateValue,
+      activeLink: stateValue === "connected",
       lastError: lastErrorValue,
     });
   }
 
   function upsertResolvedPeer(peer: PeerRecord): void {
     const destination = normalizeDestinationHex(peer.destinationHex);
-    if (!isValidDestinationHex(destination) || isLocalPeerDestination(destination)) {
+    if (!isValidDestinationHex(destination) || isLocalDestinationIdentityPair(destination, peer.identityHex)) {
       return;
     }
 
@@ -593,12 +717,6 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
       lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
-    }
-    if (isValidDestinationHex(identityHex) && typeof liveLxmfPresenceByIdentity[identityHex] === "number") {
-      livePresenceByDestination[destination] = Math.max(
-        livePresenceByDestination[destination] ?? 0,
-        liveLxmfPresenceByIdentity[identityHex],
-      );
     }
 
     const saved = savedByDestination[destination];
@@ -615,13 +733,54 @@ export const useNodeStore = defineStore("node", () => {
         announceLastSeenAt: peer.announceLastSeenAtMs,
         lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
         lastSeenAt: peer.lastSeenAtMs,
-        state:
-          peer.state === "Connected"
-            ? "connected"
-            : peer.state === "Connecting"
-              ? "connecting"
-              : "disconnected",
+        state: toUiPeerState(peer.state),
+        managementState: toUiManagementState(peer.managementState),
+        availabilityState: toUiAvailabilityState(peer.availabilityState),
+        activeLink: peer.activeLink,
+        lastError: peer.lastResolutionError,
+        lastResolutionError: peer.lastResolutionError,
+        lastResolutionAttemptAt: peer.lastResolutionAttemptAtMs,
+        lastReadyAt: peer.lastReadyAtMs,
         verifiedCapability: matchesEmergencyCapabilities(peer.appData ?? ""),
+      },
+      "announce",
+    );
+  }
+
+  function applyPeerChanged(change: PeerChangedEvent["change"]): void {
+    const destination = normalizeDestinationHex(change.destinationHex);
+    if (!isValidDestinationHex(destination) || isLocalDestinationIdentityPair(destination, change.identityHex)) {
+      return;
+    }
+
+    const saved = savedByDestination[destination];
+    upsertDiscovered(
+      destination,
+      {
+        identityHex: isValidDestinationHex(change.identityHex ?? "")
+          ? normalizeDestinationHex(change.identityHex ?? "")
+          : undefined,
+        lxmfDestinationHex: isValidDestinationHex(change.lxmfDestinationHex ?? "")
+          ? normalizeDestinationHex(change.lxmfDestinationHex ?? "")
+          : undefined,
+        announcedName: change.displayName?.trim() || undefined,
+        label: saved?.label ?? discoveredByDestination[destination]?.label,
+        appData: change.appData ?? discoveredByDestination[destination]?.appData,
+        state: change.state ? toUiPeerState(change.state) : undefined,
+        managementState: change.managementState
+          ? toUiManagementState(change.managementState)
+          : undefined,
+        availabilityState: change.availabilityState
+          ? toUiAvailabilityState(change.availabilityState)
+          : undefined,
+        activeLink: change.activeLink,
+        lastError: change.lastError,
+        lastResolutionError: change.lastResolutionError,
+        lastResolutionAttemptAt: change.lastResolutionAttemptAtMs,
+        lastReadyAt: change.lastReadyAtMs,
+        lastSeenAt: change.lastSeenAtMs,
+        announceLastSeenAt: change.announceLastSeenAtMs,
+        lxmfLastSeenAt: change.lxmfLastSeenAtMs,
       },
       "announce",
     );
@@ -637,6 +796,9 @@ export const useNodeStore = defineStore("node", () => {
     return [
       `destination=${destination}`,
       `state=${peer.state}`,
+      `management=${peer.managementState}`,
+      `availability=${peer.availabilityState}`,
+      `activeLink=${peer.activeLink}`,
       `label=${peer.label ?? "-"}`,
       `announced=${peer.announcedName ?? "-"}`,
       `identity=${peer.identityHex ?? "-"}`,
@@ -655,11 +817,15 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function recordLivePresence(
-    destinationKind: "app" | "lxmf_delivery" | "other",
+    destinationKind: "app" | "lxmf_delivery" | "lxmf_propagation" | "other",
     destinationHex: string,
     identityHex: string | undefined,
     receivedAtMs: number,
   ): void {
+    if (destinationKind === "lxmf_propagation") {
+      return;
+    }
+
     if (destinationKind === "lxmf_delivery") {
       if (isValidDestinationHex(identityHex ?? "")) {
         const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
@@ -697,12 +863,93 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  function shouldAutoConnectSavedPeer(destination: string): boolean {
+    const normalizedDestination = normalizeDestinationHex(destination);
+    if (!settings.autoConnectSaved || !status.value.running) {
+      return false;
+    }
+    if (isLocalPeerDestination(normalizedDestination) || !savedByDestination[normalizedDestination]) {
+      return false;
+    }
+    const peer = discoveredByDestination[normalizedDestination];
+    if (!peer) {
+      return false;
+    }
+    if (!peer.sources.includes("announce")) {
+      return false;
+    }
+    const announceSeenAt = peer.announceLastSeenAt ?? peer.lastSeenAt;
+    if (nowMs() - announceSeenAt > STARTUP_AUTO_CONNECT_FRESHNESS_MS) {
+      return false;
+    }
+    if (peer.managementState === "managed" || peer.state === "connecting" || peer.activeLink) {
+      return false;
+    }
+    return !autoConnectInFlight.has(normalizedDestination);
+  }
+
+  function scheduleSavedPeerAutoConnect(destination: string, reason: string): void {
+    const normalizedDestination = normalizeDestinationHex(destination);
+    if (!shouldAutoConnectSavedPeer(normalizedDestination)) {
+      return;
+    }
+    autoConnectInFlight.add(normalizedDestination);
+    if (!autoConnectQueue.includes(normalizedDestination)) {
+      autoConnectQueue.push(normalizedDestination);
+    }
+    void drainAutoConnectQueue(reason);
+  }
+
+  async function drainAutoConnectQueue(reason: string): Promise<void> {
+    if (autoConnectQueueActive.value) {
+      return;
+    }
+    autoConnectQueueActive.value = true;
+    try {
+      while (autoConnectQueue.length > 0) {
+        const nextDestination = autoConnectQueue.shift();
+        if (!nextDestination) {
+          continue;
+        }
+        if (!shouldAutoConnectSavedPeer(nextDestination)) {
+          autoConnectInFlight.delete(nextDestination);
+          continue;
+        }
+        await sleep(AUTO_CONNECT_SERIAL_DELAY_MS);
+        try {
+          await connectPeer(nextDestination);
+          appendLog("Debug", `[peers] auto-connected saved peer ${nextDestination} after ${reason}.`);
+        } catch (error: unknown) {
+          appendLog(
+            "Debug",
+            `[peers] auto-connect skipped destination=${nextDestination} after ${reason}: ${errorMessage(error)}.`,
+          );
+        } finally {
+          autoConnectInFlight.delete(nextDestination);
+        }
+      }
+    } finally {
+      autoConnectQueueActive.value = false;
+    }
+  }
+
+  function queueEligibleSavedPeerAutoConnects(reason: string): void {
+    for (const peer of Object.values(discoveredByDestination)) {
+      if (savedByDestination[peer.destination]) {
+        scheduleSavedPeerAutoConnect(peer.destination, reason);
+      }
+    }
+  }
+
   function applyAnnounceUpdate(
     event: AnnounceReceivedEvent | AnnounceRecord,
     source: "live" | "snapshot" = "live",
   ): void {
     presenceNow.value = event.receivedAtMs;
     const identityHex = normalizeDestinationHex(event.identityHex ?? "");
+    if (isLocalDestinationIdentityPair(event.destinationHex, identityHex)) {
+      return;
+    }
     if (source === "live") {
       recordLivePresence(
         event.destinationKind,
@@ -710,6 +957,9 @@ export const useNodeStore = defineStore("node", () => {
         identityHex,
         event.receivedAtMs,
       );
+    }
+    if (event.destinationKind === "lxmf_propagation") {
+      return;
     }
     if (event.destinationKind === "lxmf_delivery") {
       if (isValidDestinationHex(identityHex)) {
@@ -761,6 +1011,9 @@ export const useNodeStore = defineStore("node", () => {
       },
       "announce",
     );
+    if (source === "live") {
+      scheduleSavedPeerAutoConnect(event.destinationHex, `${event.destinationKind} announce`);
+    }
   }
 
   async function refreshAnnounceState(): Promise<void> {
@@ -787,28 +1040,23 @@ export const useNodeStore = defineStore("node", () => {
     }, delayMs);
   }
 
-  async function quietlyAnnounce(reason: string): Promise<void> {
-    if (!client.value || !status.value.running) {
+  async function settleStartupDiscovery(reason: string): Promise<void> {
+    if (!status.value.running) {
       return;
     }
+    startupSettling.value = true;
     try {
-      await client.value.announceNow();
-      appendLog("Debug", `[announce] queued ${reason}.`);
-      scheduleDiscoveryRefresh(reason);
-    } catch (error: unknown) {
-      appendLog("Debug", `[announce] skipped ${reason}: ${errorMessage(error)}`);
-    }
-  }
-
-  function scheduleAnnounce(reason: string, delayMs = 1_500): void {
-    window.setTimeout(() => {
-      void quietlyAnnounce(reason);
-    }, delayMs);
-  }
-
-  function scheduleAnnounceBurst(reason: string, delaysMs: number[]): void {
-    for (const delayMs of delaysMs) {
-      scheduleAnnounce(`${reason} +${delayMs}ms`, delayMs);
+      await sleep(STARTUP_ANNOUNCE_SETTLE_MS);
+      await Promise.allSettled([refreshAnnounceState(), refreshMessagingState()]);
+      queueEligibleSavedPeerAutoConnects(`${reason} settle`);
+      scheduleDiscoveryRefresh(reason, STARTUP_ANNOUNCE_SETTLE_MS);
+    } finally {
+      startupSettling.value = false;
+      if (deferredMessagingRefreshReason) {
+        const pendingReason = deferredMessagingRefreshReason;
+        deferredMessagingRefreshReason = null;
+        scheduleMessagingSnapshotRefresh(`${reason} settle release (${pendingReason})`, 150);
+      }
     }
   }
 
@@ -878,7 +1126,7 @@ export const useNodeStore = defineStore("node", () => {
   function setHubRegistrationPending(lastErrorValue?: string): void {
     hubRegistration.status = settings.hub.mode === "Disabled" ? "disabled" : "pending";
     if (lastErrorValue !== undefined) {
-      hubRegistration.lastError = lastErrorValue.trim();
+      hubRegistration.lastError = asTrimmedString(lastErrorValue);
     } else {
       hubRegistration.lastError = "";
     }
@@ -1023,7 +1271,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function configureClientLogging(): Promise<void> {
-    if (!client.value) {
+    if (!client.value || !status.value.running) {
       return;
     }
     try {
@@ -1045,29 +1293,18 @@ export const useNodeStore = defineStore("node", () => {
     resetClientEventBindings();
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
-        status.value = { ...event.status };
+        status.value = normalizeNodeStatus(event.status);
         void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         applyAnnounceUpdate(event);
+        scheduleMessagingSnapshotRefresh(
+          `announce ${event.destinationKind}:${normalizeDestinationHex(event.destinationHex)}`,
+        );
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
         presenceNow.value = nowMs();
-        if (event.change.state === "Connecting") {
-          setPeerState(event.change.destinationHex, "connecting");
-        } else if (event.change.state === "Connected") {
-          setPeerState(event.change.destinationHex, "connected");
-          void resolvePeerIdentityIfNeeded(event.change.destinationHex, "peer-connected");
-          void quietlyAnnounce(
-            `after peer-connected ${normalizeDestinationHex(event.change.destinationHex).slice(0, 8)}`,
-          );
-        } else {
-          setPeerState(
-            event.change.destinationHex,
-            "disconnected",
-            event.change.lastError,
-          );
-        }
+        applyPeerChanged(event.change);
         logUi(
           "Debug",
           `[peers] peerChanged destination=${normalizeDestinationHex(event.change.destinationHex)} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(event.change.destinationHex)}.`,
@@ -1076,6 +1313,10 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("peerResolved", (peer: PeerRecord) => {
         presenceNow.value = peer.lastSeenAtMs;
         upsertResolvedPeer(peer);
+        logUi(
+          "Debug",
+          `[peers] peerResolved destination=${normalizeDestinationHex(peer.destinationHex)} state=${peer.state} management=${peer.managementState} availability=${peer.availabilityState} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
+        );
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
         presenceNow.value = event.receivedAtMs;
@@ -1088,7 +1329,6 @@ export const useNodeStore = defineStore("node", () => {
               label: existing?.label ?? saved?.label,
               announcedName: existing?.announcedName,
               verifiedCapability: existing?.verifiedCapability ?? false,
-              lastSeenAt: event.receivedAtMs,
             },
             "hub",
           );
@@ -1116,7 +1356,15 @@ export const useNodeStore = defineStore("node", () => {
         }
       }),
       nodeClient.on("syncUpdated", (statusUpdate: SyncStatus) => {
+        const previousRelay = activePropagationNodeHex(syncStatus.value);
         syncStatus.value = { ...statusUpdate };
+        const nextRelay = activePropagationNodeHex(syncStatus.value);
+        if (previousRelay !== nextRelay) {
+          appendLog(
+            "Debug",
+            `[sync] propagation relay ${nextRelay ? `selected ${nextRelay}` : "cleared"}.`,
+          );
+        }
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
@@ -1139,7 +1387,7 @@ export const useNodeStore = defineStore("node", () => {
     let latest: NodeStatus = { ...EMPTY_STATUS };
     for (let attempt = 0; attempt < retries; attempt += 1) {
       try {
-        latest = await client.value.getStatus();
+        latest = normalizeNodeStatus(await client.value.getStatus());
         status.value = { ...latest };
         if (latest.running || attempt === retries - 1) {
           return latest;
@@ -1177,6 +1425,24 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  function scheduleMessagingSnapshotRefresh(reason: string, delayMs = 400): void {
+    if (startupSettling.value) {
+      deferredMessagingRefreshReason = reason;
+      return;
+    }
+    if (messagingRefreshTimerId !== null) {
+      window.clearTimeout(messagingRefreshTimerId);
+    }
+    messagingRefreshTimerId = window.setTimeout(() => {
+      messagingRefreshTimerId = null;
+      void refreshMessagingState()
+        .then(() => {
+          appendLog("Debug", `[peers] refreshed native peer snapshot after ${reason}.`);
+        })
+        .catch(() => undefined);
+    }, delayMs);
+  }
+
   async function init(): Promise<void> {
     if (initialized.value) {
       return;
@@ -1190,7 +1456,6 @@ export const useNodeStore = defineStore("node", () => {
         presenceNow.value = nowMs();
       }, PEER_PRESENCE_TICK_MS);
     }
-    await configureClientLogging();
 
     for (const savedPeer of Object.values(savedByDestination)) {
       upsertDiscovered(
@@ -1219,24 +1484,15 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
-      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
-      await refreshHubRegistrationState(true);
       await configureClientLogging();
-      await quietlyAnnounce("after start");
-      scheduleAnnounceBurst("after start burst", [1_500, 5_000, 10_000]);
+      await settleStartupDiscovery("startup");
+      await refreshHubRegistrationState(true);
       appendLog("Info", "Node started.");
 
       if (settings.hub.mode !== "Disabled") {
         await refreshHubDirectory().catch((error: unknown) => {
           appendLog("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
         });
-      }
-
-      if (settings.autoConnectSaved) {
-        await connectAllSaved().catch((error: unknown) => {
-          appendLog("Warn", `Auto connect failed: ${errorMessage(error)}`);
-        });
-        await resolveSavedPeerIdentities("auto-connect after start");
       }
     } catch (error: unknown) {
       throw captureActionError("Start node failed", error);
@@ -1271,24 +1527,15 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
-      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
-      await refreshHubRegistrationState(true);
       await configureClientLogging();
-      await quietlyAnnounce("after restart");
-      scheduleAnnounceBurst("after restart burst", [1_500, 5_000, 10_000]);
+      await settleStartupDiscovery("restart");
+      await refreshHubRegistrationState(true);
       appendLog("Info", "Node restarted with updated settings.");
 
       if (settings.hub.mode !== "Disabled") {
         await refreshHubDirectory().catch((error: unknown) => {
           appendLog("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
         });
-      }
-
-      if (settings.autoConnectSaved) {
-        await connectAllSaved().catch((error: unknown) => {
-          appendLog("Warn", `Auto connect failed after restart: ${errorMessage(error)}`);
-        });
-        await resolveSavedPeerIdentities("auto-connect after restart");
       }
     } catch (error: unknown) {
       throw captureActionError("Restart node failed", error);
@@ -1305,7 +1552,6 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
 
-    setPeerState(destination, "connecting");
     try {
       clearLastError();
       logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
@@ -1326,7 +1572,6 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
       await client.value.disconnectPeer(destination);
-      setPeerState(destination, "disconnected");
       logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
     } catch (error: unknown) {
       throw captureActionError(`Disconnect peer failed (${destination})`, error);
@@ -1539,9 +1784,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function peerPresenceTimestamp(
-    peer: Pick<DiscoveredPeer, "destination">,
+    peer: Pick<DiscoveredPeer, "lastReadyAt" | "lastSeenAt">,
   ): number | undefined {
-    const seenAt = livePresenceByDestination[peer.destination];
+    const seenAt = Math.max(peer.lastReadyAt ?? 0, peer.lastSeenAt ?? 0);
     return seenAt > 0 ? seenAt : undefined;
   }
 
@@ -1559,21 +1804,18 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function peerPresenceState(
-    peer: Pick<DiscoveredPeer, "destination">,
+    peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
   ): "online" | "offline" {
-    return hasFreshPresence(peerPresenceTimestamp(peer)) ? "online" : "offline";
+    return peer.activeLink || peer.availabilityState === "ready" ? "online" : "offline";
   }
 
   function peerHasEventRoute(
-    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "state">,
+    peer: Pick<DiscoveredPeer, "lxmfDestinationHex" | "availabilityState">,
   ): boolean {
     if (!isValidDestinationHex(peer.lxmfDestinationHex ?? "")) {
       return false;
     }
-    if (peer.state === "connected") {
-      return true;
-    }
-    return hasFreshPresence(peerPresenceTimestamp(peer));
+    return peer.availabilityState === "ready";
   }
 
   const discoveredPeers = computed(() =>
@@ -1581,12 +1823,19 @@ export const useNodeStore = defineStore("node", () => {
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
       .filter((peer) => !isLocalPeer(peer))
       .sort((a, b) => {
-        const byPresence = (peerPresenceTimestamp(b) ?? 0) - (peerPresenceTimestamp(a) ?? 0);
-        if (byPresence !== 0) {
-          return byPresence;
+        const byAvailabilityRank = availabilityRank(b) - availabilityRank(a);
+        if (byAvailabilityRank !== 0) {
+          return byAvailabilityRank;
         }
         return b.lastSeenAt - a.lastSeenAt;
       }),
+  );
+
+  const communicationReadyPeers = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peer.availabilityState === "ready")
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
   const savedPeers = computed(() =>
@@ -1594,19 +1843,17 @@ export const useNodeStore = defineStore("node", () => {
   );
 
   const connectedDestinations = computed(() =>
-    discoveredPeers.value
-      .filter((peer) => peer.state === "connected")
-      .map((peer) => peer.destination),
+    communicationReadyPeers.value.map((peer) => peer.destination),
   );
 
   const connectedLinkDestinations = computed(() =>
     discoveredPeers.value
-      .filter((peer) => peer.state === "connected")
+      .filter((peer) => peer.activeLink)
       .map((peer) => peer.destination),
   );
 
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    discoveredPeers.value
+    communicationReadyPeers.value
       .filter((peer) => peerHasEventRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1617,24 +1864,13 @@ export const useNodeStore = defineStore("node", () => {
       })),
   );
 
-  const communicationReadyPeerCount = computed(() => connectedEventPeerRoutes.value.length);
-  const propagationCandidateDestinations = computed(() => {
-    const preferredDestination = normalizeDestinationHex(settings.hub.identityHash ?? "");
-    return Object.values(discoveredByDestination)
-      .filter((peer) => peer.sources.includes("announce"))
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerExposesPropagationCapability(peer.appData))
-      .filter((peer) => hasFreshPresence(peerPresenceTimestamp(peer)))
-      .sort((left, right) =>
-        comparePropagationCandidates(
-          left,
-          right,
-          isValidDestinationHex(preferredDestination) ? preferredDestination : undefined,
-        ),
-      )
-      .map((peer) => peer.destination);
-  });
-  const bestPropagationNodeHex = computed(() => propagationCandidateDestinations.value[0]);
+  const communicationReadyPeerCount = computed(() => communicationReadyPeers.value.length);
+  const propagationCandidateDestinations = computed(() =>
+    activePropagationNodeHex(syncStatus.value)
+      ? [activePropagationNodeHex(syncStatus.value)!]
+      : [],
+  );
+  const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
 
   const telemetryDestinations = computed(() =>
     Object.values(discoveredByDestination)
@@ -1651,6 +1887,7 @@ export const useNodeStore = defineStore("node", () => {
   );
   const hubRegistrationPending = computed(() => hubRegistration.status === "pending");
   const hubRegistrationSummary = computed(() => {
+    const lastHubError = asTrimmedString(hubRegistration.lastError);
     switch (hubRegistration.status) {
       case "disabled":
         return "Hub sync disabled";
@@ -1660,43 +1897,19 @@ export const useNodeStore = defineStore("node", () => {
         }
         return `Ready | team=${hubRegistration.linkage.teamUid.slice(0, 10)}... member=${hubRegistration.linkage.teamMemberUid.slice(0, 10)}...`;
       case "error":
-        return hubRegistration.lastError?.trim()
-          ? `Error | ${hubRegistration.lastError.trim()}`
+        return lastHubError
+          ? `Error | ${lastHubError}`
           : "Hub registration error";
       case "pending":
       default:
-        return hubRegistration.lastError?.trim()
-          ? `Pending | ${hubRegistration.lastError.trim()}`
+        return lastHubError
+          ? `Pending | ${lastHubError}`
           : "Pending hub registration";
     }
   });
 
   async function syncAutoPropagationNode(reason: string): Promise<void> {
-    if (!client.value || propagationSelectionInFlight) {
-      return;
-    }
-
-    const desiredDestination = status.value.running ? bestPropagationNodeHex.value : undefined;
-    const currentDestination = activePropagationNodeHex(syncStatus.value);
-    if (desiredDestination === currentDestination) {
-      return;
-    }
-
-    propagationSelectionInFlight = true;
-    try {
-      await client.value.setActivePropagationNode(desiredDestination);
-      appendLog(
-        "Debug",
-        `[propagation] auto-selected relay=${desiredDestination ?? "none"} reason=${reason}.`,
-      );
-    } catch (error: unknown) {
-      appendLog(
-        "Warn",
-        `[propagation] auto-selection failed reason=${reason}: ${errorMessage(error)}.`,
-      );
-    } finally {
-      propagationSelectionInFlight = false;
-    }
+    void reason;
   }
 
   function notReadyMessage(action: string): string {
@@ -1776,6 +1989,63 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  async function sendBytesDirect(
+    destinationHex: string,
+    bytes: Uint8Array,
+    options?: PacketSendOptions,
+  ): Promise<void> {
+    const nodeClient = client.value;
+    if (!nodeClient) {
+      throw captureActionError(
+        `Direct send failed (${destinationHex})`,
+        new Error("Node client is not initialized."),
+      );
+    }
+    try {
+      logUi(
+        "Debug",
+        `Direct send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
+      );
+      await nodeClient.sendBytes(destinationHex, bytes, options);
+      logUi(
+        "Debug",
+        `Direct send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
+      );
+    } catch (error: unknown) {
+      throw captureActionError(`Direct send failed (${destinationHex})`, error);
+    }
+  }
+
+  async function sendBytesViaPropagation(
+    destinationHex: string,
+    bytes: Uint8Array,
+    options?: PacketSendOptions,
+  ): Promise<void> {
+    const nodeClient = client.value;
+    if (!nodeClient) {
+      throw captureActionError(
+        `Propagation send failed (${destinationHex})`,
+        new Error("Node client is not initialized."),
+      );
+    }
+    try {
+      logUi(
+        "Debug",
+        `Propagation send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
+      );
+      await nodeClient.sendBytes(destinationHex, bytes, {
+        ...options,
+        usePropagationNode: true,
+      });
+      logUi(
+        "Debug",
+        `Propagation send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
+      );
+    } catch (error: unknown) {
+      throw captureActionError(`Propagation send failed (${destinationHex})`, error);
+    }
+  }
+
   async function sendLxmf(
     destinationHex: string,
     bodyUtf8: string,
@@ -1845,19 +2115,6 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  watch(
-    [ready, bestPropagationNodeHex],
-    ([isRunning, candidate]) => {
-      const reason = isRunning
-        ? candidate
-          ? "best-candidate-updated"
-          : "no-candidate-available"
-        : "node-not-running";
-      void syncAutoPropagationNode(reason);
-    },
-    { immediate: true },
-  );
-
   async function requestLxmfSync(limit?: number): Promise<void> {
     if (!client.value) {
       return;
@@ -1920,6 +2177,7 @@ export const useNodeStore = defineStore("node", () => {
     connectedLinkDestinations,
     connectedEventPeerRoutes,
     communicationReadyPeerCount,
+    startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,
     savedDestinations,
@@ -1955,12 +2213,15 @@ export const useNodeStore = defineStore("node", () => {
     announceNow,
     requestPeerIdentity,
     sendBytes,
+    sendBytesDirect,
+    sendBytesViaPropagation,
     sendLxmf,
     setActivePropagationNode,
     requestLxmfSync,
     broadcastBytes,
     broadcastJson,
     sendJson,
+    resolvePeerLxmfDestinationByIdentity,
     destinationHasCapability,
     reinitializeClient,
     setLastError,

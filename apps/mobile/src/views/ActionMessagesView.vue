@@ -18,9 +18,6 @@ const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
 const router = useRouter();
 
-messagesStore.init();
-messagesStore.initReplication();
-
 const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
   label: formatR3aktTeamColorLabel(value),

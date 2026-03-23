@@ -6,8 +6,6 @@ import { useNodeStore } from "../stores/nodeStore";
 
 const eventsStore = useEventsStore();
 const nodeStore = useNodeStore();
-eventsStore.init();
-eventsStore.initReplication();
 
 const events = computed(() => eventsStore.records);
 const appReady = computed(() => nodeStore.ready);

@@ -12,8 +12,8 @@ use serde_json::json;
 use crate::node::{EventSubscription, Node};
 use crate::types::{
     HubMode, LogLevel, LxmfDeliveryStatus, MessageDirection, MessageMethod, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, PeerState, SendLxmfRequest, SendOutcome,
-    SyncPhase,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerManagementState,
+    PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
 };
 
 const RESULT_OK: jint = 0;
@@ -254,6 +254,22 @@ fn peer_state_to_str(state: PeerState) -> &'static str {
     }
 }
 
+fn peer_management_state_to_str(state: PeerManagementState) -> &'static str {
+    match state {
+        PeerManagementState::Unmanaged {} => "Unmanaged",
+        PeerManagementState::Managed {} => "Managed",
+    }
+}
+
+fn peer_availability_state_to_str(state: PeerAvailabilityState) -> &'static str {
+    match state {
+        PeerAvailabilityState::Unseen {} => "Unseen",
+        PeerAvailabilityState::Discovered {} => "Discovered",
+        PeerAvailabilityState::Resolved {} => "Resolved",
+        PeerAvailabilityState::Ready {} => "Ready",
+    }
+}
+
 fn send_outcome_to_str(outcome: SendOutcome) -> &'static str {
     match outcome {
         SendOutcome::SentDirect {} => "SentDirect",
@@ -367,8 +383,21 @@ fn event_to_wire_json(event: NodeEvent) -> String {
             json!({
                 "change": {
                     "destinationHex": change.destination_hex,
+                    "identityHex": change.identity_hex,
+                    "lxmfDestinationHex": change.lxmf_destination_hex,
+                    "displayName": change.display_name,
+                    "appData": change.app_data,
                     "state": peer_state_to_str(change.state),
-                    "lastError": change.last_error
+                    "managementState": peer_management_state_to_str(change.management_state),
+                    "availabilityState": peer_availability_state_to_str(change.availability_state),
+                    "activeLink": change.active_link,
+                    "lastError": change.last_error,
+                    "lastResolutionError": change.last_resolution_error,
+                    "lastResolutionAttemptAtMs": change.last_resolution_attempt_at_ms,
+                    "lastReadyAtMs": change.last_ready_at_ms,
+                    "lastSeenAtMs": change.last_seen_at_ms,
+                    "announceLastSeenAtMs": change.announce_last_seen_at_ms,
+                    "lxmfLastSeenAtMs": change.lxmf_last_seen_at_ms
                 }
             }),
         ),
@@ -424,6 +453,12 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "displayName": peer.display_name,
                 "appData": peer.app_data,
                 "state": peer_state_to_str(peer.state),
+                "managementState": peer_management_state_to_str(peer.management_state),
+                "availabilityState": peer_availability_state_to_str(peer.availability_state),
+                "activeLink": peer.active_link,
+                "lastResolutionError": peer.last_resolution_error,
+                "lastResolutionAttemptAtMs": peer.last_resolution_attempt_at_ms,
+                "lastReadyAtMs": peer.last_ready_at_ms,
                 "lastSeenAtMs": peer.last_seen_at_ms,
                 "announceLastSeenAtMs": peer.announce_last_seen_at_ms,
                 "lxmfLastSeenAtMs": peer.lxmf_last_seen_at_ms

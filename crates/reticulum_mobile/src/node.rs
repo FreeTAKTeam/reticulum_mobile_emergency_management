@@ -22,6 +22,8 @@ const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 struct NodeInner {
     bus: EventBus,
     status: Arc<Mutex<NodeStatus>>,
+    peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
+    sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::UnboundedSender<Command>>,
 }
@@ -46,6 +48,15 @@ impl Node {
             inner: Mutex::new(NodeInner {
                 bus: EventBus::new(),
                 status: Arc::new(Mutex::new(initial)),
+                peers_snapshot: Arc::new(Mutex::new(Vec::new())),
+                sync_status_snapshot: Arc::new(Mutex::new(SyncStatus {
+                    phase: crate::types::SyncPhase::Idle {},
+                    active_propagation_node_hex: None,
+                    requested_at_ms: None,
+                    completed_at_ms: None,
+                    messages_received: 0,
+                    detail: None,
+                })),
                 runtime: None,
                 cmd_tx: None,
             }),
@@ -103,6 +114,8 @@ impl Node {
             config,
             identity,
             inner.status.clone(),
+            inner.peers_snapshot.clone(),
+            inner.sync_status_snapshot.clone(),
             inner.bus.clone(),
             cmd_rx,
         ));
@@ -114,13 +127,15 @@ impl Node {
     }
 
     pub fn stop(&self) -> Result<(), NodeError> {
-        let (runtime, cmd_tx, bus, status) = {
+        let (runtime, cmd_tx, bus, status, peers_snapshot, sync_status_snapshot) = {
             let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             (
                 inner.runtime.take(),
                 inner.cmd_tx.take(),
                 inner.bus.clone(),
                 inner.status.clone(),
+                inner.peers_snapshot.clone(),
+                inner.sync_status_snapshot.clone(),
             )
         };
 
@@ -142,6 +157,19 @@ impl Node {
             bus.emit(NodeEvent::StatusChanged {
                 status: guard.clone(),
             });
+        }
+        if let Ok(mut guard) = peers_snapshot.lock() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = sync_status_snapshot.lock() {
+            *guard = SyncStatus {
+                phase: crate::types::SyncPhase::Idle {},
+                active_propagation_node_hex: None,
+                requested_at_ms: None,
+                completed_at_ms: None,
+                messages_received: 0,
+                detail: None,
+            };
         }
 
         Ok(())
@@ -384,17 +412,12 @@ impl Node {
     }
 
     pub fn list_peers(&self) -> Result<Vec<PeerRecord>, NodeError> {
-        let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
-        };
-
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::ListPeers { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or(Err(NodeError::Timeout {}))
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner
+            .peers_snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| NodeError::InternalError {})
     }
 
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
@@ -432,17 +455,12 @@ impl Node {
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
-        let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
-        };
-
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::GetLxmfSyncStatus { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or(Err(NodeError::Timeout {}))
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner
+            .sync_status_snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| NodeError::InternalError {})
     }
 
     pub fn set_announce_capabilities(&self, capability_string: String) -> Result<(), NodeError> {

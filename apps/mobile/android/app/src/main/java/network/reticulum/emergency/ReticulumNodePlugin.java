@@ -27,7 +27,6 @@ public class ReticulumNodePlugin extends Plugin {
     public void load() {
         super.load();
         Logger.info(TAG, "ReticulumNode plugin loaded.");
-        ensurePoller();
     }
 
     @Override
@@ -411,6 +410,7 @@ public class ReticulumNodePlugin extends Plugin {
 
     @PluginMethod
     public void removeAllListeners(PluginCall call) {
+        stopPoller();
         call.resolve();
     }
 

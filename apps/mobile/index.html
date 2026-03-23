@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Reticulum Mobile Emergency Management</title>
+    <script>
+      window.Capacitor = window.Capacitor || {};
+      if (typeof window.Capacitor.triggerEvent !== "function") {
+        window.Capacitor.triggerEvent = function () {
+          return false;
+        };
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

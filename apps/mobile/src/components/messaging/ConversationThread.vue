@@ -20,17 +20,21 @@ const emit = defineEmits<{
 
 const draft = ref("");
 
+function safeTrim(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 const canSend = computed(() => draft.value.trim().length > 0 && Boolean(props.destinationHex));
 const hasReadablePeerName = computed(() => {
-  const displayName = props.displayName?.trim() ?? "";
-  const destinationHex = props.destinationHex?.trim() ?? "";
+  const displayName = safeTrim(props.displayName);
+  const destinationHex = safeTrim(props.destinationHex);
   return displayName.length > 0 && displayName.toLowerCase() !== destinationHex.toLowerCase();
 });
 const hasTargetPosition = computed(() =>
-  Boolean((props.targetLatitude?.trim() ?? "") || (props.targetLongitude?.trim() ?? "")),
+  Boolean(safeTrim(props.targetLatitude) || safeTrim(props.targetLongitude)),
 );
-const visibleTargetStatus = computed(() => props.targetStatus?.trim() || "Unknown");
-const visibleTargetTeam = computed(() => props.targetTeam?.trim() || "Unknown Team");
+const visibleTargetStatus = computed(() => safeTrim(props.targetStatus) || "Unknown");
+const visibleTargetTeam = computed(() => safeTrim(props.targetTeam) || "Unknown Team");
 
 function submit(): void {
   const bodyUtf8 = draft.value.trim();

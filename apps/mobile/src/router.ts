@@ -1,4 +1,12 @@
 import { createRouter, createWebHistory } from "vue-router";
+import ActionMessagesView from "./views/ActionMessagesView.vue";
+import DashboardView from "./views/DashboardView.vue";
+import EventsView from "./views/EventsView.vue";
+import InboxView from "./views/InboxView.vue";
+import MessageStatusHelpView from "./views/MessageStatusHelpView.vue";
+import PeersDiscoveryView from "./views/PeersDiscoveryView.vue";
+import SettingsView from "./views/SettingsView.vue";
+import TelemetryMapView from "./views/TelemetryMapView.vue";
 
 const routes = [
   {
@@ -8,42 +16,42 @@ const routes = [
   {
     path: "/messages",
     name: "messages",
-    component: () => import("./views/ActionMessagesView.vue"),
+    component: ActionMessagesView,
   },
   {
     path: "/inbox",
     name: "inbox",
-    component: () => import("./views/InboxView.vue"),
+    component: InboxView,
   },
   {
     path: "/messages/help",
     name: "message-status-help",
-    component: () => import("./views/MessageStatusHelpView.vue"),
+    component: MessageStatusHelpView,
   },
   {
     path: "/events",
     name: "events",
-    component: () => import("./views/EventsView.vue"),
+    component: EventsView,
   },
   {
     path: "/dashboard",
     name: "dashboard",
-    component: () => import("./views/DashboardView.vue"),
+    component: DashboardView,
   },
   {
     path: "/settings",
     name: "settings",
-    component: () => import("./views/SettingsView.vue"),
+    component: SettingsView,
   },
   {
     path: "/peers",
     name: "peers",
-    component: () => import("./views/PeersDiscoveryView.vue"),
+    component: PeersDiscoveryView,
   },
   {
     path: "/telemetry",
     name: "telemetry",
-    component: () => import("./views/TelemetryMapView.vue"),
+    component: TelemetryMapView,
   },
 ];
 

@@ -13,8 +13,9 @@ pub use node::{EventSubscription, Node};
 pub use types::{
     AnnounceRecord, ConversationRecord, HubMode, LogLevel, LxmfDeliveryStatus,
     LxmfDeliveryUpdate, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, SendLxmfRequest,
-    SendOutcome, SyncPhase, SyncStatus,
+    NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange,
+    PeerManagementState, PeerRecord, PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
+    SyncStatus,
 };
 
 pub fn healthcheck() -> String {

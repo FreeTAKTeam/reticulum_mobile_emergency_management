@@ -19,6 +19,10 @@ let didFitBounds = false;
 const markersByCallsign = new Map<string, Marker>();
 const markerElementsByCallsign = new Map<string, HTMLDivElement>();
 
+function safeTrim(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function markerStatusClass(position: TelemetryPosition): string {
   return Date.now() - position.updatedAt > telemetryStore.staleThresholdMs ? "is-stale" : "is-live";
 }
@@ -38,8 +42,8 @@ function speedLine(position: TelemetryPosition): string {
 }
 
 function positionLabel(position: TelemetryPosition): string {
-  const peer = nodeStore.discoveredByDestination[position.callsign.trim().toLowerCase()];
-  return peer?.announcedName?.trim() || peer?.label?.trim() || position.callsign;
+  const peer = nodeStore.discoveredByDestination[safeTrim(position.callsign).toLowerCase()];
+  return safeTrim(peer?.announcedName) || safeTrim(peer?.label) || position.callsign;
 }
 
 function popupHtml(position: TelemetryPosition): string {

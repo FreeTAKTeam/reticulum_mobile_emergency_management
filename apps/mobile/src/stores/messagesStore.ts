@@ -48,6 +48,8 @@ const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
 const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
+const LXMF_ACCEPT_WAIT_TIMEOUT_MS = 12_000;
+const EAM_PEER_HYDRATION_RETRY_MS = 2 * 60_000;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationPeer = {
@@ -83,9 +85,16 @@ type PeerFailure = {
   peer: ReplicationPeer;
   detail: string;
 };
+type EamTransportMode = "default" | "direct" | "propagation";
 
 function nowMs(): number {
   return Date.now();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function createTrackingId(prefix: string, suffix?: string): string {
@@ -245,6 +254,8 @@ export const useMessagesStore = defineStore("messages", () => {
   const recoveryInFlight = ref(false);
   const nodeStore = useNodeStore();
   const peerSyncInFlight = new Set<string>();
+  const peerHydrationAttemptAt = new Map<string, number>();
+  let settleDeferralLogged = false;
 
   function persist(): void {
     saveMessages(byCallsign);
@@ -427,14 +438,19 @@ export const useMessagesStore = defineStore("messages", () => {
     });
   }
 
-  function applyUpsert(message: ActionMessage): UpsertOutcome {
+  function applyUpsert(
+    message: ActionMessage,
+    options?: {
+      preferIncoming?: boolean;
+    },
+  ): UpsertOutcome {
     const normalized = normalizeMessage(message);
     if (!normalized.callsign) {
       return "ignored";
     }
     const key = keyFor(normalized.callsign);
     const existing = byCallsign[key];
-    if (existing && existing.updatedAt > normalized.updatedAt) {
+    if (existing && existing.updatedAt > normalized.updatedAt && !options?.preferIncoming) {
       return "ignored";
     }
     byCallsign[key] = {
@@ -546,18 +562,33 @@ export const useMessagesStore = defineStore("messages", () => {
     });
   }
 
-  async function sendEamCommand(destination: string, command: EamCommandEnvelope): Promise<void> {
-    await nodeStore.sendBytes(destination, EMPTY_BYTES, {
-      fieldsBase64: buildEamCommandFieldsBase64([command]),
-    });
+async function sendEamCommand(
+  destination: string,
+  command: EamCommandEnvelope,
+  transportMode: EamTransportMode = "default",
+): Promise<void> {
+  const options = {
+    fieldsBase64: buildEamCommandFieldsBase64([command]),
+  };
+  if (transportMode === "propagation") {
+    await nodeStore.sendBytesViaPropagation(destination, EMPTY_BYTES, options);
+    return;
   }
+  if (transportMode === "direct") {
+    await nodeStore.sendBytesDirect(destination, EMPTY_BYTES, options);
+    return;
+  }
+  await nodeStore.sendBytes(destination, EMPTY_BYTES, options);
+}
 
   async function sendEamResponse(
     destination: string,
     result: EamResponsePayload,
     event?: EamEventEnvelope,
+    mode: "default" | "direct" = "default",
   ): Promise<void> {
-    await nodeStore.sendBytes(destination, EMPTY_BYTES, {
+    const send = mode === "direct" ? nodeStore.sendBytesDirect : nodeStore.sendBytes;
+    await send(destination, EMPTY_BYTES, {
       fieldsBase64: buildEamResponseFieldsBase64({ result, event }),
     });
   }
@@ -663,10 +694,6 @@ export const useMessagesStore = defineStore("messages", () => {
     });
   }
 
-  function isTimeoutError(error: unknown): boolean {
-    return errorMessage(error).trim().toLowerCase().includes("timeout");
-  }
-
   function eventTypeForCommand(commandType: EamCommandType): EamEventEnvelope["event_type"] {
     switch (commandType) {
       case "mission.registry.eam.list":
@@ -696,6 +723,13 @@ export const useMessagesStore = defineStore("messages", () => {
     return "result received";
   }
 
+  function resolveOnAccepted(commandType: EamCommandType): boolean {
+    return commandType === "mission.registry.eam.list"
+      || commandType === "mission.registry.eam.get"
+      || commandType === "mission.registry.eam.latest"
+      || commandType === "mission.registry.eam.team.summary";
+  }
+
   function matchesTrackingIdentity(
     expected: EamTrackingExpectation,
     commandId?: string,
@@ -717,37 +751,80 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!record) {
       return false;
     }
+    const nestedRecord = record.eam && typeof record.eam === "object"
+      ? record.eam as Record<string, unknown>
+      : null;
+    const summaryRecord = record.summary && typeof record.summary === "object"
+      ? record.summary as Record<string, unknown>
+      : null;
+    const firstNonEmpty = (...values: Array<string | undefined>): string | undefined =>
+      values.find((value) => typeof value === "string" && value.length > 0);
     if (expected.eamUid) {
-      const payloadEamUid = asTrimmedString(record.eam_uid)
-        ?? (record.eam && typeof record.eam === "object"
-          ? asTrimmedString((record.eam as Record<string, unknown>).eam_uid)
-          : undefined);
+      const payloadEamUid = firstNonEmpty(
+        asTrimmedString(record.eam_uid),
+        nestedRecord ? asTrimmedString(nestedRecord.eam_uid) : undefined,
+      );
       if (payloadEamUid === expected.eamUid) {
         return true;
       }
     }
     if (expected.callsign) {
-      const payloadCallsign = asTrimmedString(record.callsign)
-        ?? (record.eam && typeof record.eam === "object"
-          ? asTrimmedString((record.eam as Record<string, unknown>).callsign)
-          : undefined);
+      const payloadCallsign = firstNonEmpty(
+        asTrimmedString(record.callsign),
+        nestedRecord ? asTrimmedString(nestedRecord.callsign) : undefined,
+      );
       if (payloadCallsign?.toLowerCase() === expected.callsign.toLowerCase()) {
         return true;
       }
     }
     if (expected.teamUid) {
-      const payloadTeamUid = asTrimmedString(record.team_uid)
-        ?? (record.eam && typeof record.eam === "object"
-          ? asTrimmedString((record.eam as Record<string, unknown>).team_uid)
-          : undefined)
-        ?? (record.summary && typeof record.summary === "object"
-          ? asTrimmedString((record.summary as Record<string, unknown>).team_uid)
-          : undefined);
+      const payloadTeamUid = firstNonEmpty(
+        asTrimmedString(record.team_uid),
+        nestedRecord ? asTrimmedString(nestedRecord.team_uid) : undefined,
+        summaryRecord ? asTrimmedString(summaryRecord.team_uid) : undefined,
+      );
       if (payloadTeamUid === expected.teamUid) {
         return true;
       }
     }
     return false;
+  }
+
+  function responseMatchesTrackingIdentity(
+    expected: EamTrackingExpectation,
+    result: EamResponsePayload | null,
+  ): boolean {
+    return Boolean(
+      result
+      && matchesTrackingIdentity(expected, result.command_id, result.correlation_id),
+    );
+  }
+
+  function eventMatchesTrackingIdentity(
+    expected: EamTrackingExpectation,
+    event: EamEventEnvelope | null,
+  ): boolean {
+    if (!event || event.event_type !== eventTypeForCommand(expected.commandType)) {
+      return false;
+    }
+    const meta = event.meta && typeof event.meta === "object" ? event.meta : undefined;
+    return matchesTrackingIdentity(
+      expected,
+      asTrimmedString(meta?.command_id),
+      asTrimmedString(meta?.correlation_id),
+    );
+  }
+
+  function packetMatchesPeerSource(
+    peer: ReplicationPeer,
+    packet: PacketReceivedEvent,
+  ): boolean | null {
+    const packetSource = normalizeHex(packet.sourceHex);
+    if (!packetSource) {
+      return null;
+    }
+    return packetSource === normalizeHex(peer.lxmfDestinationHex)
+      || packetSource === normalizeHex(peer.appDestinationHex);
   }
 
   function responseMatchesExpectation(
@@ -833,11 +910,24 @@ export const useMessagesStore = defineStore("messages", () => {
       });
 
       unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
+        const sourceMatchesPeer = packetMatchesPeerSource(peer, packet);
+        if (sourceMatchesPeer === false) {
+          return;
+        }
         const missionSync = parseEamMissionSyncFields(packet.fieldsBase64);
-        const matchingResult = responseMatchesExpectation(expected, missionSync?.result ?? null)
+        const allowPayloadFallback = sourceMatchesPeer === true;
+        const matchingResult = (
+          allowPayloadFallback
+            ? responseMatchesExpectation(expected, missionSync?.result ?? null)
+            : responseMatchesTrackingIdentity(expected, missionSync?.result ?? null)
+        )
           ? missionSync?.result ?? null
           : null;
-        const matchingEvent = eventMatchesExpectation(expected, missionSync?.event ?? null)
+        const matchingEvent = (
+          allowPayloadFallback
+            ? eventMatchesExpectation(expected, missionSync?.event ?? null)
+            : eventMatchesTrackingIdentity(expected, missionSync?.event ?? null)
+        )
           ? missionSync?.event ?? null
           : null;
         if (!matchingResult && !matchingEvent) {
@@ -859,32 +949,63 @@ export const useMessagesStore = defineStore("messages", () => {
 
       timeoutId = window.setTimeout(() => {
         finish(() => reject(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`)));
-      }, LXMF_DELIVERY_WAIT_TIMEOUT_MS);
+      }, expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS);
     });
 
     return { promise, cancel: () => finish() };
   }
 
-  async function sendEamCommandAwaitingDelivery(
-    peer: ReplicationPeer,
-    command: EamCommandEnvelope,
-    expected: EamTrackingExpectation,
-  ): Promise<void> {
+async function sendEamCommandAwaitingDelivery(
+  peer: ReplicationPeer,
+  command: EamCommandEnvelope,
+  expected: EamTrackingExpectation,
+): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     const tracker = createEamDeliveryTracker(peer, expected);
     try {
-      await sendEamCommand(peer.lxmfDestinationHex, command);
+      nodeStore.logUi(
+        "Debug",
+        `[eam] ${expected.commandType} direct attempt ${attempt}/3 to ${peer.label}.`,
+      );
+      await sendEamCommand(peer.lxmfDestinationHex, command, "direct");
+      await tracker.promise;
+      return;
     } catch (error: unknown) {
-      if (!isTimeoutError(error)) {
-        tracker.cancel();
-        throw error;
+      tracker.cancel();
+      lastError = error;
+      if (attempt >= 3) {
+        break;
       }
       nodeStore.logUi(
         "Warn",
-        `[eam] native send timed out for ${expected.commandType} to ${formatPeerRoute(peer)}; waiting for mission result/event before failing.`,
+        `[eam] ${expected.commandType} direct attempt ${attempt}/3 failed for ${peer.label}: ${errorMessage(error)}.`,
       );
+      await sleep(250 * attempt);
     }
-    await tracker.promise;
   }
+
+  if (nodeStore.bestPropagationNodeHex) {
+    const tracker = createEamDeliveryTracker(peer, expected);
+    try {
+      nodeStore.logUi(
+        "Warn",
+        `[eam] ${expected.commandType} direct attempts exhausted for ${peer.label}; retrying via propagation ${nodeStore.bestPropagationNodeHex}.`,
+      );
+      await sendEamCommand(peer.lxmfDestinationHex, command, "propagation");
+      await tracker.promise;
+      return;
+    } catch (error: unknown) {
+      tracker.cancel();
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`[eam] ${expected.commandType} failed for ${peer.label}.`);
+}
 
   async function sendUpsertToPeer(peer: ReplicationPeer, message: ActionMessage): Promise<void> {
     const sourceIdentity = localSourceIdentity();
@@ -1050,6 +1171,7 @@ export const useMessagesStore = defineStore("messages", () => {
           eamUid: "eam_uid" in args ? asTrimmedString((args as Record<string, unknown>).eam_uid) : undefined,
           callsign: "callsign" in args ? asTrimmedString((args as Record<string, unknown>).callsign) : undefined,
           teamUid: "team_uid" in args ? asTrimmedString((args as Record<string, unknown>).team_uid) : undefined,
+          resolveOnAccepted: resolveOnAccepted(commandType),
         });
       }
     });
@@ -1121,6 +1243,7 @@ export const useMessagesStore = defineStore("messages", () => {
         correlationId: command.correlation_id ?? command.command_id,
         commandType: "mission.registry.eam.list",
         teamUid: linkage?.teamUid,
+        resolveOnAccepted: true,
       });
     }
   }
@@ -1138,23 +1261,7 @@ export const useMessagesStore = defineStore("messages", () => {
 
     peerSyncInFlight.add(destination);
     try {
-      const localMessages = snapshotMessages()
-        .filter((message) => message.syncState !== "draft")
-        .sort((a, b) => a.updatedAt - b.updatedAt);
-      if (localMessages.length > 0) {
-        nodeStore.logUi(
-          "Debug",
-          `[eam] replaying ${localMessages.length} local item(s) to ${peer.label} before hydration.`,
-        );
-      }
-      for (const message of localMessages) {
-        const payload = replicationPayload(message);
-        if (payload.deletedAt) {
-          await sendDeleteToPeer(peer, payload);
-          continue;
-        }
-        await sendUpsertToPeer(peer, payload);
-      }
+      nodeStore.logUi("Debug", `[eam] hydrating from ${peer.label} without replaying full local state.`);
       await requestListFromPeer(peer);
     } finally {
       peerSyncInFlight.delete(destination);
@@ -1312,7 +1419,7 @@ export const useMessagesStore = defineStore("messages", () => {
     return true;
   }
 
-  async function handleMissionCommand(destination: string, command: EamCommandEnvelope): Promise<void> {
+  async function handleMissionCommand(destination: string | undefined, command: EamCommandEnvelope): Promise<void> {
     const localIdentity = localSourceIdentity();
     const localDisplayName = localCallsign() || undefined;
     const accepted = createEamAcceptedPayload({
@@ -1330,25 +1437,41 @@ export const useMessagesStore = defineStore("messages", () => {
           display_name: command.source.display_name,
         },
       });
-      const outcome = applyUpsert(incoming);
+      const outcome = applyUpsert(incoming, { preferIncoming: true });
       const stored = byCallsign[keyFor(incoming.callsign)];
-      await sendEamResponse(destination, accepted);
-      await sendEamResponse(
-        destination,
-        createEamUpsertResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          eam: stored ? toEamRecord(stored) : null,
-        }),
-        createEamEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.eam.upserted",
-          payload: { eam: stored ? toEamRecord(stored) : null },
-          topics: eamTopics(stored?.teamUid ?? args.team_uid),
-          meta: { command_id: command.command_id, correlation_id: command.correlation_id },
-        }),
+      nodeStore.logUi(
+        "Info",
+        `[eam] inbound upsert from ${incoming.source?.display_name ?? incoming.source?.rns_identity ?? destination} for ${incoming.callsign} outcome=${outcome} eamUid=${incoming.eamUid}.`,
       );
+      if (destination) {
+        await sendEamResponse(destination, accepted, undefined, "direct");
+        void sendEamResponse(
+          destination,
+          createEamUpsertResultPayload({
+            commandId: command.command_id,
+            correlationId: command.correlation_id,
+            eam: stored ? toEamRecord(stored) : null,
+          }),
+          createEamEventEnvelope({
+            sourceIdentity: localIdentity || "mobile",
+            sourceDisplayName: localDisplayName,
+            eventType: "mission.registry.eam.upserted",
+            payload: { eam: stored ? toEamRecord(stored) : null },
+            topics: eamTopics(stored?.teamUid ?? args.team_uid),
+            meta: { command_id: command.command_id, correlation_id: command.correlation_id },
+          }),
+        ).catch((error: unknown) => {
+          nodeStore.logUi(
+            "Warn",
+            `[eam] deferred upsert reply failed for ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      } else {
+        nodeStore.logUi(
+          "Warn",
+          `[eam] inbound upsert for ${incoming.callsign} has no reply route; applying without acknowledgement.`,
+        );
+      }
       if (outcome !== "ignored" && incoming.source?.rns_identity !== localIdentity) {
         notifyOperationalUpdate("Emergency update", summarizeMessage(incoming)).catch(() => undefined);
       }
@@ -1360,48 +1483,64 @@ export const useMessagesStore = defineStore("messages", () => {
       const target = args.callsign
         ? byCallsign[keyFor(args.callsign)]
         : Object.values(byCallsign).find((message) => message.eamUid === args.eam_uid);
-      await sendEamResponse(destination, accepted);
+      if (destination) {
+        await sendEamResponse(destination, accepted, undefined, "direct");
+      }
       if (!target) {
-        await sendEamResponse(
-          destination,
-          createEamDeleteResultPayload({
-            commandId: command.command_id,
-            correlationId: command.correlation_id,
-            eam: null,
-            status: "not_found",
-            eamUid: args.eam_uid,
-            callsign: args.callsign,
-          }),
-        );
+        if (destination) {
+          void sendEamResponse(
+            destination,
+            createEamDeleteResultPayload({
+              commandId: command.command_id,
+              correlationId: command.correlation_id,
+              eam: null,
+              status: "not_found",
+              eamUid: args.eam_uid,
+              callsign: args.callsign,
+            }),
+          ).catch((error: unknown) => {
+            nodeStore.logUi(
+              "Warn",
+              `[eam] deferred delete reply failed for ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        }
         return;
       }
       const deletedAt = nowMs();
       applyDelete(target.callsign, deletedAt);
       const deleted = byCallsign[keyFor(target.callsign)];
-      await sendEamResponse(
-        destination,
-        createEamDeleteResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          eam: deleted ? toEamRecord(deleted) : null,
-          status: "deleted",
-          eamUid: deleted?.eamUid,
-          callsign: deleted?.callsign,
-        }),
-        createEamEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.eam.deleted",
-          payload: {
+      if (destination) {
+        void sendEamResponse(
+          destination,
+          createEamDeleteResultPayload({
+            commandId: command.command_id,
+            correlationId: command.correlation_id,
             eam: deleted ? toEamRecord(deleted) : null,
             status: "deleted",
-            eam_uid: deleted?.eamUid,
+            eamUid: deleted?.eamUid,
             callsign: deleted?.callsign,
-          },
-          topics: eamTopics(deleted?.teamUid ?? args.team_uid),
-          meta: { command_id: command.command_id, correlation_id: command.correlation_id },
-        }),
-      );
+          }),
+          createEamEventEnvelope({
+            sourceIdentity: localIdentity || "mobile",
+            sourceDisplayName: localDisplayName,
+            eventType: "mission.registry.eam.deleted",
+            payload: {
+              eam: deleted ? toEamRecord(deleted) : null,
+              status: "deleted",
+              eam_uid: deleted?.eamUid,
+              callsign: deleted?.callsign,
+            },
+            topics: eamTopics(deleted?.teamUid ?? args.team_uid),
+            meta: { command_id: command.command_id, correlation_id: command.correlation_id },
+          }),
+        ).catch((error: unknown) => {
+          nodeStore.logUi(
+            "Warn",
+            `[eam] deferred delete reply failed for ${destination}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      }
       return;
     }
 
@@ -1415,23 +1554,25 @@ export const useMessagesStore = defineStore("messages", () => {
           Number(args.offset ?? 0) + Number(args.limit ?? Number.MAX_SAFE_INTEGER),
         )
         .map((message) => toEamRecord(message));
-      await sendEamResponse(destination, accepted);
-      await sendEamResponse(
-        destination,
-        createEamListResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          eams: matches,
-        }),
-        createEamEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.eam.listed",
-          payload: { eams: matches },
-          topics: eamTopics(args.team_uid),
-          meta: { command_id: command.command_id, correlation_id: command.correlation_id },
-        }),
-      );
+      if (destination) {
+        await sendEamResponse(destination, accepted);
+        await sendEamResponse(
+          destination,
+          createEamListResultPayload({
+            commandId: command.command_id,
+            correlationId: command.correlation_id,
+            eams: matches,
+          }),
+          createEamEventEnvelope({
+            sourceIdentity: localIdentity || "mobile",
+            sourceDisplayName: localDisplayName,
+            eventType: "mission.registry.eam.listed",
+            payload: { eams: matches },
+            topics: eamTopics(args.team_uid),
+            meta: { command_id: command.command_id, correlation_id: command.correlation_id },
+          }),
+        );
+      }
       return;
     }
 
@@ -1441,67 +1582,73 @@ export const useMessagesStore = defineStore("messages", () => {
         .filter((message) => messageMatchesFilters(message, args))
         .sort((a, b) => b.updatedAt - a.updatedAt);
       const match = command.command_type === "mission.registry.eam.latest" ? matches[0] : matches[0];
-      await sendEamResponse(destination, accepted);
-      await sendEamResponse(
-        destination,
-        command.command_type === "mission.registry.eam.latest"
-          ? createEamLatestResultPayload({
-              commandId: command.command_id,
-              correlationId: command.correlation_id,
-              eam: match ? toEamRecord(match) : null,
-            })
-          : createEamGetResultPayload({
-              commandId: command.command_id,
-              correlationId: command.correlation_id,
-              eam: match ? toEamRecord(match) : null,
-            }),
-        createEamEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType:
-            command.command_type === "mission.registry.eam.latest"
-              ? "mission.registry.eam.latest_retrieved"
-              : "mission.registry.eam.retrieved",
-          payload: { eam: match ? toEamRecord(match) : null },
-          topics: eamTopics(args.team_uid),
-          meta: { command_id: command.command_id, correlation_id: command.correlation_id },
-        }),
-      );
+      if (destination) {
+        await sendEamResponse(destination, accepted);
+        await sendEamResponse(
+          destination,
+          command.command_type === "mission.registry.eam.latest"
+            ? createEamLatestResultPayload({
+                commandId: command.command_id,
+                correlationId: command.correlation_id,
+                eam: match ? toEamRecord(match) : null,
+              })
+            : createEamGetResultPayload({
+                commandId: command.command_id,
+                correlationId: command.correlation_id,
+                eam: match ? toEamRecord(match) : null,
+              }),
+          createEamEventEnvelope({
+            sourceIdentity: localIdentity || "mobile",
+            sourceDisplayName: localDisplayName,
+            eventType:
+              command.command_type === "mission.registry.eam.latest"
+                ? "mission.registry.eam.latest_retrieved"
+                : "mission.registry.eam.retrieved",
+            payload: { eam: match ? toEamRecord(match) : null },
+            topics: eamTopics(args.team_uid),
+            meta: { command_id: command.command_id, correlation_id: command.correlation_id },
+          }),
+        );
+      }
       return;
     }
 
     if (command.command_type === "mission.registry.eam.team.summary") {
       const args = command.args as EamCommandArgsByType["mission.registry.eam.team.summary"];
       const summary = computeTeamSummary(args.team_uid);
-      await sendEamResponse(destination, accepted);
-      await sendEamResponse(
-        destination,
-        createEamTeamSummaryResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          summary,
-        }),
-        createEamEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.eam.team_summary.retrieved",
-          payload: { summary },
-          topics: eamTopics(args.team_uid),
-          meta: { command_id: command.command_id, correlation_id: command.correlation_id },
-        }),
-      );
+      if (destination) {
+        await sendEamResponse(destination, accepted);
+        await sendEamResponse(
+          destination,
+          createEamTeamSummaryResultPayload({
+            commandId: command.command_id,
+            correlationId: command.correlation_id,
+            summary,
+          }),
+          createEamEventEnvelope({
+            sourceIdentity: localIdentity || "mobile",
+            sourceDisplayName: localDisplayName,
+            eventType: "mission.registry.eam.team_summary.retrieved",
+            payload: { summary },
+            topics: eamTopics(args.team_uid),
+            meta: { command_id: command.command_id, correlation_id: command.correlation_id },
+          }),
+        );
+      }
       return;
     }
 
-    await sendEamResponse(
-      destination,
-      createEamRejectedPayload({
-        commandId: command.command_id,
-        correlationId: command.correlation_id,
-        reasonCode: "unsupported_command",
-        reason: `Unsupported EAM command ${command.command_type}.`,
-      }),
-    );
+    if (destination) {
+      await sendEamResponse(
+        destination,
+        createEamRejectedPayload({
+          commandId: command.command_id,
+          correlationId: command.correlation_id,
+          reasonCode: "unsupported_command",
+          reason: `Unsupported EAM command ${command.command_type}.`,
+        }),
+      );
+    }
   }
 
   function applyMissionPayload(result: EamResponsePayload | null, event: EamEventEnvelope | null): void {
@@ -1515,13 +1662,17 @@ export const useMessagesStore = defineStore("messages", () => {
       }
       if ("summary" in payload) {
         teamSummary.value = payload.summary;
+        nodeStore.logUi("Debug", `[eam] applied team summary for ${payload.summary.team_uid}.`);
       }
       if ("eams" in payload) {
+        nodeStore.logUi("Debug", `[eam] applying ${payload.eams.length} inbound EAM record(s).`);
         for (const record of payload.eams) {
-          applyUpsert(messageFromEamRecord(record, byCallsign[keyFor(record.callsign)]));
+          const outcome = applyUpsert(messageFromEamRecord(record, byCallsign[keyFor(record.callsign)]));
+          nodeStore.logUi("Info", `[eam] applied inbound record ${record.callsign} outcome=${outcome}.`);
         }
       } else if ("eam" in payload && payload.eam) {
-        applyUpsert(messageFromEamRecord(payload.eam, byCallsign[keyFor(payload.eam.callsign)]));
+        const outcome = applyUpsert(messageFromEamRecord(payload.eam, byCallsign[keyFor(payload.eam.callsign)]));
+        nodeStore.logUi("Info", `[eam] applied inbound record ${payload.eam.callsign} outcome=${outcome}.`);
       } else if (
         "status" in payload
         && (payload.status === "deleted" || payload.status === "not_found")
@@ -1548,9 +1699,17 @@ export const useMessagesStore = defineStore("messages", () => {
     nodeStore.onPacket((event: PacketReceivedEvent) => {
       const missionSync = parseEamMissionSyncFields(event.fieldsBase64);
       if (missionSync) {
-        if (missionSync.commands.length > 0 && event.sourceHex) {
+        if (missionSync.commands.length > 0) {
           for (const command of missionSync.commands) {
-            void handleMissionCommand(event.sourceHex, command);
+            const replyDestination = normalizeHex(event.sourceHex)
+              || nodeStore.resolvePeerLxmfDestinationByIdentity(command.source?.rns_identity);
+            if (!replyDestination) {
+              nodeStore.logUi(
+                "Warn",
+                `[eam] inbound ${command.command_type} missing source route; falling back to apply-only handling.`,
+              );
+            }
+            void handleMissionCommand(replyDestination || undefined, command);
           }
           return;
         }
@@ -1581,7 +1740,7 @@ export const useMessagesStore = defineStore("messages", () => {
         return;
       }
       if (legacy.kind === "message_upsert") {
-        const outcome = applyUpsert(legacy.message);
+        const outcome = applyUpsert(legacy.message, { preferIncoming: true });
         if (outcome !== "ignored") {
           notifyOperationalUpdate("Emergency update", summarizeMessage(legacy.message)).catch(() => undefined);
         }
@@ -1607,42 +1766,43 @@ export const useMessagesStore = defineStore("messages", () => {
     watch(
       () => ({
         identity: nodeStore.status.identityHex.trim().toLowerCase(),
-        peers: replicationPeers(false).map((peer) => ({
-          appDestinationHex: peer.appDestinationHex,
-          lxmfDestinationHex: peer.lxmfDestinationHex,
-        })),
+        settling: nodeStore.startupSettling,
+        routeKey: replicationPeers(false)
+          .map((peer) => normalizeHex(peer.lxmfDestinationHex))
+          .filter((value) => value.length > 0)
+          .sort()
+          .join(","),
+        errorCount: Object.values(byCallsign).filter((message) => message.syncState === "error").length,
       }),
       (current, previous) => {
         if (!current.identity) {
           return;
         }
-        void retryErroredMessages().catch(() => undefined);
-        const previousDestinations = previous?.identity
-          ? new Set(previous.peers.map((peer) => peer.lxmfDestinationHex))
-          : new Set<string>();
-        for (const peer of replicationPeers(false)) {
-          if (previousDestinations.has(peer.lxmfDestinationHex)) {
-            continue;
+        if (current.settling) {
+          if (!settleDeferralLogged) {
+            settleDeferralLogged = true;
+            nodeStore.logUi("Debug", "[eam] startup settling active; deferring peer hydration and retry.");
           }
-          void syncPeerMessages(peer).catch((error: unknown) => {
-            nodeStore.logUi(
-              "Warn",
-              `[eam] peer sync failed for ${peer.label}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          });
+          return;
+        }
+        settleDeferralLogged = false;
+        if (current.errorCount > 0 && (current.routeKey !== previous?.routeKey || current.errorCount !== previous?.errorCount)) {
+          void retryErroredMessages().catch(() => undefined);
         }
       },
-      { immediate: true, deep: true },
+      { immediate: true },
     );
 
     watch(
-      () => nodeStore.hubRegistrationReady,
-      (ready) => {
-        if (!ready) {
+      () => ({
+        ready: nodeStore.hubRegistrationReady,
+        settling: nodeStore.startupSettling,
+      }),
+      ({ ready, settling }) => {
+        if (!ready || settling) {
           return;
         }
         void replayPendingDrafts().catch(() => undefined);
-        void requestList().catch(() => undefined);
         void requestTeamSummary().catch(() => undefined);
       },
       { immediate: true },

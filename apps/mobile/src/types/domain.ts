@@ -215,6 +215,8 @@ export interface TelemetryPosition {
 
 export type PeerSource = "announce" | "hub" | "import";
 export type PeerConnectionState = "disconnected" | "connecting" | "connected";
+export type PeerManagementState = "unmanaged" | "managed";
+export type PeerAvailabilityState = "unseen" | "discovered" | "resolved" | "ready";
 
 export interface DiscoveredPeer {
   destination: string;
@@ -231,7 +233,13 @@ export interface DiscoveredPeer {
   verifiedCapability: boolean;
   sources: PeerSource[];
   state: PeerConnectionState;
+  managementState: PeerManagementState;
+  availabilityState: PeerAvailabilityState;
+  activeLink: boolean;
   lastError?: string;
+  lastResolutionError?: string;
+  lastResolutionAttemptAt?: number;
+  lastReadyAt?: number;
 }
 
 export interface SavedPeer {
