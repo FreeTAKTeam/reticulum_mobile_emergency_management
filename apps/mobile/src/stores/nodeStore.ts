@@ -64,9 +64,9 @@ const SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
+const MESSAGING_SNAPSHOT_COOLDOWN_MS = 60_000;
+const MESSAGING_SNAPSHOT_FALLBACK_INTERVAL_MS = 2 * 60_000;
 const EMPTY_BYTES = new Uint8Array(0);
-const LXMF_SEND_ATTEMPTS = 3;
-const LXMF_SEND_RETRY_DELAY_MS = 250;
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
 const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
 const AUTO_CONNECT_SERIAL_DELAY_MS = 300;
@@ -443,6 +443,7 @@ export const useNodeStore = defineStore("node", () => {
   let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
   let messagingRefreshTimerId: number | null = null;
+  let lastMessagingSnapshotAtMs = 0;
   const startupSettling = ref(false);
   const autoConnectQueueActive = ref(false);
   let deferredMessagingRefreshReason: string | null = null;
@@ -469,6 +470,10 @@ export const useNodeStore = defineStore("node", () => {
 
   function mirrorUiLogToNative(level: string, message: string): void {
     if (!client.value || runtimeProfile === "web") {
+      return;
+    }
+    const normalizedLevel = asTrimmedString(level).toLowerCase();
+    if (normalizedLevel !== "warn" && normalizedLevel !== "error") {
       return;
     }
     void client.value.logMessage(toPluginLogLevel(level), message).catch(() => undefined);
@@ -507,65 +512,6 @@ export const useNodeStore = defineStore("node", () => {
       return error.message;
     }
     return String(error);
-  }
-
-  async function retryLxmfSend<T>(
-    action: string,
-    destinationHex: string,
-    send: (attempt: number) => Promise<T>,
-    sendViaPropagation?: () => Promise<T>,
-  ): Promise<T> {
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= LXMF_SEND_ATTEMPTS; attempt += 1) {
-      try {
-        appendLog(
-          "Debug",
-          `${action} attempt ${attempt}/${LXMF_SEND_ATTEMPTS} destination=${destinationHex}.`,
-        );
-        return await send(attempt);
-      } catch (error: unknown) {
-        lastError = error;
-        const message = errorMessage(error);
-        if (attempt >= LXMF_SEND_ATTEMPTS) {
-          break;
-        }
-
-        appendLog(
-          "Warn",
-          `${action} attempt ${attempt}/${LXMF_SEND_ATTEMPTS} failed destination=${destinationHex}: ${message}. Retrying.`,
-        );
-        await sleep(LXMF_SEND_RETRY_DELAY_MS * attempt);
-      }
-    }
-
-    const propagationNodeHex = activePropagationNodeHex(syncStatus.value);
-    if (propagationNodeHex && sendViaPropagation) {
-      try {
-        appendLog(
-          "Warn",
-          `${action} direct delivery exhausted after ${LXMF_SEND_ATTEMPTS} attempts destination=${destinationHex}. Switching to propagation relay ${propagationNodeHex}.`,
-        );
-        return await sendViaPropagation();
-      } catch (error: unknown) {
-        lastError = error;
-        appendLog(
-          "Error",
-          `${action} propagation fallback failed destination=${destinationHex} relay=${propagationNodeHex}: ${errorMessage(error)}.`,
-        );
-      }
-    } else if (lastError) {
-      appendLog(
-        "Error",
-        `${action} failed after ${LXMF_SEND_ATTEMPTS} direct attempts destination=${destinationHex}: ${errorMessage(lastError)}.`,
-      );
-    }
-
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-
-    throw new Error(`${action} failed after ${LXMF_SEND_ATTEMPTS} attempts.`);
   }
 
   function captureActionError(action: string, error: unknown): Error {
@@ -1317,8 +1263,8 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     try {
-      await client.value.setLogLevel("Debug");
-      logUi("Debug", "Node client log level set to Debug.");
+      await client.value.setLogLevel("Info");
+      appendLog("Debug", "Node client log level set to Info.");
     } catch (error: unknown) {
       logUi("Warn", `Failed to set node log level: ${errorMessage(error)}`);
     }
@@ -1457,6 +1403,7 @@ export const useNodeStore = defineStore("node", () => {
         client.value.listPeers(),
         client.value.getLxmfSyncStatus(),
       ]);
+      lastMessagingSnapshotAtMs = nowMs();
       reconcileNativePeerSnapshot(peers);
       for (const peer of peers) {
         upsertResolvedPeer(peer);
@@ -1472,6 +1419,11 @@ export const useNodeStore = defineStore("node", () => {
       deferredMessagingRefreshReason = reason;
       return;
     }
+    const remainingCooldownMs = Math.max(
+      0,
+      MESSAGING_SNAPSHOT_COOLDOWN_MS - (nowMs() - lastMessagingSnapshotAtMs),
+    );
+    const nextDelayMs = Math.max(delayMs, remainingCooldownMs);
     if (messagingRefreshTimerId !== null) {
       window.clearTimeout(messagingRefreshTimerId);
     }
@@ -1482,7 +1434,7 @@ export const useNodeStore = defineStore("node", () => {
           appendLog("Debug", `[peers] refreshed native peer snapshot after ${reason}.`);
         })
         .catch(() => undefined);
-    }, delayMs);
+    }, nextDelayMs);
   }
 
   async function init(): Promise<void> {
@@ -1496,8 +1448,12 @@ export const useNodeStore = defineStore("node", () => {
     if (presenceTickerId === null) {
       presenceTickerId = window.setInterval(() => {
         presenceNow.value = nowMs();
-        if (status.value.running && !startupSettling.value) {
-          void refreshMessagingState().catch(() => undefined);
+        if (
+          status.value.running
+          && !startupSettling.value
+          && nowMs() - lastMessagingSnapshotAtMs >= MESSAGING_SNAPSHOT_FALLBACK_INTERVAL_MS
+        ) {
+          scheduleMessagingSnapshotRefresh("presence fallback", 250);
         }
       }, PEER_PRESENCE_TICK_MS);
     }

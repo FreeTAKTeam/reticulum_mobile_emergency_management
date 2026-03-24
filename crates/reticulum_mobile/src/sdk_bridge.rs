@@ -41,6 +41,9 @@ use crate::types::{
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
 const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+const COMPAT_EVENT_RETENTION_LIMIT: usize = 2_048;
+const COMPAT_DELIVERY_RETENTION_LIMIT: usize = 1_024;
+const COMPAT_SEND_REPORT_RETENTION_LIMIT: usize = 512;
 
 fn sdk_internal(message: impl Into<String>) -> SdkError {
     SdkError::new(
@@ -277,6 +280,7 @@ struct CompatBackendState {
     events: VecDeque<SdkEvent>,
     deliveries: HashMap<String, DeliverySnapshot>,
     send_reports: HashMap<String, CompatSendReport>,
+    send_report_order: VecDeque<String>,
 }
 
 fn has_delivery_ratchet(state: &SdkTransportState, destination: &AddressHash) -> bool {
@@ -295,6 +299,7 @@ impl CompatBackendState {
             events: VecDeque::new(),
             deliveries: HashMap::new(),
             send_reports: HashMap::new(),
+            send_report_order: VecDeque::new(),
         }
     }
 
@@ -315,6 +320,9 @@ impl CompatBackendState {
             severity,
             payload,
         ));
+        while self.events.len() > COMPAT_EVENT_RETENTION_LIMIT {
+            self.events.pop_front();
+        }
     }
 
     fn update_delivery(
@@ -342,6 +350,60 @@ impl CompatBackendState {
             message_id_hex.to_string(),
             make_delivery_snapshot(message_id_hex, state, terminal, attempts, reason_code),
         );
+        self.prune_deliveries();
+    }
+
+    fn record_send_report(&mut self, report: CompatSendReport) {
+        let message_id_hex = report.message_id_hex.clone();
+        self.send_reports.insert(message_id_hex.clone(), report);
+        self.send_report_order.retain(|value| value != &message_id_hex);
+        self.send_report_order.push_back(message_id_hex);
+        while self.send_report_order.len() > COMPAT_SEND_REPORT_RETENTION_LIMIT {
+            if let Some(evicted) = self.send_report_order.pop_front() {
+                self.send_reports.remove(&evicted);
+            }
+        }
+    }
+
+    fn prune_deliveries(&mut self) {
+        if self.deliveries.len() <= COMPAT_DELIVERY_RETENTION_LIMIT {
+            return;
+        }
+
+        let mut terminal = self
+            .deliveries
+            .iter()
+            .filter_map(|(message_id_hex, snapshot)| {
+                snapshot
+                    .terminal
+                    .then_some((message_id_hex.clone(), snapshot.last_updated_ms))
+            })
+            .collect::<Vec<_>>();
+        terminal.sort_by_key(|(_, updated_at_ms)| *updated_at_ms);
+
+        for (message_id_hex, _) in terminal {
+            if self.deliveries.len() <= COMPAT_DELIVERY_RETENTION_LIMIT {
+                break;
+            }
+            self.deliveries.remove(&message_id_hex);
+        }
+
+        if self.deliveries.len() <= COMPAT_DELIVERY_RETENTION_LIMIT {
+            return;
+        }
+
+        let mut oldest = self
+            .deliveries
+            .iter()
+            .map(|(message_id_hex, snapshot)| (message_id_hex.clone(), snapshot.last_updated_ms))
+            .collect::<Vec<_>>();
+        oldest.sort_by_key(|(_, updated_at_ms)| *updated_at_ms);
+        for (message_id_hex, _) in oldest {
+            if self.deliveries.len() <= COMPAT_DELIVERY_RETENTION_LIMIT {
+                break;
+            }
+            self.deliveries.remove(&message_id_hex);
+        }
     }
 }
 
@@ -513,9 +575,7 @@ impl SdkBackend for CompatBackend {
                 _ => Some(format!("{:?}", report.outcome)),
             };
             state.update_delivery(&report.message_id_hex, delivery_state, reason_code);
-            state
-                .send_reports
-                .insert(report.message_id_hex.clone(), report.clone());
+            state.record_send_report(report.clone());
         }
         Ok(MessageId(report.message_id_hex))
     }
@@ -1674,5 +1734,87 @@ mod tests {
         assert_eq!(second.message_id_hex, "msg-1");
         assert!(first.used_resource);
         assert!(second.used_resource);
+    }
+
+    #[test]
+    fn compat_backend_caps_event_history() {
+        let backend = CompatBackend::new_for_tests("runtime-test");
+
+        for seq in 0..(COMPAT_EVENT_RETENTION_LIMIT + 8) {
+            backend.record_peer_changed(format!("dest-{seq}").as_str(), "connected", None);
+        }
+
+        let state = backend.state.lock().expect("state lock");
+        assert_eq!(state.events.len(), COMPAT_EVENT_RETENTION_LIMIT);
+        assert_eq!(state.last_seq_no(), (COMPAT_EVENT_RETENTION_LIMIT + 8) as u64);
+        assert_eq!(state.events.front().map(|event| event.seq_no), Some(9));
+    }
+
+    #[test]
+    fn compat_backend_prunes_terminal_deliveries_first() {
+        let backend = CompatBackend::new_for_tests("runtime-test");
+
+        backend.record_delivery_update(
+            "queued",
+            DeliveryState::Queued,
+            "dest-queued",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        for index in 0..(COMPAT_DELIVERY_RETENTION_LIMIT + 16) {
+            backend.record_delivery_update(
+                format!("msg-{index}").as_str(),
+                DeliveryState::Delivered,
+                format!("dest-{index}").as_str(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("accepted"),
+            );
+        }
+
+        let state = backend.state.lock().expect("state lock");
+        assert!(state.deliveries.contains_key("queued"));
+        assert_eq!(state.deliveries.len(), COMPAT_DELIVERY_RETENTION_LIMIT);
+    }
+
+    #[test]
+    fn compat_backend_prunes_old_send_reports() {
+        let backend = CompatBackend::new_for_tests("runtime-test");
+
+        {
+            let mut state = backend.state.lock().expect("state lock");
+            for index in 0..(COMPAT_SEND_REPORT_RETENTION_LIMIT + 8) {
+                state.record_send_report(CompatSendReport {
+                    outcome: RnsSendOutcome::SentDirect,
+                    message_id_hex: format!("msg-{index}"),
+                    resolved_destination_hex: format!("dest-{index}"),
+                    used_resource: false,
+                    used_propagation_node: false,
+                    method: LxmfDeliveryMethod::Direct {},
+                    representation: LxmfDeliveryRepresentation::Packet {},
+                    relay_destination_hex: None,
+                    fallback_stage: None,
+                    receipt_hash_hex: None,
+                });
+            }
+        }
+
+        let state = backend.state.lock().expect("state lock");
+        assert_eq!(state.send_reports.len(), COMPAT_SEND_REPORT_RETENTION_LIMIT);
+        assert!(!state.send_reports.contains_key("msg-0"));
+        assert!(state.send_reports.contains_key(&format!(
+            "msg-{}",
+            COMPAT_SEND_REPORT_RETENTION_LIMIT + 7
+        )));
     }
 }

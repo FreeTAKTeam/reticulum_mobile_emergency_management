@@ -47,9 +47,6 @@ import { useNodeStore } from "./nodeStore";
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
-const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
-const LXMF_ACCEPT_WAIT_TIMEOUT_MS = 12_000;
-const LXMF_PROPAGATION_WAIT_TIMEOUT_MS = 5 * 60_000;
 const EAM_PEER_HYDRATION_RETRY_MS = 2 * 60_000;
 const FANOUT_CONCURRENCY_LIMIT = 4;
 
@@ -87,6 +84,13 @@ type EamTrackingExpectation = {
 type PeerFailure = {
   peer: ReplicationPeer;
   detail: string;
+};
+type PendingEamDeliveryTracker = {
+  peer: ReplicationPeer;
+  expected: EamTrackingExpectation;
+  settled: boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
 };
 function nowMs(): number {
   return Date.now();
@@ -256,6 +260,7 @@ export const useMessagesStore = defineStore("messages", () => {
   const nodeStore = useNodeStore();
   const peerSyncInFlight = new Set<string>();
   const peerHydrationAttemptAt = new Map<string, number>();
+  const pendingEamTrackers = new Set<PendingEamDeliveryTracker>();
   let settleDeferralLogged = false;
 
   function persist(): void {
@@ -875,121 +880,137 @@ async function sendEamCommand(
     return payloadMatchesExpectation(expected, event.payload);
   }
 
+  function releaseEamDeliveryTracker(tracker: PendingEamDeliveryTracker): void {
+    if (tracker.settled) {
+      return;
+    }
+    tracker.settled = true;
+    pendingEamTrackers.delete(tracker);
+  }
+
+  function handlePendingEamDeliveryEvent(event: LxmfDeliveryEvent): void {
+    if (pendingEamTrackers.size === 0) {
+      return;
+    }
+
+    for (const tracker of Array.from(pendingEamTrackers)) {
+      const { peer, expected } = tracker;
+      if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
+        continue;
+      }
+      if (event.commandType && event.commandType !== expected.commandType) {
+        continue;
+      }
+      if (
+        !matchesTrackingIdentity(expected, event.commandId, event.correlationId)
+        && !event.commandType
+      ) {
+        continue;
+      }
+
+      if (
+        event.status === "Sent"
+        || event.status === "SentToPropagation"
+        || event.status === "Acknowledged"
+      ) {
+        if (event.status === "Acknowledged" && expected.resolveOnAccepted) {
+          releaseEamDeliveryTracker(tracker);
+          tracker.resolve();
+        }
+        continue;
+      }
+
+      const detail = event.detail?.trim() || "delivery failed";
+      releaseEamDeliveryTracker(tracker);
+      tracker.reject(new Error(`[eam] ${expected.commandType} failed for ${formatPeerRoute(peer)}: ${detail}`));
+    }
+  }
+
+  function handlePendingEamPacket(packet: PacketReceivedEvent): void {
+    if (pendingEamTrackers.size === 0) {
+      return;
+    }
+
+    const missionSync = parseEamMissionSyncFields(packet.fieldsBase64);
+    if (!missionSync) {
+      return;
+    }
+
+    for (const tracker of Array.from(pendingEamTrackers)) {
+      const { peer, expected } = tracker;
+      const sourceMatchesPeer = packetMatchesPeerSource(peer, packet);
+      if (sourceMatchesPeer === false) {
+        continue;
+      }
+
+      const allowPayloadFallback = sourceMatchesPeer === true;
+      const matchingResult = (
+        allowPayloadFallback
+          ? responseMatchesExpectation(expected, missionSync.result ?? null)
+          : responseMatchesTrackingIdentity(expected, missionSync.result ?? null)
+      )
+        ? missionSync.result ?? null
+        : null;
+      const matchingEvent = (
+        allowPayloadFallback
+          ? eventMatchesExpectation(expected, missionSync.event ?? null)
+          : eventMatchesTrackingIdentity(expected, missionSync.event ?? null)
+      )
+        ? missionSync.event ?? null
+        : null;
+
+      if (!matchingResult && !matchingEvent) {
+        continue;
+      }
+
+      if (matchingResult?.status === "accepted") {
+        if (expected.resolveOnAccepted) {
+          releaseEamDeliveryTracker(tracker);
+          tracker.resolve();
+        }
+        continue;
+      }
+
+      if (matchingResult?.status === "rejected") {
+        const detail = responseDetail(matchingResult);
+        releaseEamDeliveryTracker(tracker);
+        tracker.reject(new Error(`[eam] ${expected.commandType} rejected by ${formatPeerRoute(peer)}: ${detail}`));
+        continue;
+      }
+
+      releaseEamDeliveryTracker(tracker);
+      tracker.resolve();
+    }
+  }
+
   function createEamDeliveryTracker(peer: ReplicationPeer, expected: EamTrackingExpectation): {
     promise: Promise<void>;
     arm: () => void;
     cancel: () => void;
   } {
-    let settled = false;
-    let timeoutId: number | undefined;
-    let unsubscribePacket: () => void = () => undefined;
-    let unsubscribeDelivery: () => void = () => undefined;
-    let rejectPromise: ((reason?: unknown) => void) | undefined;
-    let timeoutMs = expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS;
-
-    const finish = (callback?: () => void): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
-      }
-      unsubscribePacket();
-      unsubscribeDelivery();
-      callback?.();
-    };
-
-    const scheduleTimeout = (): void => {
-      if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
-      }
-      timeoutId = window.setTimeout(() => {
-        finish(() => rejectPromise?.(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`)));
-      }, timeoutMs);
-    };
-
+    let tracker: PendingEamDeliveryTracker | null = null;
     const promise = new Promise<void>((resolve, reject) => {
-      rejectPromise = reject;
-      unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
-        if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
-          return;
-        }
-        if (event.commandType && event.commandType !== expected.commandType) {
-          return;
-        }
-        if (
-          !matchesTrackingIdentity(expected, event.commandId, event.correlationId)
-          && !event.commandType
-        ) {
-          return;
-        }
-        if (
-          event.status === "Sent"
-          || event.status === "SentToPropagation"
-          || event.status === "Acknowledged"
-        ) {
-          if (event.status === "SentToPropagation" && timeoutMs < LXMF_PROPAGATION_WAIT_TIMEOUT_MS) {
-            timeoutMs = LXMF_PROPAGATION_WAIT_TIMEOUT_MS;
-            scheduleTimeout();
-          }
-          if (event.status === "Acknowledged" && expected.resolveOnAccepted) {
-            finish(resolve);
-          }
-          return;
-        }
-        const detail = event.detail?.trim() || "delivery failed";
-        finish(() => reject(new Error(`[eam] ${expected.commandType} failed for ${formatPeerRoute(peer)}: ${detail}`)));
-      });
-
-      unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
-        const sourceMatchesPeer = packetMatchesPeerSource(peer, packet);
-        if (sourceMatchesPeer === false) {
-          return;
-        }
-        const missionSync = parseEamMissionSyncFields(packet.fieldsBase64);
-        const allowPayloadFallback = sourceMatchesPeer === true;
-        const matchingResult = (
-          allowPayloadFallback
-            ? responseMatchesExpectation(expected, missionSync?.result ?? null)
-            : responseMatchesTrackingIdentity(expected, missionSync?.result ?? null)
-        )
-          ? missionSync?.result ?? null
-          : null;
-        const matchingEvent = (
-          allowPayloadFallback
-            ? eventMatchesExpectation(expected, missionSync?.event ?? null)
-            : eventMatchesTrackingIdentity(expected, missionSync?.event ?? null)
-        )
-          ? missionSync?.event ?? null
-          : null;
-        if (!matchingResult && !matchingEvent) {
-          return;
-        }
-        if (matchingResult?.status === "accepted") {
-          if (expected.resolveOnAccepted) {
-            finish(resolve);
-          }
-          return;
-        }
-        if (matchingResult?.status === "rejected") {
-          const detail = responseDetail(matchingResult);
-          finish(() => reject(new Error(`[eam] ${expected.commandType} rejected by ${formatPeerRoute(peer)}: ${detail}`)));
-          return;
-        }
-        finish(resolve);
-      });
-
+      tracker = {
+        peer,
+        expected,
+        settled: false,
+        resolve,
+        reject,
+      };
+      pendingEamTrackers.add(tracker);
     });
 
-    const arm = (): void => {
-      if (settled || timeoutId !== undefined) {
-        return;
-      }
-      scheduleTimeout();
-    };
+    const arm = (): void => undefined;
 
-    return { promise, arm, cancel: () => finish() };
+    return {
+      promise,
+      arm,
+      cancel: () => {
+        if (tracker) {
+          releaseEamDeliveryTracker(tracker);
+        }
+      },
+    };
   }
 
   async function sendEamCommandAwaitingDelivery(
@@ -997,6 +1018,7 @@ async function sendEamCommand(
     command: EamCommandEnvelope,
     expected: EamTrackingExpectation,
   ): Promise<void> {
+  initReplication();
   const tracker = createEamDeliveryTracker(peer, expected);
   try {
     nodeStore.logUi(
@@ -1703,6 +1725,7 @@ async function sendEamCommand(
     const decoder = new TextDecoder();
 
     nodeStore.onPacket((event: PacketReceivedEvent) => {
+      handlePendingEamPacket(event);
       const missionSync = parseEamMissionSyncFields(event.fieldsBase64);
       if (missionSync) {
         if (missionSync.commands.length > 0) {
@@ -1758,6 +1781,7 @@ async function sendEamCommand(
     });
 
     nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
+      handlePendingEamDeliveryEvent(event);
       if (!event.commandType?.startsWith("mission.registry.eam")) {
         return;
       }

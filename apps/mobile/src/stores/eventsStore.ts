@@ -28,10 +28,9 @@ import { useNodeStore } from "./nodeStore";
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const EVENT_TYPE_KEYWORD_PREFIX = "r3akt:event-type:";
-const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
-const LXMF_PROPAGATION_WAIT_TIMEOUT_MS = 5 * 60_000;
 const BACKGROUND_MISSION_HYDRATION_ENABLED = true;
 const FANOUT_CONCURRENCY_LIMIT = 4;
+const EVENT_REPLAY_COOLDOWN_MS = 5 * 60_000;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
@@ -47,6 +46,25 @@ type ReplicationFailure = {
   stage: ReplicationStage;
   peer: ReplicationPeer;
   message: string;
+};
+type PendingMissionDeliveryTracker = {
+  peer: ReplicationPeer;
+  expected: {
+    stage: ReplicationStage;
+    correlationId: string;
+    commandId: string;
+    commandType: string;
+    eventUid?: string;
+    missionUid?: string;
+  };
+  settled: boolean;
+  resolve: () => void;
+  reject: (error: EventReplicationError) => void;
+};
+type PeerReplayState = {
+  lastAttemptAt: number;
+  lastEventCount: number;
+  lastNewestEventUpdatedAt: number;
 };
 
 type LegacyEventReplicationMessage =
@@ -85,6 +103,10 @@ class EventReplicationError extends Error {
     this.name = "EventReplicationError";
     this.failures = failures;
   }
+}
+
+function nowMs(): number {
+  return Date.now();
 }
 
 function createEventUid(): string {
@@ -644,6 +666,8 @@ export const useEventsStore = defineStore("events", () => {
   const replicationInitialized = ref(false);
   const nodeStore = useNodeStore();
   const peerSyncInFlight = new Set<string>();
+  const pendingMissionTrackers = new Set<PendingMissionDeliveryTracker>();
+  const peerReplayStateByDestination: Record<string, PeerReplayState> = {};
 
   function persist(): void {
     saveEvents(byUid);
@@ -818,6 +842,132 @@ export const useEventsStore = defineStore("events", () => {
     };
   }
 
+  function releaseMissionDeliveryTracker(tracker: PendingMissionDeliveryTracker): void {
+    if (tracker.settled) {
+      return;
+    }
+    tracker.settled = true;
+    pendingMissionTrackers.delete(tracker);
+  }
+
+  function rejectMissionDeliveryTracker(
+    tracker: PendingMissionDeliveryTracker,
+    message: string,
+    detail: string,
+  ): void {
+    releaseMissionDeliveryTracker(tracker);
+    tracker.reject(new EventReplicationError(message, [{
+      stage: tracker.expected.stage,
+      peer: tracker.peer,
+      message: detail,
+    }]));
+  }
+
+  function handlePendingMissionDeliveryEvent(event: LxmfDeliveryEvent): void {
+    if (!isEventDelivery(event) || pendingMissionTrackers.size === 0) {
+      return;
+    }
+
+    for (const tracker of Array.from(pendingMissionTrackers)) {
+      const { expected, peer } = tracker;
+      if (event.correlationId !== expected.correlationId && event.commandId !== expected.commandId) {
+        continue;
+      }
+      if (event.commandType && event.commandType !== expected.commandType) {
+        continue;
+      }
+      if (expected.eventUid && event.eventUid && event.eventUid !== expected.eventUid) {
+        continue;
+      }
+      if (expected.missionUid && event.missionUid && event.missionUid !== expected.missionUid) {
+        continue;
+      }
+      if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
+        continue;
+      }
+
+      if (event.status === "Sent" || event.status === "SentToPropagation") {
+        nodeStore.logUi(
+          "Debug",
+          `[events] ${expected.stage} ${event.status === "SentToPropagation" ? "queued on propagation relay" : "sent"} to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
+        );
+        continue;
+      }
+
+      if (event.status === "Acknowledged") {
+        releaseMissionDeliveryTracker(tracker);
+        tracker.resolve();
+        continue;
+      }
+
+      const detail = event.detail?.trim() || "delivery failed";
+      rejectMissionDeliveryTracker(
+        tracker,
+        `[events] ${expected.stage} failed for ${formatPeerRoute(peer)}: ${detail}`,
+        detail,
+      );
+    }
+  }
+
+  function handlePendingMissionPacket(packet: PacketReceivedEvent): void {
+    if (pendingMissionTrackers.size === 0) {
+      return;
+    }
+
+    const missionSync = parseMissionSyncFields(packet.fieldsBase64);
+    if (!missionSync) {
+      return;
+    }
+
+    for (const tracker of Array.from(pendingMissionTrackers)) {
+      const { expected, peer } = tracker;
+      const matchingResult = missionResponseMatches(expected, missionSync.result ?? null)
+        ? missionSync.result ?? null
+        : null;
+      const matchingEvent = missionEventMatches(expected, missionSync.event ?? null)
+        ? missionSync.event ?? null
+        : null;
+
+      if (!matchingResult && !matchingEvent) {
+        continue;
+      }
+
+      if (matchingEvent) {
+        nodeStore.logUi(
+          "Debug",
+          `[events] ${expected.stage} completion event ${matchingEvent.event_type} received from ${formatPeerRoute(peer)}.`,
+        );
+      }
+
+      if (!matchingResult) {
+        continue;
+      }
+
+      if (matchingResult.status === "accepted") {
+        nodeStore.logUi(
+          "Debug",
+          `[events] ${expected.stage} accepted by ${formatPeerRoute(peer)} (${missionResponseDetail(matchingResult)}).`,
+        );
+        continue;
+      }
+
+      if (matchingResult.status === "rejected") {
+        const detail = missionResponseDetail(matchingResult);
+        rejectMissionDeliveryTracker(
+          tracker,
+          `[events] ${expected.stage} rejected by ${formatPeerRoute(peer)}: ${detail}`,
+          detail,
+        );
+        continue;
+      }
+
+      nodeStore.logUi(
+        "Debug",
+        `[events] ${expected.stage} result received from ${formatPeerRoute(peer)}.`,
+      );
+    }
+  }
+
   function createMissionDeliveryTracker(
     peer: ReplicationPeer,
     expected: {
@@ -832,164 +982,25 @@ export const useEventsStore = defineStore("events", () => {
     promise: Promise<void>;
     cancel: () => void;
   } {
-    let cleanup = () => undefined;
-
+    let tracker: PendingMissionDeliveryTracker | null = null;
     const promise = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let unsubscribeDelivery: () => void = () => undefined;
-      let unsubscribePacket: () => void = () => undefined;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      let timeoutMs = LXMF_DELIVERY_WAIT_TIMEOUT_MS;
-
-      const finish = (effect: () => void) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        unsubscribeDelivery();
-        unsubscribePacket();
-        effect();
+      tracker = {
+        peer,
+        expected,
+        settled: false,
+        resolve,
+        reject,
       };
-
-      const scheduleTimeout = () => {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        timeoutId = setTimeout(() => {
-          finish(() => reject(new EventReplicationError(
-            `[events] ${expected.stage} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`,
-            [{
-              stage: expected.stage,
-              peer,
-              message: `Timed out waiting for LXMF acknowledgement after ${timeoutMs}ms.`,
-            }],
-          )));
-        }, timeoutMs);
-      };
-
-      unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
-        if (!isEventDelivery(event)) {
-          return;
-        }
-        if (event.correlationId !== expected.correlationId && event.commandId !== expected.commandId) {
-          return;
-        }
-        if (event.commandType && event.commandType !== expected.commandType) {
-          return;
-        }
-        if (expected.eventUid && event.eventUid && event.eventUid !== expected.eventUid) {
-          return;
-        }
-        if (expected.missionUid && event.missionUid && event.missionUid !== expected.missionUid) {
-          return;
-        }
-
-        const destinationMatches = normalizeHex(event.destinationHex) === normalizeHex(peer.lxmfDestinationHex);
-        if (!destinationMatches) {
-          return;
-        }
-
-        if (event.status === "Sent" || event.status === "SentToPropagation") {
-          if (event.status === "SentToPropagation" && timeoutMs < LXMF_PROPAGATION_WAIT_TIMEOUT_MS) {
-            timeoutMs = LXMF_PROPAGATION_WAIT_TIMEOUT_MS;
-            scheduleTimeout();
-          }
-          nodeStore.logUi(
-            "Debug",
-            `[events] ${expected.stage} ${event.status === "SentToPropagation" ? "queued on propagation relay" : "sent"} to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
-          );
-          return;
-        }
-
-        if (event.status === "Acknowledged") {
-          finish(() => resolve());
-          return;
-        }
-
-        const detail = event.detail?.trim() || "delivery failed";
-        finish(() => reject(new EventReplicationError(
-          `[events] ${expected.stage} failed for ${formatPeerRoute(peer)}: ${detail}`,
-          [{
-            stage: expected.stage,
-            peer,
-            message: detail,
-          }],
-        )));
-      });
-
-      unsubscribePacket = nodeStore.onPacket((packet: PacketReceivedEvent) => {
-        const missionSync = parseMissionSyncFields(packet.fieldsBase64);
-        const matchingResult = missionResponseMatches(expected, missionSync?.result ?? null)
-          ? missionSync?.result ?? null
-          : null;
-        const matchingEvent = missionEventMatches(expected, missionSync?.event ?? null)
-          ? missionSync?.event ?? null
-          : null;
-
-        if (!matchingResult && !matchingEvent) {
-          return;
-        }
-
-        if (matchingEvent) {
-          nodeStore.logUi(
-            "Debug",
-            `[events] ${expected.stage} completion event ${matchingEvent.event_type} received from ${formatPeerRoute(peer)}.`,
-          );
-        }
-
-        if (!matchingResult) {
-          return;
-        }
-
-        const result = matchingResult;
-        if (result.status === "accepted") {
-          nodeStore.logUi(
-            "Debug",
-            `[events] ${expected.stage} accepted by ${formatPeerRoute(peer)} (${missionResponseDetail(result)}).`,
-          );
-          return;
-        }
-
-        if (result.status === "rejected") {
-          const detail = missionResponseDetail(result);
-          finish(() => reject(new EventReplicationError(
-            `[events] ${expected.stage} rejected by ${formatPeerRoute(peer)}: ${detail}`,
-            [{
-              stage: expected.stage,
-              peer,
-              message: detail,
-            }],
-          )));
-          return;
-        }
-
-        nodeStore.logUi(
-          "Debug",
-          `[events] ${expected.stage} result received from ${formatPeerRoute(peer)}.`,
-        );
-      });
-
-      scheduleTimeout();
-
-      cleanup = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
-        unsubscribeDelivery();
-        unsubscribePacket();
-      };
+      pendingMissionTrackers.add(tracker);
     });
 
     return {
       promise,
-      cancel: () => cleanup(),
+      cancel: () => {
+        if (tracker) {
+          releaseMissionDeliveryTracker(tracker);
+        }
+      },
     };
   }
 
@@ -1011,6 +1022,7 @@ export const useEventsStore = defineStore("events", () => {
     command: MissionCommandEnvelope,
     stage: ReplicationStage,
   ): Promise<void> {
+    initReplication();
     const tracker = createMissionDeliveryTracker(peer, {
       stage,
       correlationId: command.correlation_id ?? command.command_id,
@@ -1183,17 +1195,42 @@ export const useEventsStore = defineStore("events", () => {
     try {
       const localEvents = snapshotEvents()
         .sort((a, b) => getEventUpdatedAt(a) - getEventUpdatedAt(b));
-      if (localEvents.length > 0) {
+      const newestEventUpdatedAt = localEvents.length > 0
+        ? getEventUpdatedAt(localEvents[localEvents.length - 1]!)
+        : 0;
+      const replayState = peerReplayStateByDestination[destination];
+      const shouldReplayLocalState = !replayState
+        || replayState.lastEventCount !== localEvents.length
+        || replayState.lastNewestEventUpdatedAt !== newestEventUpdatedAt
+        || nowMs() - replayState.lastAttemptAt >= EVENT_REPLAY_COOLDOWN_MS;
+
+      peerReplayStateByDestination[destination] = {
+        lastAttemptAt: nowMs(),
+        lastEventCount: replayState?.lastEventCount ?? 0,
+        lastNewestEventUpdatedAt: replayState?.lastNewestEventUpdatedAt ?? 0,
+      };
+
+      if (shouldReplayLocalState && localEvents.length > 0) {
         nodeStore.logUi(
           "Debug",
           `[events] replaying ${localEvents.length} local event(s) to ${formatPeerRoute(peer)} before hydration.`,
         );
-      }
-      for (const record of localEvents) {
-        await replicateLogUpsertToPeer(peer, record, {
-          logLevel: "Debug",
-          verb: "replayed",
-        });
+        for (const record of localEvents) {
+          await replicateLogUpsertToPeer(peer, record, {
+            logLevel: "Debug",
+            verb: "replayed",
+          });
+        }
+        peerReplayStateByDestination[destination] = {
+          lastAttemptAt: nowMs(),
+          lastEventCount: localEvents.length,
+          lastNewestEventUpdatedAt: newestEventUpdatedAt,
+        };
+      } else if (localEvents.length > 0) {
+        nodeStore.logUi(
+          "Debug",
+          `[events] replay skipped for ${formatPeerRoute(peer)}; requesting hydration only.`,
+        );
       }
       await requestEventList(peer.lxmfDestinationHex);
     } finally {
@@ -1443,6 +1480,7 @@ export const useEventsStore = defineStore("events", () => {
 
     const decoder = new TextDecoder();
     nodeStore.onPacket((event: PacketReceivedEvent) => {
+      handlePendingMissionPacket(event);
       const missionSync = parseMissionSyncFields(event.fieldsBase64);
       if (missionSync) {
         if (missionSync.commands.length > 0 && event.sourceHex) {
@@ -1509,6 +1547,7 @@ export const useEventsStore = defineStore("events", () => {
     });
 
     nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
+      handlePendingMissionDeliveryEvent(event);
       if (!isEventDelivery(event)) {
         return;
       }
@@ -1548,20 +1587,22 @@ export const useEventsStore = defineStore("events", () => {
     watch(
       () => ({
         identity: nodeStore.status.identityHex.trim().toLowerCase(),
-        peers: replicationPeers(false).map((peer) => ({
-          appDestinationHex: peer.appDestinationHex,
-          lxmfDestinationHex: peer.lxmfDestinationHex,
-        })),
+        routeKey: replicationPeers(false)
+          .map((peer) => normalizeHex(peer.lxmfDestinationHex))
+          .filter((value) => value.length > 0)
+          .sort()
+          .join(","),
       }),
       (current, previous) => {
         if (!current.identity) {
           return;
         }
-        const previousDestinations = previous?.identity
-          ? new Set(previous.peers.map((peer) => peer.lxmfDestinationHex))
+        const previousDestinations = previous?.identity && previous.routeKey
+          ? new Set(previous.routeKey.split(",").filter((value) => value.length > 0))
           : new Set<string>();
         for (const peer of replicationPeers(false)) {
-          if (previousDestinations.has(peer.lxmfDestinationHex)) {
+          const destination = normalizeHex(peer.lxmfDestinationHex);
+          if (!destination || previousDestinations.has(destination)) {
             continue;
           }
           void syncPeerEvents(peer).catch((error: unknown) => {
@@ -1572,7 +1613,7 @@ export const useEventsStore = defineStore("events", () => {
           });
         }
       },
-      { immediate: true, deep: true },
+      { immediate: true },
     );
   }
 

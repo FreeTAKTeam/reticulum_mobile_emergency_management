@@ -21,6 +21,7 @@ public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
 
     private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
+    private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private ExecutorService poller;
 
     @Override
@@ -32,6 +33,7 @@ public class ReticulumNodePlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         stopPoller();
+        bridgeExecutor.shutdownNow();
         ReticulumBridge.stop();
         super.handleOnDestroy();
     }
@@ -41,24 +43,23 @@ public class ReticulumNodePlugin extends Plugin {
         JSObject config = call.getObject("config", new JSObject());
         normalizeConfig(config);
         Logger.info(TAG, "startNode called.");
-        int result = ReticulumBridge.start(config.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to start native Reticulum node.");
-            return;
-        }
-        ensurePoller();
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to start native Reticulum node.",
+            () -> ReticulumBridge.start(config.toString()),
+            true
+        );
     }
 
     @PluginMethod
     public void stopNode(PluginCall call) {
         Logger.info(TAG, "stopNode called.");
-        int result = ReticulumBridge.stop();
-        if (result != 0) {
-            rejectFromNative(call, "Failed to stop native Reticulum node.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to stop native Reticulum node.",
+            ReticulumBridge::stop,
+            false
+        );
     }
 
     @PluginMethod
@@ -66,28 +67,22 @@ public class ReticulumNodePlugin extends Plugin {
         JSObject config = call.getObject("config", new JSObject());
         normalizeConfig(config);
         Logger.info(TAG, "restartNode called.");
-        int result = ReticulumBridge.restart(config.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to restart native Reticulum node.");
-            return;
-        }
-        ensurePoller();
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to restart native Reticulum node.",
+            () -> ReticulumBridge.restart(config.toString()),
+            true
+        );
     }
 
     @PluginMethod
     public void getStatus(PluginCall call) {
-        String raw = ReticulumBridge.getStatusJson();
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to fetch node status.");
-            return;
-        }
-
-        try {
-            call.resolve(new JSObject(raw));
-        } catch (JSONException ex) {
-            call.reject("Native status JSON parse failed.", ex);
-        }
+        runStringBridgeCall(
+            call,
+            "Failed to fetch node status.",
+            "Native status JSON parse failed.",
+            ReticulumBridge::getStatusJson
+        );
     }
 
     @PluginMethod
@@ -98,12 +93,12 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        int result = ReticulumBridge.connectPeer(destinationHex);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to connect peer.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to connect peer.",
+            () -> ReticulumBridge.connectPeer(destinationHex),
+            false
+        );
     }
 
     @PluginMethod
@@ -114,12 +109,12 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        int result = ReticulumBridge.disconnectPeer(destinationHex);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to disconnect peer.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to disconnect peer.",
+            () -> ReticulumBridge.disconnectPeer(destinationHex),
+            false
+        );
     }
 
     @PluginMethod
@@ -127,6 +122,7 @@ public class ReticulumNodePlugin extends Plugin {
         String destinationHex = call.getString("destinationHex");
         String bytesBase64 = call.getString("bytesBase64");
         String fieldsBase64 = call.getString("fieldsBase64");
+        String sendMode = call.getString("sendMode");
         boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
@@ -143,6 +139,9 @@ public class ReticulumNodePlugin extends Plugin {
         if (fieldsBase64 != null && !fieldsBase64.isEmpty()) {
             payload.put("fieldsBase64", fieldsBase64);
         }
+        if (sendMode != null && !sendMode.isEmpty()) {
+            payload.put("sendMode", sendMode);
+        }
         if (usePropagationNode) {
             payload.put("usePropagationNode", true);
         }
@@ -155,18 +154,19 @@ public class ReticulumNodePlugin extends Plugin {
                 + bytesBase64.length()
                 + " fieldsBase64Present="
                 + (fieldsBase64 != null && !fieldsBase64.isEmpty())
+                + " sendMode="
+                + (sendMode != null ? sendMode : "Auto")
                 + " usePropagationNode="
                 + usePropagationNode
         );
 
-        int result = ReticulumBridge.sendJson(payload.toString());
-        if (result != 0) {
-            Log.e(TAG, "send native returned non-zero destination=" + destinationHex);
-            rejectFromNative(call, "Failed to send bytes.");
-            return;
-        }
-        Log.d(TAG, "send native accepted destination=" + destinationHex);
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to send bytes.",
+            () -> ReticulumBridge.sendJson(payload.toString()),
+            false,
+            () -> Log.d(TAG, "send native accepted destination=" + destinationHex)
+        );
     }
 
     @PluginMethod
@@ -174,6 +174,7 @@ public class ReticulumNodePlugin extends Plugin {
         String destinationHex = call.getString("destinationHex");
         String bodyUtf8 = call.getString("bodyUtf8", "");
         String title = call.getString("title");
+        String sendMode = call.getString("sendMode");
         boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
@@ -186,16 +187,19 @@ public class ReticulumNodePlugin extends Plugin {
         if (title != null && !title.isEmpty()) {
             payload.put("title", title);
         }
+        if (sendMode != null && !sendMode.isEmpty()) {
+            payload.put("sendMode", sendMode);
+        }
         if (usePropagationNode) {
             payload.put("usePropagationNode", true);
         }
 
-        String raw = ReticulumBridge.sendLxmfJson(payload.toString());
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to send LXMF message.");
-            return;
-        }
-        resolveJson(call, raw, "Native LXMF send JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to send LXMF message.",
+            "Native LXMF send JSON parse failed.",
+            () -> ReticulumBridge.sendLxmfJson(payload.toString())
+        );
     }
 
     @PluginMethod
@@ -208,12 +212,12 @@ public class ReticulumNodePlugin extends Plugin {
 
         JSObject payload = new JSObject();
         payload.put("messageIdHex", messageIdHex);
-        int result = ReticulumBridge.retryLxmfJson(payload.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to retry LXMF message.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to retry LXMF message.",
+            () -> ReticulumBridge.retryLxmfJson(payload.toString()),
+            false
+        );
     }
 
     @PluginMethod
@@ -226,22 +230,22 @@ public class ReticulumNodePlugin extends Plugin {
 
         JSObject payload = new JSObject();
         payload.put("messageIdHex", messageIdHex);
-        int result = ReticulumBridge.cancelLxmfJson(payload.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to cancel LXMF message.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to cancel LXMF message.",
+            () -> ReticulumBridge.cancelLxmfJson(payload.toString()),
+            false
+        );
     }
 
     @PluginMethod
     public void announceNow(PluginCall call) {
-        int result = ReticulumBridge.announceNow();
-        if (result != 0) {
-            rejectFromNative(call, "Failed to send announce.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to send announce.",
+            ReticulumBridge::announceNow,
+            false
+        );
     }
 
     @PluginMethod
@@ -252,12 +256,12 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        int result = ReticulumBridge.requestPeerIdentity(destinationHex);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to request peer identity.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to request peer identity.",
+            () -> ReticulumBridge.requestPeerIdentity(destinationHex),
+            false
+        );
     }
 
     @PluginMethod
@@ -273,12 +277,12 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        int result = ReticulumBridge.broadcastBase64(bytesBase64);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to broadcast bytes.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to broadcast bytes.",
+            () -> ReticulumBridge.broadcastBase64(bytesBase64),
+            false
+        );
     }
 
     @PluginMethod
@@ -289,23 +293,23 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        int result = ReticulumBridge.setAnnounceCapabilities(capabilityString);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to set announce capabilities.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to set announce capabilities.",
+            () -> ReticulumBridge.setAnnounceCapabilities(capabilityString),
+            false
+        );
     }
 
     @PluginMethod
     public void setLogLevel(PluginCall call) {
         String level = call.getString("level", "Info");
-        int result = ReticulumBridge.setLogLevel(level);
-        if (result != 0) {
-            rejectFromNative(call, "Failed to set log level.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to set log level.",
+            () -> ReticulumBridge.setLogLevel(level),
+            false
+        );
     }
 
     @PluginMethod
@@ -319,24 +323,24 @@ public class ReticulumNodePlugin extends Plugin {
     @PluginMethod
     public void refreshHubDirectory(PluginCall call) {
         Logger.info(TAG, "refreshHubDirectory called.");
-        int result = ReticulumBridge.refreshHubDirectory();
-        if (result != 0) {
-            rejectFromNative(call, "Failed to refresh hub directory.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to refresh hub directory.",
+            ReticulumBridge::refreshHubDirectory,
+            false
+        );
     }
 
     @PluginMethod
     public void setActivePropagationNode(PluginCall call) {
         JSObject payload = new JSObject();
         payload.put("destinationHex", call.getString("destinationHex"));
-        int result = ReticulumBridge.setActivePropagationNodeJson(payload.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to set active propagation node.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to set active propagation node.",
+            () -> ReticulumBridge.setActivePropagationNodeJson(payload.toString()),
+            false
+        );
     }
 
     @PluginMethod
@@ -348,64 +352,64 @@ public class ReticulumNodePlugin extends Plugin {
         } else {
             payload.put("limit", null);
         }
-        int result = ReticulumBridge.requestLxmfSyncJson(payload.toString());
-        if (result != 0) {
-            rejectFromNative(call, "Failed to request LXMF sync.");
-            return;
-        }
-        call.resolve();
+        runIntBridgeCall(
+            call,
+            "Failed to request LXMF sync.",
+            () -> ReticulumBridge.requestLxmfSyncJson(payload.toString()),
+            false
+        );
     }
 
     @PluginMethod
     public void listAnnounces(PluginCall call) {
-        String raw = ReticulumBridge.listAnnouncesJson();
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to list announces.");
-            return;
-        }
-        resolveJson(call, raw, "Native announce list JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to list announces.",
+            "Native announce list JSON parse failed.",
+            ReticulumBridge::listAnnouncesJson
+        );
     }
 
     @PluginMethod
     public void listPeers(PluginCall call) {
-        String raw = ReticulumBridge.listPeersJson();
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to list peers.");
-            return;
-        }
-        resolveJson(call, raw, "Native peer list JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to list peers.",
+            "Native peer list JSON parse failed.",
+            ReticulumBridge::listPeersJson
+        );
     }
 
     @PluginMethod
     public void listConversations(PluginCall call) {
-        String raw = ReticulumBridge.listConversationsJson();
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to list conversations.");
-            return;
-        }
-        resolveJson(call, raw, "Native conversation list JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to list conversations.",
+            "Native conversation list JSON parse failed.",
+            ReticulumBridge::listConversationsJson
+        );
     }
 
     @PluginMethod
     public void listMessages(PluginCall call) {
         JSObject payload = new JSObject();
         payload.put("conversationId", call.getString("conversationId"));
-        String raw = ReticulumBridge.listMessagesJson(payload.toString());
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to list messages.");
-            return;
-        }
-        resolveJson(call, raw, "Native message list JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to list messages.",
+            "Native message list JSON parse failed.",
+            () -> ReticulumBridge.listMessagesJson(payload.toString())
+        );
     }
 
     @PluginMethod
     public void getLxmfSyncStatus(PluginCall call) {
-        String raw = ReticulumBridge.getLxmfSyncStatusJson();
-        if (raw == null || raw.isEmpty()) {
-            rejectFromNative(call, "Failed to get LXMF sync status.");
-            return;
-        }
-        resolveJson(call, raw, "Native sync status JSON parse failed.");
+        runStringBridgeCall(
+            call,
+            "Failed to get LXMF sync status.",
+            "Native sync status JSON parse failed.",
+            ReticulumBridge::getLxmfSyncStatusJson
+        );
     }
 
     @PluginMethod
@@ -499,6 +503,74 @@ public class ReticulumNodePlugin extends Plugin {
             poller.shutdownNow();
             poller = null;
         }
+    }
+
+    private void runIntBridgeCall(
+        PluginCall call,
+        String fallbackMessage,
+        NativeIntOperation operation,
+        boolean onSuccessEnsurePoller
+    ) {
+        runIntBridgeCall(call, fallbackMessage, operation, onSuccessEnsurePoller, null);
+    }
+
+    private void runIntBridgeCall(
+        PluginCall call,
+        String fallbackMessage,
+        NativeIntOperation operation,
+        boolean onSuccessEnsurePoller,
+        Runnable onSuccess
+    ) {
+        bridgeExecutor.execute(
+            () -> {
+                try {
+                    int result = operation.run();
+                    if (result != 0) {
+                        rejectFromNative(call, fallbackMessage);
+                        return;
+                    }
+                    if (onSuccessEnsurePoller) {
+                        ensurePoller();
+                    }
+                    if (onSuccess != null) {
+                        onSuccess.run();
+                    }
+                    call.resolve();
+                } catch (Exception ex) {
+                    call.reject(fallbackMessage, ex);
+                }
+            }
+        );
+    }
+
+    private void runStringBridgeCall(
+        PluginCall call,
+        String fallbackMessage,
+        String parseFallbackMessage,
+        NativeStringOperation operation
+    ) {
+        bridgeExecutor.execute(
+            () -> {
+                try {
+                    String raw = operation.run();
+                    if (raw == null || raw.isEmpty()) {
+                        rejectFromNative(call, fallbackMessage);
+                        return;
+                    }
+                    resolveJson(call, raw, parseFallbackMessage);
+                } catch (Exception ex) {
+                    call.reject(fallbackMessage, ex);
+                }
+            }
+        );
+    }
+
+    private interface NativeIntOperation {
+        int run() throws Exception;
+    }
+
+    private interface NativeStringOperation {
+        String run() throws Exception;
     }
 
     private void rejectFromNative(PluginCall call, String fallbackMessage) {

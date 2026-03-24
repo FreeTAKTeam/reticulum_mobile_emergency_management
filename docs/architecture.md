@@ -232,6 +232,7 @@ Transport:
 - This **is LXMF**.
 - In the runtime, any `sendBytes(...)` call that includes `fieldsBase64` is wrapped into an LXMF message and sent to the peer's **`lxmf/delivery` destination**.
 - The body bytes are empty for the mission-sync event path; the meaningful data is in the LXMF fields map.
+- On Android, the Capacitor `send` bridge is enqueue-only for mission/LXMF sends. The plugin resolves as soon as Rust accepts the work, and later `lxmfDelivery` / `messageUpdated` / `error` events from Rust own timeout and failure reporting. TypeScript does not run a separate transport timeout for Event or EAM sends.
 
 Verification:
 - `npm --workspace apps/mobile run typecheck`

@@ -18,6 +18,19 @@ use crate::types::{
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const COMMAND_QUEUE_CAPACITY: usize = 256;
+
+fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return tx.try_send(command).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => NodeError::Timeout {},
+            mpsc::error::TrySendError::Closed(_) => NodeError::NotRunning {},
+        });
+    }
+
+    tx.blocking_send(command)
+        .map_err(|_| NodeError::NotRunning {})
+}
 
 struct NodeInner {
     bus: EventBus,
@@ -25,7 +38,7 @@ struct NodeInner {
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     runtime: Option<Runtime>,
-    cmd_tx: Option<mpsc::UnboundedSender<Command>>,
+    cmd_tx: Option<mpsc::Sender<Command>>,
 }
 
 pub struct Node {
@@ -108,7 +121,7 @@ impl Node {
         }
 
         let runtime = Runtime::new().map_err(|_| NodeError::InternalError {})?;
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
 
         runtime.spawn(run_node(
             config,
@@ -145,8 +158,8 @@ impl Node {
 
         if let Some(cmd_tx) = cmd_tx {
             let (tx, rx) = cb::bounded(1);
-            let _ = cmd_tx.send(Command::Stop { resp: tx });
-            let _ = rx.recv_timeout(Duration::from_secs(2));
+            let _ = dispatch_command(&cmd_tx, Command::Stop { resp: tx });
+            let _ = rx.recv_timeout(Duration::from_secs(5));
         }
 
         drop(runtime);
@@ -212,11 +225,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::ConnectPeer {
+        dispatch_command(&tx, Command::ConnectPeer {
             destination_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -229,11 +242,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::DisconnectPeer {
+        dispatch_command(&tx, Command::DisconnectPeer {
             destination_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -251,18 +264,15 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::SendBytes {
+        let (resp_tx, _resp_rx) = cb::bounded(1);
+        dispatch_command(&tx, Command::SendBytes {
             destination_hex,
             bytes,
             fields_bytes,
             send_mode,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
-            .unwrap_or(Err(NodeError::Timeout {}))
+        
     }
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {
@@ -271,15 +281,12 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::BroadcastBytes {
+        let (resp_tx, _resp_rx) = cb::bounded(1);
+        dispatch_command(&tx, Command::BroadcastBytes {
             bytes,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
-            .unwrap_or(Err(NodeError::Timeout {}))
+        
     }
 
     pub fn announce_now(&self) -> Result<(), NodeError> {
@@ -288,8 +295,7 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        tx.send(Command::AnnounceNow {})
-            .map_err(|_| NodeError::NotRunning {})
+        dispatch_command(&tx, Command::AnnounceNow {})
     }
 
     pub fn request_peer_identity(&self, destination_hex: String) -> Result<(), NodeError> {
@@ -299,11 +305,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::RequestPeerIdentity {
+        dispatch_command(&tx, Command::RequestPeerIdentity {
             destination_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -316,11 +322,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::SendLxmf {
+        dispatch_command(&tx, Command::SendLxmf {
             request,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -332,15 +338,12 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::RetryLxmf {
+        let (resp_tx, _resp_rx) = cb::bounded(1);
+        dispatch_command(&tx, Command::RetryLxmf {
             message_id_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
-        resp_rx
-            .recv_timeout(SEND_COMMAND_TIMEOUT)
-            .unwrap_or(Err(NodeError::Timeout {}))
+        
     }
 
     pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
@@ -350,11 +353,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::CancelLxmf {
+        dispatch_command(&tx, Command::CancelLxmf {
             message_id_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -370,11 +373,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::SetActivePropagationNode {
+        dispatch_command(&tx, Command::SetActivePropagationNode {
             destination_hex,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -387,11 +390,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::RequestLxmfSync {
+        dispatch_command(&tx, Command::RequestLxmfSync {
             limit,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(30))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -404,8 +407,7 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::ListAnnounces { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
+        dispatch_command(&tx, Command::ListAnnounces { resp: resp_tx })?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -427,8 +429,7 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::ListConversations { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
+        dispatch_command(&tx, Command::ListConversations { resp: resp_tx })?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -444,11 +445,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::ListMessages {
+        dispatch_command(&tx, Command::ListMessages {
             conversation_id,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -470,11 +471,11 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::SetAnnounceCapabilities {
+        dispatch_command(&tx, Command::SetAnnounceCapabilities {
             capability_string,
             resp: resp_tx,
         })
-        .map_err(|_| NodeError::NotRunning {})?;
+        ?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -484,7 +485,7 @@ impl Node {
         NodeLogger::global().set_level(level);
         if let Ok(inner) = self.inner.lock() {
             if let Some(tx) = inner.cmd_tx.clone() {
-                let _ = tx.send(Command::SetLogLevel { level });
+                let _ = tx.try_send(Command::SetLogLevel { level });
             }
         }
     }
@@ -508,8 +509,7 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        tx.send(Command::RefreshHubDirectory { resp: resp_tx })
-            .map_err(|_| NodeError::NotRunning {})?;
+        dispatch_command(&tx, Command::RefreshHubDirectory { resp: resp_tx })?;
         resp_rx
             .recv_timeout(Duration::from_secs(30))
             .unwrap_or(Err(NodeError::Timeout {}))
