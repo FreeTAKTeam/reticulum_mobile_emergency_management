@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,6 +55,31 @@ pub enum LxmfDeliveryStatus {
     Acknowledged {},
     Failed {},
     TimedOut {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SendMode {
+    Auto {},
+    DirectOnly {},
+    PropagationOnly {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LxmfDeliveryMethod {
+    Direct {},
+    Opportunistic {},
+    Propagated {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LxmfDeliveryRepresentation {
+    Packet {},
+    Resource {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LxmfFallbackStage {
+    AfterDirectRetryBudget {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -186,6 +211,10 @@ pub struct LxmfDeliveryUpdate {
     pub event_uid: Option<String>,
     pub mission_uid: Option<String>,
     pub status: LxmfDeliveryStatus,
+    pub method: LxmfDeliveryMethod,
+    pub representation: LxmfDeliveryRepresentation,
+    pub relay_destination_hex: Option<String>,
+    pub fallback_stage: Option<LxmfFallbackStage>,
     pub detail: Option<String>,
     pub sent_at_ms: u64,
     pub updated_at_ms: u64,
@@ -269,7 +298,7 @@ pub struct SendLxmfRequest {
     pub destination_hex: String,
     pub body_utf8: String,
     pub title: Option<String>,
-    pub use_propagation_node: bool,
+    pub send_mode: SendMode,
 }
 
 #[derive(Debug, Clone)]

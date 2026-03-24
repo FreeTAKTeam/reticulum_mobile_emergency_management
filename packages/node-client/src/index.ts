@@ -14,6 +14,10 @@ export type SendOutcome =
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
 export type LxmfDeliveryStatus = "Sent" | "SentToPropagation" | "Acknowledged" | "Failed" | "TimedOut";
+export type SendMode = "Auto" | "DirectOnly" | "PropagationOnly";
+export type LxmfDeliveryMethod = "Direct" | "Opportunistic" | "Propagated";
+export type LxmfDeliveryRepresentation = "Packet" | "Resource";
+export type LxmfFallbackStage = "AfterDirectRetryBudget";
 export type MessageMethod = "Direct" | "Opportunistic" | "Propagated" | "Resource";
 export type MessageState =
   | "Queued"
@@ -114,7 +118,7 @@ export interface PacketReceivedEvent {
 export interface PacketSendOptions {
   dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
-  usePropagationNode?: boolean;
+  sendMode?: SendMode;
 }
 
 export interface PacketSentEvent {
@@ -133,6 +137,10 @@ export interface LxmfDeliveryEvent {
   eventUid?: string;
   missionUid?: string;
   status: LxmfDeliveryStatus;
+  method: LxmfDeliveryMethod;
+  representation: LxmfDeliveryRepresentation;
+  relayDestinationHex?: string;
+  fallbackStage?: LxmfFallbackStage;
   detail?: string;
   sentAtMs: number;
   updatedAtMs: number;
@@ -208,7 +216,7 @@ export interface SendLxmfRequest {
   destinationHex: string;
   bodyUtf8: string;
   title?: string;
-  usePropagationNode?: boolean;
+  sendMode?: SendMode;
 }
 
 export interface HubDirectoryUpdatedEvent {
@@ -342,13 +350,13 @@ interface ReticulumNodePlugin {
     bytesBase64: string;
     dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
-    usePropagationNode?: boolean;
+    sendMode?: SendMode;
   }): Promise<void>;
   sendLxmf(options: {
     destinationHex: string;
     bodyUtf8: string;
     title?: string;
-    usePropagationNode?: boolean;
+    sendMode?: SendMode;
   }): Promise<{ messageIdHex: string }>;
   retryLxmf(options: { messageIdHex: string }): Promise<void>;
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
@@ -785,6 +793,24 @@ function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
     : "Failed";
 }
 
+function toLxmfDeliveryMethod(raw: unknown): LxmfDeliveryMethod {
+  const value = String(raw ?? "");
+  const valid: LxmfDeliveryMethod[] = ["Direct", "Opportunistic", "Propagated"];
+  return valid.includes(value as LxmfDeliveryMethod)
+    ? (value as LxmfDeliveryMethod)
+    : "Direct";
+}
+
+function toLxmfDeliveryRepresentation(raw: unknown): LxmfDeliveryRepresentation {
+  return String(raw ?? "") === "Resource" ? "Resource" : "Packet";
+}
+
+function toLxmfFallbackStage(raw: unknown): LxmfFallbackStage | undefined {
+  return String(raw ?? "") === "AfterDirectRetryBudget"
+    ? "AfterDirectRetryBudget"
+    : undefined;
+}
+
 function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
   return {
     messageIdHex: normalizeHex(
@@ -828,6 +854,14 @@ function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
           ? raw.mission_uid
           : undefined,
     status: toLxmfDeliveryStatus(raw.status),
+    method: toLxmfDeliveryMethod(raw.method),
+    representation: toLxmfDeliveryRepresentation(raw.representation),
+    relayDestinationHex: toOptionalHex(
+      hasValue(raw.relayDestinationHex) ? raw.relayDestinationHex : raw.relay_destination_hex,
+    ),
+    fallbackStage: toLxmfFallbackStage(
+      hasValue(raw.fallbackStage) ? raw.fallbackStage : raw.fallback_stage,
+    ),
     detail:
       typeof raw.detail === "string"
         ? raw.detail
@@ -1113,7 +1147,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       bytesBase64: encodeBytesToBase64(bytes),
       dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
-      usePropagationNode: options?.usePropagationNode,
+      sendMode: options?.sendMode,
     });
   }
 
@@ -1123,7 +1157,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       destinationHex: normalizeHex(request.destinationHex),
       bodyUtf8: request.bodyUtf8,
       title: request.title,
-      usePropagationNode: request.usePropagationNode,
+      sendMode: request.sendMode,
     });
     return normalizeHex(String(result.messageIdHex ?? ""));
   }

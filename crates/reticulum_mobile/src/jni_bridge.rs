@@ -11,9 +11,10 @@ use serde_json::json;
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    HubMode, LogLevel, LxmfDeliveryStatus, MessageDirection, MessageMethod, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerManagementState,
-    PeerChange, PeerRecord, PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
+    HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    LxmfFallbackStage, MessageDirection, MessageMethod, MessageState, NodeConfig, NodeError,
+    NodeEvent, NodeStatus, PeerAvailabilityState, PeerManagementState, PeerChange, PeerRecord,
+    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
 };
 
 const RESULT_OK: jint = 0;
@@ -54,6 +55,7 @@ struct SendInput {
     destination_hex: String,
     bytes_base64: String,
     fields_base64: Option<String>,
+    send_mode: Option<String>,
     #[serde(default)]
     use_propagation_node: bool,
 }
@@ -64,6 +66,7 @@ struct SendLxmfInput {
     destination_hex: String,
     body_utf8: String,
     title: Option<String>,
+    send_mode: Option<String>,
     #[serde(default)]
     use_propagation_node: bool,
 }
@@ -340,6 +343,46 @@ fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
     }
 }
 
+fn send_mode_from_input(send_mode: Option<&str>, use_propagation_node: bool) -> SendMode {
+    if use_propagation_node {
+        return SendMode::PropagationOnly {};
+    }
+    match send_mode.unwrap_or("").trim() {
+        "DirectOnly" => SendMode::DirectOnly {},
+        "PropagationOnly" => SendMode::PropagationOnly {},
+        _ => SendMode::Auto {},
+    }
+}
+
+fn send_mode_to_str(mode: SendMode) -> &'static str {
+    match mode {
+        SendMode::Auto {} => "Auto",
+        SendMode::DirectOnly {} => "DirectOnly",
+        SendMode::PropagationOnly {} => "PropagationOnly",
+    }
+}
+
+fn lxmf_delivery_method_to_str(method: LxmfDeliveryMethod) -> &'static str {
+    match method {
+        LxmfDeliveryMethod::Direct {} => "Direct",
+        LxmfDeliveryMethod::Opportunistic {} => "Opportunistic",
+        LxmfDeliveryMethod::Propagated {} => "Propagated",
+    }
+}
+
+fn lxmf_delivery_representation_to_str(representation: LxmfDeliveryRepresentation) -> &'static str {
+    match representation {
+        LxmfDeliveryRepresentation::Packet {} => "Packet",
+        LxmfDeliveryRepresentation::Resource {} => "Resource",
+    }
+}
+
+fn lxmf_fallback_stage_to_str(stage: LxmfFallbackStage) -> &'static str {
+    match stage {
+        LxmfFallbackStage::AfterDirectRetryBudget {} => "AfterDirectRetryBudget",
+    }
+}
+
 fn message_method_to_str(method: MessageMethod) -> &'static str {
     match method {
         MessageMethod::Direct {} => "Direct",
@@ -472,6 +515,10 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "eventUid": update.event_uid,
                 "missionUid": update.mission_uid,
                 "status": lxmf_delivery_status_to_str(update.status),
+                "method": lxmf_delivery_method_to_str(update.method),
+                "representation": lxmf_delivery_representation_to_str(update.representation),
+                "relayDestinationHex": update.relay_destination_hex,
+                "fallbackStage": update.fallback_stage.map(lxmf_fallback_stage_to_str),
                 "detail": update.detail,
                 "sentAtMs": update.sent_at_ms,
                 "updatedAtMs": update.updated_at_ms
@@ -866,7 +913,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         payload.destination_hex,
         bytes,
         fields_bytes,
-        payload.use_propagation_node,
+        send_mode_from_input(payload.send_mode.as_deref(), payload.use_propagation_node),
     ) {
         Ok(_) => {
             log::debug!("jni sendJson result=ok");
@@ -923,7 +970,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmf
         destination_hex: payload.destination_hex,
         body_utf8: payload.body_utf8,
         title: payload.title,
-        use_propagation_node: payload.use_propagation_node,
+        send_mode: send_mode_from_input(payload.send_mode.as_deref(), payload.use_propagation_node),
     }) {
         Ok(message_id_hex) => ok_json_result(&mut env, &json!({ "messageIdHex": message_id_hex })),
         Err(err) => {

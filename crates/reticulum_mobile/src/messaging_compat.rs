@@ -63,6 +63,14 @@ pub enum SyncPhase {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SendMode {
+    #[default]
+    Auto,
+    DirectOnly,
+    PropagationOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnnounceRecord {
     pub destination_hex: String,
@@ -166,7 +174,19 @@ pub struct SendMessageRequest {
     pub body_utf8: String,
     pub title: Option<String>,
     #[serde(default)]
+    pub send_mode: SendMode,
+    #[serde(default)]
     pub use_propagation_node: bool,
+}
+
+impl SendMessageRequest {
+    pub fn effective_send_mode(&self) -> SendMode {
+        if self.use_propagation_node {
+            SendMode::PropagationOnly
+        } else {
+            self.send_mode
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -451,7 +471,7 @@ impl MessagingStore {
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
             let last_ready_at_ms = self.last_ready_at_ms.get(&destination_hex).copied();
             let peer_app_data = app_record.map(|record| record.app_data.as_str());
-            let supports_mission_traffic = supports_mission_traffic(peer_app_data);
+            let mission_ready = app_record.is_some() && supports_mission_traffic(peer_app_data);
             let availability_state = peer_availability_state(
                 app_record.is_some(),
                 lxmf_record.is_some(),
@@ -464,10 +484,9 @@ impl MessagingStore {
                 now_ms,
             );
             let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
-            let mission_ready = communication_ready && supports_mission_traffic;
             let relay_eligible = identity_hex.is_some()
                 && lxmf_destination_hex.is_some()
-                && supports_mission_traffic;
+                && mission_ready;
             let stale = peer_is_stale(
                 active_link,
                 app_record.map(|record| record.received_at_ms),
@@ -1050,6 +1069,9 @@ mod tests {
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Discovered);
         assert_eq!(peers[0].state, PeerState::Connecting);
         assert_eq!(peers[0].lxmf_destination_hex, None);
+        assert!(!peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(!peers[0].relay_eligible);
     }
 
     #[test]
@@ -1130,6 +1152,8 @@ mod tests {
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
         assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(!peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(peers[0].relay_eligible);
         assert!(peers[0].stale);
     }
 

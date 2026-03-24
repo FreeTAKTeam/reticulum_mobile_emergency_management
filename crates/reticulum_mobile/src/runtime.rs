@@ -37,10 +37,11 @@ use tokio::sync::{mpsc, Mutex as TokioMutex};
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    AnnounceRecord, ConversationRecord, HubMode, LxmfDeliveryStatus, LxmfDeliveryUpdate,
+    AnnounceRecord, ConversationRecord, HubMode, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
     NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
-    PeerState, SendLxmfRequest, SendOutcome, SyncPhase, SyncStatus,
+    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -261,6 +262,14 @@ fn from_sdk_message_state(state: sdkmsg::MessageState) -> MessageState {
     }
 }
 
+fn to_sdk_send_mode(mode: SendMode) -> sdkmsg::SendMode {
+    match mode {
+        SendMode::Auto {} => sdkmsg::SendMode::Auto,
+        SendMode::DirectOnly {} => sdkmsg::SendMode::DirectOnly,
+        SendMode::PropagationOnly {} => sdkmsg::SendMode::PropagationOnly,
+    }
+}
+
 fn to_sdk_message_direction(direction: MessageDirection) -> sdkmsg::MessageDirection {
     match direction {
         MessageDirection::Inbound {} => sdkmsg::MessageDirection::Inbound,
@@ -426,7 +435,8 @@ fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest 
         destination_hex: request.destination_hex.clone(),
         body_utf8: request.body_utf8.clone(),
         title: request.title.clone(),
-        use_propagation_node: request.use_propagation_node,
+        send_mode: to_sdk_send_mode(request.send_mode),
+        use_propagation_node: matches!(request.send_mode, SendMode::PropagationOnly {}),
     }
 }
 
@@ -442,6 +452,10 @@ struct PendingLxmfDelivery {
     team_member_uid: Option<String>,
     team_uid: Option<String>,
     mission_uid: Option<String>,
+    method: LxmfDeliveryMethod,
+    representation: LxmfDeliveryRepresentation,
+    relay_destination_hex: Option<String>,
+    fallback_stage: Option<LxmfFallbackStage>,
     sent_at_ms: u64,
 }
 
@@ -466,6 +480,10 @@ pub(crate) struct LxmfSendReport {
     pub(crate) track_delivery_timeout: bool,
     pub(crate) used_resource: bool,
     pub(crate) used_propagation_node: bool,
+    pub(crate) method: LxmfDeliveryMethod,
+    pub(crate) representation: LxmfDeliveryRepresentation,
+    pub(crate) relay_destination_hex: Option<String>,
+    pub(crate) fallback_stage: Option<LxmfFallbackStage>,
     pub(crate) receipt_hash_hex: Option<String>,
 }
 
@@ -507,6 +525,10 @@ fn emit_lxmf_delivery(
             event_uid: pending.event_uid.clone(),
             mission_uid: pending.mission_uid.clone(),
             status,
+            method: pending.method,
+            representation: pending.representation,
+            relay_destination_hex: pending.relay_destination_hex.clone(),
+            fallback_stage: pending.fallback_stage,
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
@@ -533,6 +555,10 @@ fn emit_lxmf_delivery_with_source(
             event_uid: pending.event_uid.clone(),
             mission_uid: pending.mission_uid.clone(),
             status,
+            method: pending.method,
+            representation: pending.representation,
+            relay_destination_hex: pending.relay_destination_hex.clone(),
+            fallback_stage: pending.fallback_stage,
             detail,
             sent_at_ms: pending.sent_at_ms,
             updated_at_ms: now,
@@ -762,17 +788,6 @@ async fn has_active_propagation_relay(state: &NodeRuntimeState) -> bool {
         .await
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
-}
-
-async fn should_skip_direct_lxmf_delivery(
-    state: &NodeRuntimeState,
-    destination_hex: &str,
-) -> bool {
-    let Some(peer) = peer_for_any_destination_hex(state, destination_hex).await else {
-        return false;
-    };
-    !peer.active_link
-        && !matches!(peer.availability_state, sdkmsg::PeerAvailabilityState::Ready)
 }
 
 fn propagation_candidate_sort_key(
@@ -1018,7 +1033,7 @@ pub enum Command {
         destination_hex: String,
         bytes: Vec<u8>,
         fields_bytes: Option<Vec<u8>>,
-        use_propagation_node: bool,
+        send_mode: SendMode,
         resp: cb::Sender<Result<(), NodeError>>,
     },
     BroadcastBytes {
@@ -1318,6 +1333,10 @@ async fn register_pending_lxmf_delivery(
         team_member_uid: metadata.team_member_uid.clone(),
         team_uid: metadata.team_uid.clone(),
         mission_uid: metadata.mission_uid.clone(),
+        method: report.method,
+        representation: report.representation,
+        relay_destination_hex: report.relay_destination_hex.clone(),
+        fallback_stage: report.fallback_stage,
         sent_at_ms: now_ms(),
     };
 
@@ -1366,22 +1385,13 @@ async fn send_lxmf_with_delivery_policy(
     title: Option<String>,
     fields_bytes: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
-    force_propagation_only: bool,
+    send_mode: SendMode,
 ) -> Result<LxmfSendReport, NodeError> {
-    const DIRECT_ATTEMPTS: usize = 3;
-    const RETRY_DELAY_MS: u64 = 250;
+    const DIRECT_ATTEMPTS: usize = 5;
+    const RETRY_DELAY: Duration = Duration::from_secs(10);
     let has_active_relay = has_active_propagation_relay(state).await;
 
-    if force_propagation_only
-        || (has_active_relay
-            && should_skip_direct_lxmf_delivery(state, requested_destination_hex).await)
-    {
-        if !force_propagation_only {
-            info!(
-                "[lxmf][mission] direct route unavailable destination={}; sending immediately via propagation relay",
-                requested_destination_hex,
-            );
-        }
+    if matches!(send_mode, SendMode::PropagationOnly {}) {
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
@@ -1390,10 +1400,10 @@ async fn send_lxmf_with_delivery_policy(
             .send_lxmf(
                 destination,
                 body,
-                title.clone(),
-                fields_bytes.clone(),
-                metadata.clone(),
-                true,
+                title,
+                fields_bytes,
+                metadata,
+                SendMode::PropagationOnly {},
             )
             .await;
     }
@@ -1412,7 +1422,7 @@ async fn send_lxmf_with_delivery_policy(
                 title.clone(),
                 fields_bytes.clone(),
                 metadata.clone(),
-                false,
+                send_mode,
             )
             .await
         {
@@ -1421,8 +1431,9 @@ async fn send_lxmf_with_delivery_policy(
             }
             Ok(report) => {
                 info!(
-                    "[lxmf][mission] direct send attempt {attempt}/{DIRECT_ATTEMPTS} failed destination={} outcome={:?}",
+                    "[lxmf][mission] send attempt {attempt}/{DIRECT_ATTEMPTS} failed destination={} mode={:?} outcome={:?}",
                     requested_destination_hex,
+                    send_mode,
                     report.outcome,
                 );
                 last_error = Some(NodeError::NetworkError {});
@@ -1430,8 +1441,9 @@ async fn send_lxmf_with_delivery_policy(
             Err(err) => {
                 let retriable = is_retriable_lxmf_error(&err);
                 info!(
-                    "[lxmf][mission] direct send attempt {attempt}/{DIRECT_ATTEMPTS} errored destination={} err={}",
+                    "[lxmf][mission] send attempt {attempt}/{DIRECT_ATTEMPTS} errored destination={} mode={:?} err={}",
                     requested_destination_hex,
+                    send_mode,
                     err,
                 );
                 last_error = Some(err);
@@ -1442,22 +1454,22 @@ async fn send_lxmf_with_delivery_policy(
         }
 
         if attempt < DIRECT_ATTEMPTS {
-            tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+            tokio::time::sleep(RETRY_DELAY).await;
         }
     }
 
-    if !has_active_relay {
+    if !matches!(send_mode, SendMode::Auto {}) || !has_active_relay {
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }
 
     info!(
-        "[lxmf][mission] direct delivery exhausted destination={}; retrying via propagation relay",
+        "[lxmf][mission] auto delivery exhausted destination={}; retrying via propagation relay",
         requested_destination_hex,
     );
     let resolved_destination_hex =
         resolve_lxmf_destination_hex(state, requested_destination_hex).await;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
-    state
+    let mut report = state
         .sdk
         .send_lxmf(
             destination,
@@ -1465,9 +1477,11 @@ async fn send_lxmf_with_delivery_policy(
             title,
             fields_bytes,
             metadata,
-            true,
+            SendMode::PropagationOnly {},
         )
-        .await
+        .await?;
+    report.fallback_stage = Some(LxmfFallbackStage::AfterDirectRetryBudget {});
+    Ok(report)
 }
 
 async fn emit_received_payload(
@@ -1853,6 +1867,16 @@ pub async fn run_node(
         path.push("ratchets.dat");
         transport_cfg.set_ratchet_store_path(path);
     }
+    let ratchet_store_path = config
+        .storage_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|mut path| {
+            path.push("ratchets.dat");
+            path
+        });
 
     let mut transport = Transport::new(transport_cfg);
     let receipt_message_ids = Arc::new(Mutex::new(HashMap::<String, String>::new()));
@@ -1918,6 +1942,7 @@ pub async fn run_node(
             known_destinations: known_destinations.clone(),
             out_links: out_links.clone(),
             active_propagation_node_hex: active_propagation_node_hex.clone(),
+            ratchet_store_path,
         },
     ));
 
@@ -2530,7 +2555,7 @@ pub async fn run_node(
                 destination_hex,
                 bytes,
                 fields_bytes,
-                use_propagation_node,
+                send_mode,
                 resp,
             } => {
                 let state = state.clone();
@@ -2550,7 +2575,7 @@ pub async fn run_node(
                                 None,
                                 fields_bytes.clone(),
                                 metadata.clone(),
-                                use_propagation_node,
+                                send_mode,
                             )
                             .await?,
                         )
@@ -2748,15 +2773,14 @@ pub async fn run_node(
                         request.title.clone(),
                         None,
                         None,
-                        request.use_propagation_node,
+                        request.send_mode,
                     )
                     .await?;
-                    let method = if report.used_propagation_node {
-                        MessageMethod::Propagated {}
-                    } else if report.used_resource {
-                        MessageMethod::Resource {}
-                    } else {
-                        MessageMethod::Direct {}
+                    let method = match (report.method, report.representation) {
+                        (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
+                        (LxmfDeliveryMethod::Opportunistic {}, _) => MessageMethod::Opportunistic {},
+                        (_, LxmfDeliveryRepresentation::Resource {}) => MessageMethod::Resource {},
+                        _ => MessageMethod::Direct {},
                     };
                     let state_value = if report.used_propagation_node
                         && matches!(
@@ -2830,7 +2854,11 @@ pub async fn run_node(
                         outbound.request.title.clone(),
                         None,
                         None,
-                        outbound.request.use_propagation_node,
+                        match outbound.request.effective_send_mode() {
+                            sdkmsg::SendMode::Auto => SendMode::Auto {},
+                            sdkmsg::SendMode::DirectOnly => SendMode::DirectOnly {},
+                            sdkmsg::SendMode::PropagationOnly => SendMode::PropagationOnly {},
+                        },
                     )
                     .await?;
                     let retried_state = if report.used_propagation_node
@@ -2855,12 +2883,11 @@ pub async fn run_node(
                         )),
                         title: outbound.request.title.clone(),
                         body_utf8: outbound.request.body_utf8.clone(),
-                        method: if report.used_propagation_node {
-                            MessageMethod::Propagated {}
-                        } else if report.used_resource {
-                            MessageMethod::Resource {}
-                        } else {
-                            MessageMethod::Direct {}
+                        method: match (report.method, report.representation) {
+                            (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
+                            (LxmfDeliveryMethod::Opportunistic {}, _) => MessageMethod::Opportunistic {},
+                            (_, LxmfDeliveryRepresentation::Resource {}) => MessageMethod::Resource {},
+                            _ => MessageMethod::Direct {},
                         },
                         state: retried_state,
                         detail: Some(format!("retry of {}", outbound.message_id_hex)),

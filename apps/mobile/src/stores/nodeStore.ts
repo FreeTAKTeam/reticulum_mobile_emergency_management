@@ -2,6 +2,7 @@ import {
   DEFAULT_NODE_CONFIG,
   type AnnounceRecord,
   type PeerRecord,
+  type SendMode,
   type SyncStatus,
   createReticulumNodeClient,
   type AnnounceReceivedEvent,
@@ -132,12 +133,12 @@ type EventPeerRoute = {
   identityHex?: string;
   label?: string;
   announcedName?: string;
-  usePropagationNode?: boolean;
+  sendMode: SendMode;
 };
 type PacketSendOptions = {
   dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
-  usePropagationNode?: boolean;
+  sendMode?: SendMode;
 };
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
@@ -1883,10 +1884,10 @@ function peerHasDirectLxmfDelivery(
 function peerCanAcceptMissionTraffic(
   peer: Pick<
     DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "missionReady"
+    "destination" | "lxmfDestinationHex" | "communicationReady" | "missionReady"
   >,
 ): boolean {
-  return peer.missionReady && peerHasKnownMissionRoute(peer);
+  return peer.communicationReady && peer.missionReady && peerHasKnownMissionRoute(peer);
 }
 
 function peerCanRelayMissionTraffic(
@@ -1895,10 +1896,18 @@ function peerCanRelayMissionTraffic(
   return peer.relayEligible && peerHasKnownMissionRoute(peer);
 }
 
+function peerIsManagedForAutoFanout(
+  peer: Pick<DiscoveredPeer, "destination" | "managementState">,
+  savedByDestination: Record<string, SavedPeer>,
+): boolean {
+  const destination = normalizeDestinationHex(peer.destination);
+  return peer.managementState === "managed" || Boolean(savedByDestination[destination]);
+}
+
 function peerHasEventRoute(
   peer: Pick<
     DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "missionReady"
+    "destination" | "lxmfDestinationHex" | "communicationReady" | "missionReady"
   >,
 ): boolean {
   return peerCanAcceptMissionTraffic(peer);
@@ -1943,7 +1952,7 @@ function peerByAnyKnownDestination(
   const missionReadyPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerCanAcceptMissionTraffic(peer))
+      .filter((peer) => peer.missionReady)
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
@@ -1954,9 +1963,18 @@ function peerByAnyKnownDestination(
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
+  const autoFanoutPeers = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peerIsManagedForAutoFanout(peer, savedByDestination))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
+
   const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    relayEligiblePeers.value
-      .filter((peer) => !peer.missionReady)
+    (!bestPropagationNodeHex.value ? [] : autoFanoutPeers.value)
+      .filter((peer) => peer.missionReady)
+      .filter((peer) => peerCanRelayMissionTraffic(peer))
+      .filter((peer) => !peer.communicationReady)
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1964,7 +1982,7 @@ function peerByAnyKnownDestination(
         identityHex: peer.identityHex,
         label: peer.label,
         announcedName: peer.announcedName,
-        usePropagationNode: true,
+        sendMode: "Auto",
       })),
   );
 
@@ -1983,7 +2001,7 @@ function peerByAnyKnownDestination(
   );
 
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    missionReadyPeers.value
+    autoFanoutPeers.value
       .filter((peer) => peerHasEventRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1991,7 +2009,7 @@ function peerByAnyKnownDestination(
         identityHex: peer.identityHex,
         label: peer.label,
         announcedName: peer.announcedName,
-        usePropagationNode: false,
+        sendMode: "Auto",
       })),
   );
 
@@ -2101,24 +2119,18 @@ function peerByAnyKnownDestination(
     }
     try {
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
-      const usePropagationNode = options?.usePropagationNode
-        ?? Boolean(
-          bestPropagationNodeHex.value
-          && matchedPeer
-          && matchedPeer.relayEligible
-          && !peerHasDirectLxmfDelivery(matchedPeer),
-        );
+      const sendMode = options?.sendMode ?? "Auto";
       logUi(
         "Debug",
-        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"} propagation=${usePropagationNode}.`,
+        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"} mode=${sendMode}${matchedPeer ? ` peer=${matchedPeer.label ?? matchedPeer.destination}` : ""}.`,
       );
       await nodeClient.sendBytes(destinationHex, bytes, {
         ...options,
-        usePropagationNode,
+        sendMode,
       });
       logUi(
         "Debug",
-        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength} propagation=${usePropagationNode}.`,
+        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength} mode=${sendMode}.`,
       );
     } catch (error: unknown) {
       throw captureActionError(`Send failed (${destinationHex})`, error);
@@ -2142,7 +2154,10 @@ function peerByAnyKnownDestination(
         "Debug",
         `Direct send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
       );
-      await nodeClient.sendBytes(destinationHex, bytes, options);
+      await nodeClient.sendBytes(destinationHex, bytes, {
+        ...options,
+        sendMode: "DirectOnly",
+      });
       logUi(
         "Debug",
         `Direct send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
@@ -2171,7 +2186,7 @@ function peerByAnyKnownDestination(
       );
       await nodeClient.sendBytes(destinationHex, bytes, {
         ...options,
-        usePropagationNode: true,
+        sendMode: "PropagationOnly",
       });
       logUi(
         "Debug",
@@ -2187,7 +2202,7 @@ function peerByAnyKnownDestination(
     bodyUtf8: string,
     title?: string,
     options?: {
-      usePropagationNode?: boolean;
+      sendMode?: SendMode;
     },
   ): Promise<string> {
     const nodeClient = client.value;
@@ -2199,22 +2214,16 @@ function peerByAnyKnownDestination(
     }
     try {
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
-      const usePropagationNode = options?.usePropagationNode
-        ?? Boolean(
-          bestPropagationNodeHex.value
-          && matchedPeer
-          && matchedPeer.relayEligible
-          && !peerHasDirectLxmfDelivery(matchedPeer),
-        );
+      const sendMode = options?.sendMode ?? "Auto";
       logUi(
         "Debug",
-        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength} propagation=${usePropagationNode}.`,
+        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength} mode=${sendMode}${matchedPeer ? ` peer=${matchedPeer.label ?? matchedPeer.destination}` : ""}.`,
       );
       return await nodeClient.sendLxmf({
         destinationHex,
         bodyUtf8,
         title,
-        usePropagationNode,
+        sendMode,
       });
     } catch (error: unknown) {
       throw captureActionError(`LXMF send failed (${destinationHex})`, error);

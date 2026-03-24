@@ -11,11 +11,11 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceRecord, ConversationRecord, HubMode, LogLevel, LxmfDeliveryStatus,
-    LxmfDeliveryUpdate, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange,
-    PeerManagementState, PeerRecord, PeerState, SendLxmfRequest, SendOutcome, SyncPhase,
-    SyncStatus,
+    AnnounceRecord, ConversationRecord, HubMode, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
+    NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
+    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
 };
 
 pub fn healthcheck() -> String {

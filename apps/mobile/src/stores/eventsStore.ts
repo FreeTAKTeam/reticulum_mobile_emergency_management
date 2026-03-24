@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
-import type { LxmfDeliveryEvent, PacketReceivedEvent } from "@reticulum/node-client";
+import type { LxmfDeliveryEvent, PacketReceivedEvent, SendMode } from "@reticulum/node-client";
 
 import { notifyOperationalUpdate } from "../services/notifications";
 import type { EventRecord } from "../types/domain";
@@ -29,7 +29,9 @@ const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
 const EMPTY_BYTES = new Uint8Array(0);
 const EVENT_TYPE_KEYWORD_PREFIX = "r3akt:event-type:";
 const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
+const LXMF_PROPAGATION_WAIT_TIMEOUT_MS = 5 * 60_000;
 const BACKGROUND_MISSION_HYDRATION_ENABLED = true;
+const FANOUT_CONCURRENCY_LIMIT = 4;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
@@ -39,7 +41,7 @@ type ReplicationPeer = {
   identityHex?: string;
   label: string;
   announcedName?: string;
-  usePropagationNode?: boolean;
+  sendMode: SendMode;
 };
 type ReplicationFailure = {
   stage: ReplicationStage;
@@ -778,7 +780,7 @@ export const useEventsStore = defineStore("events", () => {
         identityHex: peer.identityHex,
         label,
         announcedName: peer.announcedName,
-        usePropagationNode: peer.usePropagationNode,
+        sendMode: peer.sendMode,
       });
     }
 
@@ -837,6 +839,7 @@ export const useEventsStore = defineStore("events", () => {
       let unsubscribeDelivery: () => void = () => undefined;
       let unsubscribePacket: () => void = () => undefined;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let timeoutMs = LXMF_DELIVERY_WAIT_TIMEOUT_MS;
 
       const finish = (effect: () => void) => {
         if (settled) {
@@ -849,6 +852,22 @@ export const useEventsStore = defineStore("events", () => {
         unsubscribeDelivery();
         unsubscribePacket();
         effect();
+      };
+
+      const scheduleTimeout = () => {
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        timeoutId = setTimeout(() => {
+          finish(() => reject(new EventReplicationError(
+            `[events] ${expected.stage} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`,
+            [{
+              stage: expected.stage,
+              peer,
+              message: `Timed out waiting for LXMF acknowledgement after ${timeoutMs}ms.`,
+            }],
+          )));
+        }, timeoutMs);
       };
 
       unsubscribeDelivery = nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
@@ -874,6 +893,10 @@ export const useEventsStore = defineStore("events", () => {
         }
 
         if (event.status === "Sent" || event.status === "SentToPropagation") {
+          if (event.status === "SentToPropagation" && timeoutMs < LXMF_PROPAGATION_WAIT_TIMEOUT_MS) {
+            timeoutMs = LXMF_PROPAGATION_WAIT_TIMEOUT_MS;
+            scheduleTimeout();
+          }
           nodeStore.logUi(
             "Debug",
             `[events] ${expected.stage} ${event.status === "SentToPropagation" ? "queued on propagation relay" : "sent"} to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
@@ -949,16 +972,7 @@ export const useEventsStore = defineStore("events", () => {
         );
       });
 
-      timeoutId = setTimeout(() => {
-        finish(() => reject(new EventReplicationError(
-          `[events] ${expected.stage} timed out for ${formatPeerRoute(peer)} after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`,
-          [{
-            stage: expected.stage,
-            peer,
-            message: `Timed out waiting for LXMF acknowledgement after ${LXMF_DELIVERY_WAIT_TIMEOUT_MS}ms.`,
-          }],
-        )));
-      }, LXMF_DELIVERY_WAIT_TIMEOUT_MS);
+      scheduleTimeout();
 
       cleanup = () => {
         if (settled) {
@@ -983,12 +997,12 @@ export const useEventsStore = defineStore("events", () => {
     destination: string,
     command: MissionCommandEnvelope,
     options?: {
-      usePropagationNode?: boolean;
+      sendMode?: SendMode;
     },
   ): Promise<void> {
     await nodeStore.sendBytes(destination, EMPTY_BYTES, {
       fieldsBase64: buildMissionCommandFieldsBase64([command]),
-      usePropagationNode: options?.usePropagationNode,
+      sendMode: options?.sendMode,
     });
   }
 
@@ -1008,7 +1022,7 @@ export const useEventsStore = defineStore("events", () => {
 
     try {
       await sendMissionCommand(peer.lxmfDestinationHex, command, {
-        usePropagationNode: peer.usePropagationNode,
+        sendMode: peer.sendMode,
       });
     } catch (error: unknown) {
       tracker.cancel();
@@ -1091,26 +1105,58 @@ export const useEventsStore = defineStore("events", () => {
     }
 
     const eventUid = getEventUid(record);
-    const failures = (await Promise.all(peers.map(async (peer) => {
-      try {
-        await replicateLogUpsertToPeer(peer, record);
-        return null;
-      } catch (error: unknown) {
-        nodeStore.logUi(
-          "Error",
-          `[events] failed to send ${eventUid} to ${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}): ${errorMessage(error)}`,
-        );
-        if (error instanceof EventReplicationError) {
-          return error.failures;
+    const failures: ReplicationFailure[] = [];
+    let successCount = 0;
+    let nextIndex = 0;
+
+    nodeStore.logUi(
+      "Debug",
+      `[events] mission.registry.log_entry.upsert fanout starting for ${eventUid} across ${peers.length} route(s) with concurrency=${Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length)}.`,
+    );
+
+    const worker = async (): Promise<void> => {
+      while (nextIndex < peers.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const peer = peers[currentIndex];
+        if (!peer) {
+          return;
         }
-        return [createReplicationFailure("mission.registry.log_entry.upsert", peer, error)];
+        try {
+          await replicateLogUpsertToPeer(peer, record);
+          successCount += 1;
+        } catch (error: unknown) {
+          nodeStore.logUi(
+            "Error",
+            `[events] failed to send ${eventUid} to ${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}): ${errorMessage(error)}`,
+          );
+          if (error instanceof EventReplicationError) {
+            failures.push(...error.failures);
+            continue;
+          }
+          failures.push(createReplicationFailure("mission.registry.log_entry.upsert", peer, error));
+        }
       }
-    }))).flat().filter((failure): failure is ReplicationFailure => failure !== null);
+    };
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length) },
+        () => worker(),
+      ),
+    );
+
+    if (successCount === 0) {
+      throw new EventReplicationError(
+        `[events] replicated ${eventUid} to 0/${peers.length} peers.`,
+        failures,
+      );
+    }
 
     if (failures.length > 0) {
-      throw new EventReplicationError(
-        `[events] replicated ${eventUid} to ${peers.length - failures.length}/${peers.length} peers.`,
-        failures,
+      nodeStore.logUi(
+        "Warn",
+        `[events] replicated ${eventUid} to ${successCount}/${peers.length} peers; failed routes: ${failures.map((failure) => `${formatPeerRoute(failure.peer)}: ${failure.message}`).join("; ")}`,
       );
     }
   }

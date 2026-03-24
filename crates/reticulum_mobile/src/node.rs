@@ -12,12 +12,12 @@ use crate::logger::NodeLogger;
 use crate::runtime::{load_or_create_identity, run_node, Command};
 use crate::types::{
     AnnounceRecord, ConversationRecord, LogLevel, MessageRecord, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, PeerRecord, SendLxmfRequest, SyncStatus,
+    NodeStatus, PeerRecord, SendLxmfRequest, SendMode, SyncStatus,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
-const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
+const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 struct NodeInner {
     bus: EventBus,
@@ -244,7 +244,7 @@ impl Node {
         destination_hex: String,
         bytes: Vec<u8>,
         fields_bytes: Option<Vec<u8>>,
-        use_propagation_node: bool,
+        send_mode: SendMode,
     ) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
@@ -256,7 +256,7 @@ impl Node {
             destination_hex,
             bytes,
             fields_bytes,
-            use_propagation_node,
+            send_mode,
             resp: resp_tx,
         })
         .map_err(|_| NodeError::NotRunning {})?;
@@ -857,7 +857,7 @@ mod tests {
                 destination_hex: node_b_status.lxmf_destination_hex.clone(),
                 body_utf8: body.to_string(),
                 title: Some("chat".to_string()),
-                use_propagation_node: false,
+                send_mode: SendMode::Auto {},
             })
             .expect("send chat message");
         let event = wait_for_event(&subscription, TEST_TIMEOUT, |event| {
@@ -898,7 +898,7 @@ mod tests {
                 node_b_status.lxmf_destination_hex.clone(),
                 body.as_bytes().to_vec(),
                 Some(fields.clone()),
-                false,
+                SendMode::Auto {},
             )
             .expect("send emergency packet");
 
@@ -942,7 +942,7 @@ mod tests {
                 node_b_status.lxmf_destination_hex.clone(),
                 body.as_bytes().to_vec(),
                 Some(fields.clone()),
-                false,
+                SendMode::Auto {},
             )
             .expect("send event packet");
 
@@ -994,7 +994,7 @@ mod tests {
                 node_b_status.lxmf_destination_hex.clone(),
                 body.as_bytes().to_vec(),
                 Some(fields.clone()),
-                false,
+                SendMode::Auto {},
             )
             .expect("send telemetry packet");
 

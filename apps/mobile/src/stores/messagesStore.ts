@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
-import type { LxmfDeliveryEvent, PacketReceivedEvent } from "@reticulum/node-client";
+import type { LxmfDeliveryEvent, PacketReceivedEvent, SendMode } from "@reticulum/node-client";
 
 import { notifyOperationalUpdate } from "../services/notifications";
 import type {
@@ -49,7 +49,9 @@ const EMPTY_BYTES = new Uint8Array(0);
 const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
 const LXMF_DELIVERY_WAIT_TIMEOUT_MS = 90_000;
 const LXMF_ACCEPT_WAIT_TIMEOUT_MS = 12_000;
+const LXMF_PROPAGATION_WAIT_TIMEOUT_MS = 5 * 60_000;
 const EAM_PEER_HYDRATION_RETRY_MS = 2 * 60_000;
+const FANOUT_CONCURRENCY_LIMIT = 4;
 
 type UpsertOutcome = "inserted" | "updated" | "ignored";
 type ReplicationPeer = {
@@ -58,7 +60,7 @@ type ReplicationPeer = {
   identityHex?: string;
   label: string;
   announcedName?: string;
-  usePropagationNode?: boolean;
+  sendMode: SendMode;
 };
 
 type LegacyMessageReplication =
@@ -371,7 +373,7 @@ export const useMessagesStore = defineStore("messages", () => {
         identityHex: peer.identityHex,
         label: formatPeerLabel(peer),
         announcedName: peer.announcedName,
-        usePropagationNode: peer.usePropagationNode,
+        sendMode: peer.sendMode,
       });
     }
 
@@ -585,12 +587,12 @@ async function sendEamCommand(
   destination: string,
   command: EamCommandEnvelope,
   options?: {
-    usePropagationNode?: boolean;
+    sendMode?: SendMode;
   },
 ): Promise<void> {
   await nodeStore.sendBytes(destination, EMPTY_BYTES, {
     fieldsBase64: buildEamCommandFieldsBase64([command]),
-    usePropagationNode: options?.usePropagationNode,
+    sendMode: options?.sendMode,
   });
 }
 
@@ -650,59 +652,58 @@ async function sendEamCommand(
     action: string,
     peers: ReplicationPeer[],
     send: (peer: ReplicationPeer) => Promise<void>,
-  ): Promise<void> {
+  ): Promise<{ successCount: number; failures: PeerFailure[] }> {
     if (peers.length === 0) {
       throw new Error(`[eam] ${action} has no deliverable LXMF routes.`);
     }
 
-    return await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let completed = 0;
-      let successCount = 0;
-      const failures: PeerFailure[] = [];
+    const failures: PeerFailure[] = [];
+    let successCount = 0;
+    let nextIndex = 0;
 
-      const finalize = () => {
-        if (completed !== peers.length) {
+    nodeStore.logUi(
+      "Debug",
+      `[eam] ${action} fanout starting across ${peers.length} route(s) with concurrency=${Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length)}.`,
+    );
+
+    const worker = async (): Promise<void> => {
+      while (nextIndex < peers.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const peer = peers[currentIndex];
+        if (!peer) {
           return;
         }
-
-        if (successCount === 0) {
-          const summary = describePeerFailures(failures);
-          if (!settled) {
-            settled = true;
-            reject(new Error(`[eam] ${action} failed for all ${peers.length} route(s): ${summary}`));
-          }
-          return;
+        try {
+          await send(peer);
+          successCount += 1;
+        } catch (error: unknown) {
+          const detail = errorMessage(error);
+          failures.push({ peer, detail });
+          nodeStore.logUi("Warn", `[eam] ${action} failed for ${formatPeerRoute(peer)}: ${detail}`);
         }
-
-        if (failures.length > 0) {
-          nodeStore.logUi(
-            "Warn",
-            `[eam] ${action} completed on ${successCount}/${peers.length} route(s). Failed routes: ${describePeerFailures(failures)}`,
-          );
-        }
-      };
-
-      for (const peer of peers) {
-        void send(peer)
-          .then(() => {
-            successCount += 1;
-            if (!settled) {
-              settled = true;
-              resolve();
-            }
-          })
-          .catch((error: unknown) => {
-            const detail = errorMessage(error);
-            failures.push({ peer, detail });
-            nodeStore.logUi("Warn", `[eam] ${action} failed for ${formatPeerRoute(peer)}: ${detail}`);
-          })
-          .finally(() => {
-            completed += 1;
-            finalize();
-          });
       }
-    });
+    };
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length) },
+        () => worker(),
+      ),
+    );
+
+    if (successCount === 0) {
+      throw new Error(`[eam] ${action} failed for all ${peers.length} route(s): ${describePeerFailures(failures)}`);
+    }
+
+    if (failures.length > 0) {
+      nodeStore.logUi(
+        "Warn",
+        `[eam] ${action} completed on ${successCount}/${peers.length} route(s). Failed routes: ${describePeerFailures(failures)}`,
+      );
+    }
+
+    return { successCount, failures };
   }
 
   function eventTypeForCommand(commandType: EamCommandType): EamEventEnvelope["event_type"] {
@@ -884,7 +885,7 @@ async function sendEamCommand(
     let unsubscribePacket: () => void = () => undefined;
     let unsubscribeDelivery: () => void = () => undefined;
     let rejectPromise: ((reason?: unknown) => void) | undefined;
-    const timeoutMs = expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS;
+    let timeoutMs = expected.resolveOnAccepted ? LXMF_ACCEPT_WAIT_TIMEOUT_MS : LXMF_DELIVERY_WAIT_TIMEOUT_MS;
 
     const finish = (callback?: () => void): void => {
       if (settled) {
@@ -897,6 +898,15 @@ async function sendEamCommand(
       unsubscribePacket();
       unsubscribeDelivery();
       callback?.();
+    };
+
+    const scheduleTimeout = (): void => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(() => {
+        finish(() => rejectPromise?.(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`)));
+      }, timeoutMs);
     };
 
     const promise = new Promise<void>((resolve, reject) => {
@@ -919,6 +929,10 @@ async function sendEamCommand(
           || event.status === "SentToPropagation"
           || event.status === "Acknowledged"
         ) {
+          if (event.status === "SentToPropagation" && timeoutMs < LXMF_PROPAGATION_WAIT_TIMEOUT_MS) {
+            timeoutMs = LXMF_PROPAGATION_WAIT_TIMEOUT_MS;
+            scheduleTimeout();
+          }
           if (event.status === "Acknowledged" && expected.resolveOnAccepted) {
             finish(resolve);
           }
@@ -972,9 +986,7 @@ async function sendEamCommand(
       if (settled || timeoutId !== undefined) {
         return;
       }
-      timeoutId = window.setTimeout(() => {
-        finish(() => rejectPromise?.(new Error(`[eam] ${expected.commandType} timed out for ${formatPeerRoute(peer)} after ${timeoutMs}ms.`)));
-      }, timeoutMs);
+      scheduleTimeout();
     };
 
     return { promise, arm, cancel: () => finish() };
@@ -992,7 +1004,7 @@ async function sendEamCommand(
       `[eam] ${expected.commandType} send requested to ${peer.label}; native runtime will handle direct retries and propagation fallback.`,
     );
     await sendEamCommand(peer.lxmfDestinationHex, command, {
-      usePropagationNode: peer.usePropagationNode,
+      sendMode: peer.sendMode,
     });
     tracker.arm();
     await tracker.promise;

@@ -1,11 +1,15 @@
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use log::{debug, info};
-use lxmf::message::{Message as LxmfMessage, WireMessage as LxmfWireMessage};
+use lxmf::message::{
+    decide_delivery, DeliveryDecision, Message as LxmfMessage, MessageMethod as LxmfRepresentation,
+    TransportMethod, WireMessage as LxmfWireMessage,
+};
 use lxmf_sdk::{
     Ack, CancelResult, Client, ConfigPatch, DeliverySnapshot, DeliveryState, EventBatch,
     EventCursor, LxmfSdk, MessageId, NegotiationRequest, NegotiationResponse, RuntimeSnapshot,
@@ -30,7 +34,10 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::mission_sync::MissionSyncMetadata;
 use crate::runtime::{lxmf_private_identity, LxmfSendReport};
-use crate::types::{NodeError, PeerState};
+use crate::types::{
+    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfFallbackStage, NodeError, PeerState,
+    SendMode,
+};
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
 const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -58,6 +65,44 @@ fn sdk_transport(message: impl Into<String>) -> SdkError {
         lxmf_sdk::ErrorCategory::Transport,
         message,
     )
+}
+
+fn delivery_method_from_transport(method: TransportMethod) -> LxmfDeliveryMethod {
+    match method {
+        TransportMethod::Opportunistic => LxmfDeliveryMethod::Opportunistic {},
+        TransportMethod::Direct => LxmfDeliveryMethod::Direct {},
+        TransportMethod::Propagated => LxmfDeliveryMethod::Propagated {},
+        TransportMethod::Paper => LxmfDeliveryMethod::Direct {},
+    }
+}
+
+fn delivery_representation_from_lxmf(method: LxmfRepresentation) -> LxmfDeliveryRepresentation {
+    match method {
+        LxmfRepresentation::Packet => LxmfDeliveryRepresentation::Packet {},
+        LxmfRepresentation::Resource => LxmfDeliveryRepresentation::Resource {},
+        LxmfRepresentation::Paper => LxmfDeliveryRepresentation::Packet {},
+        LxmfRepresentation::Unknown => LxmfDeliveryRepresentation::Packet {},
+    }
+}
+
+fn transport_method_for_send_mode(
+    send_mode: SendMode,
+    has_cached_direct_link: bool,
+    has_delivery_ratchet: bool,
+) -> TransportMethod {
+    match send_mode {
+        SendMode::PropagationOnly {} => TransportMethod::Propagated,
+        SendMode::DirectOnly {} => TransportMethod::Direct,
+        SendMode::Auto {} => {
+            if has_cached_direct_link {
+                TransportMethod::Direct
+            } else if has_delivery_ratchet {
+                TransportMethod::Opportunistic
+            } else {
+                TransportMethod::Direct
+            }
+        }
+    }
 }
 
 fn lxmf_identity(
@@ -207,6 +252,7 @@ const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
 const EXT_FIELDS_BASE64: &str = "reticulum.fields_base64";
 const EXT_RAW_BYTES_BASE64: &str = "reticulum.raw_bytes_base64";
+const EXT_SEND_MODE: &str = "reticulum.send_mode";
 const EXT_USE_PROPAGATION_NODE: &str = "reticulum.use_propagation_node";
 const EVENT_PACKET_RECEIVED: &str = "reticulum.packet_received";
 const EVENT_ANNOUNCE_RECEIVED: &str = "reticulum.announce_received";
@@ -222,6 +268,7 @@ pub(crate) struct SdkTransportState {
     pub(crate) known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     pub(crate) out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
     pub(crate) active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
+    pub(crate) ratchet_store_path: Option<PathBuf>,
 }
 
 struct CompatBackendState {
@@ -230,6 +277,14 @@ struct CompatBackendState {
     events: VecDeque<SdkEvent>,
     deliveries: HashMap<String, DeliverySnapshot>,
     send_reports: HashMap<String, CompatSendReport>,
+}
+
+fn has_delivery_ratchet(state: &SdkTransportState, destination: &AddressHash) -> bool {
+    state
+        .ratchet_store_path
+        .as_ref()
+        .map(|path| path.join(destination.to_hex_string()))
+        .is_some_and(|path| path.is_file())
 }
 
 impl CompatBackendState {
@@ -553,6 +608,10 @@ struct CompatSendReport {
     resolved_destination_hex: String,
     used_resource: bool,
     used_propagation_node: bool,
+    method: LxmfDeliveryMethod,
+    representation: LxmfDeliveryRepresentation,
+    relay_destination_hex: Option<String>,
+    fallback_stage: Option<LxmfFallbackStage>,
     receipt_hash_hex: Option<String>,
 }
 
@@ -601,7 +660,7 @@ impl RuntimeLxmfSdk {
         title: Option<String>,
         fields_bytes: Option<Vec<u8>>,
         metadata: Option<MissionSyncMetadata>,
-        use_propagation_node: bool,
+        send_mode: SendMode,
     ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .client
@@ -632,7 +691,12 @@ impl RuntimeLxmfSdk {
                 json!(BASE64_STANDARD.encode(fields_bytes)),
             );
         }
-        if use_propagation_node {
+        request = request.with_extension(EXT_SEND_MODE, json!(match send_mode {
+            SendMode::Auto {} => "Auto",
+            SendMode::DirectOnly {} => "DirectOnly",
+            SendMode::PropagationOnly {} => "PropagationOnly",
+        }));
+        if matches!(send_mode, SendMode::PropagationOnly {}) {
             request = request.with_extension(EXT_USE_PROPAGATION_NODE, json!(true));
         }
         if let Some(correlation_id) = metadata
@@ -685,6 +749,10 @@ impl RuntimeLxmfSdk {
             track_delivery_timeout,
             used_resource: report.used_resource,
             used_propagation_node: report.used_propagation_node,
+            method: report.method,
+            representation: report.representation,
+            relay_destination_hex: report.relay_destination_hex,
+            fallback_stage: report.fallback_stage,
             receipt_hash_hex: report.receipt_hash_hex,
         })
     }
@@ -880,6 +948,20 @@ async fn compat_send_lxmf(
         .get(EXT_USE_PROPAGATION_NODE)
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
+    let send_mode = if use_propagation_node {
+        SendMode::PropagationOnly {}
+    } else {
+        match req
+            .extensions
+            .get(EXT_SEND_MODE)
+            .and_then(JsonValue::as_str)
+            .unwrap_or("Auto")
+        {
+            "DirectOnly" => SendMode::DirectOnly {},
+            "PropagationOnly" => SendMode::PropagationOnly {},
+            _ => SendMode::Auto {},
+        }
+    };
 
     let remote_desc = resolve_lxmf_destination_desc(&state, destination)
         .await
@@ -929,7 +1011,29 @@ async fn compat_send_lxmf(
         .map(|wire| hex::encode(wire.message_id()))
         .map_err(|_| sdk_internal("failed to unpack lxmf message id"))?;
 
-    if use_propagation_node {
+    let cached_link = state
+        .out_links
+        .lock()
+        .await
+        .get(&remote_desc.address_hash)
+        .cloned();
+    let has_cached_direct_link = if let Some(link) = cached_link {
+        matches!(link.lock().await.status(), LinkStatus::Active)
+    } else {
+        false
+    };
+    let desired_method = transport_method_for_send_mode(
+        send_mode,
+        has_cached_direct_link,
+        has_delivery_ratchet(&state, &remote_desc.address_hash),
+    );
+    let DeliveryDecision { method, representation } =
+        decide_delivery(desired_method, false, wire.len())
+            .map_err(|err| sdk_validation(format!("failed to choose lxmf delivery representation: {err}")))?;
+    let method_value = delivery_method_from_transport(method);
+    let representation_value = delivery_representation_from_lxmf(representation);
+
+    if matches!(method, TransportMethod::Propagated) {
         return compat_send_lxmf_via_propagation(
             &state,
             &remote_desc,
@@ -937,15 +1041,59 @@ async fn compat_send_lxmf(
             requested_destination_hex.as_str(),
             resolved_destination_hex.as_str(),
             message_id_hex.as_str(),
+            method_value,
+            representation_value,
+            None,
         )
         .await;
+    }
+
+    if matches!(method, TransportMethod::Opportunistic) {
+        let packet = Packet {
+            header: Header {
+                ifac_flag: IfacFlag::Open,
+                header_type: HeaderType::Type1,
+                context_flag: ContextFlag::Unset,
+                propagation_type: PropagationType::Transport,
+                destination_type: DestinationType::Single,
+                packet_type: PacketType::Data,
+                hops: 0,
+            },
+            ifac: None,
+            destination: remote_desc.address_hash,
+            transport: None,
+            context: PacketContext::None,
+            data: PacketDataBuffer::new_from_slice(&wire),
+        };
+        let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
+        info!(
+            "[lxmf][events][sdk] path=opportunistic representation=packet requested_destination={} resolved_destination={} message_id={} wire_bytes={} max_wire_bytes={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            message_id_hex,
+            wire.len(),
+            LXMF_MAX_PAYLOAD,
+        );
+        let outcome = state.transport.send_packet_with_outcome(packet).await;
+        return Ok(CompatSendReport {
+            outcome,
+            message_id_hex,
+            resolved_destination_hex,
+            used_resource: false,
+            used_propagation_node: false,
+            method: method_value,
+            representation: representation_value,
+            relay_destination_hex: None,
+            fallback_stage: None,
+            receipt_hash_hex: Some(receipt_hash_hex),
+        });
     }
 
     let link = ensure_lxmf_output_link(&state, remote_desc)
         .await
         .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
     let link_id = *link.lock().await.id();
-    if wire.len() > LXMF_MAX_PAYLOAD {
+    if matches!(representation, LxmfRepresentation::Resource) {
         let mut resource_events = state.transport.resource_events();
         let resource_hash = state
             .transport
@@ -1001,6 +1149,10 @@ async fn compat_send_lxmf(
                                 resolved_destination_hex,
                                 used_resource: true,
                                 used_propagation_node: false,
+                                method: method_value,
+                                representation: representation_value,
+                                relay_destination_hex: None,
+                                fallback_stage: None,
                                 receipt_hash_hex: None,
                             });
                         }
@@ -1037,6 +1189,10 @@ async fn compat_send_lxmf(
         resolved_destination_hex,
         used_resource: false,
         used_propagation_node: false,
+        method: method_value,
+        representation: representation_value,
+        relay_destination_hex: None,
+        fallback_stage: None,
         receipt_hash_hex: Some(receipt_hash_hex),
     })
 }
@@ -1048,6 +1204,9 @@ async fn compat_send_lxmf_via_propagation(
     requested_destination_hex: &str,
     resolved_destination_hex: &str,
     message_id_hex: &str,
+    method: LxmfDeliveryMethod,
+    representation: LxmfDeliveryRepresentation,
+    fallback_stage: Option<LxmfFallbackStage>,
 ) -> Result<CompatSendReport, SdkError> {
     let relay_hex = state
         .active_propagation_node_hex
@@ -1147,6 +1306,10 @@ async fn compat_send_lxmf_via_propagation(
                                 resolved_destination_hex: resolved_destination_hex.to_string(),
                                 used_resource: true,
                                 used_propagation_node: true,
+                                method,
+                                representation,
+                                relay_destination_hex: Some(relay_destination_hex.clone()),
+                                fallback_stage,
                                 receipt_hash_hex: None,
                             });
                         }
@@ -1205,6 +1368,10 @@ async fn compat_send_lxmf_via_propagation(
         resolved_destination_hex: resolved_destination_hex.to_string(),
         used_resource: false,
         used_propagation_node: true,
+        method,
+        representation,
+        relay_destination_hex: Some(relay_destination_hex),
+        fallback_stage,
         receipt_hash_hex: None,
     })
 }
@@ -1487,6 +1654,10 @@ mod tests {
             resolved_destination_hex: "dest-1".to_string(),
             used_resource: true,
             used_propagation_node: false,
+            method: LxmfDeliveryMethod::Direct {},
+            representation: LxmfDeliveryRepresentation::Resource {},
+            relay_destination_hex: None,
+            fallback_stage: None,
             receipt_hash_hex: None,
         };
         {

@@ -26,6 +26,14 @@ enum SendOutcome {
 
 enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Acknowledged", "Failed", "TimedOut" };
 
+enum SendMode { "Auto", "DirectOnly", "PropagationOnly" };
+
+enum LxmfDeliveryMethod { "Direct", "Opportunistic", "Propagated" };
+
+enum LxmfDeliveryRepresentation { "Packet", "Resource" };
+
+enum LxmfFallbackStage { "AfterDirectRetryBudget" };
+
 enum MessageMethod { "Direct", "Opportunistic", "Propagated", "Resource" };
 
 enum MessageState {
@@ -144,6 +152,10 @@ dictionary LxmfDeliveryUpdate {
   string? event_uid;
   string? mission_uid;
   LxmfDeliveryStatus status;
+  LxmfDeliveryMethod method;
+  LxmfDeliveryRepresentation representation;
+  string? relay_destination_hex;
+  LxmfFallbackStage? fallback_stage;
   string? detail;
   u64 sent_at_ms;
   u64 updated_at_ms;
@@ -221,7 +233,7 @@ dictionary SendLxmfRequest {
   string destination_hex;
   string body_utf8;
   string? title;
-  boolean use_propagation_node;
+  SendMode send_mode;
 };
 
 // Event stream from the node to the UI.
@@ -277,7 +289,7 @@ interface Node {
     string destination_hex,
     sequence<u8> bytes,
     sequence<u8>? fields_bytes,
-    boolean use_propagation_node
+    SendMode send_mode
   );
   [Throws=NodeError]
   void broadcast_bytes(sequence<u8> bytes);
