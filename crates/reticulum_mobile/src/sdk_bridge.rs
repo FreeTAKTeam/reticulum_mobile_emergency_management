@@ -954,7 +954,7 @@ async fn compat_send_lxmf(
             .map_err(|_| sdk_transport("failed to start lxmf resource transfer"))?;
         let resource_hash_hex = hex::encode(resource_hash.as_slice());
         info!(
-            "[lxmf][events][sdk] using resource fallback requested_destination={} resolved_destination={} message_id={} resource_hash={} wire_bytes={} max_wire_bytes={}",
+            "[lxmf][events][sdk] path=direct representation=resource requested_destination={} resolved_destination={} message_id={} resource_hash={} wire_bytes={} max_wire_bytes={}",
             requested_destination_hex,
             resolved_destination_hex,
             message_id_hex,
@@ -989,7 +989,7 @@ async fn compat_send_lxmf(
                         }
                         ResourceEventKind::OutboundComplete => {
                             info!(
-                                "[lxmf][events][sdk] resource fallback complete requested_destination={} resolved_destination={} message_id={} resource_hash={}",
+                                "[lxmf][events][sdk] path=direct representation=resource complete requested_destination={} resolved_destination={} message_id={} resource_hash={}",
                                 requested_destination_hex,
                                 resolved_destination_hex,
                                 message_id_hex,
@@ -1015,6 +1015,14 @@ async fn compat_send_lxmf(
             }
         }
     }
+    info!(
+        "[lxmf][events][sdk] path=direct representation=packet requested_destination={} resolved_destination={} message_id={} wire_bytes={} max_wire_bytes={}",
+        requested_destination_hex,
+        resolved_destination_hex,
+        message_id_hex,
+        wire.len(),
+        LXMF_MAX_PAYLOAD,
+    );
     let packet = link
         .lock()
         .await
@@ -1062,6 +1070,99 @@ async fn compat_send_lxmf_via_propagation(
             OsRng,
         )
         .map_err(|_| sdk_internal("failed to encode propagated lxmf payload"))?;
+    let relay_destination_hex = relay_desc.address_hash.to_hex_string();
+
+    info!(
+        "[lxmf][events][sdk] path=propagation requested_destination={} resolved_destination={} relay_destination={} message_id={} wire_bytes={} propagated_bytes={} max_wire_bytes={}",
+        requested_destination_hex,
+        resolved_destination_hex,
+        relay_destination_hex,
+        message_id_hex,
+        wire.len(),
+        propagated_payload.len(),
+        LXMF_MAX_PAYLOAD,
+    );
+
+    if propagated_payload.len() > LXMF_MAX_PAYLOAD {
+        let link = ensure_lxmf_output_link(state, relay_desc)
+            .await
+            .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
+        let link_id = *link.lock().await.id();
+        let mut resource_events = state.transport.resource_events();
+        let resource_hash = state
+            .transport
+            .send_resource(&link_id, propagated_payload.clone(), None)
+            .await
+            .map_err(|_| sdk_transport("failed to start propagated lxmf relay resource transfer"))?;
+        let resource_hash_hex = hex::encode(resource_hash.as_slice());
+        info!(
+            "[lxmf][events][sdk] path=propagation representation=resource requested_destination={} resolved_destination={} relay_destination={} message_id={} resource_hash={} propagated_bytes={} max_wire_bytes={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            relay_destination_hex,
+            message_id_hex,
+            resource_hash_hex,
+            propagated_payload.len(),
+            LXMF_MAX_PAYLOAD,
+        );
+
+        let deadline = tokio::time::Instant::now() + RESOURCE_TRANSFER_TIMEOUT;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(sdk_transport("propagated lxmf relay resource transfer timed out"));
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, resource_events.recv()).await {
+                Ok(Ok(event)) => {
+                    if event.hash != resource_hash {
+                        continue;
+                    }
+                    match event.kind {
+                        ResourceEventKind::Progress(progress) => {
+                            debug!(
+                                "[lxmf][debug][sdk] path=propagation representation=resource progress requested_destination={} resolved_destination={} relay_destination={} message_id={} resource_hash={} received_bytes={} total_bytes={} received_parts={} total_parts={}",
+                                requested_destination_hex,
+                                resolved_destination_hex,
+                                relay_destination_hex,
+                                message_id_hex,
+                                resource_hash_hex,
+                                progress.received_bytes,
+                                progress.total_bytes,
+                                progress.received_parts,
+                                progress.total_parts,
+                            );
+                        }
+                        ResourceEventKind::OutboundComplete => {
+                            info!(
+                                "[lxmf][events][sdk] path=propagation representation=resource complete requested_destination={} resolved_destination={} relay_destination={} message_id={} resource_hash={}",
+                                requested_destination_hex,
+                                resolved_destination_hex,
+                                relay_destination_hex,
+                                message_id_hex,
+                                resource_hash_hex,
+                            );
+                            return Ok(CompatSendReport {
+                                outcome: RnsSendOutcome::SentDirect,
+                                message_id_hex: message_id_hex.to_string(),
+                                resolved_destination_hex: resolved_destination_hex.to_string(),
+                                used_resource: true,
+                                used_propagation_node: true,
+                                receipt_hash_hex: None,
+                            });
+                        }
+                        ResourceEventKind::Complete(_) => {}
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err(sdk_transport("propagation relay resource event stream closed"));
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Err(_) => {
+                    return Err(sdk_transport("propagated lxmf relay resource transfer timed out"));
+                }
+            }
+        }
+    }
 
     let mut relay_data = PacketDataBuffer::new();
     relay_data
@@ -1094,7 +1195,7 @@ async fn compat_send_lxmf_via_propagation(
         "[lxmf][events][sdk] propagated relay send requested_destination={} resolved_destination={} relay_destination={} message_id={}",
         requested_destination_hex,
         resolved_destination_hex,
-        relay_desc.address_hash.to_hex_string(),
+        relay_destination_hex,
         message_id_hex,
     );
 

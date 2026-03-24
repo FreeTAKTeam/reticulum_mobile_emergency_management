@@ -63,6 +63,27 @@ On Windows, broad recursive directory scans can fail inside Android build interm
   - semicolons
   - explicit typing when it improves clarity at boundaries
 
+## Rust Skills Integration
+
+Apply these additional rules whenever a task touches Rust code, `Cargo.toml`, or the UniFFI/native bridge:
+
+- Treat the installed Rust skills bundle as the default routing layer for Rust work:
+  - general Rust questions or ambiguous Rust tasks: `rust-router`
+  - ownership, borrowing, lifetimes, and move errors: `m01-ownership`
+  - smart pointers and resource ownership patterns: `m02-resource`
+  - error modeling and propagation: `m06-error-handling`
+  - async, `Send`/`Sync`, threading, and channels: `m07-concurrency`
+  - `unsafe`, FFI, raw pointers, JNI, and bridge boundary reviews: `unsafe-checker`
+- For new Rust crates or new `Cargo.toml` package sections created in this repo, default to:
+  - `edition = "2024"`
+  - `rust-version = "1.85"`
+  - `[lints.rust] unsafe_code = "warn"`
+  - `[lints.clippy] all = "warn"` and `pedantic = "warn"`
+- Prefer domain-correct design fixes over borrow-checker workarounds. Do not reach for cloning or ownership duplication until the ownership model is justified by the runtime and protocol design.
+- Use `?` and typed error propagation in library/runtime code instead of `unwrap()` or `expect()`, unless a crash is intentionally part of the boundary behavior.
+- Every `unsafe` block must carry a nearby `// SAFETY:` comment that states the invariant making the block sound.
+- Keep Rust changes aligned with the existing project architecture in this file, especially the rules about using the compiled `LXMF-rs` implementation through the current bridge instead of recreating protocol behavior in higher layers.
+
 ## Change Routing
 
 Use this map to decide where a change belongs:

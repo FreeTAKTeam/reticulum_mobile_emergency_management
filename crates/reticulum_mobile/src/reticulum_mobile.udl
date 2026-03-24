@@ -121,6 +121,8 @@ dictionary PeerChange {
   PeerManagementState management_state;
   PeerAvailabilityState availability_state;
   boolean communication_ready;
+  boolean mission_ready;
+  boolean relay_eligible;
   boolean stale;
   boolean active_link;
   string? last_error;
@@ -168,6 +170,8 @@ dictionary PeerRecord {
   PeerManagementState management_state;
   PeerAvailabilityState availability_state;
   boolean communication_ready;
+  boolean mission_ready;
+  boolean relay_eligible;
   boolean stale;
   boolean active_link;
   string? last_resolution_error;

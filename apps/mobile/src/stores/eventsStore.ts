@@ -731,11 +731,12 @@ export const useEventsStore = defineStore("events", () => {
     const localAppDestination = normalizeHex(nodeStore.status.appDestinationHex);
     const localLxmfDestination = normalizeHex(nodeStore.status.lxmfDestinationHex);
     const directPeers = nodeStore.connectedEventPeerRoutes;
-    const propagationFallbackPeers = directPeers.length === 0 && nodeStore.bestPropagationNodeHex
+    const propagationPeers = nodeStore.bestPropagationNodeHex
       ? nodeStore.propagationEligibleEventPeerRoutes
       : [];
-    const selectedPeers = directPeers.length > 0 ? directPeers : propagationFallbackPeers;
+    const selectedPeers = [...directPeers, ...propagationPeers];
     const deliverable: ReplicationPeer[] = [];
+    const seenByAppDestination = new Set<string>();
 
     for (const peer of selectedPeers) {
       const label = formatPeerLabel(peer);
@@ -758,6 +759,9 @@ export const useEventsStore = defineStore("events", () => {
         }
         continue;
       }
+      if (seenByAppDestination.has(appDestinationHex)) {
+        continue;
+      }
       if (!peer.lxmfDestinationHex) {
         if (logMissing) {
           nodeStore.logUi(
@@ -767,6 +771,7 @@ export const useEventsStore = defineStore("events", () => {
         }
         continue;
       }
+      seenByAppDestination.add(appDestinationHex);
       deliverable.push({
         appDestinationHex: peer.appDestinationHex,
         lxmfDestinationHex: peer.lxmfDestinationHex,
@@ -783,10 +788,15 @@ export const useEventsStore = defineStore("events", () => {
           "Debug",
           `[events] no deliverable event peers. connectedRoutes=${nodeStore.connectedEventPeerRoutes.length} connectedDestinations=${nodeStore.connectedDestinations.length} discoveredPeers=${nodeStore.discoveredPeers.length}.`,
         );
-      } else if (directPeers.length === 0 && propagationFallbackPeers.length > 0) {
+      } else if (directPeers.length === 0 && propagationPeers.length > 0) {
         nodeStore.logUi(
           "Info",
           `[events] no direct LXMF peer routes are available; using propagation relay ${nodeStore.bestPropagationNodeHex}.`,
+        );
+      } else if (propagationPeers.length > 0) {
+        nodeStore.logUi(
+          "Info",
+          `[events] using ${directPeers.length} direct route(s) and ${Math.max(propagationPeers.length - directPeers.length, 0)} propagation route(s).`,
         );
       }
     }

@@ -236,6 +236,8 @@ export interface DiscoveredPeer {
   managementState: PeerManagementState;
   availabilityState: PeerAvailabilityState;
   communicationReady: boolean;
+  missionReady: boolean;
+  relayEligible: boolean;
   stale: boolean;
   activeLink: boolean;
   lastError?: string;

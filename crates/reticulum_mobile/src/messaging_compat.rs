@@ -86,6 +86,8 @@ pub struct PeerRecord {
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
     pub communication_ready: bool,
+    pub mission_ready: bool,
+    pub relay_eligible: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_resolution_error: Option<String>,
@@ -107,6 +109,8 @@ pub struct PeerChange {
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
     pub communication_ready: bool,
+    pub mission_ready: bool,
+    pub relay_eligible: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_error: Option<String>,
@@ -447,11 +451,11 @@ impl MessagingStore {
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
             let last_ready_at_ms = self.last_ready_at_ms.get(&destination_hex).copied();
             let peer_app_data = app_record.map(|record| record.app_data.as_str());
+            let supports_mission_traffic = supports_mission_traffic(peer_app_data);
             let availability_state = peer_availability_state(
                 app_record.is_some(),
                 lxmf_record.is_some(),
                 active_link,
-                supports_mission_traffic(peer_app_data),
                 identity_hex.as_ref(),
                 lxmf_destination_hex.as_ref(),
                 app_record.map(|record| record.received_at_ms),
@@ -460,6 +464,10 @@ impl MessagingStore {
                 now_ms,
             );
             let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
+            let mission_ready = communication_ready && supports_mission_traffic;
+            let relay_eligible = identity_hex.is_some()
+                && lxmf_destination_hex.is_some()
+                && supports_mission_traffic;
             let stale = peer_is_stale(
                 active_link,
                 app_record.map(|record| record.received_at_ms),
@@ -478,6 +486,8 @@ impl MessagingStore {
                 management_state,
                 availability_state,
                 communication_ready,
+                mission_ready,
+                relay_eligible,
                 stale,
                 active_link,
                 last_resolution_error: self.last_resolution_errors.get(&destination_hex).cloned(),
@@ -768,7 +778,6 @@ fn peer_availability_state(
     has_app_announce: bool,
     has_lxmf_announce: bool,
     active_link: bool,
-    supports_mission_traffic: bool,
     identity_hex: Option<&String>,
     lxmf_destination_hex: Option<&String>,
     announce_last_seen_at_ms: Option<u64>,
@@ -785,10 +794,7 @@ fn peer_availability_state(
             now_ms,
         );
         if has_live_presence && (has_app_announce || has_lxmf_announce || last_ready_at_ms.is_some()) {
-            if supports_mission_traffic {
-                return PeerAvailabilityState::Ready;
-            }
-            return PeerAvailabilityState::Resolved;
+            return PeerAvailabilityState::Ready;
         }
         return PeerAvailabilityState::Resolved;
     }
@@ -809,6 +815,8 @@ fn peer_change_from_record(record: PeerRecord) -> PeerChange {
         management_state: record.management_state,
         availability_state: record.availability_state,
         communication_ready: record.communication_ready,
+        mission_ready: record.mission_ready,
+        relay_eligible: record.relay_eligible,
         stale: record.stale,
         active_link: record.active_link,
         last_error: record.last_resolution_error.clone(),
@@ -861,6 +869,8 @@ mod tests {
         assert_eq!(peers[0].management_state, PeerManagementState::Managed);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
         assert!(peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(peers[0].relay_eligible);
         assert!(!peers[0].stale);
     }
 
@@ -953,6 +963,41 @@ mod tests {
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
         assert_eq!(peers[0].state, PeerState::Connected);
         assert!(peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(peers[0].relay_eligible);
+    }
+
+    #[test]
+    fn direct_ready_peer_without_mission_capability_is_not_mission_ready() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "chat".into(),
+            display_name: Some("Chat Only".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("Chat Only".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(10),
+        });
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
+        assert!(peers[0].communication_ready);
+        assert!(!peers[0].mission_ready);
+        assert!(!peers[0].relay_eligible);
     }
 
     #[test]
@@ -1106,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn peer_without_required_mission_capabilities_is_not_communication_ready() {
+    fn peer_without_required_mission_capabilities_is_still_direct_ready() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1132,8 +1177,10 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
-        assert!(!peers[0].communication_ready);
+        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
+        assert!(peers[0].communication_ready);
+        assert!(!peers[0].mission_ready);
+        assert!(!peers[0].relay_eligible);
         assert!(!peers[0].stale);
     }
 }

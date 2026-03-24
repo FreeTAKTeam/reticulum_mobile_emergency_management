@@ -601,6 +601,8 @@ export const useNodeStore = defineStore("node", () => {
       managementState: "unmanaged",
       availabilityState: "unseen",
       communicationReady: false,
+      missionReady: false,
+      relayEligible: false,
       stale: false,
       activeLink: false,
     };
@@ -622,6 +624,8 @@ export const useNodeStore = defineStore("node", () => {
       managementState: patch.managementState ?? base.managementState,
       availabilityState: patch.availabilityState ?? base.availabilityState,
       communicationReady: patch.communicationReady ?? base.communicationReady,
+      missionReady: patch.missionReady ?? base.missionReady,
+      relayEligible: patch.relayEligible ?? base.relayEligible,
       stale: patch.stale ?? base.stale,
       activeLink: patch.activeLink ?? base.activeLink,
       lastError: Object.prototype.hasOwnProperty.call(patch, "lastError")
@@ -697,8 +701,6 @@ export const useNodeStore = defineStore("node", () => {
 
     upsertDiscovered(destination, {
       state: stateValue,
-      activeLink: false,
-      communicationReady: false,
       lastError: lastErrorValue,
     });
   }
@@ -736,6 +738,8 @@ export const useNodeStore = defineStore("node", () => {
         managementState: toUiManagementState(peer.managementState),
         availabilityState: toUiAvailabilityState(peer.availabilityState),
         communicationReady: peer.communicationReady,
+        missionReady: peer.missionReady,
+        relayEligible: peer.relayEligible,
         stale: peer.stale,
         activeLink: peer.activeLink,
         lastError: peer.lastResolutionError,
@@ -775,6 +779,8 @@ export const useNodeStore = defineStore("node", () => {
           ? toUiAvailabilityState(change.availabilityState)
           : undefined,
         communicationReady: change.communicationReady,
+        missionReady: change.missionReady,
+        relayEligible: change.relayEligible,
         stale: change.stale,
         activeLink: change.activeLink,
         lastError: change.lastError,
@@ -817,6 +823,8 @@ export const useNodeStore = defineStore("node", () => {
         state: peer.managementState === "managed" ? "connecting" : "disconnected",
         availabilityState: "unseen",
         communicationReady: false,
+        missionReady: false,
+        relayEligible: false,
         stale: false,
         activeLink: false,
         lastError: undefined,
@@ -838,6 +846,8 @@ export const useNodeStore = defineStore("node", () => {
       `management=${peer.managementState}`,
       `availability=${peer.availabilityState}`,
       `communicationReady=${peer.communicationReady}`,
+      `missionReady=${peer.missionReady}`,
+      `relayEligible=${peer.relayEligible}`,
       `stale=${peer.stale}`,
       `activeLink=${peer.activeLink}`,
       `label=${peer.label ?? "-"}`,
@@ -1496,10 +1506,13 @@ export const useNodeStore = defineStore("node", () => {
         savedPeer.destination,
         {
           label: savedPeer.label,
-      verifiedCapability: false,
-      lastSeenAt: savedPeer.savedAt,
-      communicationReady: false,
-      stale: false,
+          verifiedCapability: false,
+          lastSeenAt: savedPeer.savedAt,
+          communicationReady: false,
+          missionReady: false,
+          relayEligible: false,
+          stale: false,
+          activeLink: false,
         },
         "import",
       );
@@ -1856,30 +1869,36 @@ function peerHasKnownLxmfRoute(
 }
 
 function peerHasKnownMissionRoute(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "verifiedCapability">,
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
 ): boolean {
-  return peer.verifiedCapability && peerHasKnownLxmfRoute(peer);
+  return peerHasKnownLxmfRoute(peer);
 }
 
 function peerHasDirectLxmfDelivery(
-  peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
+  peer: Pick<DiscoveredPeer, "communicationReady">,
 ): boolean {
-  return peer.activeLink || peer.availabilityState === "ready";
+  return peer.communicationReady;
 }
 
 function peerCanAcceptMissionTraffic(
   peer: Pick<
     DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "communicationReady" | "verifiedCapability"
+    "destination" | "lxmfDestinationHex" | "missionReady"
   >,
 ): boolean {
-  return peer.communicationReady && peerHasKnownMissionRoute(peer);
+  return peer.missionReady && peerHasKnownMissionRoute(peer);
+}
+
+function peerCanRelayMissionTraffic(
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "relayEligible">,
+): boolean {
+  return peer.relayEligible && peerHasKnownMissionRoute(peer);
 }
 
 function peerHasEventRoute(
   peer: Pick<
     DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "communicationReady" | "verifiedCapability"
+    "destination" | "lxmfDestinationHex" | "missionReady"
   >,
 ): boolean {
   return peerCanAcceptMissionTraffic(peer);
@@ -1917,15 +1936,27 @@ function peerByAnyKnownDestination(
   const communicationReadyPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peer.communicationReady)
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
+
+  const missionReadyPeers = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
       .filter((peer) => peerCanAcceptMissionTraffic(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
-  const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
+  const relayEligiblePeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerHasKnownMissionRoute(peer))
-      .filter((peer) => !peer.communicationReady)
+      .filter((peer) => peerCanRelayMissionTraffic(peer))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
+
+  const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
+    relayEligiblePeers.value
+      .filter((peer) => !peer.missionReady)
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1952,7 +1983,7 @@ function peerByAnyKnownDestination(
   );
 
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    communicationReadyPeers.value
+    missionReadyPeers.value
       .filter((peer) => peerHasEventRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -1965,6 +1996,8 @@ function peerByAnyKnownDestination(
   );
 
   const communicationReadyPeerCount = computed(() => communicationReadyPeers.value.length);
+  const missionReadyPeerCount = computed(() => missionReadyPeers.value.length);
+  const relayEligiblePeerCount = computed(() => relayEligiblePeers.value.length);
   const propagationCandidateDestinations = computed(() =>
     activePropagationNodeHex(syncStatus.value)
       ? [activePropagationNodeHex(syncStatus.value)!]
@@ -2072,6 +2105,7 @@ function peerByAnyKnownDestination(
         ?? Boolean(
           bestPropagationNodeHex.value
           && matchedPeer
+          && matchedPeer.relayEligible
           && !peerHasDirectLxmfDelivery(matchedPeer),
         );
       logUi(
@@ -2169,6 +2203,7 @@ function peerByAnyKnownDestination(
         ?? Boolean(
           bestPropagationNodeHex.value
           && matchedPeer
+          && matchedPeer.relayEligible
           && !peerHasDirectLxmfDelivery(matchedPeer),
         );
       logUi(
@@ -2279,11 +2314,15 @@ function peerByAnyKnownDestination(
     discoveredPeers,
     savedPeers,
     communicationReadyPeers,
+    missionReadyPeers,
+    relayEligiblePeers,
     propagationEligibleEventPeerRoutes,
     connectedDestinations,
     connectedLinkDestinations,
     connectedEventPeerRoutes,
     communicationReadyPeerCount,
+    missionReadyPeerCount,
+    relayEligiblePeerCount,
     startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,

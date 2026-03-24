@@ -38,7 +38,13 @@ const managementLabel = computed(() =>
   props.peer.managementState === "managed" ? "Managed" : "Unmanaged",
 );
 const readinessLabel = computed(() =>
-  props.peer.communicationReady ? "Ready for communication" : "Not deliverable",
+  props.peer.communicationReady ? "Direct-ready" : "Not direct-ready",
+);
+const missionLabel = computed(() =>
+  props.peer.missionReady ? "Mission-ready" : "Not mission-ready",
+);
+const relayLabel = computed(() =>
+  props.peer.relayEligible ? "Relay-eligible" : "No relay route",
 );
 const staleLabel = computed(() => (props.peer.stale ? "Stale" : "Current"));
 const linkLabel = computed(() => (props.peer.activeLink ? "Active link" : "No active link"));
@@ -69,7 +75,10 @@ const resolutionLabel = computed(() => {
         {{ props.peer.announcedName }}
       </p>
       <p class="details">
-        {{ managementLabel }} | {{ stateLabel }} | {{ readinessLabel }} | {{ staleLabel }} | last seen {{ lastSeenLabel }}
+        {{ managementLabel }} | {{ stateLabel }} | {{ readinessLabel }} | {{ missionLabel }} | {{ relayLabel }}
+      </p>
+      <p class="details">
+        {{ staleLabel }} | {{ linkLabel }} | last seen {{ lastSeenLabel }}
       </p>
       <p class="details">
         {{ resolutionLabel }}

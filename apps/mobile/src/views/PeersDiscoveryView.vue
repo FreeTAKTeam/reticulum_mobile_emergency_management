@@ -145,7 +145,10 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
     <section class="panel">
       <h2>Discovered</h2>
       <p class="section-meta">
-        {{ nodeStore.communicationReadyPeerCount }} communication-ready | {{ filteredDiscovered.length }} peers visible
+        {{ nodeStore.communicationReadyPeerCount }} communication-ready |
+        {{ nodeStore.missionReadyPeerCount }} mission-ready |
+        {{ nodeStore.relayEligiblePeerCount }} relay-eligible |
+        {{ filteredDiscovered.length }} peers visible
       </p>
       <div class="rows">
         <PeerRow

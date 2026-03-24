@@ -338,14 +338,14 @@ export const useMessagesStore = defineStore("messages", () => {
     const localIdentity = normalizeHex(nodeStore.status.identityHex);
     const localAppDestination = normalizeHex(nodeStore.status.appDestinationHex);
     const localLxmfDestination = normalizeHex(nodeStore.status.lxmfDestinationHex);
-    const seen = new Set<string>();
+    const seenByAppDestination = new Set<string>();
     const peers: ReplicationPeer[] = [];
 
     const directPeers = nodeStore.connectedEventPeerRoutes;
-    const propagationFallbackPeers = directPeers.length === 0 && nodeStore.bestPropagationNodeHex
+    const propagationPeers = nodeStore.bestPropagationNodeHex
       ? nodeStore.propagationEligibleEventPeerRoutes
       : [];
-    const selectedPeers = directPeers.length > 0 ? directPeers : propagationFallbackPeers;
+    const selectedPeers = [...directPeers, ...propagationPeers];
 
     for (const peer of selectedPeers) {
       const appDestinationHex = normalizeHex(peer.appDestinationHex);
@@ -360,11 +360,11 @@ export const useMessagesStore = defineStore("messages", () => {
         || lxmfDestinationHex === localAppDestination
         || lxmfDestinationHex === localLxmfDestination
         || (peerIdentity.length > 0 && peerIdentity === localIdentity)
-        || seen.has(lxmfDestinationHex)
+        || seenByAppDestination.has(appDestinationHex)
       ) {
         continue;
       }
-      seen.add(lxmfDestinationHex);
+      seenByAppDestination.add(appDestinationHex);
       peers.push({
         appDestinationHex: peer.appDestinationHex,
         lxmfDestinationHex: peer.lxmfDestinationHex,
@@ -378,10 +378,15 @@ export const useMessagesStore = defineStore("messages", () => {
     if (logMissing) {
       if (peers.length === 0) {
         nodeStore.logUi("Debug", "[eam] no deliverable LXMF routes are available.");
-      } else if (directPeers.length === 0 && propagationFallbackPeers.length > 0) {
+      } else if (directPeers.length === 0 && propagationPeers.length > 0) {
         nodeStore.logUi(
           "Info",
           `[eam] no direct LXMF peer routes are available; using propagation relay ${nodeStore.bestPropagationNodeHex}.`,
+        );
+      } else if (propagationPeers.length > 0) {
+        nodeStore.logUi(
+          "Info",
+          `[eam] using ${directPeers.length} direct route(s) and ${Math.max(propagationPeers.length - directPeers.length, 0)} propagation route(s).`,
         );
       }
     }

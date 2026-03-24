@@ -60,9 +60,11 @@ export interface PeerChange {
   state?: PeerState;
   managementState?: PeerManagementState;
   availabilityState?: PeerAvailabilityState;
-  communicationReady?: boolean;
-  stale?: boolean;
-  activeLink?: boolean;
+  communicationReady: boolean;
+  missionReady: boolean;
+  relayEligible: boolean;
+  stale: boolean;
+  activeLink: boolean;
   lastError?: string;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
@@ -162,6 +164,8 @@ export interface PeerRecord {
   managementState: PeerManagementState;
   availabilityState: PeerAvailabilityState;
   communicationReady: boolean;
+  missionReady: boolean;
+  relayEligible: boolean;
   stale: boolean;
   activeLink: boolean;
   lastResolutionError?: string;
@@ -597,13 +601,23 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
       availabilityState: hasValue(availabilityStateRaw)
         ? toPeerAvailabilityState(availabilityStateRaw)
         : undefined,
-      communicationReady: hasValue(changeRaw.communicationReady)
-        ? Boolean(changeRaw.communicationReady)
-        : hasValue(changeRaw.communication_ready)
-          ? Boolean(changeRaw.communication_ready)
-          : undefined,
-      stale: hasValue(changeRaw.stale) ? Boolean(changeRaw.stale) : undefined,
-      activeLink: hasValue(activeLinkRaw) ? Boolean(activeLinkRaw) : undefined,
+      communicationReady: Boolean(
+        hasValue(changeRaw.communicationReady)
+          ? changeRaw.communicationReady
+          : changeRaw.communication_ready,
+      ),
+      missionReady: Boolean(
+        hasValue(changeRaw.missionReady)
+          ? changeRaw.missionReady
+          : changeRaw.mission_ready,
+      ),
+      relayEligible: Boolean(
+        hasValue(changeRaw.relayEligible)
+          ? changeRaw.relayEligible
+          : changeRaw.relay_eligible,
+      ),
+      stale: Boolean(changeRaw.stale),
+      activeLink: Boolean(activeLinkRaw),
       lastError: (changeRaw.lastError ?? changeRaw.last_error) as
         | string
         | undefined,
@@ -666,6 +680,12 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
     availabilityState: toPeerAvailabilityState(raw.availabilityState ?? raw.availability_state),
     communicationReady: Boolean(
       hasValue(raw.communicationReady) ? raw.communicationReady : raw.communication_ready,
+    ),
+    missionReady: Boolean(
+      hasValue(raw.missionReady) ? raw.missionReady : raw.mission_ready,
+    ),
+    relayEligible: Boolean(
+      hasValue(raw.relayEligible) ? raw.relayEligible : raw.relay_eligible,
     ),
     stale: Boolean(raw.stale),
     activeLink: Boolean(raw.activeLink ?? raw.active_link),
@@ -1237,6 +1257,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
           state: "Disconnected",
           managementState: "Unmanaged",
           availabilityState: "Unseen",
+          communicationReady: false,
+          missionReady: false,
+          relayEligible: false,
+          stale: false,
           activeLink: false,
           lastSeenAtMs: Date.now(),
         },
@@ -1266,6 +1290,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         state: "Connecting",
         managementState: "Managed",
         availabilityState: "Unseen",
+        communicationReady: false,
+        missionReady: false,
+        relayEligible: false,
+        stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
       },
@@ -1277,6 +1305,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         state: "Connected",
         managementState: "Managed",
         availabilityState: "Ready",
+        communicationReady: true,
+        missionReady: true,
+        relayEligible: true,
+        stale: false,
         activeLink: true,
         lastSeenAtMs: Date.now(),
       },
@@ -1292,6 +1324,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         state: "Disconnected",
         managementState: "Unmanaged",
         availabilityState: "Unseen",
+        communicationReady: false,
+        missionReady: false,
+        relayEligible: false,
+        stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
       },
@@ -1535,6 +1571,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         state: "Connecting",
         managementState: "Managed",
         availabilityState: "Unseen",
+        communicationReady: false,
+        missionReady: false,
+        relayEligible: false,
+        stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
       },
@@ -1547,6 +1587,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         state: "Connected",
         managementState: "Managed",
         availabilityState: "Ready",
+        communicationReady: true,
+        missionReady: true,
+        relayEligible: true,
+        stale: false,
         activeLink: true,
         lastSeenAtMs: Date.now(),
       },
@@ -1562,6 +1606,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         state: "Disconnected",
         managementState: "Unmanaged",
         availabilityState: "Unseen",
+        communicationReady: false,
+        missionReady: false,
+        relayEligible: false,
+        stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
       },
