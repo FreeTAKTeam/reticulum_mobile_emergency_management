@@ -100,6 +100,26 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
       <p>
         Select destination allowlist per device. New discoveries never auto-save.
       </p>
+      <div class="header-actions">
+        <button
+          type="button"
+          class="badge badge-button"
+          @click="
+            runNodeAction(() => nodeStore.announceNow(), 'Announce requested.')
+          "
+        >
+          Announce
+        </button>
+        <button
+          type="button"
+          class="badge badge-button"
+          @click="
+            runNodeAction(() => nodeStore.requestLxmfSync(), 'Sync requested.')
+          "
+        >
+          Sync
+        </button>
+      </div>
     </header>
 
     <section class="panel controls">
@@ -245,6 +265,57 @@ header p {
   margin: 0.25rem 0 0;
 }
 
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}
+
+.badge {
+  background: rgb(9 61 108 / 68%);
+  border: 1px solid rgb(73 173 255 / 62%);
+  border-radius: 999px;
+  color: #64beff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.92rem;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  padding: 0.46rem 0.8rem;
+  text-transform: uppercase;
+}
+
+.badge-button {
+  box-shadow:
+    inset 0 1px 0 rgb(186 236 255 / 8%),
+    0 8px 18px rgb(3 24 56 / 18%);
+  cursor: pointer;
+  min-height: 0;
+  touch-action: manipulation;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.badge-button:active {
+  background: linear-gradient(118deg, #0b4d7d, #106f90);
+  border-color: rgb(86 197 255 / 72%);
+  box-shadow:
+    inset 0 1px 0 rgb(224 248 255 / 14%),
+    0 4px 10px rgb(3 18 40 / 20%);
+  color: #dff8ff;
+  transform: translateY(1px) scale(0.985);
+}
+
+.badge-button:focus-visible {
+  outline: 2px solid rgb(111 219 255 / 70%);
+  outline-offset: 2px;
+}
+
 .panel {
   background: rgb(9 24 52 / 86%);
   border: 1px solid rgb(72 114 184 / 33%);
@@ -367,7 +438,7 @@ h2 {
   margin-top: 0.65rem;
 }
 
-button:not(.saved-toggle) {
+button:not(.saved-toggle):not(.badge-button) {
   background: linear-gradient(118deg, #0b9fff, #20ecff);
   border: 0;
   border-radius: 10px;
@@ -389,7 +460,7 @@ button:not(.saved-toggle) {
   text-transform: uppercase;
 }
 
-button:not(.saved-toggle):active {
+button:not(.saved-toggle):not(.badge-button):active {
   background: linear-gradient(118deg, #046aa8, #0ea9cb);
   box-shadow:
     inset 0 1px 0 rgb(220 248 255 / 16%),
@@ -431,6 +502,10 @@ textarea {
 }
 
 @media (max-width: 760px) {
+  .header-actions {
+    flex-wrap: wrap;
+  }
+
   .saved-item {
     align-items: flex-start;
     flex-direction: column;
