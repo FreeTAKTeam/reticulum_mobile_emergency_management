@@ -85,8 +85,6 @@ type PeerFailure = {
   peer: ReplicationPeer;
   detail: string;
 };
-type EamTransportMode = "default" | "direct" | "propagation";
-
 function nowMs(): number {
   return Date.now();
 }
@@ -566,30 +564,18 @@ export const useMessagesStore = defineStore("messages", () => {
 async function sendEamCommand(
   destination: string,
   command: EamCommandEnvelope,
-  transportMode: EamTransportMode = "default",
 ): Promise<void> {
-  const options = {
+  await nodeStore.sendBytes(destination, EMPTY_BYTES, {
     fieldsBase64: buildEamCommandFieldsBase64([command]),
-  };
-  if (transportMode === "propagation") {
-    await nodeStore.sendBytesViaPropagation(destination, EMPTY_BYTES, options);
-    return;
-  }
-  if (transportMode === "direct") {
-    await nodeStore.sendBytesDirect(destination, EMPTY_BYTES, options);
-    return;
-  }
-  await nodeStore.sendBytes(destination, EMPTY_BYTES, options);
+  });
 }
 
   async function sendEamResponse(
     destination: string,
     result: EamResponsePayload,
     event?: EamEventEnvelope,
-    mode: "default" | "direct" = "default",
   ): Promise<void> {
-    const send = mode === "direct" ? nodeStore.sendBytesDirect : nodeStore.sendBytes;
-    await send(destination, EMPTY_BYTES, {
+    await nodeStore.sendBytes(destination, EMPTY_BYTES, {
       fieldsBase64: buildEamResponseFieldsBase64({ result, event }),
     });
   }
@@ -904,7 +890,11 @@ async function sendEamCommand(
         ) {
           return;
         }
-        if (event.status === "Sent" || event.status === "Acknowledged") {
+        if (
+          event.status === "Sent"
+          || event.status === "SentToPropagation"
+          || event.status === "Acknowledged"
+        ) {
           if (event.status === "Acknowledged" && expected.resolveOnAccepted) {
             finish(resolve);
           }
@@ -971,53 +961,18 @@ async function sendEamCommandAwaitingDelivery(
   command: EamCommandEnvelope,
   expected: EamTrackingExpectation,
 ): Promise<void> {
-  let lastError: unknown;
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const tracker = createEamDeliveryTracker(peer, expected);
-    try {
-      nodeStore.logUi(
-        "Debug",
-        `[eam] ${expected.commandType} direct attempt ${attempt}/3 to ${peer.label}.`,
-      );
-      await sendEamCommand(peer.lxmfDestinationHex, command, "direct");
-      tracker.arm();
-      await tracker.promise;
-      return;
-    } catch (error: unknown) {
-      tracker.cancel();
-      lastError = error;
-      if (attempt >= 3) {
-        break;
-      }
-      nodeStore.logUi(
-        "Warn",
-        `[eam] ${expected.commandType} direct attempt ${attempt}/3 failed for ${peer.label}: ${errorMessage(error)}.`,
-      );
-      await sleep(250 * attempt);
-    }
+  const tracker = createEamDeliveryTracker(peer, expected);
+  try {
+    nodeStore.logUi(
+      "Debug",
+      `[eam] ${expected.commandType} send requested to ${peer.label}; native runtime will handle direct retries and propagation fallback.`,
+    );
+    await sendEamCommand(peer.lxmfDestinationHex, command);
+    tracker.arm();
+    await tracker.promise;
+  } finally {
+    tracker.cancel();
   }
-
-  if (nodeStore.bestPropagationNodeHex) {
-    const tracker = createEamDeliveryTracker(peer, expected);
-    try {
-      nodeStore.logUi(
-        "Warn",
-        `[eam] ${expected.commandType} direct attempts exhausted for ${peer.label}; retrying via propagation ${nodeStore.bestPropagationNodeHex}.`,
-      );
-      await sendEamCommand(peer.lxmfDestinationHex, command, "propagation");
-      tracker.arm();
-      await tracker.promise;
-      return;
-    } catch (error: unknown) {
-      tracker.cancel();
-      lastError = error;
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`[eam] ${expected.commandType} failed for ${peer.label}.`);
 }
 
   async function sendUpsertToPeer(peer: ReplicationPeer, message: ActionMessage): Promise<void> {
@@ -1457,7 +1412,7 @@ async function sendEamCommandAwaitingDelivery(
         `[eam] inbound upsert from ${incoming.source?.display_name ?? incoming.source?.rns_identity ?? destination} for ${incoming.callsign} outcome=${outcome} eamUid=${incoming.eamUid}.`,
       );
       if (destination) {
-        await sendEamResponse(destination, accepted, undefined, "direct");
+        await sendEamResponse(destination, accepted);
         void sendEamResponse(
           destination,
           createEamUpsertResultPayload({
@@ -1497,7 +1452,7 @@ async function sendEamCommandAwaitingDelivery(
         ? byCallsign[keyFor(args.callsign)]
         : Object.values(byCallsign).find((message) => message.eamUid === args.eam_uid);
       if (destination) {
-        await sendEamResponse(destination, accepted, undefined, "direct");
+        await sendEamResponse(destination, accepted);
       }
       if (!target) {
         if (destination) {

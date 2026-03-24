@@ -51,6 +51,7 @@ pub enum SendOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum LxmfDeliveryStatus {
     Sent {},
+    SentToPropagation {},
     Acknowledged {},
     Failed {},
     TimedOut {},
@@ -160,6 +161,8 @@ pub struct PeerChange {
     pub state: PeerState,
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
+    pub communication_ready: bool,
+    pub stale: bool,
     pub active_link: bool,
     pub last_error: Option<String>,
     pub last_resolution_error: Option<String>,
@@ -208,6 +211,8 @@ pub struct PeerRecord {
     pub state: PeerState,
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
+    pub communication_ready: bool,
+    pub stale: bool,
     pub active_link: bool,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,

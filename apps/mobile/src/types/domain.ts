@@ -235,6 +235,8 @@ export interface DiscoveredPeer {
   state: PeerConnectionState;
   managementState: PeerManagementState;
   availabilityState: PeerAvailabilityState;
+  communicationReady: boolean;
+  stale: boolean;
   activeLink: boolean;
   lastError?: string;
   lastResolutionError?: string;

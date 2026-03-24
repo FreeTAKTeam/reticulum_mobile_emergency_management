@@ -280,6 +280,8 @@ fn peer_change_json(change: &PeerChange) -> serde_json::Value {
         "state": peer_state_to_str(change.state),
         "managementState": peer_management_state_to_str(change.management_state),
         "availabilityState": peer_availability_state_to_str(change.availability_state),
+        "communicationReady": change.communication_ready,
+        "stale": change.stale,
         "activeLink": change.active_link,
         "lastError": change.last_error,
         "lastResolutionError": change.last_resolution_error,
@@ -301,6 +303,8 @@ fn peer_record_json(peer: &PeerRecord) -> serde_json::Value {
         "state": peer_state_to_str(peer.state),
         "managementState": peer_management_state_to_str(peer.management_state),
         "availabilityState": peer_availability_state_to_str(peer.availability_state),
+        "communicationReady": peer.communication_ready,
+        "stale": peer.stale,
         "activeLink": peer.active_link,
         "lastResolutionError": peer.last_resolution_error,
         "lastResolutionAttemptAtMs": peer.last_resolution_attempt_at_ms,
@@ -325,6 +329,7 @@ fn send_outcome_to_str(outcome: SendOutcome) -> &'static str {
 fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
     match status {
         LxmfDeliveryStatus::Sent {} => "Sent",
+        LxmfDeliveryStatus::SentToPropagation {} => "SentToPropagation",
         LxmfDeliveryStatus::Acknowledged {} => "Acknowledged",
         LxmfDeliveryStatus::Failed {} => "Failed",
         LxmfDeliveryStatus::TimedOut {} => "TimedOut",

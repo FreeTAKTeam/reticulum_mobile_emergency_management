@@ -124,7 +124,9 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
 
     <section class="panel">
       <h2>Discovered</h2>
-      <p class="section-meta">{{ filteredDiscovered.length }} peers visible</p>
+      <p class="section-meta">
+        {{ nodeStore.communicationReadyPeerCount }} communication-ready | {{ filteredDiscovered.length }} peers visible
+      </p>
       <div class="rows">
         <PeerRow
           v-for="peer in filteredDiscovered"

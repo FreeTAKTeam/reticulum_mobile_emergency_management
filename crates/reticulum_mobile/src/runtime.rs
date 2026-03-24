@@ -359,6 +359,8 @@ fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
         state: from_sdk_peer_state(record.state),
         management_state: from_sdk_peer_management_state(record.management_state),
         availability_state: from_sdk_peer_availability_state(record.availability_state),
+        communication_ready: record.communication_ready,
+        stale: record.stale,
         active_link: record.active_link,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
@@ -379,6 +381,8 @@ fn from_sdk_peer_change(change: sdkmsg::PeerChange) -> PeerChange {
         state: from_sdk_peer_state(change.state),
         management_state: from_sdk_peer_management_state(change.management_state),
         availability_state: from_sdk_peer_availability_state(change.availability_state),
+        communication_ready: change.communication_ready,
+        stale: change.stale,
         active_link: change.active_link,
         last_error: change.last_error,
         last_resolution_error: change.last_resolution_error,
@@ -642,23 +646,69 @@ async fn emit_peer_changed(state: &NodeRuntimeState, bus: &EventBus, destination
     }
 }
 
-async fn canonical_peer_destination_hex(
+fn peer_matches_hex(peer: &sdkmsg::PeerRecord, normalized_hex: &str) -> bool {
+    peer.destination_hex == normalized_hex
+        || peer
+            .lxmf_destination_hex
+            .as_deref()
+            .is_some_and(|value| value == normalized_hex)
+        || peer
+            .identity_hex
+            .as_deref()
+            .is_some_and(|value| value == normalized_hex)
+}
+
+fn equivalent_peer_destinations(peer: &sdkmsg::PeerRecord) -> impl Iterator<Item = &str> {
+    [
+        Some(peer.destination_hex.as_str()),
+        peer.lxmf_destination_hex.as_deref(),
+        peer.identity_hex.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+async fn peer_for_any_destination_hex(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> Option<sdkmsg::PeerRecord> {
+    let normalized_destination = destination_hex.to_ascii_lowercase();
+    let messaging = state.messaging.lock().await;
+    messaging
+        .peer_by_destination(normalized_destination.as_str())
+        .or_else(|| {
+            messaging
+                .list_peers()
+                .into_iter()
+                .find(|peer| peer_matches_hex(peer, normalized_destination.as_str()))
+        })
+}
+
+async fn resolve_lxmf_destination_hex(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
-    let peer = {
-        let messaging = state.messaging.lock().await;
-        messaging
-            .peer_by_destination(normalized_destination.as_str())
-            .or_else(|| {
-                messaging.list_peers().into_iter().find(|peer| {
-                    peer.lxmf_destination_hex.as_deref() == Some(normalized_destination.as_str())
-                        || peer.identity_hex.as_deref() == Some(normalized_destination.as_str())
-                })
-            })
+    let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
+        return normalized_destination;
     };
-    let Some(peer) = peer else {
+    if peer
+        .lxmf_destination_hex
+        .as_deref()
+        .is_some_and(|value| value == normalized_destination)
+    {
+        return normalized_destination;
+    }
+    peer.lxmf_destination_hex
+        .unwrap_or(peer.destination_hex)
+}
+
+async fn canonical_app_destination_hex(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> String {
+    let normalized_destination = destination_hex.to_ascii_lowercase();
+    let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
         return normalized_destination;
     };
     let Some(identity_hex) = peer.identity_hex.clone() else {
@@ -672,23 +722,33 @@ async fn canonical_peer_destination_hex(
         .unwrap_or(peer.destination_hex)
 }
 
-fn parse_capability_tokens(app_data: &str) -> Vec<String> {
-    app_data
-        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
-        .map(|token| token.to_ascii_lowercase())
-        .collect()
-}
+async fn peer_destinations_equivalent(
+    state: &NodeRuntimeState,
+    left_hex: &str,
+    right_hex: &str,
+) -> bool {
+    let normalized_left = left_hex.to_ascii_lowercase();
+    let normalized_right = right_hex.to_ascii_lowercase();
+    if normalized_left == normalized_right {
+        return true;
+    }
 
-fn peer_exposes_propagation_capability(peer: &sdkmsg::PeerRecord) -> bool {
-    peer.app_data
-        .as_deref()
-        .map(parse_capability_tokens)
-        .unwrap_or_default()
-        .into_iter()
-        .any(|token| token == "hub" || token.ends_with("hub"))
+    let left_peer = peer_for_any_destination_hex(state, &normalized_left).await;
+    let right_peer = peer_for_any_destination_hex(state, &normalized_right).await;
+    let (Some(left_peer), Some(right_peer)) = (left_peer, right_peer) else {
+        return false;
+    };
+
+    if left_peer.identity_hex.is_some()
+        && left_peer.identity_hex == right_peer.identity_hex
+    {
+        return true;
+    }
+
+    let matches = equivalent_peer_destinations(&left_peer).any(|candidate| {
+        equivalent_peer_destinations(&right_peer).any(|other| candidate == other)
+    });
+    matches
 }
 
 fn propagation_candidate_sort_key(
@@ -696,7 +756,9 @@ fn propagation_candidate_sort_key(
     preferred_destination_hex: Option<&str>,
 ) -> (u8, u8, u64, String) {
     let preferred_rank = if preferred_destination_hex
-        .is_some_and(|preferred| preferred == announce.destination_hex)
+        .is_some_and(|preferred| {
+            preferred == announce.destination_hex || preferred == announce.identity_hex
+        })
     {
         0
     } else {
@@ -711,9 +773,9 @@ fn propagation_candidate_sort_key(
 }
 
 async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
-    let (announces, peers) = {
+    let announces = {
         let messaging = state.messaging.lock().await;
-        (messaging.list_announces(), messaging.list_peers())
+        messaging.list_announces()
     };
     let desired_destination = announces
         .iter()
@@ -724,33 +786,7 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
                 state.preferred_propagation_node_hex.as_deref(),
             )
         })
-        .map(|record| record.destination_hex.clone())
-        .or_else(|| {
-            peers
-                .iter()
-                .filter(|peer| {
-                    matches!(peer.availability_state, sdkmsg::PeerAvailabilityState::Ready)
-                })
-                .filter(|peer| peer_exposes_propagation_capability(peer))
-                .min_by_key(|peer| {
-                    (
-                        if state
-                            .preferred_propagation_node_hex
-                            .as_deref()
-                            .is_some_and(|preferred| preferred == peer.destination_hex)
-                        {
-                            0_u8
-                        } else {
-                            1_u8
-                        },
-                        if peer.active_link { 0_u8 } else { 1_u8 },
-                        u64::MAX - peer.last_ready_at_ms.unwrap_or(0),
-                        u64::MAX - peer.last_seen_at_ms,
-                        peer.destination_hex.clone(),
-                    )
-                })
-                .map(|peer| peer.destination_hex.clone())
-        });
+        .map(|record| record.destination_hex.clone());
 
     let mut active_guard = state.active_propagation_node_hex.lock().await;
     if *active_guard == desired_destination {
@@ -1277,6 +1313,135 @@ async fn register_pending_lxmf_delivery(
     })
 }
 
+fn lxmf_send_succeeded(outcome: RnsSendOutcome) -> bool {
+    matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast)
+}
+
+fn lxmf_delivery_status_for(report: &LxmfSendReport) -> LxmfDeliveryStatus {
+    if report.used_propagation_node && lxmf_send_succeeded(report.outcome) {
+        LxmfDeliveryStatus::SentToPropagation {}
+    } else {
+        LxmfDeliveryStatus::Sent {}
+    }
+}
+
+fn is_retriable_lxmf_error(err: &NodeError) -> bool {
+    matches!(
+        err,
+        NodeError::NetworkError {}
+            | NodeError::Timeout {}
+            | NodeError::ReticulumError {}
+            | NodeError::InternalError {}
+    )
+}
+
+async fn send_lxmf_with_delivery_policy(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    body: &[u8],
+    title: Option<String>,
+    fields_bytes: Option<Vec<u8>>,
+    metadata: Option<MissionSyncMetadata>,
+    force_propagation_only: bool,
+) -> Result<LxmfSendReport, NodeError> {
+    const DIRECT_ATTEMPTS: usize = 3;
+    const RETRY_DELAY_MS: u64 = 250;
+
+    if force_propagation_only {
+        let resolved_destination_hex =
+            resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+        let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        return state
+            .sdk
+            .send_lxmf(
+                destination,
+                body,
+                title.clone(),
+                fields_bytes.clone(),
+                metadata.clone(),
+                true,
+            )
+            .await;
+    }
+
+    let mut last_error: Option<NodeError> = None;
+
+    for attempt in 1..=DIRECT_ATTEMPTS {
+        let resolved_destination_hex =
+            resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+        let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        match state
+            .sdk
+            .send_lxmf(
+                destination,
+                body,
+                title.clone(),
+                fields_bytes.clone(),
+                metadata.clone(),
+                false,
+            )
+            .await
+        {
+            Ok(report) if lxmf_send_succeeded(report.outcome) => {
+                return Ok(report);
+            }
+            Ok(report) => {
+                info!(
+                    "[lxmf][mission] direct send attempt {attempt}/{DIRECT_ATTEMPTS} failed destination={} outcome={:?}",
+                    requested_destination_hex,
+                    report.outcome,
+                );
+                last_error = Some(NodeError::NetworkError {});
+            }
+            Err(err) => {
+                let retriable = is_retriable_lxmf_error(&err);
+                info!(
+                    "[lxmf][mission] direct send attempt {attempt}/{DIRECT_ATTEMPTS} errored destination={} err={}",
+                    requested_destination_hex,
+                    err,
+                );
+                last_error = Some(err);
+                if !retriable {
+                    break;
+                }
+            }
+        }
+
+        if attempt < DIRECT_ATTEMPTS {
+            tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+        }
+    }
+
+    let has_active_relay = state
+        .active_propagation_node_hex
+        .lock()
+        .await
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if !has_active_relay {
+        return Err(last_error.unwrap_or(NodeError::NetworkError {}));
+    }
+
+    info!(
+        "[lxmf][mission] direct delivery exhausted destination={}; retrying via propagation relay",
+        requested_destination_hex,
+    );
+    let resolved_destination_hex =
+        resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+    let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+    state
+        .sdk
+        .send_lxmf(
+            destination,
+            body,
+            title,
+            fields_bytes,
+            metadata,
+            true,
+        )
+        .await
+}
+
 async fn emit_received_payload(
     state: &NodeRuntimeState,
     bus: &EventBus,
@@ -1420,7 +1585,7 @@ async fn ack_pending_lxmf_delivery(
         }
         return;
     };
-    if pending.destination_hex != source_hex {
+    if !peer_destinations_equivalent(state, pending.destination_hex.as_str(), source_hex).await {
         if let Some(tracking_key) = pending
             .correlation_id
             .as_deref()
@@ -1767,6 +1932,20 @@ pub async fn run_node(
         guard.running = true;
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
+        });
+    }
+
+    // Peer freshness/relay maintenance.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                refresh_peer_snapshot(&state).await;
+                sync_auto_propagation_node(&state, &bus).await;
+            }
         });
     }
 
@@ -2126,7 +2305,7 @@ pub async fn run_node(
                     Ok(event) => {
                         let destination_hex = address_hash_to_hex(&event.address_hash);
                         let canonical_destination_hex =
-                            canonical_peer_destination_hex(&state, &destination_hex).await;
+                            canonical_app_destination_hex(&state, &destination_hex).await;
                         match event.event {
                             LinkEvent::Activated => {
                                 connected_peers.lock().await.insert(event.address_hash);
@@ -2331,39 +2510,29 @@ pub async fn run_node(
                 let transport = transport.clone();
                 tokio::spawn(async move {
                 let result = async {
-                    let canonical_destination_hex =
-                        canonical_peer_destination_hex(&state, &destination_hex).await;
-                    let dest = parse_address_hash(&canonical_destination_hex)?;
                     let metadata = fields_bytes
                         .as_deref()
                         .and_then(parse_mission_sync_metadata);
                     let lxmf_report = if fields_bytes.is_some() {
-                        #[cfg(feature = "legacy-lxmf-runtime")]
-                        {
-                            Some(send_lxmf_message(&state, dest, &bytes, fields_bytes.clone()).await?)
-                        }
-                        #[cfg(not(feature = "legacy-lxmf-runtime"))]
-                        {
-                            Some(
-                                state
-                                    .sdk
-                                    .send_lxmf(
-                                        dest,
-                                        &bytes,
-                                        None,
-                                        fields_bytes.clone(),
-                                        metadata.clone(),
-                                        use_propagation_node,
-                                    )
-                                    .await?,
+                        Some(
+                            send_lxmf_with_delivery_policy(
+                                &state,
+                                &destination_hex,
+                                &bytes,
+                                None,
+                                fields_bytes.clone(),
+                                metadata.clone(),
+                                use_propagation_node,
                             )
-                        }
+                            .await?,
+                        )
                     } else {
                         None
                     };
                     let outcome = if let Some(report) = lxmf_report.as_ref() {
                         report.outcome
                     } else {
+                        let dest = parse_address_hash(&destination_hex)?;
                         send_transport_packet_with_path_retry(&transport, dest, &bytes).await
                     };
                     let mapped = send_outcome_to_udl(outcome);
@@ -2412,7 +2581,7 @@ pub async fn run_node(
                                 emit_lxmf_delivery(
                                     &bus,
                                     &pending,
-                                    LxmfDeliveryStatus::Sent {},
+                                    lxmf_delivery_status_for(report),
                                     None,
                                 );
                                 info!(
@@ -2428,7 +2597,13 @@ pub async fn run_node(
                                         .as_deref()
                                         .or(pending.command_id.as_deref())
                                         .map(ToOwned::to_owned);
-                                    if buffered_ack.source_hex == pending.destination_hex {
+                                    if peer_destinations_equivalent(
+                                        &state,
+                                        pending.destination_hex.as_str(),
+                                        buffered_ack.source_hex.as_str(),
+                                    )
+                                    .await
+                                    {
                                         if let Some(tracking_key) = tracking_key.as_deref() {
                                             state
                                                 .pending_lxmf_deliveries
@@ -2537,22 +2712,17 @@ pub async fn run_node(
                 let receipt_message_ids = receipt_message_ids.clone();
                 tokio::spawn(async move {
                 let result = async {
-                    let canonical_destination_hex =
-                        canonical_peer_destination_hex(&state, request.destination_hex.as_str())
-                            .await;
-                    let destination = parse_address_hash(canonical_destination_hex.as_str())?;
                     let body_bytes = request.body_utf8.as_bytes().to_vec();
-                    let report = state
-                        .sdk
-                        .send_lxmf(
-                            destination,
-                            body_bytes.as_slice(),
-                            request.title.clone(),
-                            None,
-                            None,
-                            request.use_propagation_node,
-                        )
-                        .await?;
+                    let report = send_lxmf_with_delivery_policy(
+                        &state,
+                        request.destination_hex.as_str(),
+                        body_bytes.as_slice(),
+                        request.title.clone(),
+                        None,
+                        None,
+                        request.use_propagation_node,
+                    )
+                    .await?;
                     let method = if report.used_propagation_node {
                         MessageMethod::Propagated {}
                     } else if report.used_resource {
@@ -2625,23 +2795,16 @@ pub async fn run_node(
                         .await
                         .outbound(message_id_hex.as_str())
                         .ok_or(NodeError::InvalidConfig {})?;
-                    let canonical_destination_hex = canonical_peer_destination_hex(
+                    let report = send_lxmf_with_delivery_policy(
                         &state,
                         outbound.request.destination_hex.as_str(),
+                        outbound.request.body_utf8.as_bytes(),
+                        outbound.request.title.clone(),
+                        None,
+                        None,
+                        outbound.request.use_propagation_node,
                     )
-                    .await;
-                    let destination = parse_address_hash(canonical_destination_hex.as_str())?;
-                    let report = state
-                        .sdk
-                        .send_lxmf(
-                            destination,
-                            outbound.request.body_utf8.as_bytes(),
-                            outbound.request.title.clone(),
-                            None,
-                            None,
-                            outbound.request.use_propagation_node,
-                        )
-                        .await?;
+                    .await?;
                     let retried_state = if report.used_propagation_node
                         && matches!(
                             report.outcome,

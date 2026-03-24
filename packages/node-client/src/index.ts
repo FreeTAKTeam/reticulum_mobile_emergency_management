@@ -13,7 +13,7 @@ export type SendOutcome =
   | "DroppedCiphertextTooLarge"
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
-export type LxmfDeliveryStatus = "Sent" | "Acknowledged" | "Failed" | "TimedOut";
+export type LxmfDeliveryStatus = "Sent" | "SentToPropagation" | "Acknowledged" | "Failed" | "TimedOut";
 export type MessageMethod = "Direct" | "Opportunistic" | "Propagated" | "Resource";
 export type MessageState =
   | "Queued"
@@ -60,6 +60,8 @@ export interface PeerChange {
   state?: PeerState;
   managementState?: PeerManagementState;
   availabilityState?: PeerAvailabilityState;
+  communicationReady?: boolean;
+  stale?: boolean;
   activeLink?: boolean;
   lastError?: string;
   lastResolutionError?: string;
@@ -159,6 +161,8 @@ export interface PeerRecord {
   state: PeerState;
   managementState: PeerManagementState;
   availabilityState: PeerAvailabilityState;
+  communicationReady: boolean;
+  stale: boolean;
   activeLink: boolean;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
@@ -593,6 +597,12 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
       availabilityState: hasValue(availabilityStateRaw)
         ? toPeerAvailabilityState(availabilityStateRaw)
         : undefined,
+      communicationReady: hasValue(changeRaw.communicationReady)
+        ? Boolean(changeRaw.communicationReady)
+        : hasValue(changeRaw.communication_ready)
+          ? Boolean(changeRaw.communication_ready)
+          : undefined,
+      stale: hasValue(changeRaw.stale) ? Boolean(changeRaw.stale) : undefined,
       activeLink: hasValue(activeLinkRaw) ? Boolean(activeLinkRaw) : undefined,
       lastError: (changeRaw.lastError ?? changeRaw.last_error) as
         | string
@@ -654,6 +664,10 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
     state: toPeerState(raw.state),
     managementState: toPeerManagementState(raw.managementState ?? raw.management_state),
     availabilityState: toPeerAvailabilityState(raw.availabilityState ?? raw.availability_state),
+    communicationReady: Boolean(
+      hasValue(raw.communicationReady) ? raw.communicationReady : raw.communication_ready,
+    ),
+    stale: Boolean(raw.stale),
     activeLink: Boolean(raw.activeLink ?? raw.active_link),
     lastResolutionError:
       typeof raw.lastResolutionError === "string"
@@ -739,7 +753,13 @@ function toPacketSentEvent(raw: Record<string, unknown>): PacketSentEvent {
 
 function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
   const value = String(raw ?? "");
-  const valid: LxmfDeliveryStatus[] = ["Sent", "Acknowledged", "Failed", "TimedOut"];
+  const valid: LxmfDeliveryStatus[] = [
+    "Sent",
+    "SentToPropagation",
+    "Acknowledged",
+    "Failed",
+    "TimedOut",
+  ];
   return valid.includes(value as LxmfDeliveryStatus)
     ? (value as LxmfDeliveryStatus)
     : "Failed";

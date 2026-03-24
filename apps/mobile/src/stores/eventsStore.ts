@@ -849,10 +849,10 @@ export const useEventsStore = defineStore("events", () => {
           return;
         }
 
-        if (event.status === "Sent") {
+        if (event.status === "Sent" || event.status === "SentToPropagation") {
           nodeStore.logUi(
             "Debug",
-            `[events] ${expected.stage} sent to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
+            `[events] ${expected.stage} ${event.status === "SentToPropagation" ? "queued on propagation relay" : "sent"} to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
           );
           return;
         }

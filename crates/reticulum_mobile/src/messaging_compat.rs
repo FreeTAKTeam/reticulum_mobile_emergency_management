@@ -85,6 +85,8 @@ pub struct PeerRecord {
     pub state: PeerState,
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
+    pub communication_ready: bool,
+    pub stale: bool,
     pub active_link: bool,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
@@ -104,6 +106,8 @@ pub struct PeerChange {
     pub state: PeerState,
     pub management_state: PeerManagementState,
     pub availability_state: PeerAvailabilityState,
+    pub communication_ready: bool,
+    pub stale: bool,
     pub active_link: bool,
     pub last_error: Option<String>,
     pub last_resolution_error: Option<String>,
@@ -185,6 +189,7 @@ pub struct MessagingStore {
 }
 
 const PEER_READY_FRESHNESS_MS: u64 = 45_000;
+const REQUIRED_MISSION_CAPABILITIES: [&str; 2] = ["r3akt", "emergencymessages"];
 
 impl Default for SyncStatus {
     fn default() -> Self {
@@ -441,12 +446,22 @@ impl MessagingStore {
                     .as_ref()
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
             let last_ready_at_ms = self.last_ready_at_ms.get(&destination_hex).copied();
+            let peer_app_data = app_record.map(|record| record.app_data.as_str());
             let availability_state = peer_availability_state(
                 app_record.is_some(),
                 lxmf_record.is_some(),
                 active_link,
+                supports_mission_traffic(peer_app_data),
                 identity_hex.as_ref(),
                 lxmf_destination_hex.as_ref(),
+                app_record.map(|record| record.received_at_ms),
+                lxmf_record.map(|record| record.received_at_ms),
+                last_ready_at_ms,
+                now_ms,
+            );
+            let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
+            let stale = peer_is_stale(
+                active_link,
                 app_record.map(|record| record.received_at_ms),
                 lxmf_record.map(|record| record.received_at_ms),
                 last_ready_at_ms,
@@ -458,10 +473,12 @@ impl MessagingStore {
                 lxmf_destination_hex: lxmf_destination_hex.clone(),
                 display_name: lxmf_record
                     .and_then(|record| record.display_name.clone()),
-                app_data: app_record.map(|record| record.app_data.clone()),
+                app_data: peer_app_data.map(ToOwned::to_owned),
                 state: compatibility_peer_state(management_state, availability_state),
                 management_state,
                 availability_state,
+                communication_ready,
+                stale,
                 active_link,
                 last_resolution_error: self.last_resolution_errors.get(&destination_hex).cloned(),
                 last_resolution_attempt_at_ms: self
@@ -477,50 +494,6 @@ impl MessagingStore {
                 announce_last_seen_at_ms: app_record.map(|record| record.received_at_ms),
                 lxmf_last_seen_at_ms: lxmf_record.map(|record| record.received_at_ms),
             });
-        }
-
-        for (identity_hex, lxmf_destination_hex) in lxmf_dest_by_identity {
-            if app_dest_by_identity.contains_key(identity_hex.as_str()) {
-                continue;
-            }
-            if let Some(record) = lxmf_records.get(&lxmf_destination_hex) {
-                let management_state = if self.managed_destinations.contains(lxmf_destination_hex.as_str()) {
-                    PeerManagementState::Managed
-                } else {
-                    PeerManagementState::Unmanaged
-                };
-                let availability_state = peer_availability_state(
-                    false,
-                    true,
-                    self.active_link_destinations.contains(lxmf_destination_hex.as_str()),
-                    Some(&identity_hex),
-                    Some(&lxmf_destination_hex),
-                    None,
-                    Some(record.received_at_ms),
-                    self.last_ready_at_ms.get(&lxmf_destination_hex).copied(),
-                    now_ms,
-                );
-                peers.push(PeerRecord {
-                    destination_hex: lxmf_destination_hex.clone(),
-                    identity_hex: Some(identity_hex),
-                    lxmf_destination_hex: Some(lxmf_destination_hex.clone()),
-                    display_name: record.display_name.clone(),
-                    app_data: None,
-                    state: compatibility_peer_state(management_state, availability_state),
-                    management_state,
-                    availability_state,
-                    active_link: self.active_link_destinations.contains(lxmf_destination_hex.as_str()),
-                    last_resolution_error: self.last_resolution_errors.get(&lxmf_destination_hex).cloned(),
-                    last_resolution_attempt_at_ms: self
-                        .last_resolution_attempt_at_ms
-                        .get(&lxmf_destination_hex)
-                        .copied(),
-                    last_ready_at_ms: self.last_ready_at_ms.get(&lxmf_destination_hex).copied(),
-                    last_seen_at_ms: record.received_at_ms,
-                    announce_last_seen_at_ms: None,
-                    lxmf_last_seen_at_ms: Some(record.received_at_ms),
-                });
-            }
         }
 
         peers.sort_by(|left, right| right.last_seen_at_ms.cmp(&left.last_seen_at_ms));
@@ -718,6 +691,68 @@ fn is_fresh(timestamp_ms: Option<u64>, now_ms: u64) -> bool {
         .is_some_and(|timestamp| (now_ms - timestamp) <= PEER_READY_FRESHNESS_MS)
 }
 
+fn parse_capability_tokens(app_data: &str) -> Vec<String> {
+    app_data
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn supports_mission_traffic(app_data: Option<&str>) -> bool {
+    let tokens = app_data
+        .map(parse_capability_tokens)
+        .unwrap_or_default();
+    REQUIRED_MISSION_CAPABILITIES
+        .iter()
+        .all(|required| tokens.iter().any(|token| token == required))
+}
+
+fn peer_has_live_presence(
+    active_link: bool,
+    announce_last_seen_at_ms: Option<u64>,
+    lxmf_last_seen_at_ms: Option<u64>,
+    last_ready_at_ms: Option<u64>,
+    now_ms: u64,
+) -> bool {
+    active_link
+        || is_fresh(announce_last_seen_at_ms, now_ms)
+        || is_fresh(lxmf_last_seen_at_ms, now_ms)
+        || is_fresh(last_ready_at_ms, now_ms)
+}
+
+fn peer_is_stale(
+    active_link: bool,
+    announce_last_seen_at_ms: Option<u64>,
+    lxmf_last_seen_at_ms: Option<u64>,
+    last_ready_at_ms: Option<u64>,
+    now_ms: u64,
+) -> bool {
+    if active_link {
+        return false;
+    }
+
+    let latest_known_activity = [
+        announce_last_seen_at_ms.unwrap_or(0),
+        lxmf_last_seen_at_ms.unwrap_or(0),
+        last_ready_at_ms.unwrap_or(0),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0);
+
+    latest_known_activity > 0
+        && !peer_has_live_presence(
+            active_link,
+            announce_last_seen_at_ms,
+            lxmf_last_seen_at_ms,
+            last_ready_at_ms,
+            now_ms,
+        )
+}
+
 fn compatibility_peer_state(
     management_state: PeerManagementState,
     availability_state: PeerAvailabilityState,
@@ -733,6 +768,7 @@ fn peer_availability_state(
     has_app_announce: bool,
     has_lxmf_announce: bool,
     active_link: bool,
+    supports_mission_traffic: bool,
     identity_hex: Option<&String>,
     lxmf_destination_hex: Option<&String>,
     announce_last_seen_at_ms: Option<u64>,
@@ -741,12 +777,18 @@ fn peer_availability_state(
     now_ms: u64,
 ) -> PeerAvailabilityState {
     if identity_hex.is_some() && lxmf_destination_hex.is_some() {
-        let has_live_presence = active_link
-            || is_fresh(announce_last_seen_at_ms, now_ms)
-            || is_fresh(lxmf_last_seen_at_ms, now_ms)
-            || is_fresh(last_ready_at_ms, now_ms);
+        let has_live_presence = peer_has_live_presence(
+            active_link,
+            announce_last_seen_at_ms,
+            lxmf_last_seen_at_ms,
+            last_ready_at_ms,
+            now_ms,
+        );
         if has_live_presence && (has_app_announce || has_lxmf_announce || last_ready_at_ms.is_some()) {
-            return PeerAvailabilityState::Ready;
+            if supports_mission_traffic {
+                return PeerAvailabilityState::Ready;
+            }
+            return PeerAvailabilityState::Resolved;
         }
         return PeerAvailabilityState::Resolved;
     }
@@ -766,6 +808,8 @@ fn peer_change_from_record(record: PeerRecord) -> PeerChange {
         state: record.state,
         management_state: record.management_state,
         availability_state: record.availability_state,
+        communication_ready: record.communication_ready,
+        stale: record.stale,
         active_link: record.active_link,
         last_error: record.last_resolution_error.clone(),
         last_resolution_error: record.last_resolution_error,
@@ -789,7 +833,7 @@ mod tests {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: None,
             hops: 1,
             interface_hex: "iface".into(),
@@ -816,6 +860,8 @@ mod tests {
         assert_eq!(peers[0].state, PeerState::Connected);
         assert_eq!(peers[0].management_state, PeerManagementState::Managed);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
+        assert!(peers[0].communication_ready);
+        assert!(!peers[0].stale);
     }
 
     #[test]
@@ -826,7 +872,7 @@ mod tests {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: None,
             hops: 1,
             interface_hex: "iface".into(),
@@ -883,7 +929,7 @@ mod tests {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -906,6 +952,7 @@ mod tests {
         assert_eq!(peers[0].management_state, PeerManagementState::Unmanaged);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
         assert_eq!(peers[0].state, PeerState::Connected);
+        assert!(peers[0].communication_ready);
     }
 
     #[test]
@@ -945,7 +992,7 @@ mod tests {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: None,
             hops: 1,
             interface_hex: "iface".into(),
@@ -968,7 +1015,7 @@ mod tests {
             destination_hex: "appdest-old".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: Some("Old".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -978,7 +1025,7 @@ mod tests {
             destination_hex: "appdest-new".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: Some("New".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1016,7 +1063,7 @@ mod tests {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1037,5 +1084,56 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
         assert_eq!(peers[0].state, PeerState::Disconnected);
+        assert!(!peers[0].communication_ready);
+        assert!(peers[0].stale);
+    }
+
+    #[test]
+    fn lxmf_only_announce_does_not_create_peer_record() {
+        let mut store = MessagingStore::default();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: current_time_ms(),
+        });
+
+        assert!(store.list_peers().is_empty());
+    }
+
+    #[test]
+    fn peer_without_required_mission_capabilities_is_not_communication_ready() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "R3AKT".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(10),
+        });
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
+        assert!(!peers[0].communication_ready);
+        assert!(!peers[0].stale);
     }
 }
