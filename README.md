@@ -11,9 +11,6 @@ It is designed to be simple enough for anyone to use, even under stress.
 <img width="438" height="881" alt="Dashboard" src="https://github.com/user-attachments/assets/1a5dfce2-8d41-469c-b9b5-ced8377e44ed" />
 <img width="429" height="897" alt="Chat" src="https://github.com/user-attachments/assets/63b48784-5a2f-4fb1-b924-76e7d68fb571" />
 <img width="451" height="878" alt="Positioning" src="https://github.com/user-attachments/assets/62e81b21-30a5-4d32-9051-26327f1083a7" />
-<img width="433" height="898" alt="Status" src="https://github.com/user-attachments/assets/589ab34a-a1f5-4f90-bb2f-3ec5bb7a7520" />
-<img width="442" height="899" alt="Events" src="https://github.com/user-attachments/assets/710f1061-e2a0-4d00-8d1e-56f3ecf44425" />
-
 
 ## What This App Does
 
@@ -25,6 +22,8 @@ It is designed to be simple enough for anyone to use, even under stress.
  
 ## Trust-Based Updates
 
+<img width="433" height="898" alt="Status" src="https://github.com/user-attachments/assets/589ab34a-a1f5-4f90-bb2f-3ec5bb7a7520" />
+
 This app assumes information is updated by the people who know the facts.
 
 - Anyone in the mesh can create a status for someone and update it later.
@@ -33,6 +32,8 @@ This app assumes information is updated by the people who know the facts.
 The goal is one shared, evolving picture of the situation, not “who created the record”.
 
 ## Events / Logs
+
+<img width="442" height="899" alt="Events" src="https://github.com/user-attachments/assets/710f1061-e2a0-4d00-8d1e-56f3ecf44425" />
 
 Alongside statuses, the app supports simple events and logs: short notes about conditions that affect the network or the response (for example, “power is out”, “bridge closed”, or “comms degraded”).
 
