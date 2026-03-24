@@ -751,6 +751,26 @@ async fn peer_destinations_equivalent(
     matches
 }
 
+async fn has_active_propagation_relay(state: &NodeRuntimeState) -> bool {
+    state
+        .active_propagation_node_hex
+        .lock()
+        .await
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+async fn should_skip_direct_lxmf_delivery(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> bool {
+    let Some(peer) = peer_for_any_destination_hex(state, destination_hex).await else {
+        return false;
+    };
+    !peer.active_link
+        && !matches!(peer.availability_state, sdkmsg::PeerAvailabilityState::Ready)
+}
+
 fn propagation_candidate_sort_key(
     announce: &sdkmsg::AnnounceRecord,
     preferred_destination_hex: Option<&str>,
@@ -1346,8 +1366,18 @@ async fn send_lxmf_with_delivery_policy(
 ) -> Result<LxmfSendReport, NodeError> {
     const DIRECT_ATTEMPTS: usize = 3;
     const RETRY_DELAY_MS: u64 = 250;
+    let has_active_relay = has_active_propagation_relay(state).await;
 
-    if force_propagation_only {
+    if force_propagation_only
+        || (has_active_relay
+            && should_skip_direct_lxmf_delivery(state, requested_destination_hex).await)
+    {
+        if !force_propagation_only {
+            info!(
+                "[lxmf][mission] direct route unavailable destination={}; sending immediately via propagation relay",
+                requested_destination_hex,
+            );
+        }
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
@@ -1412,12 +1442,6 @@ async fn send_lxmf_with_delivery_policy(
         }
     }
 
-    let has_active_relay = state
-        .active_propagation_node_hex
-        .lock()
-        .await
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
     if !has_active_relay {
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }

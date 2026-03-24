@@ -242,6 +242,8 @@ Verification:
 
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
+- If the peer is known but is not currently direct-deliverable and an active propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
+- If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
 
 Acknowledgement:
 - Sender success is tracked from the LXMF response path, not just packet send.

@@ -39,6 +39,7 @@ type ReplicationPeer = {
   identityHex?: string;
   label: string;
   announcedName?: string;
+  usePropagationNode?: boolean;
 };
 type ReplicationFailure = {
   stage: ReplicationStage;
@@ -729,9 +730,14 @@ export const useEventsStore = defineStore("events", () => {
     const localIdentity = normalizeHex(nodeStore.status.identityHex);
     const localAppDestination = normalizeHex(nodeStore.status.appDestinationHex);
     const localLxmfDestination = normalizeHex(nodeStore.status.lxmfDestinationHex);
+    const directPeers = nodeStore.connectedEventPeerRoutes;
+    const propagationFallbackPeers = directPeers.length === 0 && nodeStore.bestPropagationNodeHex
+      ? nodeStore.propagationEligibleEventPeerRoutes
+      : [];
+    const selectedPeers = directPeers.length > 0 ? directPeers : propagationFallbackPeers;
     const deliverable: ReplicationPeer[] = [];
 
-    for (const peer of nodeStore.connectedEventPeerRoutes) {
+    for (const peer of selectedPeers) {
       const label = formatPeerLabel(peer);
       const appDestinationHex = normalizeHex(peer.appDestinationHex);
       const lxmfDestinationHex = normalizeHex(peer.lxmfDestinationHex);
@@ -767,14 +773,22 @@ export const useEventsStore = defineStore("events", () => {
         identityHex: peer.identityHex,
         label,
         announcedName: peer.announcedName,
+        usePropagationNode: peer.usePropagationNode,
       });
     }
 
-    if (logMissing && deliverable.length === 0) {
-      nodeStore.logUi(
-        "Debug",
-        `[events] no deliverable event peers. connectedRoutes=${nodeStore.connectedEventPeerRoutes.length} connectedDestinations=${nodeStore.connectedDestinations.length} discoveredPeers=${nodeStore.discoveredPeers.length}.`,
-      );
+    if (logMissing) {
+      if (deliverable.length === 0) {
+        nodeStore.logUi(
+          "Debug",
+          `[events] no deliverable event peers. connectedRoutes=${nodeStore.connectedEventPeerRoutes.length} connectedDestinations=${nodeStore.connectedDestinations.length} discoveredPeers=${nodeStore.discoveredPeers.length}.`,
+        );
+      } else if (directPeers.length === 0 && propagationFallbackPeers.length > 0) {
+        nodeStore.logUi(
+          "Info",
+          `[events] no direct LXMF peer routes are available; using propagation relay ${nodeStore.bestPropagationNodeHex}.`,
+        );
+      }
     }
 
     return deliverable;
@@ -955,9 +969,16 @@ export const useEventsStore = defineStore("events", () => {
     };
   }
 
-  async function sendMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
+  async function sendMissionCommand(
+    destination: string,
+    command: MissionCommandEnvelope,
+    options?: {
+      usePropagationNode?: boolean;
+    },
+  ): Promise<void> {
     await nodeStore.sendBytes(destination, EMPTY_BYTES, {
       fieldsBase64: buildMissionCommandFieldsBase64([command]),
+      usePropagationNode: options?.usePropagationNode,
     });
   }
 
@@ -976,7 +997,9 @@ export const useEventsStore = defineStore("events", () => {
     });
 
     try {
-      await sendMissionCommand(peer.lxmfDestinationHex, command);
+      await sendMissionCommand(peer.lxmfDestinationHex, command, {
+        usePropagationNode: peer.usePropagationNode,
+      });
     } catch (error: unknown) {
       tracker.cancel();
       throw new EventReplicationError(

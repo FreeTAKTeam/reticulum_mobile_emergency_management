@@ -132,10 +132,12 @@ type EventPeerRoute = {
   identityHex?: string;
   label?: string;
   announcedName?: string;
+  usePropagationNode?: boolean;
 };
 type PacketSendOptions = {
   dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
+  usePropagationNode?: boolean;
 };
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
@@ -1843,26 +1845,59 @@ function peerPresenceState(
   return peer.activeLink || peer.availabilityState === "ready" ? "online" : "offline";
 }
 
-function peerCanAcceptMissionTraffic(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "communicationReady">,
+function peerHasKnownLxmfRoute(
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
 ): boolean {
   const appDestinationHex = normalizeDestinationHex(peer.destination);
   const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-  if (
-    !peer.communicationReady
-    || !isValidDestinationHex(appDestinationHex)
-    || !isValidDestinationHex(lxmfDestinationHex)
-    || appDestinationHex === lxmfDestinationHex
-  ) {
-    return false;
-  }
-  return true;
+  return isValidDestinationHex(appDestinationHex)
+    && isValidDestinationHex(lxmfDestinationHex)
+    && appDestinationHex !== lxmfDestinationHex;
+}
+
+function peerHasKnownMissionRoute(
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "verifiedCapability">,
+): boolean {
+  return peer.verifiedCapability && peerHasKnownLxmfRoute(peer);
+}
+
+function peerHasDirectLxmfDelivery(
+  peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
+): boolean {
+  return peer.activeLink || peer.availabilityState === "ready";
+}
+
+function peerCanAcceptMissionTraffic(
+  peer: Pick<
+    DiscoveredPeer,
+    "destination" | "lxmfDestinationHex" | "communicationReady" | "verifiedCapability"
+  >,
+): boolean {
+  return peer.communicationReady && peerHasKnownMissionRoute(peer);
 }
 
 function peerHasEventRoute(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "communicationReady">,
+  peer: Pick<
+    DiscoveredPeer,
+    "destination" | "lxmfDestinationHex" | "communicationReady" | "verifiedCapability"
+  >,
 ): boolean {
   return peerCanAcceptMissionTraffic(peer);
+}
+
+function peerByAnyKnownDestination(
+  peers: Record<string, DiscoveredPeer>,
+  destinationRaw: string,
+): DiscoveredPeer | undefined {
+  const destinationHex = normalizeDestinationHex(destinationRaw);
+  if (!isValidDestinationHex(destinationHex)) {
+    return undefined;
+  }
+  return Object.values(peers).find((peer) =>
+    destinationHex === normalizeDestinationHex(peer.destination)
+      || destinationHex === normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+      || destinationHex === normalizeDestinationHex(peer.identityHex ?? ""),
+  );
 }
 
   const discoveredPeers = computed(() =>
@@ -1884,6 +1919,22 @@ function peerHasEventRoute(
       .filter((peer) => !isLocalPeer(peer))
       .filter((peer) => peerCanAcceptMissionTraffic(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
+
+  const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peerHasKnownMissionRoute(peer))
+      .filter((peer) => !peer.communicationReady)
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+      .map((peer) => ({
+        appDestinationHex: peer.destination,
+        lxmfDestinationHex: peer.lxmfDestinationHex!,
+        identityHex: peer.identityHex,
+        label: peer.label,
+        announcedName: peer.announcedName,
+        usePropagationNode: true,
+      })),
   );
 
   const savedPeers = computed(() =>
@@ -1909,6 +1960,7 @@ function peerHasEventRoute(
         identityHex: peer.identityHex,
         label: peer.label,
         announcedName: peer.announcedName,
+        usePropagationNode: false,
       })),
   );
 
@@ -2015,14 +2067,24 @@ function peerHasEventRoute(
       );
     }
     try {
+      const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
+      const usePropagationNode = options?.usePropagationNode
+        ?? Boolean(
+          bestPropagationNodeHex.value
+          && matchedPeer
+          && !peerHasDirectLxmfDelivery(matchedPeer),
+        );
       logUi(
         "Debug",
-        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
+        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"} propagation=${usePropagationNode}.`,
       );
-      await nodeClient.sendBytes(destinationHex, bytes, options);
+      await nodeClient.sendBytes(destinationHex, bytes, {
+        ...options,
+        usePropagationNode,
+      });
       logUi(
         "Debug",
-        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
+        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength} propagation=${usePropagationNode}.`,
       );
     } catch (error: unknown) {
       throw captureActionError(`Send failed (${destinationHex})`, error);
@@ -2090,6 +2152,9 @@ function peerHasEventRoute(
     destinationHex: string,
     bodyUtf8: string,
     title?: string,
+    options?: {
+      usePropagationNode?: boolean;
+    },
   ): Promise<string> {
     const nodeClient = client.value;
     if (!nodeClient) {
@@ -2099,14 +2164,22 @@ function peerHasEventRoute(
       );
     }
     try {
+      const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
+      const usePropagationNode = options?.usePropagationNode
+        ?? Boolean(
+          bestPropagationNodeHex.value
+          && matchedPeer
+          && !peerHasDirectLxmfDelivery(matchedPeer),
+        );
       logUi(
         "Debug",
-        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength}.`,
+        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength} propagation=${usePropagationNode}.`,
       );
       return await nodeClient.sendLxmf({
         destinationHex,
         bodyUtf8,
         title,
+        usePropagationNode,
       });
     } catch (error: unknown) {
       throw captureActionError(`LXMF send failed (${destinationHex})`, error);
@@ -2206,6 +2279,7 @@ function peerHasEventRoute(
     discoveredPeers,
     savedPeers,
     communicationReadyPeers,
+    propagationEligibleEventPeerRoutes,
     connectedDestinations,
     connectedLinkDestinations,
     connectedEventPeerRoutes,

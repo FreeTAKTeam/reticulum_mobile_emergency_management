@@ -58,6 +58,7 @@ type ReplicationPeer = {
   identityHex?: string;
   label: string;
   announcedName?: string;
+  usePropagationNode?: boolean;
 };
 
 type LegacyMessageReplication =
@@ -340,7 +341,13 @@ export const useMessagesStore = defineStore("messages", () => {
     const seen = new Set<string>();
     const peers: ReplicationPeer[] = [];
 
-    for (const peer of nodeStore.connectedEventPeerRoutes) {
+    const directPeers = nodeStore.connectedEventPeerRoutes;
+    const propagationFallbackPeers = directPeers.length === 0 && nodeStore.bestPropagationNodeHex
+      ? nodeStore.propagationEligibleEventPeerRoutes
+      : [];
+    const selectedPeers = directPeers.length > 0 ? directPeers : propagationFallbackPeers;
+
+    for (const peer of selectedPeers) {
       const appDestinationHex = normalizeHex(peer.appDestinationHex);
       const lxmfDestinationHex = normalizeHex(peer.lxmfDestinationHex);
       const peerIdentity = normalizeHex(peer.identityHex);
@@ -364,11 +371,19 @@ export const useMessagesStore = defineStore("messages", () => {
         identityHex: peer.identityHex,
         label: formatPeerLabel(peer),
         announcedName: peer.announcedName,
+        usePropagationNode: peer.usePropagationNode,
       });
     }
 
-    if (logMissing && peers.length === 0) {
-      nodeStore.logUi("Debug", "[eam] no deliverable LXMF routes are available.");
+    if (logMissing) {
+      if (peers.length === 0) {
+        nodeStore.logUi("Debug", "[eam] no deliverable LXMF routes are available.");
+      } else if (directPeers.length === 0 && propagationFallbackPeers.length > 0) {
+        nodeStore.logUi(
+          "Info",
+          `[eam] no direct LXMF peer routes are available; using propagation relay ${nodeStore.bestPropagationNodeHex}.`,
+        );
+      }
     }
     return peers;
   }
@@ -564,9 +579,13 @@ export const useMessagesStore = defineStore("messages", () => {
 async function sendEamCommand(
   destination: string,
   command: EamCommandEnvelope,
+  options?: {
+    usePropagationNode?: boolean;
+  },
 ): Promise<void> {
   await nodeStore.sendBytes(destination, EMPTY_BYTES, {
     fieldsBase64: buildEamCommandFieldsBase64([command]),
+    usePropagationNode: options?.usePropagationNode,
   });
 }
 
@@ -956,18 +975,20 @@ async function sendEamCommand(
     return { promise, arm, cancel: () => finish() };
   }
 
-async function sendEamCommandAwaitingDelivery(
-  peer: ReplicationPeer,
-  command: EamCommandEnvelope,
-  expected: EamTrackingExpectation,
-): Promise<void> {
+  async function sendEamCommandAwaitingDelivery(
+    peer: ReplicationPeer,
+    command: EamCommandEnvelope,
+    expected: EamTrackingExpectation,
+  ): Promise<void> {
   const tracker = createEamDeliveryTracker(peer, expected);
   try {
     nodeStore.logUi(
       "Debug",
       `[eam] ${expected.commandType} send requested to ${peer.label}; native runtime will handle direct retries and propagation fallback.`,
     );
-    await sendEamCommand(peer.lxmfDestinationHex, command);
+    await sendEamCommand(peer.lxmfDestinationHex, command, {
+      usePropagationNode: peer.usePropagationNode,
+    });
     tracker.arm();
     await tracker.promise;
   } finally {
