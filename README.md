@@ -19,7 +19,7 @@ It is designed to be simple enough for anyone to use, even under stress.
 
 - **Shares status updates** about people or teams (who is OK, who needs help, who is missing, etc.).
 - **Works without any server**. Phones can form a peer-to-peer mesh of trusted peers and share updates directly.
-- **Exchange encrypted Messages with Peers**. 
+- **Exchanges encrypted Chat with Peers**. 
 - **Sends logs of Events**. Short text messages with SITREP.
 - **Stays compatible with RCH (Reticulum Community Hub)** if you want a directory to help discover peers, but it is not required. (in progress)
  
