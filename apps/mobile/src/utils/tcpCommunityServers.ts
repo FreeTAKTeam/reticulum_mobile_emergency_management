@@ -34,6 +34,28 @@ export const TCP_COMMUNITY_SERVERS: TcpCommunityServer[] = [
   { name: "Tidudanka.com", host: "reticulum.tidudanka.com", port: 37500 },
 ];
 
+export const DEFAULT_TCP_COMMUNITY_SERVER = TCP_COMMUNITY_SERVERS[0];
+export const DEFAULT_TCP_COMMUNITY_ENDPOINT = toTcpEndpoint(DEFAULT_TCP_COMMUNITY_SERVER);
+export const DEFAULT_TCP_COMMUNITY_ENDPOINTS = [DEFAULT_TCP_COMMUNITY_ENDPOINT];
+
 export function toTcpEndpoint(server: TcpCommunityServer): string {
   return `${server.host}:${server.port}`;
+}
+
+export function normalizeTcpCommunityClients(
+  value: unknown,
+  fallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+): string[] {
+  const placeholderEndpoint = "rmap.world:4242";
+  const candidateEntries = Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim())
+    : [];
+  const uniqueEntries = [
+    ...new Set(
+      candidateEntries.filter(
+        (entry) => entry.length > 0 && entry.toLowerCase() !== placeholderEndpoint,
+      ),
+    ),
+  ];
+  return uniqueEntries.length > 0 ? uniqueEntries : [...fallback];
 }

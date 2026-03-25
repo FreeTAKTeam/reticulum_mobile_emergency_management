@@ -13,7 +13,6 @@ import {
 
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
-messagesStore.init();
 
 async function announceNow(): Promise<void> {
   try {

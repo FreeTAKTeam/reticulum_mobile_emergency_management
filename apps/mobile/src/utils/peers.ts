@@ -6,6 +6,11 @@ const CONTROL_CHAR_REGEX = /[\u0000-\u001f\u007f]+/g;
 const DISPLAY_NAME_TOKEN_PREFIX = "name=";
 const MAX_DISPLAY_NAME_LENGTH = 64;
 export const TELEMETRY_CAPABILITY = "Telemetry";
+export const REQUIRED_ANNOUNCE_CAPABILITIES = [
+  "R3AKT",
+  "EMergencyMessages",
+  TELEMETRY_CAPABILITY,
+] as const;
 
 export function normalizeDestinationHex(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -103,6 +108,10 @@ export function ensureCapabilityTokens(
   }
 
   return normalizedTokens.join(",");
+}
+
+export function ensureRequiredAnnounceCapabilities(capabilityText: string): string {
+  return ensureCapabilityTokens(capabilityText, [...REQUIRED_ANNOUNCE_CAPABILITIES]);
 }
 
 function isDisplayNameToken(token: string): boolean {

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/reticulum_mobile"]
+members = ["crates/reticulum_mobile", "tools/uniffi-bindgen"]
 resolver = "2"
 
 [patch.crates-io]

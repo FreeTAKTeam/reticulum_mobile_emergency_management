@@ -2,6 +2,11 @@
 
 This diagram shows the end-to-end mobile event replication flow over LXMF, including local creation, peer LXMF destination resolution, Community Hub-compatible mission payload transport, receiver-side application, and acknowledgement handling.
 
+Current mobile behavior differs from the older store-centric sketch below in two important ways:
+- Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
+- When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local app destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
+- Event replication now uses a narrower native fanout policy than EAM replication: it targets saved or explicitly managed peers only, prefers direct-ready mission peers, and only falls back to relay-eligible peers when no direct target is available.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -169,6 +174,9 @@ Transport:
 - LXMF fields used: none.
 
 Routing:
+- Native `upsert_event()` fanout is scoped to saved or explicitly managed peers.
+- If any direct-ready mission peers are available, events are sent only to that direct-ready set.
+- Relay-eligible event sends are used only as a fallback when no direct-ready saved/managed peers exist.
 - Broadcast or direct send over the peer's **app destination** (`r3akt/emergency` path).
 
 ### Event
@@ -354,3 +362,38 @@ Payload mapping:
 Rollback gate:
 - The default build uses the SDK-backed path.
 - `cargo test -p reticulum_mobile --features legacy-lxmf-runtime` keeps the previous direct send implementation available for one release cycle.
+
+## Mobile Runtime Ownership Status
+
+The mobile runtime is now moving toward a Rust-authoritative projection model on device:
+
+- Rust owns the native app-state store, projection versioning, and `ProjectionInvalidated` events.
+- Mobile settings, saved peers, EAMs, events, telemetry positions, and conversation/message projections are queried from native state on mobile builds.
+- Peer availability on mobile now follows the configured stale window instead of a short announce-freshness heuristic. A peer can remain `Ready` without a fresh announce while its app and LXMF destinations are still known and the configured stale window has not expired; `active_link` is tracked separately from availability.
+- TypeScript stores on mobile are being reduced to:
+  - view filters and drafts
+  - command dispatch
+  - query refresh after projection invalidation
+  - platform-only concerns such as geolocation permission UX
+- UI-only preferences such as `clientMode` and `showOnlyCapabilityVerified` remain in TypeScript storage and are not part of the native `AppSettingsRecord`.
+- Fresh installs and empty legacy TCP selections normalize to the first entry in `TCP_COMMUNITY_SERVERS`, so mobile starts with an active TCP community server selected by default.
+- The legacy `rmap.world:4242` placeholder is treated as unset and is normalized to that first community server during migration and settings persistence.
+- Pre-start app-state/projection queries are valid through the JNI bridge; only runtime transport commands still require an initialized node.
+- Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
+
+This cutover is incomplete. Telemetry permission/fix acquisition still originates in TypeScript, and remaining long-session validation must prove that every operational lifecycle is fully native-owned.
+
+## UniFFI Code Generation
+
+The repo now carries a local workspace runner for UniFFI CLI generation:
+
+- package: `tools/uniffi-bindgen`
+- binary: `reticulum_mobile_uniffi_bindgen`
+
+`tools/codegen/generate-uniffi-bindings.ps1` uses this order:
+
+1. use `uniffi-bindgen` from `PATH` if it exists
+2. otherwise run the workspace fallback:
+   - `cargo run -p reticulum_mobile_uniffi_bindgen -- generate --language <swift|kotlin> ...`
+
+This avoids relying on a globally installed `uniffi-bindgen` executable, which is not always present with the UniFFI `0.28.x` crate layout used by this repo.

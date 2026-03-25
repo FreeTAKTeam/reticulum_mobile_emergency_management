@@ -1,3 +1,4 @@
+mod app_state;
 mod announce_compat;
 mod event_bus;
 mod jni_bridge;
@@ -11,11 +12,15 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceRecord, ConversationRecord, HubMode, LogLevel, LxmfDeliveryMethod,
-    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
-    NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
-    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
+    AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord,
+    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubMode, HubSettingsRecord,
+    LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
+    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
+    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    OperationalSummary, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
+    PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest,
+    SendMode, SendOutcome, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

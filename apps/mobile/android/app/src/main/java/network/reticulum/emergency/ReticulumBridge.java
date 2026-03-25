@@ -7,6 +7,7 @@ public final class ReticulumBridge {
 
     private ReticulumBridge() {}
 
+    public static native int initializeStorage(String storageDir);
     public static native int start(String configJson);
     public static native int stop();
     public static native int restart(String configJson);
@@ -27,6 +28,23 @@ public final class ReticulumBridge {
     public static native String listConversationsJson();
     public static native String listMessagesJson(String payloadJson);
     public static native String getLxmfSyncStatusJson();
+    public static native String legacyImportCompletedJson();
+    public static native int importLegacyStateJson(String payloadJson);
+    public static native String getAppSettingsJson();
+    public static native int setAppSettingsJson(String payloadJson);
+    public static native String getSavedPeersJson();
+    public static native int setSavedPeersJson(String payloadJson);
+    public static native String getOperationalSummaryJson();
+    public static native String getEamsJson();
+    public static native int upsertEamJson(String payloadJson);
+    public static native int deleteEamJson(String payloadJson);
+    public static native String getEamTeamSummaryJson(String payloadJson);
+    public static native String getEventsJson();
+    public static native int upsertEventJson(String payloadJson);
+    public static native int deleteEventJson(String payloadJson);
+    public static native String getTelemetryPositionsJson();
+    public static native int recordLocalTelemetryFixJson(String payloadJson);
+    public static native int deleteLocalTelemetryJson(String payloadJson);
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();

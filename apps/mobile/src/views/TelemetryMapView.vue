@@ -10,7 +10,6 @@ import { useTelemetryStore } from "../stores/telemetryStore";
 
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
-telemetryStore.init();
 
 const mapHost = ref<HTMLElement | null>(null);
 let map: MapLibreMap | null = null;

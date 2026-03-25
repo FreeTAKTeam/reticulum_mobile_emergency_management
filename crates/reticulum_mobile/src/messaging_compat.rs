@@ -195,7 +195,7 @@ pub struct StoredOutboundMessage {
     pub message_id_hex: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MessagingStore {
     announce_records: HashMap<String, AnnounceRecord>,
     resolved_app_destination_by_identity: HashMap<String, String>,
@@ -210,9 +210,10 @@ pub struct MessagingStore {
     message_order: Vec<String>,
     outbound_messages: HashMap<String, StoredOutboundMessage>,
     sync_status: SyncStatus,
+    peer_stale_after_ms: u64,
 }
 
-const PEER_READY_FRESHNESS_MS: u64 = 45_000;
+const DEFAULT_PEER_STALE_AFTER_MINUTES: u32 = 30;
 const REQUIRED_MISSION_CAPABILITIES: [&str; 2] = ["r3akt", "emergencymessages"];
 
 impl Default for SyncStatus {
@@ -228,7 +229,32 @@ impl Default for SyncStatus {
     }
 }
 
+impl Default for MessagingStore {
+    fn default() -> Self {
+        Self::new(DEFAULT_PEER_STALE_AFTER_MINUTES)
+    }
+}
+
 impl MessagingStore {
+    pub fn new(stale_after_minutes: u32) -> Self {
+        Self {
+            announce_records: HashMap::new(),
+            resolved_app_destination_by_identity: HashMap::new(),
+            resolved_app_identity_by_destination: HashMap::new(),
+            resolved_lxmf_by_identity: HashMap::new(),
+            managed_destinations: HashSet::new(),
+            active_link_destinations: HashSet::new(),
+            last_resolution_errors: HashMap::new(),
+            last_resolution_attempt_at_ms: HashMap::new(),
+            last_ready_at_ms: HashMap::new(),
+            message_records: HashMap::new(),
+            message_order: Vec::new(),
+            outbound_messages: HashMap::new(),
+            sync_status: SyncStatus::default(),
+            peer_stale_after_ms: u64::from(stale_after_minutes.max(1)) * 60_000,
+        }
+    }
+
     fn update_app_destination_mapping(
         &mut self,
         destination_hex: String,
@@ -279,11 +305,23 @@ impl MessagingStore {
         destination_hex.trim().to_ascii_lowercase()
     }
 
-    pub fn record_announce(&mut self, record: AnnounceRecord) {
+    pub fn record_announce(&mut self, mut record: AnnounceRecord) {
         let destination_hex = normalize_hex(record.destination_hex.as_str());
         let identity_hex = normalize_hex(record.identity_hex.as_str());
         let destination_kind = record.destination_kind.clone();
         let received_at_ms = record.received_at_ms;
+        if let Some(existing) = self.announce_records.get(destination_hex.as_str()) {
+            if existing.destination_kind == record.destination_kind
+                && normalize_hex(existing.identity_hex.as_str()) == identity_hex
+            {
+                if record.app_data.trim().is_empty() && !existing.app_data.trim().is_empty() {
+                    record.app_data = existing.app_data.clone();
+                }
+                if record.display_name.is_none() {
+                    record.display_name = existing.display_name.clone();
+                }
+            }
+        }
         if !destination_hex.is_empty() && !identity_hex.is_empty() {
             if record.destination_kind == "app" {
                 self.update_app_destination_mapping(destination_hex.clone(), identity_hex.clone());
@@ -472,28 +510,24 @@ impl MessagingStore {
             let last_ready_at_ms = self.last_ready_at_ms.get(&destination_hex).copied();
             let peer_app_data = app_record.map(|record| record.app_data.as_str());
             let mission_ready = app_record.is_some() && supports_mission_traffic(peer_app_data);
-            let availability_state = peer_availability_state(
-                app_record.is_some(),
-                lxmf_record.is_some(),
-                active_link,
-                identity_hex.as_ref(),
-                lxmf_destination_hex.as_ref(),
-                app_record.map(|record| record.received_at_ms),
-                lxmf_record.map(|record| record.received_at_ms),
-                last_ready_at_ms,
-                now_ms,
-            );
-            let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
-            let relay_eligible = identity_hex.is_some()
-                && lxmf_destination_hex.is_some()
-                && mission_ready;
             let stale = peer_is_stale(
                 active_link,
                 app_record.map(|record| record.received_at_ms),
                 lxmf_record.map(|record| record.received_at_ms),
                 last_ready_at_ms,
                 now_ms,
+                self.peer_stale_after_ms,
             );
+            let availability_state = peer_availability_state(
+                app_record.is_some(),
+                identity_hex.as_ref(),
+                lxmf_destination_hex.as_ref(),
+                stale,
+            );
+            let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
+            let relay_eligible = identity_hex.is_some()
+                && lxmf_destination_hex.is_some()
+                && mission_ready;
             peers.push(PeerRecord {
                 destination_hex: destination_hex.clone(),
                 identity_hex,
@@ -714,12 +748,6 @@ fn current_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn is_fresh(timestamp_ms: Option<u64>, now_ms: u64) -> bool {
-    timestamp_ms
-        .filter(|timestamp| *timestamp > 0 && now_ms >= *timestamp)
-        .is_some_and(|timestamp| (now_ms - timestamp) <= PEER_READY_FRESHNESS_MS)
-}
-
 fn parse_capability_tokens(app_data: &str) -> Vec<String> {
     app_data
         .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
@@ -739,25 +767,13 @@ fn supports_mission_traffic(app_data: Option<&str>) -> bool {
         .all(|required| tokens.iter().any(|token| token == required))
 }
 
-fn peer_has_live_presence(
-    active_link: bool,
-    announce_last_seen_at_ms: Option<u64>,
-    lxmf_last_seen_at_ms: Option<u64>,
-    last_ready_at_ms: Option<u64>,
-    now_ms: u64,
-) -> bool {
-    active_link
-        || is_fresh(announce_last_seen_at_ms, now_ms)
-        || is_fresh(lxmf_last_seen_at_ms, now_ms)
-        || is_fresh(last_ready_at_ms, now_ms)
-}
-
 fn peer_is_stale(
     active_link: bool,
     announce_last_seen_at_ms: Option<u64>,
     lxmf_last_seen_at_ms: Option<u64>,
     last_ready_at_ms: Option<u64>,
     now_ms: u64,
+    stale_after_ms: u64,
 ) -> bool {
     if active_link {
         return false;
@@ -773,13 +789,7 @@ fn peer_is_stale(
     .unwrap_or(0);
 
     latest_known_activity > 0
-        && !peer_has_live_presence(
-            active_link,
-            announce_last_seen_at_ms,
-            lxmf_last_seen_at_ms,
-            last_ready_at_ms,
-            now_ms,
-        )
+        && now_ms.saturating_sub(latest_known_activity) > stale_after_ms
 }
 
 fn compatibility_peer_state(
@@ -795,27 +805,19 @@ fn compatibility_peer_state(
 
 fn peer_availability_state(
     has_app_announce: bool,
-    has_lxmf_announce: bool,
-    active_link: bool,
     identity_hex: Option<&String>,
     lxmf_destination_hex: Option<&String>,
-    announce_last_seen_at_ms: Option<u64>,
-    lxmf_last_seen_at_ms: Option<u64>,
-    last_ready_at_ms: Option<u64>,
-    now_ms: u64,
+    stale: bool,
 ) -> PeerAvailabilityState {
     if identity_hex.is_some() && lxmf_destination_hex.is_some() {
-        let has_live_presence = peer_has_live_presence(
-            active_link,
-            announce_last_seen_at_ms,
-            lxmf_last_seen_at_ms,
-            last_ready_at_ms,
-            now_ms,
-        );
-        if has_live_presence && (has_app_announce || has_lxmf_announce || last_ready_at_ms.is_some()) {
-            return PeerAvailabilityState::Ready;
+        if !has_app_announce {
+            return PeerAvailabilityState::Resolved;
         }
-        return PeerAvailabilityState::Resolved;
+        return if stale {
+            PeerAvailabilityState::Resolved
+        } else {
+            PeerAvailabilityState::Ready
+        };
     }
     if has_app_announce || identity_hex.is_some() {
         return PeerAvailabilityState::Discovered;
@@ -1123,9 +1125,88 @@ mod tests {
     }
 
     #[test]
-    fn stale_announces_drop_ready_peer_back_to_resolved() {
+    fn ready_peer_stays_ready_without_recent_announce_until_stale_policy_expires() {
         let mut store = MessagingStore::default();
-        let stale = current_time_ms().saturating_sub(PEER_READY_FRESHNESS_MS + 5_000);
+        let stale = current_time_ms().saturating_sub(120_000);
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale,
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale,
+        });
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
+        assert_eq!(peers[0].state, PeerState::Connected);
+        assert!(peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(peers[0].relay_eligible);
+        assert!(!peers[0].stale);
+    }
+
+    #[test]
+    fn empty_app_announce_does_not_erase_mission_capabilities() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(30),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: String::new(),
+            display_name: None,
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(10),
+        });
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].app_data.as_deref(), Some("R3AKT,EMergencyMessages,Telemetry"));
+        assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
+        assert!(peers[0].communication_ready);
+        assert!(peers[0].mission_ready);
+        assert!(peers[0].relay_eligible);
+    }
+
+    #[test]
+    fn ready_peer_drops_to_resolved_once_configured_stale_window_expires() {
+        let mut store = MessagingStore::new(1);
+        let stale = current_time_ms().saturating_sub(70_000);
         store.record_announce(AnnounceRecord {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),

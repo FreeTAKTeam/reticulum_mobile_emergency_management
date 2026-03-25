@@ -32,6 +32,19 @@ export type MessageState =
   | "Cancelled"
   | "Received";
 export type MessageDirection = "Inbound" | "Outbound";
+export type ClientMode = "auto" | "capacitor";
+export type ProjectionScope =
+  | "AppSettings"
+  | "SavedPeers"
+  | "OperationalSummary"
+  | "Peers"
+  | "SyncStatus"
+  | "HubRegistration"
+  | "Eams"
+  | "Events"
+  | "Conversations"
+  | "Messages"
+  | "Telemetry";
 
 export interface NodeConfig {
   name: string;
@@ -39,6 +52,7 @@ export interface NodeConfig {
   tcpClients: string[];
   broadcast: boolean;
   announceIntervalSeconds: number;
+  staleAfterMinutes: number;
   announceCapabilities: string;
   hubMode: HubMode;
   hubIdentityHash?: string;
@@ -219,6 +233,153 @@ export interface SendLxmfRequest {
   sendMode?: SendMode;
 }
 
+export interface HubSettingsRecord {
+  mode: HubMode;
+  identityHash: string;
+  apiBaseUrl: string;
+  apiKey: string;
+  refreshIntervalSeconds: number;
+}
+
+export interface TelemetrySettingsRecord {
+  enabled: boolean;
+  publishIntervalSeconds: number;
+  accuracyThresholdMeters?: number;
+  staleAfterMinutes: number;
+  expireAfterMinutes: number;
+}
+
+export interface AppSettingsRecord {
+  displayName: string;
+  autoConnectSaved: boolean;
+  announceCapabilities: string;
+  tcpClients: string[];
+  broadcast: boolean;
+  announceIntervalSeconds: number;
+  telemetry: TelemetrySettingsRecord;
+  hub: HubSettingsRecord;
+}
+
+export interface SavedPeerRecord {
+  destination: string;
+  label?: string;
+  savedAt: number;
+}
+
+export interface EamSourceRecord {
+  rns_identity: string;
+  display_name?: string;
+}
+
+export interface EamProjectionRecord {
+  callsign: string;
+  groupName: string;
+  securityStatus: string;
+  capabilityStatus: string;
+  preparednessStatus: string;
+  medicalStatus: string;
+  mobilityStatus: string;
+  commsStatus: string;
+  notes?: string;
+  updatedAt: number;
+  deletedAt?: number;
+  eamUid?: string;
+  teamMemberUid?: string;
+  teamUid?: string;
+  reportedAt?: string;
+  reportedBy?: string;
+  overallStatus?: string;
+  confidence?: number;
+  ttlSeconds?: number;
+  source?: EamSourceRecord;
+  syncState?: string;
+  syncError?: string;
+  draftCreatedAt?: number;
+  lastSyncedAt?: number;
+}
+
+export interface EamTeamSummaryRecord {
+  teamUid: string;
+  total: number;
+  activeTotal: number;
+  deletedTotal: number;
+  overallStatus?: string;
+  greenTotal: number;
+  yellowTotal: number;
+  redTotal: number;
+  updatedAt: number;
+}
+
+export interface EventProjectionRecord {
+  command_id: string;
+  source: {
+    rns_identity: string;
+    display_name?: string;
+  };
+  timestamp: string;
+  command_type: string;
+  args: {
+    entry_uid: string;
+    mission_uid: string;
+    content: string;
+    callsign: string;
+    server_time?: string;
+    client_time?: string;
+    keywords: string[];
+    content_hashes: string[];
+    source_identity?: string;
+    source_display_name?: string;
+  };
+  correlation_id?: string;
+  topics: string[];
+  deleted_at?: number;
+  updatedAt: number;
+}
+
+export interface TelemetryPositionRecord {
+  callsign: string;
+  lat: number;
+  lon: number;
+  alt?: number;
+  course?: number;
+  speed?: number;
+  accuracy?: number;
+  updatedAt: number;
+}
+
+export interface LegacyImportPayload {
+  settings?: AppSettingsRecord;
+  savedPeers: SavedPeerRecord[];
+  eams: EamProjectionRecord[];
+  events: EventProjectionRecord[];
+  messages: MessageRecord[];
+  telemetryPositions: TelemetryPositionRecord[];
+}
+
+export interface ProjectionInvalidationEvent {
+  scope: ProjectionScope;
+  key?: string;
+  revision: number;
+  updatedAtMs: number;
+  reason?: string;
+}
+
+export interface OperationalSummary {
+  running: boolean;
+  peerCountTotal: number;
+  peerCountCommunicationReady: number;
+  peerCountMissionReady: number;
+  peerCountRelayEligible: number;
+  savedPeerCount: number;
+  conversationCount: number;
+  messageCount: number;
+  eamCount: number;
+  eventCount: number;
+  telemetryCount: number;
+  activePropagationNodeHex?: string;
+  updatedAtMs: number;
+}
+
 export interface HubDirectoryUpdatedEvent {
   destinations: string[];
   receivedAtMs: number;
@@ -246,6 +407,7 @@ export interface NodeClientEvents {
   messageUpdated: MessageRecord;
   syncUpdated: SyncStatus;
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
+  projectionInvalidated: ProjectionInvalidationEvent;
   log: NodeLogEvent;
   error: NodeErrorEvent;
 }
@@ -271,6 +433,23 @@ export interface ReticulumNodeClient {
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
   getLxmfSyncStatus(): Promise<SyncStatus>;
+  legacyImportCompleted(): Promise<boolean>;
+  importLegacyState(payload: LegacyImportPayload): Promise<void>;
+  getAppSettings(): Promise<AppSettingsRecord | null>;
+  setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getSavedPeers(): Promise<SavedPeerRecord[]>;
+  setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
+  getOperationalSummary(): Promise<OperationalSummary>;
+  getEams(): Promise<EamProjectionRecord[]>;
+  upsertEam(eam: EamProjectionRecord): Promise<void>;
+  deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
+  getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
+  getEvents(): Promise<EventProjectionRecord[]>;
+  upsertEvent(event: EventProjectionRecord): Promise<void>;
+  deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
+  getTelemetryPositions(): Promise<TelemetryPositionRecord[]>;
+  recordLocalTelemetryFix(position: TelemetryPositionRecord): Promise<void>;
+  deleteLocalTelemetry(callsign: string): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -291,6 +470,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   tcpClients: [],
   broadcast: true,
   announceIntervalSeconds: 1800,
+  staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Disabled",
   hubRefreshIntervalSeconds: 3600,
@@ -372,6 +552,23 @@ interface ReticulumNodePlugin {
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
   getLxmfSyncStatus(): Promise<Record<string, unknown>>;
+  legacyImportCompleted(): Promise<{ completed: boolean }>;
+  importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
+  getAppSettings(): Promise<Record<string, unknown>>;
+  setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
+  setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
+  getOperationalSummary(): Promise<Record<string, unknown>>;
+  getEams(): Promise<{ items: Record<string, unknown>[] }>;
+  upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
+  deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
+  getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
+  getEvents(): Promise<{ items: Record<string, unknown>[] }>;
+  upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
+  deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
+  getTelemetryPositions(): Promise<{ items: Record<string, unknown>[] }>;
+  recordLocalTelemetryFix(options: { position: Record<string, unknown> }): Promise<void>;
+  deleteLocalTelemetry(options: { callsign: string }): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -1029,6 +1226,351 @@ function toErrorEvent(raw: Record<string, unknown>): NodeErrorEvent {
   };
 }
 
+function toProjectionInvalidationEvent(raw: Record<string, unknown>): ProjectionInvalidationEvent {
+  return {
+    scope: String(raw.scope ?? "Peers") as ProjectionScope,
+    key: typeof raw.key === "string" ? raw.key : undefined,
+    revision: Number(raw.revision ?? 0),
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
+    reason: typeof raw.reason === "string" ? raw.reason : undefined,
+  };
+}
+
+function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
+  if (!raw || Object.keys(raw).length === 0) {
+    return null;
+  }
+  if ("settings" in raw) {
+    const nested = raw.settings;
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+      return null;
+    }
+    return toAppSettingsRecord(nested as Record<string, unknown>);
+  }
+  const telemetry = (raw.telemetry ?? {}) as Record<string, unknown>;
+  const hub = (raw.hub ?? {}) as Record<string, unknown>;
+  return {
+    displayName: String(raw.displayName ?? ""),
+    autoConnectSaved: Boolean(raw.autoConnectSaved),
+    announceCapabilities: String(raw.announceCapabilities ?? ""),
+    tcpClients: Array.isArray(raw.tcpClients) ? raw.tcpClients.map((entry) => String(entry)) : [],
+    broadcast: Boolean(raw.broadcast),
+    announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
+    telemetry: {
+      enabled: Boolean(telemetry.enabled),
+      publishIntervalSeconds: Number(telemetry.publishIntervalSeconds ?? 10),
+      accuracyThresholdMeters: toOptionalNumber(telemetry.accuracyThresholdMeters),
+      staleAfterMinutes: Number(telemetry.staleAfterMinutes ?? 30),
+      expireAfterMinutes: Number(telemetry.expireAfterMinutes ?? 180),
+    },
+    hub: {
+      mode: String(hub.mode ?? "Disabled") as HubMode,
+      identityHash: String(hub.identityHash ?? ""),
+      apiBaseUrl: String(hub.apiBaseUrl ?? ""),
+      apiKey: String(hub.apiKey ?? ""),
+      refreshIntervalSeconds: Number(hub.refreshIntervalSeconds ?? 3600),
+    },
+  };
+}
+
+function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
+  return {
+    destination: normalizeHex(raw.destination ?? raw.destinationHex ?? ""),
+    label: typeof raw.label === "string" ? raw.label : undefined,
+    savedAt: Number(raw.savedAt ?? raw.saved_at_ms ?? raw.savedAtMs ?? Date.now()),
+  };
+}
+
+function toEamProjectionRecord(raw: Record<string, unknown>): EamProjectionRecord {
+  const source = raw.source && typeof raw.source === "object" && !Array.isArray(raw.source)
+    ? raw.source as Record<string, unknown>
+    : null;
+  return {
+    callsign: String(raw.callsign ?? ""),
+    groupName: String(raw.groupName ?? raw.group_name ?? ""),
+    securityStatus: String(raw.securityStatus ?? raw.security_status ?? "Unknown"),
+    capabilityStatus: String(raw.capabilityStatus ?? raw.capability_status ?? "Unknown"),
+    preparednessStatus: String(raw.preparednessStatus ?? raw.preparedness_status ?? "Unknown"),
+    medicalStatus: String(raw.medicalStatus ?? raw.medical_status ?? "Unknown"),
+    mobilityStatus: String(raw.mobilityStatus ?? raw.mobility_status ?? "Unknown"),
+    commsStatus: String(raw.commsStatus ?? raw.comms_status ?? "Unknown"),
+    notes: typeof raw.notes === "string" ? raw.notes : undefined,
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at_ms ?? Date.now()),
+    deletedAt: toOptionalNumber(raw.deletedAt ?? raw.deleted_at_ms),
+    eamUid: typeof raw.eamUid === "string" ? raw.eamUid : typeof raw.eam_uid === "string" ? raw.eam_uid : undefined,
+    teamMemberUid:
+      typeof raw.teamMemberUid === "string"
+        ? raw.teamMemberUid
+        : typeof raw.team_member_uid === "string"
+          ? raw.team_member_uid
+          : undefined,
+    teamUid:
+      typeof raw.teamUid === "string"
+        ? raw.teamUid
+        : typeof raw.team_uid === "string"
+          ? raw.team_uid
+          : undefined,
+    reportedAt:
+      typeof raw.reportedAt === "string"
+        ? raw.reportedAt
+        : typeof raw.reported_at === "string"
+          ? raw.reported_at
+          : undefined,
+    reportedBy:
+      typeof raw.reportedBy === "string"
+        ? raw.reportedBy
+        : typeof raw.reported_by === "string"
+          ? raw.reported_by
+          : undefined,
+    overallStatus:
+      typeof raw.overallStatus === "string"
+        ? raw.overallStatus
+        : typeof raw.overall_status === "string"
+          ? raw.overall_status
+          : undefined,
+    confidence: toOptionalNumber(raw.confidence),
+    ttlSeconds: toOptionalNumber(raw.ttlSeconds ?? raw.ttl_seconds),
+    source: source
+      ? {
+          rns_identity: String(source.rns_identity ?? source.rnsIdentity ?? ""),
+          display_name:
+            typeof source.display_name === "string"
+              ? source.display_name
+              : typeof source.displayName === "string"
+                ? source.displayName
+                : undefined,
+        }
+      : undefined,
+    syncState:
+      typeof raw.syncState === "string"
+        ? raw.syncState
+        : typeof raw.sync_state === "string"
+          ? raw.sync_state
+          : undefined,
+    syncError:
+      typeof raw.syncError === "string"
+        ? raw.syncError
+        : typeof raw.sync_error === "string"
+          ? raw.sync_error
+          : undefined,
+    draftCreatedAt: toOptionalNumber(raw.draftCreatedAt ?? raw.draft_created_at_ms),
+    lastSyncedAt: toOptionalNumber(raw.lastSyncedAt ?? raw.last_synced_at_ms),
+  };
+}
+
+function eamProjectionRecordToPlugin(record: EamProjectionRecord): Record<string, unknown> {
+  const normalized = toEamProjectionRecord(record as unknown as Record<string, unknown>);
+  return {
+    callsign: normalized.callsign,
+    groupName: normalized.groupName,
+    securityStatus: normalized.securityStatus,
+    capabilityStatus: normalized.capabilityStatus,
+    preparednessStatus: normalized.preparednessStatus,
+    medicalStatus: normalized.medicalStatus,
+    mobilityStatus: normalized.mobilityStatus,
+    commsStatus: normalized.commsStatus,
+    notes: normalized.notes,
+    updatedAt: normalized.updatedAt,
+    deletedAt: normalized.deletedAt,
+    eamUid: normalized.eamUid,
+    teamMemberUid: normalized.teamMemberUid,
+    teamUid: normalized.teamUid,
+    reportedAt: normalized.reportedAt,
+    reportedBy: normalized.reportedBy,
+    overallStatus: normalized.overallStatus,
+    confidence: normalized.confidence,
+    ttlSeconds: normalized.ttlSeconds,
+    source: normalized.source
+      ? {
+          rnsIdentity: normalized.source.rns_identity,
+          displayName: normalized.source.display_name,
+        }
+      : undefined,
+    syncState: normalized.syncState,
+    syncError: normalized.syncError,
+    draftCreatedAt: normalized.draftCreatedAt,
+    lastSyncedAt: normalized.lastSyncedAt,
+  };
+}
+
+function toEamTeamSummaryRecord(raw: Record<string, unknown>): EamTeamSummaryRecord | null {
+  if (!raw || Object.keys(raw).length === 0 || raw.summary === null) {
+    return null;
+  }
+  const source = raw.summary && typeof raw.summary === "object"
+    ? raw.summary as Record<string, unknown>
+    : raw;
+  return {
+    teamUid: String(source.teamUid ?? ""),
+    total: Number(source.total ?? 0),
+    activeTotal: Number(source.activeTotal ?? 0),
+    deletedTotal: Number(source.deletedTotal ?? 0),
+    overallStatus: typeof source.overallStatus === "string" ? source.overallStatus : undefined,
+    greenTotal: Number(source.greenTotal ?? 0),
+    yellowTotal: Number(source.yellowTotal ?? 0),
+    redTotal: Number(source.redTotal ?? 0),
+    updatedAt: Number(source.updatedAt ?? Date.now()),
+  };
+}
+
+function toEventProjectionRecord(raw: Record<string, unknown>): EventProjectionRecord {
+  const source = (raw.source ?? {}) as Record<string, unknown>;
+  const args = (raw.args ?? {}) as Record<string, unknown>;
+  const sourceIdentity = String(
+    source.rns_identity
+      ?? raw.source_identity
+      ?? raw.sourceIdentity
+      ?? args.source_identity
+      ?? args.sourceIdentity
+      ?? "",
+  );
+  const sourceDisplayName =
+    typeof source.display_name === "string"
+      ? source.display_name
+      : typeof raw.source_display_name === "string"
+        ? raw.source_display_name
+        : typeof raw.sourceDisplayName === "string"
+          ? raw.sourceDisplayName
+          : typeof args.source_display_name === "string"
+            ? args.source_display_name
+            : typeof args.sourceDisplayName === "string"
+              ? args.sourceDisplayName
+              : undefined;
+  const entryUid = String(args.entry_uid ?? args.entryUid ?? raw.uid ?? raw.entry_uid ?? raw.entryUid ?? "");
+  const missionUid = String(args.mission_uid ?? args.missionUid ?? raw.mission_uid ?? raw.missionUid ?? "");
+  const content = String(args.content ?? raw.content ?? "");
+  const callsign = String(args.callsign ?? raw.callsign ?? "");
+  const serverTime =
+    typeof args.server_time === "string"
+      ? args.server_time
+      : typeof args.serverTime === "string"
+        ? args.serverTime
+        : typeof raw.server_time === "string"
+          ? raw.server_time
+          : typeof raw.serverTime === "string"
+            ? raw.serverTime
+            : undefined;
+  const clientTime =
+    typeof args.client_time === "string"
+      ? args.client_time
+      : typeof args.clientTime === "string"
+        ? args.clientTime
+        : typeof raw.client_time === "string"
+          ? raw.client_time
+          : typeof raw.clientTime === "string"
+            ? raw.clientTime
+            : undefined;
+  const keywords = Array.isArray(args.keywords)
+    ? args.keywords.map((entry) => String(entry))
+    : Array.isArray(raw.keywords)
+      ? raw.keywords.map((entry) => String(entry))
+      : [];
+  const contentHashes = Array.isArray(args.content_hashes)
+    ? args.content_hashes.map((entry) => String(entry))
+    : Array.isArray(args.contentHashes)
+      ? args.contentHashes.map((entry) => String(entry))
+      : Array.isArray(raw.content_hashes)
+        ? raw.content_hashes.map((entry) => String(entry))
+        : Array.isArray(raw.contentHashes)
+          ? raw.contentHashes.map((entry) => String(entry))
+          : [];
+  return {
+    command_id: String(raw.command_id ?? raw.commandId ?? ""),
+    source: {
+      rns_identity: sourceIdentity,
+      display_name: sourceDisplayName,
+    },
+    timestamp: String(raw.timestamp ?? serverTime ?? clientTime ?? ""),
+    command_type: String(raw.command_type ?? raw.commandType ?? ""),
+    args: {
+      entry_uid: entryUid,
+      mission_uid: missionUid,
+      content,
+      callsign,
+      server_time: serverTime,
+      client_time: clientTime,
+      keywords,
+      content_hashes: contentHashes,
+      source_identity: sourceIdentity || undefined,
+      source_display_name: sourceDisplayName,
+    },
+    correlation_id:
+      typeof raw.correlation_id === "string"
+        ? raw.correlation_id
+        : typeof raw.correlationId === "string"
+          ? raw.correlationId
+          : undefined,
+    topics: Array.isArray(raw.topics) ? raw.topics.map((entry) => String(entry)) : [],
+    deleted_at: toOptionalNumber(raw.deleted_at ?? raw.deletedAt),
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at ?? Date.now()),
+  };
+}
+
+function eventProjectionRecordToPlugin(record: EventProjectionRecord): Record<string, unknown> {
+  const normalized = toEventProjectionRecord(record as unknown as Record<string, unknown>);
+  return {
+    uid: normalized.args.entry_uid,
+    commandId: normalized.command_id,
+    sourceIdentity: normalized.args.source_identity ?? normalized.source.rns_identity,
+    sourceDisplayName: normalized.args.source_display_name ?? normalized.source.display_name,
+    timestamp: normalized.timestamp,
+    commandType: normalized.command_type,
+    missionUid: normalized.args.mission_uid,
+    content: normalized.args.content,
+    callsign: normalized.args.callsign,
+    serverTime: normalized.args.server_time,
+    clientTime: normalized.args.client_time,
+    keywords: normalized.args.keywords,
+    contentHashes: normalized.args.content_hashes,
+    updatedAt: normalized.updatedAt,
+    deletedAt: normalized.deleted_at,
+    correlationId: normalized.correlation_id,
+    topics: normalized.topics,
+  };
+}
+
+function legacyImportPayloadToPlugin(payload: LegacyImportPayload): Record<string, unknown> {
+  return {
+    settings: payload.settings as unknown as Record<string, unknown> | undefined,
+    savedPeers: payload.savedPeers as unknown as Record<string, unknown>[],
+    eams: payload.eams.map(eamProjectionRecordToPlugin),
+    events: payload.events.map(eventProjectionRecordToPlugin),
+    messages: payload.messages as unknown as Record<string, unknown>[],
+    telemetryPositions: payload.telemetryPositions as unknown as Record<string, unknown>[],
+  };
+}
+
+function toTelemetryPositionRecord(raw: Record<string, unknown>): TelemetryPositionRecord {
+  return {
+    callsign: String(raw.callsign ?? ""),
+    lat: Number(raw.lat ?? 0),
+    lon: Number(raw.lon ?? 0),
+    alt: toOptionalNumber(raw.alt),
+    course: toOptionalNumber(raw.course),
+    speed: toOptionalNumber(raw.speed),
+    accuracy: toOptionalNumber(raw.accuracy),
+    updatedAt: Number(raw.updatedAt ?? Date.now()),
+  };
+}
+
+function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary {
+  return {
+    running: Boolean(raw.running),
+    peerCountTotal: Number(raw.peerCountTotal ?? 0),
+    peerCountCommunicationReady: Number(raw.peerCountCommunicationReady ?? 0),
+    peerCountMissionReady: Number(raw.peerCountMissionReady ?? 0),
+    peerCountRelayEligible: Number(raw.peerCountRelayEligible ?? 0),
+    savedPeerCount: Number(raw.savedPeerCount ?? 0),
+    conversationCount: Number(raw.conversationCount ?? 0),
+    messageCount: Number(raw.messageCount ?? 0),
+    eamCount: Number(raw.eamCount ?? 0),
+    eventCount: Number(raw.eventCount ?? 0),
+    telemetryCount: Number(raw.telemetryCount ?? 0),
+    activePropagationNodeHex: toOptionalHex(raw.activePropagationNodeHex),
+    updatedAtMs: Number(raw.updatedAtMs ?? Date.now()),
+  };
+}
+
 function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
@@ -1036,6 +1578,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
     announceIntervalSeconds: config.announceIntervalSeconds,
+    staleAfterMinutes: config.staleAfterMinutes,
     announceCapabilities: config.announceCapabilities,
     hubMode: config.hubMode,
     hubIdentityHash: config.hubIdentityHash,
@@ -1084,9 +1627,13 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("messageUpdated", toMessageRecord);
       await register("syncUpdated", toSyncStatus);
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
+      await register("projectionInvalidated", toProjectionInvalidationEvent);
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
-    })();
+    })().catch((error) => {
+      this.attachPromise = null;
+      throw error;
+    });
 
     return this.attachPromise;
   }
@@ -1222,6 +1769,96 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toSyncStatus(await this.plugin.getLxmfSyncStatus());
   }
 
+  async legacyImportCompleted(): Promise<boolean> {
+    await this.ready();
+    const result = await this.plugin.legacyImportCompleted();
+    return Boolean(result.completed);
+  }
+
+  async importLegacyState(payload: LegacyImportPayload): Promise<void> {
+    await this.ready();
+    await this.plugin.importLegacyState({ payload: legacyImportPayloadToPlugin(payload) });
+  }
+
+  async getAppSettings(): Promise<AppSettingsRecord | null> {
+    await this.ready();
+    return toAppSettingsRecord(await this.plugin.getAppSettings());
+  }
+
+  async setAppSettings(settings: AppSettingsRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
+  }
+
+  async getSavedPeers(): Promise<SavedPeerRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getSavedPeers();
+    return Array.isArray(result.items) ? result.items.map(toSavedPeerRecord) : [];
+  }
+
+  async setSavedPeers(peers: SavedPeerRecord[]): Promise<void> {
+    await this.ready();
+    await this.plugin.setSavedPeers({ savedPeers: peers as unknown as Record<string, unknown>[] });
+  }
+
+  async getOperationalSummary(): Promise<OperationalSummary> {
+    await this.ready();
+    return toOperationalSummary(await this.plugin.getOperationalSummary());
+  }
+
+  async getEams(): Promise<EamProjectionRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getEams();
+    return Array.isArray(result.items) ? result.items.map(toEamProjectionRecord) : [];
+  }
+
+  async upsertEam(eam: EamProjectionRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.upsertEam({ eam: eamProjectionRecordToPlugin(eam) });
+  }
+
+  async deleteEam(callsign: string, deletedAtMs?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteEam({ callsign, deletedAtMs });
+  }
+
+  async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
+    await this.ready();
+    return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
+  }
+
+  async getEvents(): Promise<EventProjectionRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getEvents();
+    return Array.isArray(result.items) ? result.items.map(toEventProjectionRecord) : [];
+  }
+
+  async upsertEvent(event: EventProjectionRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.upsertEvent({ event: eventProjectionRecordToPlugin(event) });
+  }
+
+  async deleteEvent(uid: string, deletedAtMs?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteEvent({ uid, deletedAtMs });
+  }
+
+  async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getTelemetryPositions();
+    return Array.isArray(result.items) ? result.items.map(toTelemetryPositionRecord) : [];
+  }
+
+  async recordLocalTelemetryFix(position: TelemetryPositionRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.recordLocalTelemetryFix({ position: position as unknown as Record<string, unknown> });
+  }
+
+  async deleteLocalTelemetry(callsign: string): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteLocalTelemetry({ callsign });
+  }
+
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
     await this.ready();
     await this.plugin.setAnnounceCapabilities({ capabilityString });
@@ -1246,6 +1883,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     event: K,
     handler: (payload: NodeClientEvents[K]) => void,
   ): () => void {
+    void this.attachListeners().catch(() => undefined);
     return this.emitter.on(event, handler);
   }
 
@@ -1254,7 +1892,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await handle.remove().catch(() => undefined);
     }
     this.listenerHandles = [];
-    await this.plugin.removeAllListeners?.().catch(() => undefined);
+    this.attachPromise = null;
     this.emitter.clear();
   }
 }
@@ -1455,6 +2093,39 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       messagesReceived: 0,
     };
   }
+
+  async legacyImportCompleted(): Promise<boolean> { return false; }
+  async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
+  async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
+  async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getSavedPeers(): Promise<SavedPeerRecord[]> { return []; }
+  async setSavedPeers(_peers: SavedPeerRecord[]): Promise<void> {}
+  async getOperationalSummary(): Promise<OperationalSummary> {
+    return {
+      running: this.status.running,
+      peerCountTotal: 0,
+      peerCountCommunicationReady: 0,
+      peerCountMissionReady: 0,
+      peerCountRelayEligible: 0,
+      savedPeerCount: 0,
+      conversationCount: 0,
+      messageCount: 0,
+      eamCount: 0,
+      eventCount: 0,
+      telemetryCount: 0,
+      updatedAtMs: Date.now(),
+    };
+  }
+  async getEams(): Promise<EamProjectionRecord[]> { return []; }
+  async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
+  async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEvents(): Promise<EventProjectionRecord[]> { return []; }
+  async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
+  async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
+  async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
+  async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
+  async deleteLocalTelemetry(_callsign: string): Promise<void> {}
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
@@ -1755,6 +2426,39 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       messagesReceived: 0,
     };
   }
+
+  async legacyImportCompleted(): Promise<boolean> { return false; }
+  async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
+  async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
+  async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getSavedPeers(): Promise<SavedPeerRecord[]> { return []; }
+  async setSavedPeers(_peers: SavedPeerRecord[]): Promise<void> {}
+  async getOperationalSummary(): Promise<OperationalSummary> {
+    return {
+      running: this.status.running,
+      peerCountTotal: 0,
+      peerCountCommunicationReady: 0,
+      peerCountMissionReady: 0,
+      peerCountRelayEligible: 0,
+      savedPeerCount: 0,
+      conversationCount: 0,
+      messageCount: 0,
+      eamCount: 0,
+      eventCount: 0,
+      telemetryCount: 0,
+      updatedAtMs: Date.now(),
+    };
+  }
+  async getEams(): Promise<EamProjectionRecord[]> { return []; }
+  async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
+  async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEvents(): Promise<EventProjectionRecord[]> { return []; }
+  async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
+  async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
+  async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
+  async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
+  async deleteLocalTelemetry(_callsign: string): Promise<void> {}
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });

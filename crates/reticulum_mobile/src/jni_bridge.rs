@@ -11,10 +11,13 @@ use serde_json::json;
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
-    LxmfFallbackStage, MessageDirection, MessageMethod, MessageState, NodeConfig, NodeError,
-    NodeEvent, NodeStatus, PeerAvailabilityState, PeerManagementState, PeerChange, PeerRecord,
-    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode,
+    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
+    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    PeerAvailabilityState, PeerManagementState, PeerChange, PeerRecord, PeerState,
+    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -24,6 +27,10 @@ const RESULT_ERR: jint = 1;
 struct BridgeState {
     node: Option<Node>,
     subscription: Option<Arc<EventSubscription>>,
+}
+
+fn ensure_node(guard: &mut BridgeState) -> &Node {
+    guard.node.get_or_insert_with(Node::new)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,6 +48,7 @@ struct NodeConfigInput {
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
     announce_interval_seconds: Option<u32>,
+    stale_after_minutes: Option<u32>,
     announce_capabilities: Option<String>,
     hub_mode: Option<String>,
     hub_identity_hash: Option<String>,
@@ -93,6 +101,179 @@ struct SyncRequestInput {
 #[serde(rename_all = "camelCase")]
 struct MessageListInput {
     conversation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyImportInput {
+    settings: Option<AppSettingsInput>,
+    saved_peers: Option<Vec<SavedPeerInput>>,
+    eams: Option<Vec<EamProjectionInput>>,
+    events: Option<Vec<EventProjectionInput>>,
+    messages: Option<Vec<MessageRecordInput>>,
+    telemetry_positions: Option<Vec<TelemetryPositionInput>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSettingsInput {
+    display_name: String,
+    auto_connect_saved: bool,
+    announce_capabilities: String,
+    tcp_clients: Vec<String>,
+    broadcast: bool,
+    announce_interval_seconds: u32,
+    telemetry: TelemetrySettingsInput,
+    hub: HubSettingsInput,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HubSettingsInput {
+    mode: String,
+    identity_hash: String,
+    api_base_url: String,
+    api_key: String,
+    refresh_interval_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TelemetrySettingsInput {
+    enabled: bool,
+    publish_interval_seconds: u32,
+    accuracy_threshold_meters: Option<f64>,
+    stale_after_minutes: u32,
+    expire_after_minutes: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedPeerInput {
+    destination: String,
+    label: Option<String>,
+    saved_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EamSourceInput {
+    rns_identity: String,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EamProjectionInput {
+    callsign: String,
+    group_name: String,
+    security_status: String,
+    capability_status: String,
+    preparedness_status: String,
+    medical_status: String,
+    mobility_status: String,
+    comms_status: String,
+    notes: Option<String>,
+    updated_at: u64,
+    deleted_at: Option<u64>,
+    eam_uid: Option<String>,
+    team_member_uid: Option<String>,
+    team_uid: Option<String>,
+    reported_at: Option<String>,
+    reported_by: Option<String>,
+    overall_status: Option<String>,
+    confidence: Option<f64>,
+    ttl_seconds: Option<u64>,
+    source: Option<EamSourceInput>,
+    sync_state: Option<String>,
+    sync_error: Option<String>,
+    draft_created_at: Option<u64>,
+    last_synced_at: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventProjectionInput {
+    uid: String,
+    command_id: String,
+    source_identity: String,
+    source_display_name: Option<String>,
+    timestamp: String,
+    command_type: String,
+    mission_uid: String,
+    content: String,
+    callsign: String,
+    server_time: Option<String>,
+    client_time: Option<String>,
+    keywords: Vec<String>,
+    content_hashes: Vec<String>,
+    updated_at: u64,
+    deleted_at: Option<u64>,
+    correlation_id: Option<String>,
+    topics: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessageRecordInput {
+    message_id_hex: String,
+    conversation_id: String,
+    direction: String,
+    destination_hex: String,
+    source_hex: Option<String>,
+    title: Option<String>,
+    body_utf8: String,
+    method: String,
+    state: String,
+    detail: Option<String>,
+    sent_at: Option<u64>,
+    received_at: Option<u64>,
+    updated_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TelemetryPositionInput {
+    callsign: String,
+    lat: f64,
+    lon: f64,
+    alt: Option<f64>,
+    course: Option<f64>,
+    speed: Option<f64>,
+    accuracy: Option<f64>,
+    updated_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEamInput {
+    callsign: String,
+    deleted_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEventInput {
+    uid: String,
+    deleted_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedPeersPayload {
+    saved_peers: Vec<SavedPeerInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamUidInput {
+    team_uid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CallsignInput {
+    callsign: String,
 }
 
 fn bridge_state() -> &'static Mutex<BridgeState> {
@@ -204,6 +385,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
         announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
+        stale_after_minutes: input.stale_after_minutes.unwrap_or(30).max(1),
         announce_capabilities: input
             .announce_capabilities
             .map(|v| v.trim().to_string())
@@ -235,6 +417,208 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             }
         }),
         hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initializeStorage(
+    mut env: JNIEnv,
+    _class: JClass,
+    storage_dir: JString,
+) -> jint {
+    clear_last_error();
+    let raw = match jstring_to_rust(&mut env, storage_dir) {
+        Ok(value) => value,
+        Err(error) => {
+            set_last_error("InvalidConfig", error);
+            return RESULT_ERR;
+        }
+    };
+
+    let storage_dir = {
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return RESULT_ERR;
+        }
+    };
+
+    let node = ensure_node(&mut guard);
+    match node.initialize_storage(storage_dir.as_deref()) {
+        Ok(()) => RESULT_OK,
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+fn parse_message_direction(value: &str) -> Result<MessageDirection, NodeError> {
+    match value.trim() {
+        "Inbound" => Ok(MessageDirection::Inbound {}),
+        "Outbound" => Ok(MessageDirection::Outbound {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
+fn parse_message_method(value: &str) -> Result<MessageMethod, NodeError> {
+    match value.trim() {
+        "Direct" => Ok(MessageMethod::Direct {}),
+        "Opportunistic" => Ok(MessageMethod::Opportunistic {}),
+        "Propagated" => Ok(MessageMethod::Propagated {}),
+        "Resource" => Ok(MessageMethod::Resource {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
+fn parse_message_state(value: &str) -> Result<MessageState, NodeError> {
+    match value.trim() {
+        "Queued" => Ok(MessageState::Queued {}),
+        "PathRequested" => Ok(MessageState::PathRequested {}),
+        "LinkEstablishing" => Ok(MessageState::LinkEstablishing {}),
+        "Sending" => Ok(MessageState::Sending {}),
+        "SentDirect" => Ok(MessageState::SentDirect {}),
+        "SentToPropagation" => Ok(MessageState::SentToPropagation {}),
+        "Delivered" => Ok(MessageState::Delivered {}),
+        "Failed" => Ok(MessageState::Failed {}),
+        "TimedOut" => Ok(MessageState::TimedOut {}),
+        "Cancelled" => Ok(MessageState::Cancelled {}),
+        "Received" => Ok(MessageState::Received {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
+fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
+    SavedPeerRecord {
+        destination_hex: input.destination.trim().to_ascii_lowercase(),
+        label: input.label.and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }),
+        saved_at_ms: input.saved_at,
+    }
+}
+
+fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
+    AppSettingsRecord {
+        display_name: input.display_name,
+        auto_connect_saved: input.auto_connect_saved,
+        announce_capabilities: input.announce_capabilities,
+        tcp_clients: input.tcp_clients,
+        broadcast: input.broadcast,
+        announce_interval_seconds: input.announce_interval_seconds,
+        telemetry: TelemetrySettingsRecord {
+            enabled: input.telemetry.enabled,
+            publish_interval_seconds: input.telemetry.publish_interval_seconds,
+            accuracy_threshold_meters: input.telemetry.accuracy_threshold_meters,
+            stale_after_minutes: input.telemetry.stale_after_minutes,
+            expire_after_minutes: input.telemetry.expire_after_minutes,
+        },
+        hub: HubSettingsRecord {
+            mode: parse_hub_mode(Some(input.hub.mode.as_str())),
+            identity_hash: input.hub.identity_hash,
+            api_base_url: input.hub.api_base_url,
+            api_key: input.hub.api_key,
+            refresh_interval_seconds: input.hub.refresh_interval_seconds,
+        },
+    }
+}
+
+fn to_eam_projection_record(input: EamProjectionInput) -> EamProjectionRecord {
+    EamProjectionRecord {
+        callsign: input.callsign,
+        group_name: input.group_name,
+        security_status: input.security_status,
+        capability_status: input.capability_status,
+        preparedness_status: input.preparedness_status,
+        medical_status: input.medical_status,
+        mobility_status: input.mobility_status,
+        comms_status: input.comms_status,
+        notes: input.notes,
+        updated_at_ms: input.updated_at,
+        deleted_at_ms: input.deleted_at,
+        eam_uid: input.eam_uid,
+        team_member_uid: input.team_member_uid,
+        team_uid: input.team_uid,
+        reported_at: input.reported_at,
+        reported_by: input.reported_by,
+        overall_status: input.overall_status,
+        confidence: input.confidence,
+        ttl_seconds: input.ttl_seconds,
+        source: input.source.map(|source| crate::types::EamSourceRecord {
+            rns_identity: source.rns_identity,
+            display_name: source.display_name,
+        }),
+        sync_state: input.sync_state,
+        sync_error: input.sync_error,
+        draft_created_at_ms: input.draft_created_at,
+        last_synced_at_ms: input.last_synced_at,
+    }
+}
+
+fn to_event_projection_record(input: EventProjectionInput) -> EventProjectionRecord {
+    EventProjectionRecord {
+        uid: input.uid,
+        command_id: input.command_id,
+        source_identity: input.source_identity,
+        source_display_name: input.source_display_name,
+        timestamp: input.timestamp,
+        command_type: input.command_type,
+        mission_uid: input.mission_uid,
+        content: input.content,
+        callsign: input.callsign,
+        server_time: input.server_time,
+        client_time: input.client_time,
+        keywords: input.keywords,
+        content_hashes: input.content_hashes,
+        updated_at_ms: input.updated_at,
+        deleted_at_ms: input.deleted_at,
+        correlation_id: input.correlation_id,
+        topics: input.topics,
+    }
+}
+
+fn to_message_record(input: MessageRecordInput) -> Result<MessageRecord, NodeError> {
+    Ok(MessageRecord {
+        message_id_hex: input.message_id_hex,
+        conversation_id: input.conversation_id,
+        direction: parse_message_direction(&input.direction)?,
+        destination_hex: input.destination_hex,
+        source_hex: input.source_hex,
+        title: input.title,
+        body_utf8: input.body_utf8,
+        method: parse_message_method(&input.method)?,
+        state: parse_message_state(&input.state)?,
+        detail: input.detail,
+        sent_at_ms: input.sent_at,
+        received_at_ms: input.received_at,
+        updated_at_ms: input.updated_at,
+    })
+}
+
+fn to_telemetry_position_record(input: TelemetryPositionInput) -> TelemetryPositionRecord {
+    TelemetryPositionRecord {
+        callsign: input.callsign,
+        lat: input.lat,
+        lon: input.lon,
+        alt: input.alt,
+        course: input.course,
+        speed: input.speed,
+        accuracy: input.accuracy,
+        updated_at_ms: input.updated_at,
     }
 }
 
@@ -319,6 +703,156 @@ fn peer_record_json(peer: &PeerRecord) -> serde_json::Value {
         "lastSeenAtMs": peer.last_seen_at_ms,
         "announceLastSeenAtMs": peer.announce_last_seen_at_ms,
         "lxmfLastSeenAtMs": peer.lxmf_last_seen_at_ms
+    })
+}
+
+fn hub_settings_json(settings: &HubSettingsRecord) -> serde_json::Value {
+    json!({
+        "mode": match settings.mode {
+            HubMode::Disabled {} => "Disabled",
+            HubMode::RchLxmf {} => "RchLxmf",
+            HubMode::RchHttp {} => "RchHttp",
+        },
+        "identityHash": settings.identity_hash,
+        "apiBaseUrl": settings.api_base_url,
+        "apiKey": settings.api_key,
+        "refreshIntervalSeconds": settings.refresh_interval_seconds
+    })
+}
+
+fn telemetry_settings_json(settings: &TelemetrySettingsRecord) -> serde_json::Value {
+    json!({
+        "enabled": settings.enabled,
+        "publishIntervalSeconds": settings.publish_interval_seconds,
+        "accuracyThresholdMeters": settings.accuracy_threshold_meters,
+        "staleAfterMinutes": settings.stale_after_minutes,
+        "expireAfterMinutes": settings.expire_after_minutes
+    })
+}
+
+fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
+    json!({
+        "displayName": settings.display_name,
+        "autoConnectSaved": settings.auto_connect_saved,
+        "announceCapabilities": settings.announce_capabilities,
+        "tcpClients": settings.tcp_clients,
+        "broadcast": settings.broadcast,
+        "announceIntervalSeconds": settings.announce_interval_seconds,
+        "telemetry": telemetry_settings_json(&settings.telemetry),
+        "hub": hub_settings_json(&settings.hub)
+    })
+}
+
+fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
+    json!({
+        "destination": peer.destination_hex,
+        "label": peer.label,
+        "savedAt": peer.saved_at_ms
+    })
+}
+
+fn eam_projection_json(record: &EamProjectionRecord) -> serde_json::Value {
+    json!({
+        "callsign": record.callsign,
+        "groupName": record.group_name,
+        "securityStatus": record.security_status,
+        "capabilityStatus": record.capability_status,
+        "preparednessStatus": record.preparedness_status,
+        "medicalStatus": record.medical_status,
+        "mobilityStatus": record.mobility_status,
+        "commsStatus": record.comms_status,
+        "notes": record.notes,
+        "updatedAt": record.updated_at_ms,
+        "deletedAt": record.deleted_at_ms,
+        "eamUid": record.eam_uid,
+        "teamMemberUid": record.team_member_uid,
+        "teamUid": record.team_uid,
+        "reportedAt": record.reported_at,
+        "reportedBy": record.reported_by,
+        "overallStatus": record.overall_status,
+        "confidence": record.confidence,
+        "ttlSeconds": record.ttl_seconds,
+        "source": record.source.as_ref().map(|source| json!({
+            "rns_identity": source.rns_identity,
+            "display_name": source.display_name
+        })),
+        "syncState": record.sync_state,
+        "syncError": record.sync_error,
+        "draftCreatedAt": record.draft_created_at_ms,
+        "lastSyncedAt": record.last_synced_at_ms
+    })
+}
+
+fn event_projection_json(record: &EventProjectionRecord) -> serde_json::Value {
+    json!({
+        "command_id": record.command_id,
+        "source": {
+            "rns_identity": record.source_identity,
+            "display_name": record.source_display_name
+        },
+        "timestamp": record.timestamp,
+        "command_type": record.command_type,
+        "args": {
+            "entry_uid": record.uid,
+            "mission_uid": record.mission_uid,
+            "content": record.content,
+            "callsign": record.callsign,
+            "server_time": record.server_time,
+            "client_time": record.client_time,
+            "keywords": record.keywords,
+            "content_hashes": record.content_hashes,
+            "source_identity": record.source_identity,
+            "source_display_name": record.source_display_name
+        },
+        "correlation_id": record.correlation_id,
+        "topics": record.topics,
+        "deleted_at": record.deleted_at_ms,
+        "updatedAt": record.updated_at_ms
+    })
+}
+
+fn telemetry_position_json(record: &TelemetryPositionRecord) -> serde_json::Value {
+    json!({
+        "callsign": record.callsign,
+        "lat": record.lat,
+        "lon": record.lon,
+        "alt": record.alt,
+        "course": record.course,
+        "speed": record.speed,
+        "accuracy": record.accuracy,
+        "updatedAt": record.updated_at_ms
+    })
+}
+
+fn eam_team_summary_json(summary: &crate::types::EamTeamSummaryRecord) -> serde_json::Value {
+    json!({
+        "teamUid": summary.team_uid,
+        "total": summary.total,
+        "activeTotal": summary.active_total,
+        "deletedTotal": summary.deleted_total,
+        "overallStatus": summary.overall_status,
+        "greenTotal": summary.green_total,
+        "yellowTotal": summary.yellow_total,
+        "redTotal": summary.red_total,
+        "updatedAt": summary.updated_at_ms
+    })
+}
+
+fn operational_summary_json(summary: &crate::types::OperationalSummary) -> serde_json::Value {
+    json!({
+        "running": summary.running,
+        "peerCountTotal": summary.peer_count_total,
+        "peerCountCommunicationReady": summary.peer_count_communication_ready,
+        "peerCountMissionReady": summary.peer_count_mission_ready,
+        "peerCountRelayEligible": summary.peer_count_relay_eligible,
+        "savedPeerCount": summary.saved_peer_count,
+        "conversationCount": summary.conversation_count,
+        "messageCount": summary.message_count,
+        "eamCount": summary.eam_count,
+        "eventCount": summary.event_count,
+        "telemetryCount": summary.telemetry_count,
+        "activePropagationNodeHex": summary.active_propagation_node_hex,
+        "updatedAtMs": summary.updated_at_ms
     })
 }
 
@@ -434,6 +968,22 @@ fn log_level_to_str(level: LogLevel) -> &'static str {
         LogLevel::Info {} => "Info",
         LogLevel::Warn {} => "Warn",
         LogLevel::Error {} => "Error",
+    }
+}
+
+fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
+    match scope {
+        ProjectionScope::AppSettings {} => "AppSettings",
+        ProjectionScope::SavedPeers {} => "SavedPeers",
+        ProjectionScope::OperationalSummary {} => "OperationalSummary",
+        ProjectionScope::Peers {} => "Peers",
+        ProjectionScope::SyncStatus {} => "SyncStatus",
+        ProjectionScope::HubRegistration {} => "HubRegistration",
+        ProjectionScope::Eams {} => "Eams",
+        ProjectionScope::Events {} => "Events",
+        ProjectionScope::Conversations {} => "Conversations",
+        ProjectionScope::Messages {} => "Messages",
+        ProjectionScope::Telemetry {} => "Telemetry",
     }
 }
 
@@ -585,6 +1135,16 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "receivedAtMs": received_at_ms
             }),
         ),
+        NodeEvent::ProjectionInvalidated { invalidation } => (
+            "projectionInvalidated",
+            json!({
+                "scope": projection_scope_to_str(invalidation.scope),
+                "key": invalidation.key,
+                "revision": invalidation.revision,
+                "updatedAtMs": invalidation.updated_at_ms,
+                "reason": invalidation.reason
+            }),
+        ),
         NodeEvent::Log { level, message } => (
             "log",
             json!({
@@ -650,15 +1210,8 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
 
-    if guard.node.is_none() {
-        guard.node = Some(Node::new());
-    }
-
     let subscription = {
-        let node = match guard.node.as_ref() {
-            Some(v) => v,
-            None => return err_result("InternalError", "missing node"),
-        };
+        let node = ensure_node(&mut guard);
         if let Err(err) = node.start(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -715,15 +1268,8 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
 
-    if guard.node.is_none() {
-        guard.node = Some(Node::new());
-    }
-
     let subscription = {
-        let node = match guard.node.as_ref() {
-            Some(v) => v,
-            None => return err_result("InternalError", "missing node"),
-        };
+        let node = ensure_node(&mut guard);
         if let Err(err) = node.restart(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -1279,20 +1825,14 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConv
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
+    let mut guard = match bridge_state().lock() {
         Ok(v) => v,
         Err(_) => {
             set_last_error("InternalError", "bridge lock poisoned");
             return ptr::null_mut();
         }
     };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = ensure_node(&mut guard);
     match node.list_conversations() {
         Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
         Err(err) => {
@@ -1323,20 +1863,14 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
         }
     };
 
-    let guard = match bridge_state().lock() {
+    let mut guard = match bridge_state().lock() {
         Ok(v) => v,
         Err(_) => {
             set_last_error("InternalError", "bridge lock poisoned");
             return ptr::null_mut();
         }
     };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = ensure_node(&mut guard);
     match node.list_messages(payload.conversation_id) {
         Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
         Err(err) => {
@@ -1370,6 +1904,496 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfS
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_legacyImportCompletedJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.legacy_import_completed() {
+        Ok(completed) => ok_json_result(&mut env, &json!({ "completed": completed })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLegacyStateJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: LegacyImportInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid legacy import payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    let messages = match payload
+        .messages
+        .unwrap_or_default()
+        .into_iter()
+        .map(to_message_record)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(v) => v,
+        Err(err) => {
+            set_last_node_error(err);
+            return RESULT_ERR;
+        }
+    };
+    let legacy = LegacyImportPayload {
+        settings: payload.settings.map(to_app_settings_record),
+        saved_peers: payload
+            .saved_peers
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_saved_peer_record)
+            .collect(),
+        eams: payload
+            .eams
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_eam_projection_record)
+            .collect(),
+        events: payload
+            .events
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_event_projection_record)
+            .collect(),
+        messages,
+        telemetry_positions: payload
+            .telemetry_positions
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_telemetry_position_record)
+            .collect(),
+    };
+    match node.import_legacy_state(legacy) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getAppSettingsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_app_settings() {
+        Ok(Some(settings)) => ok_json_result(&mut env, &app_settings_json(&settings)),
+        Ok(None) => ok_json_result(&mut env, &json!({ "settings": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAppSettingsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: AppSettingsInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid settings payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_app_settings(to_app_settings_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSavedPeersJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_saved_peers() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(saved_peer_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSavedPeersJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SavedPeersPayload = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid saved peers payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    let peers = payload.saved_peers.into_iter().map(to_saved_peer_record).collect();
+    match node.set_saved_peers(peers) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getOperationalSummaryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_operational_summary() {
+        Ok(summary) => ok_json_result(&mut env, &operational_summary_json(&summary)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_eams() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(eam_projection_json).collect::<Vec<_>>() })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEamJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: EamProjectionInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid eam payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.upsert_eam(to_eam_projection_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEamJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: DeleteEamInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid eam delete payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_eam(payload.callsign, payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTeamSummaryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: TeamUidInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", format!("invalid eam team summary payload: {e}"));
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_eam_team_summary(payload.team_uid) {
+        Ok(Some(summary)) => ok_json_result(&mut env, &eam_team_summary_json(&summary)),
+        Ok(None) => ok_json_result(&mut env, &json!({ "summary": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEventsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_events() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(event_projection_json).collect::<Vec<_>>() })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEventJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: EventProjectionInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid event payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.upsert_event(to_event_projection_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEventJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: DeleteEventInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid event delete payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_event(payload.uid, payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelemetryPositionsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_telemetry_positions() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(telemetry_position_json).collect::<Vec<_>>() })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordLocalTelemetryFixJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: TelemetryPositionInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid telemetry payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.record_local_telemetry_fix(to_telemetry_position_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLocalTelemetryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: CallsignInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid telemetry delete payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_local_telemetry(payload.callsign) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

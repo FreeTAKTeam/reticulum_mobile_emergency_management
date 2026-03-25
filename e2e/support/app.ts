@@ -1,5 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 
+import { DEFAULT_TCP_COMMUNITY_ENDPOINT } from "../../apps/mobile/src/utils/tcpCommunityServers";
+
 const STORAGE_KEYS = {
   messages: "reticulum.mobile.messages.v1",
   events: "reticulum.mobile.events.v1",
@@ -115,7 +117,7 @@ export const defaultSettings: SettingsSeed = {
   clientMode: "auto",
   autoConnectSaved: true,
   announceCapabilities: "R3AKT,EMergencyMessages",
-  tcpClients: ["rmap.world:4242"],
+  tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
   broadcast: true,
   announceIntervalSeconds: 1800,
   showOnlyCapabilityVerified: true,
@@ -174,5 +176,5 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
 
 export async function gotoApp(page: Page, path: string): Promise<void> {
   await page.goto(path);
-  await expect(page.getByText("Emergency Ops", { exact: true })).toBeVisible();
+  await expect(page.locator("main h1").first()).toBeVisible();
 }

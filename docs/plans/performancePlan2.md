@@ -683,6 +683,34 @@ The UI is consuming operational chatter rather than projections.
 
 ---
 
+## Current Cutover Progress
+
+The current branch has already landed part of the runtime cutover and should be evaluated from that newer baseline:
+
+- mobile now has a native SQLite-backed app-state store in Rust
+- mobile stores query native projections for settings, saved peers, EAMs, events, telemetry, and conversations/messages
+- a single global legacy-import coordinator is replacing the earlier per-slice import flow
+- `nodeStore` no longer acts as a general raw packet/delivery/message relay for other stores
+- UI-only preferences were split away from native runtime settings
+
+The remaining performance work should therefore prioritize:
+
+1. proving long-session native ownership of every operational lifecycle under soak
+2. finishing telemetry cutover so TS keeps only permission UX and local GPS handoff
+3. reducing remaining bridge chatter to projection invalidation plus explicit queries
+4. replacing any remaining raw transport event dependencies in mobile app logic
+
+## Tooling Note
+
+UniFFI binding generation should no longer assume a globally installed `uniffi-bindgen` executable. The supported repo-local path is:
+
+- `powershell -ExecutionPolicy Bypass -File .\\tools\\codegen\\generate-uniffi-bindings.ps1 -Language kotlin`
+- `powershell -ExecutionPolicy Bypass -File .\\tools\\codegen\\generate-uniffi-bindings.ps1 -Language swift`
+
+The codegen script now falls back to the workspace runner in `tools/uniffi-bindgen` when no PATH-level `uniffi-bindgen` is available.
+
+---
+
 ## What TypeScript should look like after refactoring
 
 A healthy TypeScript layer should mostly contain:

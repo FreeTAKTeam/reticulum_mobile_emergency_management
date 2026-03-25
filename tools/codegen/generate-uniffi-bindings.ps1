@@ -22,6 +22,35 @@ $targetOut = Join-Path $repoRoot $OutDir
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 New-Item -ItemType Directory -Force -Path $targetOut | Out-Null
 
+function Invoke-UniffiBindgen {
+  param(
+    [string]$LanguageName,
+    [string]$OutputDir
+  )
+
+  $bindgen = Get-Command uniffi-bindgen -ErrorAction SilentlyContinue
+  if ($bindgen) {
+    Write-Host "Generating UniFFI bindings ($LanguageName) via PATH tool..."
+    uniffi-bindgen generate $udlPath --language $LanguageName --out-dir $OutputDir
+    return
+  }
+
+  Write-Host "Generating UniFFI bindings ($LanguageName) via workspace fallback tool..."
+  $cargoArgs = @(
+    "run",
+    "-p",
+    "reticulum_mobile_uniffi_bindgen",
+    "--",
+    "generate",
+    "--language",
+    $LanguageName,
+    "--out-dir",
+    $OutputDir,
+    $udlPath
+  )
+  cargo @cargoArgs
+}
+
 if ($Language -eq "kotlin") {
   $sdkRoot = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA "Android\Sdk" }
   if (-not (Test-Path $sdkRoot)) {
@@ -108,20 +137,16 @@ foreach ($target in $targets) {
   }
 }
 
-$bindgen = Get-Command uniffi-bindgen -ErrorAction SilentlyContinue
-if ($bindgen) {
-  Write-Host "Generating UniFFI bindings ($Language)..."
-  uniffi-bindgen generate $udlPath --language $Language --out-dir $tempDir
+if ($Language -eq "kotlin" -or $Language -eq "swift") {
+  Invoke-UniffiBindgen -LanguageName $Language -OutputDir $tempDir
   if ($LASTEXITCODE -ne 0) {
     throw "uniffi-bindgen generation failed for $Language"
   }
 
   Write-Host "Copying generated bindings to $targetOut..."
   Copy-Item -Force -Recurse (Join-Path $tempDir "*") $targetOut
-} elseif ($Language -eq "kotlin") {
-  Write-Warning "uniffi-bindgen not found; skipping Kotlin binding generation. Native .so files will still be copied."
 } else {
-  throw "uniffi-bindgen not found in PATH"
+  throw "Unsupported UniFFI target language: $Language"
 }
 
 Write-Host "Copying built native libraries..."

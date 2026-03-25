@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
-test("operators can create, edit, view help, and delete an action message", async ({ page }) => {
+test("operators can create, edit statuses, cycle status, view help, and delete an action message", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -24,9 +24,20 @@ test("operators can create, edit, view help, and delete an action message", asyn
   await expect(messageCard.getByRole("heading", { name: "Bravo-2" })).toBeVisible();
   await expect(messageCard).toContainText("Team: Red");
 
-  page.once("dialog", (dialog) => dialog.accept("BLUE"));
   await messageCard.getByRole("button", { name: "Edit Bravo-2" }).click();
+  await expect(createForm.getByLabel("Call Sign")).toHaveValue("Bravo-2");
+  await createForm.getByLabel("Team color").selectOption("BLUE");
+  await createForm.getByLabel("Security status").selectOption("Yellow");
+  await createForm.getByLabel("Comms status").selectOption("Red");
+  await createForm.getByRole("button", { name: "Save message" }).click();
   await expect(messageCard).toContainText("Team: Blue");
+  await messageCard.getByRole("button", { name: "Show statuses" }).click();
+  await expect(messageCard.locator(".pill-button").filter({ hasText: "Security" })).toContainText("Yellow");
+  await expect(messageCard.locator(".pill-button").filter({ hasText: "Comms" })).toContainText("Red");
+
+  const securityStatusButton = messageCard.locator(".pill-button").filter({ hasText: "Security" });
+  await securityStatusButton.click();
+  await expect(securityStatusButton).toContainText("Red");
 
   await page.getByRole("button", { name: "Open status color help" }).click();
   await expect(page).toHaveURL(/\/messages\/help$/);

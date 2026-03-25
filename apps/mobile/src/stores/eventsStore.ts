@@ -1,91 +1,21 @@
-import { defineStore } from "pinia";
-import { computed, reactive, ref, watch } from "vue";
-import type { LxmfDeliveryEvent, PacketReceivedEvent, SendMode } from "@reticulum/node-client";
-
-import { notifyOperationalUpdate } from "../services/notifications";
-import type { EventRecord } from "../types/domain";
 import {
-  buildMissionCommandFieldsBase64,
-  buildMissionResponseFieldsBase64,
-  createMissionAcceptedPayload,
-  createMissionCommandEnvelope,
-  createMissionEventEnvelope,
-  createMissionRejectedPayload,
-  createMissionResultPayload,
-  parseMissionSyncFields,
-  type MissionCommandEnvelope,
-  type MissionEventEnvelope,
-  type MissionResponsePayload,
-  type MissionResultPayload,
-} from "../utils/missionSync";
+  createReticulumNodeClient,
+  type EventProjectionRecord,
+  type ProjectionInvalidationEvent,
+  type ReticulumNodeClient,
+} from "@reticulum/node-client";
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
+
 import {
   DEFAULT_R3AKT_MISSION_NAME,
   DEFAULT_R3AKT_MISSION_UID,
 } from "../utils/r3akt";
-import { asNumber, asTrimmedString, parseReplicationEnvelope } from "../utils/replicationParser";
+import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 const EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
-const EMPTY_BYTES = new Uint8Array(0);
 const EVENT_TYPE_KEYWORD_PREFIX = "r3akt:event-type:";
-const BACKGROUND_MISSION_HYDRATION_ENABLED = true;
-const FANOUT_CONCURRENCY_LIMIT = 4;
-const EVENT_REPLAY_COOLDOWN_MS = 5 * 60_000;
-
-type UpsertOutcome = "inserted" | "updated" | "ignored";
-type ReplicationStage = "mission.registry.mission.upsert" | "mission.registry.log_entry.upsert";
-type ReplicationPeer = {
-  appDestinationHex: string;
-  lxmfDestinationHex: string;
-  identityHex?: string;
-  label: string;
-  announcedName?: string;
-  sendMode: SendMode;
-};
-type ReplicationFailure = {
-  stage: ReplicationStage;
-  peer: ReplicationPeer;
-  message: string;
-};
-type PendingMissionDeliveryTracker = {
-  peer: ReplicationPeer;
-  expected: {
-    stage: ReplicationStage;
-    correlationId: string;
-    commandId: string;
-    commandType: string;
-    eventUid?: string;
-    missionUid?: string;
-  };
-  settled: boolean;
-  resolve: () => void;
-  reject: (error: EventReplicationError) => void;
-};
-type PeerReplayState = {
-  lastAttemptAt: number;
-  lastEventCount: number;
-  lastNewestEventUpdatedAt: number;
-};
-
-type LegacyEventReplicationMessage =
-  | {
-      kind: "event_snapshot_request";
-      requestedAt: number;
-    }
-  | {
-      kind: "event_snapshot_response";
-      requestedAt: number;
-      events: EventRecord[];
-    }
-  | {
-      kind: "event_upsert";
-      event: EventRecord;
-    }
-  | {
-      kind: "event_delete";
-      uid: string;
-      deletedAt: number;
-    };
 
 type EventTimelineRecord = {
   uid: string;
@@ -95,15 +25,9 @@ type EventTimelineRecord = {
   updatedAt: number;
 };
 
-class EventReplicationError extends Error {
-  readonly failures: ReplicationFailure[];
-
-  constructor(message: string, failures: ReplicationFailure[]) {
-    super(message);
-    this.name = "EventReplicationError";
-    this.failures = failures;
-  }
-}
+type ProjectionClientCache = typeof globalThis & {
+  __reticulumEventsProjectionClient?: ReticulumNodeClient;
+};
 
 function nowMs(): number {
   return Date.now();
@@ -116,7 +40,7 @@ function createEventUid(): string {
   return `evt-${Date.now().toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`;
 }
 
-function createMissionTrackingId(prefix: string, suffix?: string): string {
+function createTrackingId(prefix: string, suffix?: string): string {
   const normalizedSuffix = suffix?.trim();
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return normalizedSuffix
@@ -129,8 +53,8 @@ function createMissionTrackingId(prefix: string, suffix?: string): string {
     : `${prefix}-${Date.now().toString(36)}-${entropy}`;
 }
 
-function normalizeHex(value: string | undefined | null): string {
-  return value?.trim().toLowerCase() ?? "";
+function asTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function toIsoString(value: unknown): string | undefined {
@@ -144,7 +68,7 @@ function toIsoString(value: unknown): string | undefined {
   return undefined;
 }
 
-function toTimestampMs(value: unknown, fallback = Date.now()): number {
+function toTimestampMs(value: unknown, fallback = nowMs()): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value > 1_000_000_000_000 ? Math.floor(value) : Math.floor(value * 1000);
   }
@@ -186,11 +110,7 @@ function normalizeTopics(value: unknown, missionUid: string): string[] {
       .filter((entry) => entry.length > 0)
     : [];
 
-  if (topics.length === 0) {
-    return [missionUid];
-  }
-
-  return [...new Set(topics)];
+  return topics.length > 0 ? [...new Set(topics)] : [missionUid];
 }
 
 function decodeEventType(keywords: string[], fallback = "Incident"): string {
@@ -210,336 +130,133 @@ function encodeEventTypeKeywords(type: string, keywords: string[] = []): string[
   return [...filtered, `${EVENT_TYPE_KEYWORD_PREFIX}${normalizedType}`];
 }
 
-function fallbackCallsign(options: {
-  callsign?: string;
-  sourceDisplayName?: string;
-  sourceIdentity?: string;
-}): string {
-  return options.callsign?.trim()
-    || options.sourceDisplayName?.trim()
-    || options.sourceIdentity?.trim()
-    || "Unknown";
-}
-
-function getEventUid(record: EventRecord): string {
+function getEventUid(record: EventProjectionRecord): string {
   return record.args.entry_uid;
 }
 
-function getEventMissionUid(record: EventRecord): string {
-  return record.args.mission_uid;
-}
-
-function getEventContent(record: EventRecord): string {
+function getEventContent(record: EventProjectionRecord): string {
   return record.args.content;
 }
 
-function getEventKeywords(record: EventRecord): string[] {
-  return normalizeKeywords(record.args.keywords);
+function getEventType(record: EventProjectionRecord): string {
+  return decodeEventType(normalizeKeywords(record.args.keywords), "Incident");
 }
 
-function getEventType(record: EventRecord): string {
-  return decodeEventType(getEventKeywords(record), "Incident");
-}
-
-function getEventSourceIdentity(record: EventRecord): string | undefined {
-  return asTrimmedString(record.args.source_identity) ?? asTrimmedString(record.source.rns_identity);
-}
-
-function getEventSourceDisplayName(record: EventRecord): string | undefined {
-  return asTrimmedString(record.args.source_display_name) ?? asTrimmedString(record.source.display_name);
-}
-
-function getEventUpdatedAt(record: EventRecord): number {
+function getEventUpdatedAt(record: EventProjectionRecord): number {
   return toTimestampMs(
     record.deleted_at
+      ?? record.updatedAt
       ?? record.args.server_time
       ?? record.args.client_time
       ?? record.timestamp,
-    Date.now(),
+    nowMs(),
   );
 }
 
-function getEventMissionCommandType(record: EventRecord): ReplicationStage {
-  return record.command_type === "mission.registry.mission.upsert"
-    ? "mission.registry.mission.upsert"
-    : "mission.registry.log_entry.upsert";
-}
-
-function isDeletedEvent(record: EventRecord): boolean {
+function isDeletedEvent(record: EventProjectionRecord): boolean {
   return typeof record.deleted_at === "number" && Number.isFinite(record.deleted_at);
 }
 
-function toTimelineRecord(record: EventRecord): EventTimelineRecord {
+function toTimelineRecord(record: EventProjectionRecord): EventTimelineRecord {
   return {
     uid: getEventUid(record),
     type: getEventType(record),
     summary: getEventContent(record),
-    callsign: record.args.callsign,
+    callsign: asTrimmedString(record.args.callsign) || "Unknown",
     updatedAt: getEventUpdatedAt(record),
   };
 }
 
-function normalizeEvent(entry: Partial<EventRecord> & Record<string, unknown>): EventRecord {
-  const sourceRecord = (
-    entry.source && typeof entry.source === "object" && !Array.isArray(entry.source)
-      ? entry.source
-      : {}
-  ) as Record<string, unknown>;
-  const argsRecord = (
-    entry.args && typeof entry.args === "object" && !Array.isArray(entry.args)
-      ? entry.args
-      : {}
-  ) as Record<string, unknown>;
-  const entryUid = String(
-    argsRecord.entry_uid
-      ?? argsRecord.entryUid
-      ?? entry.entry_uid
-      ?? entry.entryUid
-      ?? entry.uid
-      ?? createEventUid(),
-  ).trim();
-  const missionUid = String(
-    argsRecord.mission_uid
-      ?? argsRecord.missionUid
-      ?? entry.mission_uid
-      ?? entry.missionUid
-      ?? entry.mission_id
-      ?? DEFAULT_R3AKT_MISSION_UID,
-  ).trim() || DEFAULT_R3AKT_MISSION_UID;
-  const keywords = encodeEventTypeKeywords(
-    String(
-      entry.type
-        ?? argsRecord.type
-        ?? decodeEventType(normalizeKeywords(argsRecord.keywords ?? entry.keywords), "Incident"),
-    ).trim() || "Incident",
-    normalizeKeywords(argsRecord.keywords ?? entry.keywords),
-  );
-  const content = String(
-    argsRecord.content
-      ?? entry.content
-      ?? entry.summary
-      ?? "",
-  ).trim();
-  const sourceIdentity = asTrimmedString(
-    argsRecord.source_identity
-      ?? entry.sourceIdentity
-      ?? entry.source_identity
-      ?? entry.rns_identity
-      ?? sourceRecord.rns_identity,
-  );
-  const sourceDisplayName = asTrimmedString(
-    argsRecord.source_display_name
-      ?? entry.sourceDisplayName
-      ?? entry.source_display_name
-      ?? entry.display_name
-      ?? sourceRecord.display_name,
-  );
-  const callsign = fallbackCallsign({
-    callsign: asTrimmedString(
-      argsRecord.callsign
-        ?? entry.callsign
-        ?? entry.source_callsign
-        ?? entry.sourceCallsign,
-    ),
-    sourceDisplayName,
-    sourceIdentity,
-  });
-  const deletedAt = asNumber(entry.deleted_at ?? entry.deletedAt, 0) || undefined;
-  const updatedAt = asNumber(
-    entry.updatedAt
-      ?? entry.updated_at
-      ?? deletedAt
-      ?? argsRecord.server_time
-      ?? entry.serverTime
-      ?? entry.server_time
-      ?? argsRecord.client_time
-      ?? entry.clientTime
-      ?? entry.client_time
-      ?? entry.timestamp
-      ?? entry.created_at,
-    Date.now(),
-  );
-  const timestamp = toIsoString(entry.timestamp ?? updatedAt) ?? new Date(updatedAt).toISOString();
-  const serverTime = toIsoString(
-    argsRecord.server_time
-      ?? entry.serverTime
-      ?? entry.server_time
-      ?? entry.servertime
-      ?? timestamp,
-  ) ?? timestamp;
-  const clientTime = toIsoString(
-    argsRecord.client_time
-      ?? entry.clientTime
-      ?? entry.client_time
-      ?? entry.clienttime,
-  );
+function normalizeEvent(entry: EventProjectionRecord | Record<string, unknown>): EventProjectionRecord {
+  const raw = entry as Record<string, unknown>;
+  const rawSource = (raw.source ?? {}) as Record<string, unknown>;
+  const rawArgs = (raw.args ?? {}) as Record<string, unknown>;
+
+  const entryUid = asTrimmedString(rawArgs.entry_uid)
+    || asTrimmedString(rawArgs.entryUid)
+    || asTrimmedString(raw.entry_uid)
+    || asTrimmedString(raw.entryUid)
+    || asTrimmedString(raw.uid)
+    || createEventUid();
+  const missionUid = asTrimmedString(rawArgs.mission_uid)
+    || asTrimmedString(rawArgs.missionUid)
+    || asTrimmedString(raw.mission_uid)
+    || asTrimmedString(raw.missionUid)
+    || DEFAULT_R3AKT_MISSION_UID;
+  const updatedAt = toTimestampMs(raw.updatedAt ?? raw.deleted_at ?? raw.deletedAt, nowMs());
+  const content = asTrimmedString(rawArgs.content)
+    || asTrimmedString(raw.content)
+    || asTrimmedString(raw.summary);
+  const sourceIdentity = asTrimmedString(rawArgs.source_identity)
+    || asTrimmedString(rawArgs.sourceIdentity)
+    || asTrimmedString(rawSource.rns_identity)
+    || asTrimmedString(raw.sourceIdentity)
+    || "mobile";
+  const sourceDisplayName = asTrimmedString(rawArgs.source_display_name)
+    || asTrimmedString(rawArgs.sourceDisplayName)
+    || asTrimmedString(rawSource.display_name)
+    || asTrimmedString(raw.sourceDisplayName);
+  const callsign = asTrimmedString(rawArgs.callsign)
+    || asTrimmedString(raw.callsign)
+    || sourceDisplayName
+    || "Unknown";
+  const baseKeywords = normalizeKeywords(rawArgs.keywords ?? raw.keywords);
+  const normalizedType = asTrimmedString(raw.type) || decodeEventType(baseKeywords, "Incident");
+  const serverTime = toIsoString(rawArgs.server_time)
+    ?? toIsoString(rawArgs.serverTime)
+    ?? toIsoString(raw.serverTime)
+    ?? new Date(updatedAt).toISOString();
+  const clientTime = toIsoString(rawArgs.client_time)
+    ?? toIsoString(rawArgs.clientTime)
+    ?? toIsoString(raw.clientTime)
+    ?? serverTime;
 
   return {
-    command_id: asTrimmedString(entry.command_id ?? entry.commandId) ?? createMissionTrackingId("log-entry", entryUid),
+    command_id: asTrimmedString(raw.command_id)
+      || asTrimmedString(raw.commandId)
+      || createTrackingId("log-entry", entryUid),
     source: {
-      rns_identity: sourceIdentity || "mobile",
+      rns_identity: sourceIdentity,
       display_name: sourceDisplayName || undefined,
     },
-    timestamp,
-    command_type: asTrimmedString(entry.command_type ?? entry.commandType) ?? "mission.registry.log_entry.upsert",
+    timestamp: toIsoString(raw.timestamp) ?? serverTime,
+    command_type: asTrimmedString(raw.command_type) || "mission.registry.log_entry.upsert",
     args: {
       entry_uid: entryUid,
       mission_uid: missionUid,
       content,
       callsign,
       server_time: serverTime,
-      client_time: clientTime || undefined,
-      keywords,
-      content_hashes: normalizeContentHashes(argsRecord.content_hashes ?? entry.content_hashes),
+      client_time: clientTime,
+      keywords: encodeEventTypeKeywords(normalizedType, baseKeywords),
+      content_hashes: normalizeContentHashes(
+        rawArgs.content_hashes ?? rawArgs.contentHashes ?? raw.content_hashes ?? raw.contentHashes,
+      ),
       source_identity: sourceIdentity || undefined,
       source_display_name: sourceDisplayName || undefined,
     },
-    correlation_id: asTrimmedString(entry.correlation_id ?? entry.correlationId) ?? undefined,
-    topics: normalizeTopics(entry.topics, missionUid),
-    deleted_at: deletedAt,
+    correlation_id: asTrimmedString(raw.correlation_id) || undefined,
+    topics: normalizeTopics(raw.topics, missionUid),
+    deleted_at:
+      typeof raw.deleted_at === "number"
+        ? raw.deleted_at
+        : typeof raw.deletedAt === "number"
+          ? raw.deletedAt
+          : undefined,
+    updatedAt,
   };
 }
 
-function mergeEvents(current: EventRecord | undefined, incoming: EventRecord): EventRecord {
-  if (!current) {
-    return incoming;
-  }
-
-  return normalizeEvent({
-    ...current,
-    ...incoming,
-    source: {
-      ...current.source,
-      ...incoming.source,
-    },
-    args: {
-      ...current.args,
-      ...incoming.args,
-      content_hashes: incoming.args.content_hashes.length > 0
-        ? [...incoming.args.content_hashes]
-        : [...current.args.content_hashes],
-      keywords: incoming.args.keywords.length > 0
-        ? [...incoming.args.keywords]
-        : [...current.args.keywords],
-    },
-    topics: incoming.topics.length > 0 ? [...incoming.topics] : [...current.topics],
-    deleted_at: incoming.deleted_at ?? current.deleted_at,
-  });
-}
-
-function summarizeEvent(record: EventRecord): string {
-  const summary = getEventContent(record).length > 96
-    ? `${getEventContent(record).slice(0, 93)}...`
-    : getEventContent(record);
-  return `${record.args.callsign} | ${getEventType(record)}: ${summary}`;
-}
-
-function notifyIncomingEvent(record: EventRecord, outcome: Exclude<UpsertOutcome, "ignored">, localIdentity: string): void {
-  if (getEventSourceIdentity(record) === localIdentity) {
-    return;
-  }
-
-  const sourceLabel = getEventSourceDisplayName(record)?.trim()
-    || record.args.callsign.trim()
-    || getEventSourceIdentity(record)
-    || "mesh";
-  notifyOperationalUpdate(
-    outcome === "inserted" ? `New event from ${sourceLabel}` : `Updated event from ${sourceLabel}`,
-    summarizeEvent(record),
-  ).catch(() => undefined);
-}
-
-function missionResponseMatches(
-  expected: {
-    correlationId: string;
-    commandId: string;
-  },
-  result: MissionResponsePayload | null,
-): result is MissionResponsePayload {
-  if (!result) {
-    return false;
-  }
-  return result.correlation_id === expected.correlationId || result.command_id === expected.commandId;
-}
-
-function missionCompletionEventType(commandType: string): string | null {
-  switch (commandType) {
-    case "mission.registry.mission.upsert":
-      return "mission.registry.mission.upserted";
-    case "mission.registry.log_entry.upsert":
-      return "mission.registry.log_entry.upserted";
-    default:
-      return null;
-  }
-}
-
-function missionEventMatches(
-  expected: {
-    correlationId: string;
-    commandId: string;
-    commandType: string;
-    eventUid?: string;
-    missionUid?: string;
-  },
-  event: MissionEventEnvelope | null,
-): event is MissionEventEnvelope {
-  if (!event) {
-    return false;
-  }
-
-  const expectedEventType = missionCompletionEventType(expected.commandType);
-  if (!expectedEventType || event.event_type !== expectedEventType) {
-    return false;
-  }
-
-  const meta = event.meta ?? {};
-  const metaCorrelationId = asTrimmedString(meta.correlation_id);
-  const metaCommandId = asTrimmedString(meta.command_id);
-  if (metaCorrelationId || metaCommandId) {
-    return metaCorrelationId === expected.correlationId || metaCommandId === expected.commandId;
-  }
-
-  if (expected.commandType === "mission.registry.mission.upsert") {
-    const missionUid = asTrimmedString(event.payload.mission_uid ?? event.payload.uid);
-    return Boolean(missionUid && missionUid === expected.missionUid);
-  }
-
-  if (expected.commandType === "mission.registry.log_entry.upsert") {
-    const eventUid = asTrimmedString(event.payload.entry_uid ?? event.payload.entryUid);
-    const missionUid = asTrimmedString(event.payload.mission_uid ?? event.payload.missionUid);
-    return Boolean(
-      eventUid
-      && eventUid === expected.eventUid
-      && (!expected.missionUid || missionUid === expected.missionUid),
-    );
-  }
-
-  return false;
-}
-
-function missionResponseDetail(result: MissionResponsePayload): string {
-  if (result.status === "rejected") {
-    return result.reason?.trim() || result.reason_code;
-  }
-  if (result.status === "accepted") {
-    return `accepted at ${result.accepted_at}`;
-  }
-  return "result received";
-}
-
-function loadEvents(): Record<string, EventRecord> {
+function loadWebEvents(): Record<string, EventProjectionRecord> {
   try {
     const raw = localStorage.getItem(EVENT_STORAGE_KEY);
     if (!raw) {
       return {};
     }
-    const parsed = JSON.parse(raw) as Array<Partial<EventRecord> & Record<string, unknown>>;
-    const out: Record<string, EventRecord> = {};
-    for (const item of parsed) {
-      const normalized = normalizeEvent(item);
-      if (!getEventUid(normalized) || !getEventContent(normalized)) {
-        continue;
-      }
+    const parsed = JSON.parse(raw) as Array<Partial<EventProjectionRecord> & Record<string, unknown>>;
+    const out: Record<string, EventProjectionRecord> = {};
+    for (const entry of parsed) {
+      const normalized = normalizeEvent(entry);
       out[getEventUid(normalized)] = normalized;
     }
     return out;
@@ -548,874 +265,59 @@ function loadEvents(): Record<string, EventRecord> {
   }
 }
 
-function saveEvents(records: Record<string, EventRecord>): void {
+function saveWebEvents(records: Record<string, EventProjectionRecord>): void {
   localStorage.setItem(EVENT_STORAGE_KEY, JSON.stringify(Object.values(records)));
 }
 
-function parseLegacyEventReplicationMessage(raw: string): LegacyEventReplicationMessage | null {
-  const envelope = parseReplicationEnvelope(raw);
-  if (!envelope) {
-    return null;
+function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
+  const cache = globalThis as ProjectionClientCache;
+  if (!cache.__reticulumEventsProjectionClient) {
+    cache.__reticulumEventsProjectionClient = createReticulumNodeClient({ mode });
   }
-
-  const { kind, payload } = envelope;
-  switch (kind) {
-    case "event_snapshot_request":
-      return {
-        kind: "event_snapshot_request",
-        requestedAt: asNumber(payload.requestedAt, Date.now()),
-      };
-    case "event_snapshot_response":
-      return {
-        kind: "event_snapshot_response",
-        requestedAt: asNumber(payload.requestedAt, Date.now()),
-        events: Array.isArray(payload.events)
-          ? payload.events.map((entry) => normalizeEvent(entry as Record<string, unknown>))
-          : [],
-      };
-    case "event_upsert":
-      if (!payload.event || typeof payload.event !== "object") {
-        return null;
-      }
-      return {
-        kind: "event_upsert",
-        event: normalizeEvent(payload.event as Record<string, unknown>),
-      };
-    case "event_delete":
-      return {
-        kind: "event_delete",
-        uid: asTrimmedString(payload.uid),
-        deletedAt: asNumber(payload.deletedAt, Date.now()),
-      };
-    default:
-      return null;
-  }
-}
-
-function extractEventsFromMissionPayload(payload: Record<string, unknown>): EventRecord[] {
-  const logEntries = Array.isArray(payload.log_entries)
-    ? payload.log_entries
-    : Array.isArray(payload.logEntries)
-      ? payload.logEntries
-      : null;
-
-  if (logEntries) {
-    return logEntries
-      .map((entry) => (entry && typeof entry === "object" ? normalizeEvent(entry as Record<string, unknown>) : null))
-      .filter((entry): entry is EventRecord => entry !== null && getEventContent(entry).length > 0);
-  }
-
-  if (
-    "entry_uid" in payload
-    || "entryUid" in payload
-    || "content" in payload
-    || "summary" in payload
-  ) {
-    return [normalizeEvent(payload)];
-  }
-
-  return [];
-}
-
-function buildMissionPayload(record: EventRecord): Record<string, unknown> {
-  return {
-    entry_uid: record.args.entry_uid,
-    mission_uid: record.args.mission_uid,
-    content: record.args.content,
-    server_time: record.args.server_time ?? record.timestamp,
-    client_time: record.args.client_time,
-    keywords: [...record.args.keywords],
-    content_hashes: [...record.args.content_hashes],
-    callsign: record.args.callsign,
-    source_identity: record.args.source_identity,
-    source_display_name: record.args.source_display_name,
-  };
-}
-
-function buildDefaultMissionPayload(at = new Date().toISOString()): Record<string, unknown> {
-  return {
-    uid: DEFAULT_R3AKT_MISSION_UID,
-    mission_name: DEFAULT_R3AKT_MISSION_NAME,
-    description: "",
-    topic_id: null,
-    path: null,
-    classification: null,
-    tool: null,
-    keywords: [],
-    parent_uid: null,
-    children: [],
-    feeds: [],
-    zones: [],
-    password_hash: null,
-    default_role: null,
-    mission_priority: null,
-    mission_status: "MISSION_ACTIVE",
-    owner_role: null,
-    token: null,
-    invite_only: false,
-    expiration: null,
-    mission_rde_role: null,
-    created_at: at,
-    updated_at: at,
-  };
+  return cache.__reticulumEventsProjectionClient;
 }
 
 export const useEventsStore = defineStore("events", () => {
-  const byUid = reactive<Record<string, EventRecord>>({});
+  const nodeStore = useNodeStore();
+  const byUid = ref<Record<string, EventProjectionRecord>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
-  const nodeStore = useNodeStore();
-  const peerSyncInFlight = new Set<string>();
-  const pendingMissionTrackers = new Set<PendingMissionDeliveryTracker>();
-  const peerReplayStateByDestination: Record<string, PeerReplayState> = {};
 
-  function persist(): void {
-    saveEvents(byUid);
-  }
+  let refreshPromise: Promise<void> | null = null;
+  const cleanups: Array<() => void> = [];
 
-  function localSourceIdentity(): string {
-    return nodeStore.status.identityHex.trim().toLowerCase();
-  }
-
-  function localCallsign(): string {
-    return nodeStore.settings.displayName.trim();
-  }
-
-  function applyUpsert(record: EventRecord): UpsertOutcome {
-    const normalized = normalizeEvent(record as unknown as Partial<EventRecord> & Record<string, unknown>);
-    if (!getEventUid(normalized) || !getEventContent(normalized)) {
-      return "ignored";
+  function webPersist(): void {
+    if (!supportsNativeNodeRuntime) {
+      saveWebEvents(byUid.value);
     }
-
-    const eventUid = getEventUid(normalized);
-    const existing = byUid[eventUid];
-    if (existing && getEventUpdatedAt(existing) > getEventUpdatedAt(normalized)) {
-      return "ignored";
-    }
-
-    const merged = mergeEvents(existing, normalized);
-    const outcome: UpsertOutcome = existing ? "updated" : "inserted";
-    byUid[eventUid] = merged;
-    persist();
-    return outcome;
   }
 
-  function applyDelete(uid: string, deletedAt: number): void {
-    const eventUid = uid.trim();
-    if (!eventUid) {
+  async function refreshFromNative(): Promise<void> {
+    if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
       return;
     }
-    const existing = byUid[eventUid];
-    if (!existing) {
+    if (refreshPromise) {
+      await refreshPromise;
       return;
     }
-    if (getEventUpdatedAt(existing) > deletedAt) {
-      return;
-    }
-    byUid[eventUid] = normalizeEvent({
-      ...existing,
-      deleted_at: deletedAt,
-      timestamp: new Date(deletedAt).toISOString(),
-    });
-    persist();
-  }
-
-  function snapshotEvents(): EventRecord[] {
-    return Object.values(byUid)
-      .filter((entry) => !isDeletedEvent(entry))
-      .map((entry) => ({ ...entry }));
-  }
-
-  function errorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    return String(error);
-  }
-
-  function formatPeerLabel(peer: {
-    label?: string;
-    announcedName?: string;
-    appDestinationHex: string;
-  }): string {
-    return peer.label?.trim()
-      || peer.announcedName?.trim()
-      || peer.appDestinationHex;
-  }
-
-  function formatPeerRoute(peer: ReplicationPeer): string {
-    return `${peer.label} (app=${peer.appDestinationHex} lxmf=${peer.lxmfDestinationHex}${peer.identityHex ? ` identity=${peer.identityHex}` : ""})`;
-  }
-
-  function isEventDelivery(event: LxmfDeliveryEvent): boolean {
-    return Boolean(event.commandType?.startsWith("mission.registry.log_entry"))
-      || Boolean(event.eventUid);
-  }
-
-  function replicationPeers(logMissing = false): ReplicationPeer[] {
-    const localIdentity = normalizeHex(nodeStore.status.identityHex);
-    const localAppDestination = normalizeHex(nodeStore.status.appDestinationHex);
-    const localLxmfDestination = normalizeHex(nodeStore.status.lxmfDestinationHex);
-    const directPeers = nodeStore.connectedEventPeerRoutes;
-    const propagationPeers = nodeStore.bestPropagationNodeHex
-      ? nodeStore.propagationEligibleEventPeerRoutes
-      : [];
-    const selectedPeers = [...directPeers, ...propagationPeers];
-    const deliverable: ReplicationPeer[] = [];
-    const seenByAppDestination = new Set<string>();
-
-    for (const peer of selectedPeers) {
-      const label = formatPeerLabel(peer);
-      const appDestinationHex = normalizeHex(peer.appDestinationHex);
-      const lxmfDestinationHex = normalizeHex(peer.lxmfDestinationHex);
-      const peerIdentity = normalizeHex(peer.identityHex);
-      if (
-        !appDestinationHex
-        || appDestinationHex === localAppDestination
-        || appDestinationHex === localLxmfDestination
-        || lxmfDestinationHex === localAppDestination
-        || lxmfDestinationHex === localLxmfDestination
-        || (peerIdentity.length > 0 && peerIdentity === localIdentity)
-      ) {
-        if (logMissing) {
-          nodeStore.logUi(
-            "Debug",
-            `[events] skipping self route for ${label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}${peer.identityHex ? ` identity=${peer.identityHex}` : ""}).`,
-          );
-        }
-        continue;
+    const promise = (async () => {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      const records = await client.getEvents();
+      const next: Record<string, EventProjectionRecord> = {};
+      for (const record of records) {
+        const normalized = normalizeEvent(record);
+        next[getEventUid(normalized)] = normalized;
       }
-      if (seenByAppDestination.has(appDestinationHex)) {
-        continue;
-      }
-      if (!peer.lxmfDestinationHex) {
-        if (logMissing) {
-          nodeStore.logUi(
-            "Debug",
-            `[events] peer ${label} is connected on app destination ${peer.appDestinationHex} but has no tracked LXMF delivery destination yet; skipping event fanout until LXMF route is known.`,
-          );
-        }
-        continue;
-      }
-      seenByAppDestination.add(appDestinationHex);
-      deliverable.push({
-        appDestinationHex: peer.appDestinationHex,
-        lxmfDestinationHex: peer.lxmfDestinationHex,
-        identityHex: peer.identityHex,
-        label,
-        announcedName: peer.announcedName,
-        sendMode: peer.sendMode,
-      });
-    }
-
-    if (logMissing) {
-      if (deliverable.length === 0) {
-        nodeStore.logUi(
-          "Debug",
-          `[events] no deliverable event peers. connectedRoutes=${nodeStore.connectedEventPeerRoutes.length} connectedDestinations=${nodeStore.connectedDestinations.length} discoveredPeers=${nodeStore.discoveredPeers.length}.`,
-        );
-      } else if (directPeers.length === 0 && propagationPeers.length > 0) {
-        nodeStore.logUi(
-          "Info",
-          `[events] no direct LXMF peer routes are available; using propagation relay ${nodeStore.bestPropagationNodeHex}.`,
-        );
-      } else if (propagationPeers.length > 0) {
-        nodeStore.logUi(
-          "Info",
-          `[events] using ${directPeers.length} direct route(s) and ${Math.max(propagationPeers.length - directPeers.length, 0)} propagation route(s).`,
-        );
-      }
-    }
-
-    return deliverable;
-  }
-
-  function createReplicationFailure(
-    stage: ReplicationStage,
-    peer: ReplicationPeer,
-    error: unknown,
-  ): ReplicationFailure {
-    return {
-      stage,
-      peer,
-      message: errorMessage(error),
-    };
-  }
-
-  function releaseMissionDeliveryTracker(tracker: PendingMissionDeliveryTracker): void {
-    if (tracker.settled) {
-      return;
-    }
-    tracker.settled = true;
-    pendingMissionTrackers.delete(tracker);
-  }
-
-  function rejectMissionDeliveryTracker(
-    tracker: PendingMissionDeliveryTracker,
-    message: string,
-    detail: string,
-  ): void {
-    releaseMissionDeliveryTracker(tracker);
-    tracker.reject(new EventReplicationError(message, [{
-      stage: tracker.expected.stage,
-      peer: tracker.peer,
-      message: detail,
-    }]));
-  }
-
-  function handlePendingMissionDeliveryEvent(event: LxmfDeliveryEvent): void {
-    if (!isEventDelivery(event) || pendingMissionTrackers.size === 0) {
-      return;
-    }
-
-    for (const tracker of Array.from(pendingMissionTrackers)) {
-      const { expected, peer } = tracker;
-      if (event.correlationId !== expected.correlationId && event.commandId !== expected.commandId) {
-        continue;
-      }
-      if (event.commandType && event.commandType !== expected.commandType) {
-        continue;
-      }
-      if (expected.eventUid && event.eventUid && event.eventUid !== expected.eventUid) {
-        continue;
-      }
-      if (expected.missionUid && event.missionUid && event.missionUid !== expected.missionUid) {
-        continue;
-      }
-      if (normalizeHex(event.destinationHex) !== normalizeHex(peer.lxmfDestinationHex)) {
-        continue;
-      }
-
-      if (event.status === "Sent" || event.status === "SentToPropagation") {
-        nodeStore.logUi(
-          "Debug",
-          `[events] ${expected.stage} ${event.status === "SentToPropagation" ? "queued on propagation relay" : "sent"} to ${formatPeerRoute(peer)} (message ${event.messageIdHex}).`,
-        );
-        continue;
-      }
-
-      if (event.status === "Acknowledged") {
-        releaseMissionDeliveryTracker(tracker);
-        tracker.resolve();
-        continue;
-      }
-
-      const detail = event.detail?.trim() || "delivery failed";
-      rejectMissionDeliveryTracker(
-        tracker,
-        `[events] ${expected.stage} failed for ${formatPeerRoute(peer)}: ${detail}`,
-        detail,
-      );
-    }
-  }
-
-  function handlePendingMissionPacket(packet: PacketReceivedEvent): void {
-    if (pendingMissionTrackers.size === 0) {
-      return;
-    }
-
-    const missionSync = parseMissionSyncFields(packet.fieldsBase64);
-    if (!missionSync) {
-      return;
-    }
-
-    for (const tracker of Array.from(pendingMissionTrackers)) {
-      const { expected, peer } = tracker;
-      const matchingResult = missionResponseMatches(expected, missionSync.result ?? null)
-        ? missionSync.result ?? null
-        : null;
-      const matchingEvent = missionEventMatches(expected, missionSync.event ?? null)
-        ? missionSync.event ?? null
-        : null;
-
-      if (!matchingResult && !matchingEvent) {
-        continue;
-      }
-
-      if (matchingEvent) {
-        nodeStore.logUi(
-          "Debug",
-          `[events] ${expected.stage} completion event ${matchingEvent.event_type} received from ${formatPeerRoute(peer)}.`,
-        );
-      }
-
-      if (!matchingResult) {
-        continue;
-      }
-
-      if (matchingResult.status === "accepted") {
-        nodeStore.logUi(
-          "Debug",
-          `[events] ${expected.stage} accepted by ${formatPeerRoute(peer)} (${missionResponseDetail(matchingResult)}).`,
-        );
-        continue;
-      }
-
-      if (matchingResult.status === "rejected") {
-        const detail = missionResponseDetail(matchingResult);
-        rejectMissionDeliveryTracker(
-          tracker,
-          `[events] ${expected.stage} rejected by ${formatPeerRoute(peer)}: ${detail}`,
-          detail,
-        );
-        continue;
-      }
-
-      nodeStore.logUi(
-        "Debug",
-        `[events] ${expected.stage} result received from ${formatPeerRoute(peer)}.`,
-      );
-    }
-  }
-
-  function createMissionDeliveryTracker(
-    peer: ReplicationPeer,
-    expected: {
-      stage: ReplicationStage;
-      correlationId: string;
-      commandId: string;
-      commandType: string;
-      eventUid?: string;
-      missionUid?: string;
-    },
-  ): {
-    promise: Promise<void>;
-    cancel: () => void;
-  } {
-    let tracker: PendingMissionDeliveryTracker | null = null;
-    const promise = new Promise<void>((resolve, reject) => {
-      tracker = {
-        peer,
-        expected,
-        settled: false,
-        resolve,
-        reject,
-      };
-      pendingMissionTrackers.add(tracker);
-    });
-
-    return {
-      promise,
-      cancel: () => {
-        if (tracker) {
-          releaseMissionDeliveryTracker(tracker);
-        }
-      },
-    };
-  }
-
-  async function sendMissionCommand(
-    destination: string,
-    command: MissionCommandEnvelope,
-    options?: {
-      sendMode?: SendMode;
-    },
-  ): Promise<void> {
-    await nodeStore.sendBytes(destination, EMPTY_BYTES, {
-      fieldsBase64: buildMissionCommandFieldsBase64([command]),
-      sendMode: options?.sendMode,
-    });
-  }
-
-  async function sendMissionCommandAwaitingDelivery(
-    peer: ReplicationPeer,
-    command: MissionCommandEnvelope,
-    stage: ReplicationStage,
-  ): Promise<void> {
-    initReplication();
-    const tracker = createMissionDeliveryTracker(peer, {
-      stage,
-      correlationId: command.correlation_id ?? command.command_id,
-      commandId: command.command_id,
-      commandType: command.command_type,
-      eventUid: asTrimmedString(command.args.entry_uid),
-      missionUid: asTrimmedString(command.args.mission_uid ?? command.args.uid),
-    });
-
+      byUid.value = next;
+    })();
+    refreshPromise = promise;
     try {
-      await sendMissionCommand(peer.lxmfDestinationHex, command, {
-        sendMode: peer.sendMode,
-      });
-    } catch (error: unknown) {
-      tracker.cancel();
-      throw new EventReplicationError(
-        `[events] ${stage} send failed for ${formatPeerRoute(peer)}: ${errorMessage(error)}`,
-        [createReplicationFailure(stage, peer, error)],
-      );
-    }
-
-    await tracker.promise;
-  }
-
-  async function sendMissionResponse(
-    destination: string,
-    result: MissionResponsePayload,
-    event?: MissionEventEnvelope,
-  ): Promise<void> {
-    await nodeStore.sendBytes(destination, EMPTY_BYTES, {
-      fieldsBase64: buildMissionResponseFieldsBase64({ result, event }),
-    });
-  }
-
-  async function requestEventList(destination: string): Promise<void> {
-    const sourceIdentity = localSourceIdentity();
-    if (!sourceIdentity) {
-      return;
-    }
-    const correlationId = createMissionTrackingId("log-list", DEFAULT_R3AKT_MISSION_UID);
-    await sendMissionCommand(destination, createMissionCommandEnvelope({
-      commandId: createMissionTrackingId("log-list-command", DEFAULT_R3AKT_MISSION_UID),
-      sourceIdentity,
-      sourceDisplayName: localCallsign() || undefined,
-      commandType: "mission.registry.log_entry.list",
-      args: { mission_uid: DEFAULT_R3AKT_MISSION_UID },
-      correlationId,
-      topics: [DEFAULT_R3AKT_MISSION_UID],
-    }));
-  }
-
-  async function replicateLogUpsertToPeer(
-    peer: ReplicationPeer,
-    record: EventRecord,
-    options?: {
-      logLevel?: "Info" | "Debug";
-      verb?: "replicated" | "replayed";
-    },
-  ): Promise<void> {
-    const sourceIdentity = localSourceIdentity();
-    if (!sourceIdentity) {
-      return;
-    }
-    const eventUid = getEventUid(record);
-    const routeSuffix = peer.lxmfDestinationHex.slice(0, 8);
-    const correlationId = createMissionTrackingId("log-upsert", `${eventUid}-${routeSuffix}`);
-    await sendMissionCommandAwaitingDelivery(peer, createMissionCommandEnvelope({
-      commandId: createMissionTrackingId("log-upsert-command", `${eventUid}-${routeSuffix}`),
-      sourceIdentity: record.source.rns_identity || sourceIdentity,
-      sourceDisplayName: record.source.display_name ?? (localCallsign() || undefined),
-      commandType: getEventMissionCommandType(record),
-      args: buildMissionPayload(record),
-      correlationId,
-      topics: [...record.topics],
-    }), "mission.registry.log_entry.upsert");
-    nodeStore.logUi(
-      options?.logLevel ?? "Info",
-      `[events] ${options?.verb ?? "replicated"} ${eventUid} to ${formatPeerRoute(peer)}.`,
-    );
-  }
-
-  async function fanoutLogUpsert(record: EventRecord): Promise<void> {
-    const peers = replicationPeers(true);
-    if (peers.length === 0) {
-      if (nodeStore.connectedDestinations.length > 0 || nodeStore.discoveredPeers.length > 0) {
-        nodeStore.logUi(
-          "Warn",
-          `[events] event ${getEventUid(record)} was stored locally but no connected peer route is currently available for fanout.`,
-        );
-      }
-      return;
-    }
-
-    const eventUid = getEventUid(record);
-    const failures: ReplicationFailure[] = [];
-    let successCount = 0;
-    let nextIndex = 0;
-
-    nodeStore.logUi(
-      "Debug",
-      `[events] mission.registry.log_entry.upsert fanout starting for ${eventUid} across ${peers.length} route(s) with concurrency=${Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length)}.`,
-    );
-
-    const worker = async (): Promise<void> => {
-      while (nextIndex < peers.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        const peer = peers[currentIndex];
-        if (!peer) {
-          return;
-        }
-        try {
-          await replicateLogUpsertToPeer(peer, record);
-          successCount += 1;
-        } catch (error: unknown) {
-          nodeStore.logUi(
-            "Error",
-            `[events] failed to send ${eventUid} to ${peer.label} (app=${peer.appDestinationHex}${peer.lxmfDestinationHex ? ` lxmf=${peer.lxmfDestinationHex}` : ""}): ${errorMessage(error)}`,
-          );
-          if (error instanceof EventReplicationError) {
-            failures.push(...error.failures);
-            continue;
-          }
-          failures.push(createReplicationFailure("mission.registry.log_entry.upsert", peer, error));
-        }
-      }
-    };
-
-    await Promise.all(
-      Array.from(
-        { length: Math.min(FANOUT_CONCURRENCY_LIMIT, peers.length) },
-        () => worker(),
-      ),
-    );
-
-    if (successCount === 0) {
-      throw new EventReplicationError(
-        `[events] replicated ${eventUid} to 0/${peers.length} peers.`,
-        failures,
-      );
-    }
-
-    if (failures.length > 0) {
-      nodeStore.logUi(
-        "Warn",
-        `[events] replicated ${eventUid} to ${successCount}/${peers.length} peers; failed routes: ${failures.map((failure) => `${formatPeerRoute(failure.peer)}: ${failure.message}`).join("; ")}`,
-      );
-    }
-  }
-
-  async function hydrateDestination(peer: ReplicationPeer): Promise<void> {
-    if (!BACKGROUND_MISSION_HYDRATION_ENABLED) {
-      return;
-    }
-
-    const sourceIdentity = localSourceIdentity();
-    if (!sourceIdentity) {
-      return;
-    }
-    await requestEventList(peer.lxmfDestinationHex);
-  }
-
-  async function syncPeerEvents(peer: ReplicationPeer): Promise<void> {
-    const destination = normalizeHex(peer.lxmfDestinationHex);
-    if (!destination || peerSyncInFlight.has(destination)) {
-      return;
-    }
-
-    peerSyncInFlight.add(destination);
-    try {
-      const localEvents = snapshotEvents()
-        .sort((a, b) => getEventUpdatedAt(a) - getEventUpdatedAt(b));
-      const newestEventUpdatedAt = localEvents.length > 0
-        ? getEventUpdatedAt(localEvents[localEvents.length - 1]!)
-        : 0;
-      const replayState = peerReplayStateByDestination[destination];
-      const shouldReplayLocalState = !replayState
-        || replayState.lastEventCount !== localEvents.length
-        || replayState.lastNewestEventUpdatedAt !== newestEventUpdatedAt
-        || nowMs() - replayState.lastAttemptAt >= EVENT_REPLAY_COOLDOWN_MS;
-
-      peerReplayStateByDestination[destination] = {
-        lastAttemptAt: nowMs(),
-        lastEventCount: replayState?.lastEventCount ?? 0,
-        lastNewestEventUpdatedAt: replayState?.lastNewestEventUpdatedAt ?? 0,
-      };
-
-      if (shouldReplayLocalState && localEvents.length > 0) {
-        nodeStore.logUi(
-          "Debug",
-          `[events] replaying ${localEvents.length} local event(s) to ${formatPeerRoute(peer)} before hydration.`,
-        );
-        for (const record of localEvents) {
-          await replicateLogUpsertToPeer(peer, record, {
-            logLevel: "Debug",
-            verb: "replayed",
-          });
-        }
-        peerReplayStateByDestination[destination] = {
-          lastAttemptAt: nowMs(),
-          lastEventCount: localEvents.length,
-          lastNewestEventUpdatedAt: newestEventUpdatedAt,
-        };
-      } else if (localEvents.length > 0) {
-        nodeStore.logUi(
-          "Debug",
-          `[events] replay skipped for ${formatPeerRoute(peer)}; requesting hydration only.`,
-        );
-      }
-      await requestEventList(peer.lxmfDestinationHex);
+      await promise;
     } finally {
-      peerSyncInFlight.delete(destination);
-    }
-  }
-
-  function resultPayloadEvents(result: MissionResultPayload | null, event: MissionEventEnvelope | null): EventRecord[] {
-    if (event && (
-      event.event_type === "mission.registry.log_entry.upserted"
-      || event.event_type === "mission.registry.log_entry.listed"
-    )) {
-      return extractEventsFromMissionPayload(event.payload);
-    }
-
-    if (!result || result.status !== "result") {
-      return [];
-    }
-
-    return extractEventsFromMissionPayload(result.result);
-  }
-
-  async function handleMissionCommand(destination: string, command: MissionCommandEnvelope): Promise<void> {
-    if (
-      !command.command_type.startsWith("mission.registry.mission.")
-      && !command.command_type.startsWith("mission.registry.log_entry.")
-    ) {
-      return;
-    }
-
-    const localIdentity = localSourceIdentity();
-    const localDisplayName = localCallsign() || undefined;
-    const accepted = createMissionAcceptedPayload({
-      commandId: command.command_id,
-      correlationId: command.correlation_id,
-      byIdentity: localIdentity || undefined,
-    });
-
-    if (command.command_type === "mission.registry.mission.upsert") {
-      const missionUid = String(command.args.mission_uid ?? command.args.uid ?? "").trim() || DEFAULT_R3AKT_MISSION_UID;
-      if (missionUid !== DEFAULT_R3AKT_MISSION_UID) {
-        await sendMissionResponse(
-          destination,
-          createMissionRejectedPayload({
-            commandId: command.command_id,
-            correlationId: command.correlation_id,
-            reasonCode: "invalid_payload",
-            reason: "Only the Default mission is supported on mobile.",
-          }),
-        );
-        return;
+      if (refreshPromise === promise) {
+        refreshPromise = null;
       }
-
-      const missionPayload = buildDefaultMissionPayload();
-      await sendMissionResponse(destination, accepted);
-      await sendMissionResponse(
-        destination,
-        createMissionResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          result: missionPayload,
-        }),
-        createMissionEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.mission.upserted",
-          payload: missionPayload,
-          topics: [missionUid],
-          meta: {
-            command_id: command.command_id,
-            correlation_id: command.correlation_id,
-          },
-        }),
-      );
-      return;
     }
-
-    if (command.command_type === "mission.registry.log_entry.upsert") {
-      const missionUid = String(command.args.mission_uid ?? command.args.missionUid ?? "").trim() || DEFAULT_R3AKT_MISSION_UID;
-      if (missionUid !== DEFAULT_R3AKT_MISSION_UID) {
-        await sendMissionResponse(
-          destination,
-          createMissionRejectedPayload({
-            commandId: command.command_id,
-            correlationId: command.correlation_id,
-            reasonCode: "invalid_payload",
-            reason: "mission_uid must be Default.",
-          }),
-        );
-        return;
-      }
-
-      const incoming = normalizeEvent({
-        command_id: command.command_id,
-        source: command.source,
-        timestamp: command.timestamp,
-        command_type: command.command_type,
-        correlation_id: command.correlation_id,
-        topics: command.topics,
-        args: {
-          ...command.args,
-          mission_uid: DEFAULT_R3AKT_MISSION_UID,
-          source_identity: command.source.rns_identity,
-          source_display_name: asTrimmedString(command.args.source_display_name) ?? command.source.display_name,
-          callsign: asTrimmedString(command.args.callsign) ?? command.source.display_name,
-        } as Record<string, unknown>,
-      } as unknown as Partial<EventRecord> & Record<string, unknown>);
-      const outcome = applyUpsert(incoming);
-      const stored = byUid[getEventUid(incoming)];
-      await sendMissionResponse(destination, accepted);
-      await sendMissionResponse(
-        destination,
-        createMissionResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          result: buildMissionPayload(stored),
-        }),
-        createMissionEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.log_entry.upserted",
-          payload: buildMissionPayload(stored),
-          topics: [...stored.topics],
-          meta: {
-            command_id: command.command_id,
-            correlation_id: command.correlation_id,
-          },
-        }),
-      );
-      if (outcome !== "ignored") {
-        notifyIncomingEvent(stored, outcome, localIdentity);
-      }
-      return;
-    }
-
-    if (command.command_type === "mission.registry.log_entry.list") {
-      const missionUid = String(command.args.mission_uid ?? "").trim() || DEFAULT_R3AKT_MISSION_UID;
-      if (missionUid !== DEFAULT_R3AKT_MISSION_UID) {
-        await sendMissionResponse(
-          destination,
-          createMissionRejectedPayload({
-            commandId: command.command_id,
-            correlationId: command.correlation_id,
-            reasonCode: "invalid_payload",
-            reason: "mission_uid must be Default.",
-          }),
-        );
-        return;
-      }
-
-      const payload = {
-        log_entries: snapshotEvents().map((entry) => buildMissionPayload(entry)),
-      };
-      await sendMissionResponse(destination, accepted);
-      await sendMissionResponse(
-        destination,
-        createMissionResultPayload({
-          commandId: command.command_id,
-          correlationId: command.correlation_id,
-          result: payload,
-        }),
-        createMissionEventEnvelope({
-          sourceIdentity: localIdentity || "mobile",
-          sourceDisplayName: localDisplayName,
-          eventType: "mission.registry.log_entry.listed",
-          payload,
-          topics: [DEFAULT_R3AKT_MISSION_UID],
-          meta: {
-            command_id: command.command_id,
-            correlation_id: command.correlation_id,
-          },
-        }),
-      );
-      return;
-    }
-
-    await sendMissionResponse(
-      destination,
-      createMissionRejectedPayload({
-        commandId: command.command_id,
-        correlationId: command.correlation_id,
-        reasonCode: "unknown_command",
-        reason: `Unsupported mission command '${command.command_type}'`,
-      }),
-    );
   }
 
   function init(): void {
@@ -1424,52 +326,18 @@ export const useEventsStore = defineStore("events", () => {
     }
     initialized.value = true;
 
-    const loaded = loadEvents();
-    for (const [uid, entry] of Object.entries(loaded)) {
-      byUid[uid] = entry;
+    if (!supportsNativeNodeRuntime) {
+      byUid.value = loadWebEvents();
+      return;
     }
+
+    void refreshFromNative();
   }
 
-  async function upsertLocal(input: {
-    type: string;
-    summary: string;
-    uid?: string;
-    updatedAt?: number;
-  }): Promise<void> {
-    nodeStore.assertReadyForOutbound("send events");
-    const callsign = localCallsign();
-    const now = Number(input.updatedAt ?? Date.now());
-    const uid = input.uid?.trim() || createEventUid();
-    const event: EventRecord = normalizeEvent({
-      command_id: createMissionTrackingId("log-entry", uid),
-      source: {
-        rns_identity: localSourceIdentity() || "mobile",
-        display_name: callsign || undefined,
-      },
-      timestamp: new Date(now).toISOString(),
-      command_type: "mission.registry.log_entry.upsert",
-      correlation_id: createMissionTrackingId("ui-save", uid),
-      topics: [DEFAULT_R3AKT_MISSION_UID, "audit"],
-      args: {
-        entry_uid: uid,
-        mission_uid: DEFAULT_R3AKT_MISSION_UID,
-        content: input.summary,
-        callsign,
-        source_identity: localSourceIdentity() || undefined,
-        source_display_name: callsign || undefined,
-        keywords: encodeEventTypeKeywords(input.type),
-        content_hashes: [],
-        client_time: new Date(now).toISOString(),
-        server_time: new Date(now).toISOString(),
-      },
-    });
-    applyUpsert(event);
-    await fanoutLogUpsert(event);
-  }
-
-  async function deleteLocal(uid: string): Promise<void> {
-    const deletedAt = Date.now();
-    applyDelete(uid, deletedAt);
+  function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
+    if (event.scope === "Events") {
+      void refreshFromNative();
+    }
   }
 
   function initReplication(): void {
@@ -1478,149 +346,97 @@ export const useEventsStore = defineStore("events", () => {
     }
     replicationInitialized.value = true;
 
-    const decoder = new TextDecoder();
-    nodeStore.onPacket((event: PacketReceivedEvent) => {
-      handlePendingMissionPacket(event);
-      const missionSync = parseMissionSyncFields(event.fieldsBase64);
-      if (missionSync) {
-        if (missionSync.commands.length > 0 && event.sourceHex) {
-          for (const command of missionSync.commands) {
-            void handleMissionCommand(event.sourceHex, command);
-          }
-          return;
-        }
+    if (!supportsNativeNodeRuntime) {
+      return;
+    }
 
-        const missionEvents = resultPayloadEvents(
-          missionSync.result?.status === "result" ? missionSync.result : null,
-          missionSync.event,
-        );
-        const localIdentity = localSourceIdentity();
-        if (missionEvents.length > 0) {
-          const shouldNotify = missionSync.event?.event_type === "mission.registry.log_entry.upserted";
-          for (const incoming of missionEvents) {
-            const outcome = applyUpsert(incoming);
-            if (missionSync.event?.event_type === "mission.registry.log_entry.upserted") {
-              nodeStore.logUi(
-                "Info",
-                `[events] received ${getEventUid(incoming)} from ${getEventSourceDisplayName(incoming) ?? getEventSourceIdentity(incoming) ?? event.sourceHex ?? "unknown"} via LXMF.`,
-              );
-            }
-            if (
-              shouldNotify
-              && outcome !== "ignored"
-            ) {
-              notifyIncomingEvent(incoming, outcome, localIdentity);
-            }
-          }
-        }
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
+    cleanups.push(client.on("statusChanged", () => {
+      void refreshFromNative();
+    }));
+  }
 
-        return;
-      }
-
-      const legacy = parseLegacyEventReplicationMessage(decoder.decode(event.bytes));
-      if (!legacy) {
-        return;
-      }
-
-      if (legacy.kind === "event_snapshot_response") {
-        for (const incoming of legacy.events) {
-          if (incoming.deleted_at) {
-            applyDelete(getEventUid(incoming), incoming.deleted_at);
-          } else {
-            applyUpsert(incoming);
-          }
-        }
-        return;
-      }
-
-      if (legacy.kind === "event_upsert") {
-        const outcome = applyUpsert(legacy.event);
-        if (outcome !== "ignored") {
-          notifyIncomingEvent(legacy.event, outcome, localSourceIdentity());
-        }
-        return;
-      }
-
-      if (legacy.kind === "event_delete") {
-        applyDelete(legacy.uid, legacy.deletedAt);
-      }
-    });
-
-    nodeStore.onLxmfDelivery((event: LxmfDeliveryEvent) => {
-      handlePendingMissionDeliveryEvent(event);
-      if (!isEventDelivery(event)) {
-        return;
-      }
-
-      const eventUid = event.eventUid ?? "-";
-      const detail = event.detail?.trim();
-      if (event.status === "Sent") {
-        nodeStore.logUi(
-          "Info",
-          `[events] sent ${eventUid} over LXMF to ${event.destinationHex} (message ${event.messageIdHex}).`,
-        );
-        return;
-      }
-
-      if (event.status === "Acknowledged") {
-        nodeStore.logUi(
-          "Info",
-          `[events] acknowledged ${eventUid} from ${event.destinationHex} (message ${event.messageIdHex}).`,
-        );
-        return;
-      }
-
-      if (event.status === "TimedOut") {
-        nodeStore.logUi(
-          "Warn",
-          `[events] timed out waiting for acknowledgement for ${eventUid} to ${event.destinationHex} (${detail || "ack timeout"}).`,
-        );
-        return;
-      }
-
-      nodeStore.logUi(
-        "Error",
-        `[events] delivery failed for ${eventUid} to ${event.destinationHex} (${detail || "send failed"}).`,
-      );
-    });
-
-    watch(
-      () => ({
-        identity: nodeStore.status.identityHex.trim().toLowerCase(),
-        routeKey: replicationPeers(false)
-          .map((peer) => normalizeHex(peer.lxmfDestinationHex))
-          .filter((value) => value.length > 0)
-          .sort()
-          .join(","),
-      }),
-      (current, previous) => {
-        if (!current.identity) {
-          return;
-        }
-        const previousDestinations = previous?.identity && previous.routeKey
-          ? new Set(previous.routeKey.split(",").filter((value) => value.length > 0))
-          : new Set<string>();
-        for (const peer of replicationPeers(false)) {
-          const destination = normalizeHex(peer.lxmfDestinationHex);
-          if (!destination || previousDestinations.has(destination)) {
-            continue;
-          }
-          void syncPeerEvents(peer).catch((error: unknown) => {
-            nodeStore.logUi(
-              "Warn",
-              `[events] peer sync failed for ${formatPeerRoute(peer)}: ${errorMessage(error)}`,
-            );
-          });
-        }
+  async function upsertLocal(input: {
+    type: string;
+    summary: string;
+    uid?: string;
+  }): Promise<void> {
+    const localDisplayName = nodeStore.settings.displayName.trim() || "Unknown";
+    const updatedAt = nowMs();
+    const entryUid = input.uid?.trim() || createEventUid();
+    const nextRecord = normalizeEvent({
+      uid: entryUid,
+      command_id: createTrackingId("log-entry", entryUid),
+      timestamp: new Date(updatedAt).toISOString(),
+      command_type: "mission.registry.log_entry.upsert",
+      source: {
+        rns_identity: nodeStore.status.identityHex || "mobile",
+        display_name: localDisplayName,
       },
-      { immediate: true },
-    );
+      args: {
+        entry_uid: entryUid,
+        mission_uid: DEFAULT_R3AKT_MISSION_UID,
+        content: input.summary.trim(),
+        callsign: localDisplayName,
+        server_time: new Date(updatedAt).toISOString(),
+        client_time: new Date(updatedAt).toISOString(),
+        keywords: encodeEventTypeKeywords(input.type.trim() || "Incident"),
+        content_hashes: [],
+        source_identity: nodeStore.status.identityHex || undefined,
+        source_display_name: localDisplayName,
+      },
+      topics: [DEFAULT_R3AKT_MISSION_UID, DEFAULT_R3AKT_MISSION_NAME],
+      updatedAt,
+    });
+
+    if (!supportsNativeNodeRuntime) {
+      byUid.value = {
+        ...byUid.value,
+        [entryUid]: nextRecord,
+      };
+      webPersist();
+      return;
+    }
+
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    await client.upsertEvent(nextRecord);
+    await refreshFromNative();
+  }
+
+  async function deleteLocal(uid: string): Promise<void> {
+    const normalizedUid = uid.trim();
+    if (!normalizedUid) {
+      return;
+    }
+    const deletedAt = nowMs();
+
+    if (!supportsNativeNodeRuntime) {
+      const existing = byUid.value[normalizedUid];
+      if (!existing) {
+        return;
+      }
+      byUid.value = {
+        ...byUid.value,
+        [normalizedUid]: {
+          ...existing,
+          deleted_at: deletedAt,
+          updatedAt: deletedAt,
+        },
+      };
+      webPersist();
+      return;
+    }
+
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    await client.deleteEvent(normalizedUid, deletedAt);
+    await refreshFromNative();
   }
 
   const records = computed(() =>
-    Object.values(byUid)
+    Object.values(byUid.value)
       .filter((entry) => !isDeletedEvent(entry))
-      .sort((a, b) => getEventUpdatedAt(b) - getEventUpdatedAt(a))
+      .sort((left, right) => getEventUpdatedAt(right) - getEventUpdatedAt(left))
       .map((entry) => toTimelineRecord(entry)),
   );
 

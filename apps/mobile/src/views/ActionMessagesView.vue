@@ -8,6 +8,10 @@ import type { ActionMessage } from "../types/domain";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
+  ACTION_MESSAGE_STATUS_CONFIG,
+  type ActionMessageStatusField,
+} from "../utils/actionMessageStatus";
+import {
   DEFAULT_R3AKT_TEAM_COLOR,
   R3AKT_TEAM_COLORS,
   formatR3aktTeamColorLabel,
@@ -22,21 +26,32 @@ const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
   label: formatR3aktTeamColorLabel(value),
 }));
+const statusOptions = [
+  { value: "Unknown", label: "Unknown" },
+  { value: "Green", label: "Green" },
+  { value: "Yellow", label: "Yellow" },
+  { value: "Red", label: "Red" },
+] as const;
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
 const appReady = computed(() => nodeStore.ready);
-const draftModeActive = computed(
-  () => nodeStore.settings.hub.mode !== "Disabled" && !nodeStore.hubRegistrationReady,
-);
-const canManageMessages = computed(() => appReady.value || draftModeActive.value);
-const readinessHint = computed(() =>
+const draftModeActive = computed(() => nodeStore.settings.hub.mode !== "Disabled" && !nodeStore.hubRegistrationReady);
+const canManageMessages = computed(() => true);
+const localSaveHint = computed(() =>
   draftModeActive.value
-    ? "Hub registration is still pending. Messages are saved as local drafts and replay automatically once registration completes."
-    : "Node is not ready yet. Wait for the top-right status to show Ready.",
+    ? "Hub registration is still pending. Messages are saved locally and replay automatically once registration completes."
+    : "Node is not ready yet. Message changes are saved locally and sync automatically once the node is ready.",
 );
+const showLocalSaveBanner = computed(() => draftModeActive.value || !appReady.value);
 
 const createForm = reactive({
   callsign: defaultCallSign.value,
   groupName: DEFAULT_R3AKT_TEAM_COLOR,
+  securityStatus: "Unknown" as ActionMessage["securityStatus"],
+  capabilityStatus: "Unknown" as ActionMessage["capabilityStatus"],
+  preparednessStatus: "Unknown" as ActionMessage["preparednessStatus"],
+  medicalStatus: "Unknown" as ActionMessage["medicalStatus"],
+  mobilityStatus: "Unknown" as ActionMessage["mobilityStatus"],
+  commsStatus: "Unknown" as ActionMessage["commsStatus"],
 });
 const isCreateFormVisible = shallowRef(false);
 const editingCallsign = shallowRef<string | null>(null);
@@ -58,25 +73,16 @@ watch(defaultCallSign, (next, previous) => {
 function resetCreateForm(): void {
   createForm.callsign = defaultCallSign.value;
   createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
+  createForm.securityStatus = "Unknown";
+  createForm.capabilityStatus = "Unknown";
+  createForm.preparednessStatus = "Unknown";
+  createForm.medicalStatus = "Unknown";
+  createForm.mobilityStatus = "Unknown";
+  createForm.commsStatus = "Unknown";
   editingCallsign.value = null;
 }
 
-function ensureReady(action: string): boolean {
-  if (draftModeActive.value) {
-    return true;
-  }
-  try {
-    nodeStore.assertReadyForOutbound(action);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function toggleCreateForm(): void {
-  if (!isCreateFormVisible.value && !ensureReady("send messages")) {
-    return;
-  }
   if (isCreateFormVisible.value) {
     resetCreateForm();
   }
@@ -87,10 +93,16 @@ function openHelp(): void {
   router.push("/messages/help").catch(() => undefined);
 }
 
+function copyMessageStatuses(message: Pick<ActionMessage, ActionMessageStatusField>): void {
+  createForm.securityStatus = message.securityStatus;
+  createForm.capabilityStatus = message.capabilityStatus;
+  createForm.preparednessStatus = message.preparednessStatus;
+  createForm.medicalStatus = message.medicalStatus;
+  createForm.mobilityStatus = message.mobilityStatus;
+  createForm.commsStatus = message.commsStatus;
+}
+
 async function createMessage(): Promise<void> {
-  if (!ensureReady("send messages")) {
-    return;
-  }
   const callsign = createForm.callsign.trim() || defaultCallSign.value;
   if (!callsign) {
     return;
@@ -110,16 +122,22 @@ async function createMessage(): Promise<void> {
           ...existing,
           callsign,
           groupName: normalizedGroupName,
+          securityStatus: createForm.securityStatus,
+          capabilityStatus: createForm.capabilityStatus,
+          preparednessStatus: createForm.preparednessStatus,
+          medicalStatus: createForm.medicalStatus,
+          mobilityStatus: createForm.mobilityStatus,
+          commsStatus: createForm.commsStatus,
         }
       : {
           callsign,
           groupName: normalizedGroupName,
-          securityStatus: "Unknown",
-          capabilityStatus: "Unknown",
-          preparednessStatus: "Unknown",
-          medicalStatus: "Unknown",
-          mobilityStatus: "Unknown",
-          commsStatus: "Unknown",
+          securityStatus: createForm.securityStatus,
+          capabilityStatus: createForm.capabilityStatus,
+          preparednessStatus: createForm.preparednessStatus,
+          medicalStatus: createForm.medicalStatus,
+          mobilityStatus: createForm.mobilityStatus,
+          commsStatus: createForm.commsStatus,
         },
   );
   if (existing && originalCallsign && originalCallsign !== callsign) {
@@ -130,30 +148,22 @@ async function createMessage(): Promise<void> {
 }
 
 function editMessage(callsign: string): void {
-  if (!ensureReady("send messages")) {
-    return;
-  }
   const message = messages.value.find((item) => item.callsign === callsign);
   if (!message) {
     return;
   }
   createForm.callsign = message.callsign;
   createForm.groupName = normalizeR3aktTeamColor(message.groupName);
+  copyMessageStatuses(message);
   editingCallsign.value = message.callsign;
   isCreateFormVisible.value = true;
 }
 
 function cycleMessage(callsign: string, field: keyof ActionMessage | string): void {
-  if (!ensureReady("send messages")) {
-    return;
-  }
   messagesStore.rotateStatus(callsign, field as keyof ActionMessage);
 }
 
 function deleteMessage(callsign: string): void {
-  if (!ensureReady("send messages")) {
-    return;
-  }
   messagesStore.deleteLocal(callsign).catch(() => undefined);
 }
 </script>
@@ -185,7 +195,7 @@ function deleteMessage(callsign: string): void {
           :aria-expanded="isCreateFormVisible"
           :aria-disabled="!canManageMessages"
           :disabled="!canManageMessages"
-          :title="canManageMessages ? 'Add message' : readinessHint"
+          :title="canManageMessages ? 'Add message' : localSaveHint"
           @click="toggleCreateForm"
         >
           +
@@ -193,34 +203,60 @@ function deleteMessage(callsign: string): void {
       </div>
     </header>
 
-    <p v-if="draftModeActive" class="sync-banner">
-      {{ nodeStore.hubRegistrationSummary }} Pending drafts replay automatically in creation order.
+    <p v-if="showLocalSaveBanner" class="sync-banner">
+      <template v-if="draftModeActive">
+        {{ nodeStore.hubRegistrationSummary }} Pending drafts replay automatically in creation order.
+      </template>
+      <template v-else>
+        {{ localSaveHint }}
+      </template>
     </p>
 
     <form v-show="isCreateFormVisible" class="create-form" @submit.prevent="createMessage">
-      <input
-        v-model="createForm.callsign"
-        type="text"
-        placeholder="Call Sign"
-        aria-label="Call Sign"
-        :disabled="!canManageMessages"
-      />
-      <select
-        v-model="createForm.groupName"
-        aria-label="Team color"
-        :disabled="!canManageMessages"
-      >
-        <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
-      <button
-        type="submit"
-        :disabled="!canManageMessages"
-        :title="canManageMessages ? submitTitle : readinessHint"
-      >
-        {{ submitLabel }}
-      </button>
+      <div class="create-form-top">
+        <input
+          v-model="createForm.callsign"
+          type="text"
+          placeholder="Call Sign"
+          aria-label="Call Sign"
+          :disabled="!canManageMessages"
+        />
+        <select
+          v-model="createForm.groupName"
+          aria-label="Team color"
+          :disabled="!canManageMessages"
+        >
+          <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <button
+          type="submit"
+          :disabled="!canManageMessages"
+          :title="canManageMessages ? submitTitle : localSaveHint"
+        >
+          {{ submitLabel }}
+        </button>
+      </div>
+
+      <div class="status-edit-grid">
+        <label
+          v-for="status in ACTION_MESSAGE_STATUS_CONFIG"
+          :key="status.field"
+          class="status-edit-field"
+        >
+          <span class="status-edit-label">{{ status.label }}</span>
+          <select
+            v-model="createForm[status.field]"
+            :aria-label="`${status.label} status`"
+            :disabled="!canManageMessages"
+          >
+            <option v-for="option in statusOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+      </div>
     </form>
 
     <div class="desktop-only">
@@ -351,6 +387,11 @@ p {
 }
 
 .create-form {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.create-form-top {
   align-items: center;
   display: grid;
   gap: 0.6rem;
@@ -383,6 +424,25 @@ p {
   text-transform: uppercase;
 }
 
+.status-edit-grid {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.status-edit-field {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.status-edit-label {
+  color: #9cb3d6;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .mobile-only {
   display: none;
 }
@@ -397,6 +457,14 @@ p {
   }
 
   .create-form {
+    gap: 0.75rem;
+  }
+
+  .create-form-top {
+    grid-template-columns: 1fr;
+  }
+
+  .status-edit-grid {
     grid-template-columns: 1fr;
   }
 }

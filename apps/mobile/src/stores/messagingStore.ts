@@ -1,12 +1,22 @@
+import {
+  createReticulumNodeClient,
+  type ConversationRecord,
+  type MessageRecord,
+  type ProjectionInvalidationEvent,
+  type ReticulumNodeClient,
+} from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import type { MessageRecord } from "@reticulum/node-client";
 
+import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.inbox.v1";
 
 type StoredMessages = Record<string, MessageRecord>;
+type ProjectionClientCache = typeof globalThis & {
+  __reticulumMessagingProjectionClient?: ReticulumNodeClient;
+};
 
 function cloneMessage(message: MessageRecord): MessageRecord {
   return {
@@ -21,7 +31,7 @@ function safeMessageBody(message: Pick<MessageRecord, "bodyUtf8">): string {
   return typeof message.bodyUtf8 === "string" ? message.bodyUtf8.trim() : "";
 }
 
-function loadStoredMessages(): StoredMessages {
+function loadWebMessages(): StoredMessages {
   try {
     const raw = localStorage.getItem(MESSAGE_STORAGE_KEY);
     if (!raw) {
@@ -41,48 +51,146 @@ function loadStoredMessages(): StoredMessages {
   }
 }
 
-function saveStoredMessages(messages: StoredMessages): void {
+function saveWebMessages(messages: StoredMessages): void {
   localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(Object.values(messages)));
 }
 
-function displayNameForDestination(destinationHex: string, nodeStore: ReturnType<typeof useNodeStore>): string {
-  const direct = nodeStore.discoveredByDestination[destinationHex];
+function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
+  const cache = globalThis as ProjectionClientCache;
+  if (!cache.__reticulumMessagingProjectionClient) {
+    cache.__reticulumMessagingProjectionClient = createReticulumNodeClient({ mode });
+  }
+  return cache.__reticulumMessagingProjectionClient;
+}
+
+function displayNameForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): string {
+  const normalized = destinationHex.trim().toLowerCase();
+  const direct = nodeStore.discoveredByDestination[normalized];
   if (direct) {
     return direct.label ?? direct.announcedName ?? destinationHex;
   }
   const peer = Object.values(nodeStore.discoveredByDestination).find(
-    (candidate) => candidate.lxmfDestinationHex === destinationHex,
+    (candidate) => candidate.lxmfDestinationHex?.trim().toLowerCase() === normalized,
   );
   return peer?.label ?? peer?.announcedName ?? destinationHex;
 }
 
-function isVisibleChatMessage(message: MessageRecord): boolean {
-  return safeMessageBody(message).length > 0;
-}
-
-function isInboundPeerMessage(message: MessageRecord): boolean {
-  return isVisibleChatMessage(message) && message.direction === "Inbound";
+function mapConversationRecord(
+  record: ConversationRecord,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): {
+  conversationId: string;
+  destinationHex: string;
+  displayName: string;
+  preview: string;
+  updatedAtMs: number;
+  state: string;
+} {
+  const displayName = record.peerDisplayName
+    ?? displayNameForDestination(record.peerDestinationHex, nodeStore);
+  return {
+    conversationId: record.conversationId,
+    destinationHex: record.peerDestinationHex,
+    displayName,
+    preview: record.lastMessagePreview ?? "(empty message)",
+    updatedAtMs: record.lastMessageAtMs,
+    state: record.lastMessageState ?? "Queued",
+  };
 }
 
 export const useMessagingStore = defineStore("messaging", () => {
   const nodeStore = useNodeStore();
   const byMessageId = ref<StoredMessages>({});
+  const nativeConversations = ref<ConversationRecord[]>([]);
   const selectedConversationId = ref<string>("");
   const initialized = ref(false);
-  let unsubscribe: (() => void) | null = null;
+  const cleanups: Array<() => void> = [];
 
-  function persist(): void {
-    saveStoredMessages(byMessageId.value);
+  let conversationsRefreshPromise: Promise<void> | null = null;
+  let messagesRefreshPromise: Promise<void> | null = null;
+
+  function persistWeb(): void {
+    if (!supportsNativeNodeRuntime) {
+      saveWebMessages(byMessageId.value);
+    }
   }
 
-  function upsertMessage(message: MessageRecord): void {
-    byMessageId.value = {
-      ...byMessageId.value,
-      [message.messageIdHex]: cloneMessage(message),
-    };
-    persist();
-    if (!selectedConversationId.value && isVisibleChatMessage(message)) {
-      selectedConversationId.value = message.conversationId;
+  async function refreshConversations(): Promise<void> {
+    if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
+      return;
+    }
+    if (conversationsRefreshPromise) {
+      await conversationsRefreshPromise;
+      return;
+    }
+    const promise = (async () => {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      nativeConversations.value = await client.listConversations();
+      const currentConversationId = selectedConversationId.value.trim();
+      if (!currentConversationId && nativeConversations.value.length > 0) {
+        selectedConversationId.value = nativeConversations.value[0].conversationId;
+      } else if (
+        currentConversationId
+        && !nativeConversations.value.some((conversation) => conversation.conversationId === currentConversationId)
+      ) {
+        selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
+      }
+    })();
+    conversationsRefreshPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (conversationsRefreshPromise === promise) {
+        conversationsRefreshPromise = null;
+      }
+    }
+  }
+
+  async function refreshMessages(conversationId = selectedConversationId.value): Promise<void> {
+    if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
+      return;
+    }
+    if (messagesRefreshPromise) {
+      await messagesRefreshPromise;
+      return;
+    }
+    const promise = (async () => {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      const items = await client.listMessages(conversationId || undefined);
+      const next: StoredMessages = {};
+      for (const message of items) {
+        next[message.messageIdHex] = cloneMessage(message);
+      }
+      byMessageId.value = next;
+    })();
+    messagesRefreshPromise = promise;
+    try {
+      await promise;
+    } finally {
+      if (messagesRefreshPromise === promise) {
+        messagesRefreshPromise = null;
+      }
+    }
+  }
+
+  async function refreshAll(): Promise<void> {
+    await refreshConversations();
+    await refreshMessages();
+  }
+
+  function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
+    if (event.scope === "Conversations") {
+      void refreshConversations();
+      return;
+    }
+    if (event.scope === "Messages") {
+      if (!event.key || event.key === selectedConversationId.value) {
+        void refreshMessages();
+      }
+      void refreshConversations();
     }
   }
 
@@ -91,29 +199,55 @@ export const useMessagingStore = defineStore("messaging", () => {
       return;
     }
     initialized.value = true;
-    byMessageId.value = loadStoredMessages();
-    unsubscribe = nodeStore.onMessage((message) => {
-      upsertMessage(message);
-    });
+
+    if (!supportsNativeNodeRuntime) {
+      byMessageId.value = loadWebMessages();
+      return;
+    }
+
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
+    cleanups.push(client.on("statusChanged", () => {
+      void refreshAll();
+    }));
+    void refreshAll();
   }
 
   function dispose(): void {
-    unsubscribe?.();
-    unsubscribe = null;
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
+  }
+
+  function upsertWebMessage(message: MessageRecord): void {
+    byMessageId.value = {
+      ...byMessageId.value,
+      [message.messageIdHex]: cloneMessage(message),
+    };
+    persistWeb();
+    if (!selectedConversationId.value && safeMessageBody(message)) {
+      selectedConversationId.value = message.conversationId;
+    }
   }
 
   async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
     nodeStore.assertReadyForOutbound("send LXMF messages");
     await nodeStore.sendLxmf(destinationHex, bodyUtf8, title);
+    if (supportsNativeNodeRuntime) {
+      await refreshAll();
+    }
   }
 
   function selectConversation(conversationId: string): void {
     selectedConversationId.value = conversationId;
+    if (supportsNativeNodeRuntime) {
+      void refreshMessages(conversationId);
+    }
   }
 
-  const messages = computed(() =>
+  const webMessages = computed(() =>
     Object.values(byMessageId.value)
-      .filter((message) => isVisibleChatMessage(message))
+      .filter((message) => safeMessageBody(message).length > 0)
       .sort((left, right) => {
         const leftTime = left.receivedAtMs ?? left.sentAtMs ?? left.updatedAtMs;
         const rightTime = right.receivedAtMs ?? right.sentAtMs ?? right.updatedAtMs;
@@ -122,6 +256,10 @@ export const useMessagingStore = defineStore("messaging", () => {
   );
 
   const conversations = computed(() => {
+    if (supportsNativeNodeRuntime) {
+      return nativeConversations.value.map((record) => mapConversationRecord(record, nodeStore));
+    }
+
     const byConversation = new Map<
       string,
       {
@@ -134,7 +272,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       }
     >();
 
-    for (const message of messages.value.filter((candidate) => isInboundPeerMessage(candidate))) {
+    for (const message of webMessages.value.filter((candidate) => candidate.direction === "Inbound")) {
       const updatedAtMs = message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs;
       const existing = byConversation.get(message.conversationId);
       if (existing && existing.updatedAtMs > updatedAtMs) {
@@ -164,7 +302,13 @@ export const useMessagingStore = defineStore("messaging", () => {
     if (!conversationId) {
       return [];
     }
-    return messages.value.filter((message) => message.conversationId === conversationId);
+    return Object.values(byMessageId.value)
+      .filter((message) => message.conversationId === conversationId)
+      .sort((left, right) => {
+        const leftTime = left.receivedAtMs ?? left.sentAtMs ?? left.updatedAtMs;
+        const rightTime = right.receivedAtMs ?? right.sentAtMs ?? right.updatedAtMs;
+        return leftTime - rightTime;
+      });
   });
 
   return {
@@ -177,5 +321,6 @@ export const useMessagingStore = defineStore("messaging", () => {
     dispose,
     selectConversation,
     sendMessage,
+    upsertWebMessage,
   };
 });

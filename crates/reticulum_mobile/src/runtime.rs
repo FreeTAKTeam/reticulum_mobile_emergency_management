@@ -8,6 +8,7 @@ use fs_err as fs;
 #[cfg(feature = "legacy-lxmf-runtime")]
 use log::error;
 use log::{debug, info};
+use serde::Deserialize;
 use crate::announce_compat::{
     display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
 };
@@ -30,19 +31,25 @@ use reticulum::transport::{
     DeliveryReceipt, ReceiptHandler, SendPacketOutcome as RnsSendOutcome, Transport,
     TransportConfig,
 };
-#[cfg(test)]
 use rmpv::Value as MsgPackValue;
 use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 
+#[path = "runtime_projection.rs"]
+mod runtime_projection;
+
+use crate::app_state::AppStateStore;
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    AnnounceRecord, ConversationRecord, HubMode, LxmfDeliveryMethod,
-    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
-    NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord,
-    PeerState, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
+    AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    EventProjectionRecord, HubMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
+    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection,
+    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord, PeerState,
+    ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
 };
+
+use self::runtime_projection::RuntimeProjectionJournal;
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
@@ -58,12 +65,490 @@ const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
+const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn eam_status_rank(value: &str) -> u8 {
+    match value {
+        "Green" => 1,
+        "Yellow" => 2,
+        "Red" => 3,
+        _ => 0,
+    }
+}
+
+fn derive_eam_overall_status(record: &EamProjectionRecord) -> Option<String> {
+    let mut best_status: Option<&str> = None;
+    for value in [
+        record.security_status.as_str(),
+        record.capability_status.as_str(),
+        record.preparedness_status.as_str(),
+        record.medical_status.as_str(),
+        record.mobility_status.as_str(),
+        record.comms_status.as_str(),
+    ] {
+        if eam_status_rank(value) >= eam_status_rank(best_status.unwrap_or_default()) {
+            best_status = Some(value);
+        }
+    }
+    best_status
+        .filter(|value| !value.is_empty() && *value != "Unknown")
+        .map(str::to_string)
+}
+
+fn eam_projection_from_command(
+    envelope: MissionCommandEnvelope<EamUpsertCommandArgs>,
+    projection: Option<EamProjectionRecord>,
+    received_at_ms: u64,
+) -> Option<EamProjectionRecord> {
+    if envelope.command_type != "mission.registry.eam.upsert" {
+        return None;
+    }
+
+    if let Some(mut projection) = projection {
+        if projection.callsign.trim().is_empty() {
+            return None;
+        }
+        projection.group_name = if projection.group_name.trim().is_empty() {
+            DEFAULT_EAM_GROUP_NAME.to_string()
+        } else {
+            projection.group_name.trim().to_string()
+        };
+        if projection.overall_status.is_none() {
+            projection.overall_status = derive_eam_overall_status(&projection);
+        }
+        projection.sync_state = Some("synced".to_string());
+        projection.sync_error = None;
+        projection.last_synced_at_ms = Some(received_at_ms);
+        projection.updated_at_ms = projection.updated_at_ms.max(received_at_ms);
+        return Some(projection);
+    }
+
+    if envelope.args.callsign.trim().is_empty()
+        || envelope.args.team_member_uid.trim().is_empty()
+        || envelope.args.team_uid.trim().is_empty()
+    {
+        return None;
+    }
+
+    let mut record = EamProjectionRecord {
+        callsign: envelope.args.callsign.trim().to_string(),
+        group_name: DEFAULT_EAM_GROUP_NAME.to_string(),
+        security_status: envelope.args.security_status,
+        capability_status: envelope.args.capability_status,
+        preparedness_status: envelope.args.preparedness_status,
+        medical_status: envelope.args.medical_status,
+        mobility_status: envelope.args.mobility_status,
+        comms_status: envelope.args.comms_status,
+        notes: envelope.args.notes,
+        updated_at_ms: received_at_ms,
+        deleted_at_ms: None,
+        eam_uid: envelope.args.eam_uid,
+        team_member_uid: Some(envelope.args.team_member_uid),
+        team_uid: Some(envelope.args.team_uid),
+        reported_at: envelope.args.reported_at.or(Some(envelope.timestamp)),
+        reported_by: envelope
+            .args
+            .reported_by
+            .or(envelope.source.display_name.clone()),
+        overall_status: None,
+        confidence: envelope.args.confidence,
+        ttl_seconds: envelope.args.ttl_seconds,
+        source: Some(EamSourceRecord {
+            rns_identity: envelope
+                .args
+                .source
+                .as_ref()
+                .map(|value| value.rns_identity.clone())
+                .unwrap_or(envelope.source.rns_identity),
+            display_name: envelope
+                .args
+                .source
+                .and_then(|value| value.display_name)
+                .or(envelope.source.display_name),
+        }),
+        sync_state: Some("synced".to_string()),
+        sync_error: None,
+        draft_created_at_ms: None,
+        last_synced_at_ms: Some(received_at_ms),
+    };
+    record.overall_status = derive_eam_overall_status(&record);
+    Some(record)
+}
+
+fn eam_projection_from_fields(fields_bytes: &[u8], received_at_ms: u64) -> Option<EamProjectionRecord> {
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
+    let field_entries = msgpack_map_entries(&fields)?;
+    let commands = msgpack_get_indexed(field_entries, 0x09)?;
+    let MsgPackValue::Array(command_entries) = commands else {
+        return None;
+    };
+
+    for command in command_entries {
+        let command_map = msgpack_map_entries(command)?;
+        let command_type = msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        if command_type != "mission.registry.eam.upsert" {
+            continue;
+        }
+        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
+        let source = msgpack_get_named(args, &["source"]).and_then(msgpack_map_entries);
+        let mut record = EamProjectionRecord {
+            callsign: msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?,
+            group_name: DEFAULT_EAM_GROUP_NAME.to_string(),
+            security_status: msgpack_get_named(args, &["security_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            capability_status: msgpack_get_named(args, &["capability_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            preparedness_status: msgpack_get_named(args, &["preparedness_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            medical_status: msgpack_get_named(args, &["medical_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            mobility_status: msgpack_get_named(args, &["mobility_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            comms_status: msgpack_get_named(args, &["comms_status"])
+                .and_then(msgpack_string)
+                .unwrap_or_else(|| "Unknown".to_string()),
+            notes: msgpack_get_named(args, &["notes"]).and_then(msgpack_string),
+            updated_at_ms: received_at_ms,
+            deleted_at_ms: None,
+            eam_uid: msgpack_get_named(args, &["eam_uid"]).and_then(msgpack_string),
+            team_member_uid: msgpack_get_named(args, &["team_member_uid"]).and_then(msgpack_string),
+            team_uid: msgpack_get_named(args, &["team_uid"]).and_then(msgpack_string),
+            reported_at: msgpack_get_named(args, &["reported_at"]).and_then(msgpack_string),
+            reported_by: msgpack_get_named(args, &["reported_by"]).and_then(msgpack_string),
+            overall_status: None,
+            confidence: msgpack_get_named(args, &["confidence"]).and_then(msgpack_f64),
+            ttl_seconds: msgpack_get_named(args, &["ttl_seconds"]).and_then(msgpack_u64),
+            source: source.map(|source_map| EamSourceRecord {
+                rns_identity: msgpack_get_named(source_map, &["rns_identity"])
+                    .and_then(msgpack_string)
+                    .unwrap_or_default(),
+                display_name: msgpack_get_named(source_map, &["display_name"]).and_then(msgpack_string),
+            }),
+            sync_state: Some("synced".to_string()),
+            sync_error: None,
+            draft_created_at_ms: None,
+            last_synced_at_ms: Some(received_at_ms),
+        };
+        if record.callsign.trim().is_empty() {
+            return None;
+        }
+        record.overall_status = derive_eam_overall_status(&record);
+        return Some(record);
+    }
+
+    None
+}
+
+async fn persist_received_eam_if_present(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    metadata: Option<&MissionSyncMetadata>,
+    fields_bytes: Option<&[u8]>,
+    body_utf8: &str,
+) {
+    let parsed_from_fields = fields_bytes.and_then(|value| eam_projection_from_fields(value, now_ms()));
+    if metadata.is_none() && parsed_from_fields.is_none() {
+        return;
+    }
+    if !metadata
+        .and_then(|value| value.command_type.as_deref())
+        .is_some_and(|value| value == "mission.registry.eam.upsert")
+        && parsed_from_fields.is_none()
+    {
+        return;
+    }
+
+    let parsed = serde_json::from_str::<EamWireBody>(body_utf8)
+        .ok()
+        .and_then(|body| eam_projection_from_command(body.command, body.projection, now_ms()))
+        .or_else(|| {
+            serde_json::from_str::<MissionCommandEnvelope<EamUpsertCommandArgs>>(body_utf8)
+                .ok()
+                .and_then(|command| eam_projection_from_command(command, None, now_ms()))
+        })
+        .or(parsed_from_fields);
+
+    let Some(record) = parsed else {
+        return;
+    };
+
+    match state.app_state.upsert_eam(&record) {
+        Ok(invalidation) => {
+            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            if let Ok(summary) = state.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("eam-received".to_string()),
+            ) {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation: summary });
+            }
+        }
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist inbound eam callsign={} reason={}",
+                    record.callsign, err
+                ),
+            });
+        }
+    }
+}
+
+fn event_projection_from_fields(
+    fields_bytes: &[u8],
+    received_at_ms: u64,
+) -> Option<EventProjectionRecord> {
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
+    let field_entries = msgpack_map_entries(&fields)?;
+    let commands = msgpack_get_indexed(field_entries, LXMF_FIELD_COMMANDS)?;
+    let MsgPackValue::Array(command_entries) = commands else {
+        return None;
+    };
+
+    for command in command_entries {
+        let command_map = msgpack_map_entries(command)?;
+        let command_type = msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        if command_type != "mission.registry.log_entry.upsert" {
+            continue;
+        }
+        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
+        let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries);
+        let uid = msgpack_get_named(args, &["entry_uid"]).and_then(msgpack_string)?;
+        let mission_uid = msgpack_get_named(args, &["mission_uid"]).and_then(msgpack_string)?;
+        let content = msgpack_get_named(args, &["content"]).and_then(msgpack_string)?;
+        let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
+        let timestamp = msgpack_get_named(command_map, &["timestamp"])
+            .and_then(msgpack_string)
+            .or_else(|| msgpack_get_named(args, &["server_time"]).and_then(msgpack_string))
+            .or_else(|| msgpack_get_named(args, &["client_time"]).and_then(msgpack_string))?;
+        let command_id = msgpack_get_named(command_map, &["command_id"]).and_then(msgpack_string)?;
+        let source_identity = msgpack_get_named(args, &["source_identity"])
+            .and_then(msgpack_string)
+            .or_else(|| {
+                source.and_then(|source_map| {
+                    msgpack_get_named(source_map, &["rns_identity"]).and_then(msgpack_string)
+                })
+            })?;
+        if uid.trim().is_empty()
+            || mission_uid.trim().is_empty()
+            || content.trim().is_empty()
+            || callsign.trim().is_empty()
+            || timestamp.trim().is_empty()
+            || command_id.trim().is_empty()
+            || source_identity.trim().is_empty()
+        {
+            return None;
+        }
+        let topics = msgpack_get_named(command_map, &["topics"])
+            .and_then(msgpack_string_vec)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| vec![mission_uid.clone()]);
+        return Some(EventProjectionRecord {
+            uid,
+            command_id,
+            source_identity,
+            source_display_name: msgpack_get_named(args, &["source_display_name"])
+                .and_then(msgpack_string)
+                .or_else(|| {
+                    source.and_then(|source_map| {
+                        msgpack_get_named(source_map, &["display_name"]).and_then(msgpack_string)
+                    })
+                }),
+            timestamp,
+            command_type,
+            mission_uid,
+            content,
+            callsign,
+            server_time: msgpack_get_named(args, &["server_time"]).and_then(msgpack_string),
+            client_time: msgpack_get_named(args, &["client_time"]).and_then(msgpack_string),
+            keywords: msgpack_get_named(args, &["keywords"])
+                .and_then(msgpack_string_vec)
+                .unwrap_or_default(),
+            content_hashes: msgpack_get_named(args, &["content_hashes"])
+                .and_then(msgpack_string_vec)
+                .unwrap_or_default(),
+            updated_at_ms: received_at_ms,
+            deleted_at_ms: None,
+            correlation_id: msgpack_get_named(command_map, &["correlation_id"])
+                .and_then(msgpack_string),
+            topics,
+        });
+    }
+
+    None
+}
+
+async fn persist_received_event_if_present(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    metadata: Option<&MissionSyncMetadata>,
+    fields_bytes: Option<&[u8]>,
+) {
+    let parsed_from_fields = fields_bytes.and_then(|value| event_projection_from_fields(value, now_ms()));
+    if metadata.is_none() && parsed_from_fields.is_none() {
+        return;
+    }
+    if !metadata
+        .and_then(|value| value.command_type.as_deref())
+        .is_some_and(|value| value == "mission.registry.log_entry.upsert")
+        && parsed_from_fields.is_none()
+    {
+        return;
+    }
+
+    let Some(record) = parsed_from_fields else {
+        return;
+    };
+
+    match state.app_state.upsert_event(&record) {
+        Ok(invalidation) => {
+            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            if let Ok(summary) = state.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("event-received".to_string()),
+            ) {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation: summary });
+            }
+        }
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist inbound event uid={} reason={}",
+                    record.uid, err
+                ),
+            });
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MissionWireSource {
+    rns_identity: String,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EamUpsertCommandArgs {
+    callsign: String,
+    team_member_uid: String,
+    team_uid: String,
+    security_status: String,
+    capability_status: String,
+    preparedness_status: String,
+    medical_status: String,
+    mobility_status: String,
+    comms_status: String,
+    eam_uid: Option<String>,
+    reported_by: Option<String>,
+    reported_at: Option<String>,
+    notes: Option<String>,
+    confidence: Option<f64>,
+    ttl_seconds: Option<u64>,
+    source: Option<MissionWireSource>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MissionCommandEnvelope<T> {
+    command_id: String,
+    source: MissionWireSource,
+    timestamp: String,
+    command_type: String,
+    args: T,
+    correlation_id: Option<String>,
+    topics: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EamWireBody {
+    command: MissionCommandEnvelope<EamUpsertCommandArgs>,
+    projection: Option<EamProjectionRecord>,
+}
+
+fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackValue)]> {
+    match value {
+        MsgPackValue::Map(entries) => Some(entries.as_slice()),
+        _ => None,
+    }
+}
+
+fn msgpack_get_indexed<'a>(
+    entries: &'a [(MsgPackValue, MsgPackValue)],
+    key: i64,
+) -> Option<&'a MsgPackValue> {
+    let key_string = key.to_string();
+    for (entry_key, entry_value) in entries {
+        match entry_key {
+            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => return Some(entry_value),
+            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
+                return Some(entry_value)
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn msgpack_get_named<'a>(
+    entries: &'a [(MsgPackValue, MsgPackValue)],
+    keys: &[&str],
+) -> Option<&'a MsgPackValue> {
+    for wanted in keys {
+        for (entry_key, entry_value) in entries {
+            if matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
+            {
+                return Some(entry_value);
+            }
+        }
+    }
+    None
+}
+
+fn msgpack_string(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::String(value) => value.as_str().map(str::to_string),
+        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
+        _ => None,
+    }
+}
+
+fn msgpack_string_vec(value: &MsgPackValue) -> Option<Vec<String>> {
+    let MsgPackValue::Array(entries) = value else {
+        return None;
+    };
+    Some(entries.iter().filter_map(msgpack_string).collect())
+}
+
+fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
+    match value {
+        MsgPackValue::F32(value) => Some(f64::from(*value)),
+        MsgPackValue::F64(value) => Some(*value),
+        MsgPackValue::Integer(value) => value.as_i64().map(|entry| entry as f64),
+        _ => None,
+    }
+}
+
+fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {
+    match value {
+        MsgPackValue::Integer(value) => value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|entry| (entry >= 0).then_some(entry as u64))),
+        _ => None,
+    }
 }
 
 pub(crate) fn lxmf_private_identity(
@@ -433,6 +918,12 @@ fn from_sdk_sync_status(status: sdkmsg::SyncStatus) -> SyncStatus {
     }
 }
 
+fn to_sdk_sync_status(status: SyncStatus) -> Option<sdkmsg::SyncStatus> {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
 fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest {
     sdkmsg::SendMessageRequest {
         destination_hex: request.destination_hex.clone(),
@@ -644,16 +1135,109 @@ async fn snapshot_peer_records(state: &NodeRuntimeState) -> Vec<PeerRecord> {
         .collect()
 }
 
-async fn refresh_peer_snapshot(state: &NodeRuntimeState) {
+async fn refresh_peer_snapshot(state: &NodeRuntimeState) -> bool {
     let peers = snapshot_peer_records(state).await;
+    let changed = state
+        .projection_journal
+        .record_peers(peers.clone(), Some("peer-snapshot-refresh"));
     if let Ok(mut guard) = state.peers_snapshot.lock() {
         *guard = peers;
     }
+    changed
 }
 
-fn refresh_sync_status_snapshot(state: &NodeRuntimeState, status: &SyncStatus) {
+fn refresh_sync_status_snapshot(state: &NodeRuntimeState, status: &SyncStatus) -> bool {
+    let changed = state
+        .projection_journal
+        .record_sync_status(status.clone(), Some("sync-status-refresh"));
     if let Ok(mut guard) = state.sync_status_snapshot.lock() {
         *guard = status.clone();
+    }
+    changed
+}
+
+fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
+    storage_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|dir| PathBuf::from(dir).join("runtime_projection.json"))
+}
+
+fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord) {
+    let Some(identity_hex) = peer.identity_hex.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let app_received_at_ms = peer
+        .announce_last_seen_at_ms
+        .unwrap_or(peer.last_seen_at_ms);
+    let lxmf_received_at_ms = peer
+        .lxmf_last_seen_at_ms
+        .unwrap_or(app_received_at_ms);
+    let display_name = peer.display_name.clone();
+    let app_data = peer.app_data.clone().unwrap_or_default();
+
+    messaging.record_announce(sdkmsg::AnnounceRecord {
+        destination_hex: peer.destination_hex.clone(),
+        identity_hex: identity_hex.to_string(),
+        destination_kind: "app".to_string(),
+        app_data: app_data.clone(),
+        display_name: display_name.clone(),
+        hops: 0,
+        interface_hex: String::new(),
+        received_at_ms: app_received_at_ms,
+    });
+
+    if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.clone() {
+        messaging.record_announce(sdkmsg::AnnounceRecord {
+            destination_hex: lxmf_destination_hex,
+            identity_hex: identity_hex.to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data,
+            display_name,
+            hops: 0,
+            interface_hex: String::new(),
+            received_at_ms: lxmf_received_at_ms,
+        });
+    }
+
+    messaging.mark_peer_managed(
+        peer.destination_hex.as_str(),
+        matches!(peer.management_state, PeerManagementState::Managed {}),
+    );
+    messaging.set_peer_active_link(
+        peer.destination_hex.as_str(),
+        peer.active_link,
+        peer.last_seen_at_ms,
+    );
+    messaging.record_resolution_attempt(
+        peer.destination_hex.as_str(),
+        peer.last_resolution_attempt_at_ms.unwrap_or(peer.last_seen_at_ms),
+    );
+    messaging.record_resolution_error(
+        peer.destination_hex.as_str(),
+        peer.last_resolution_error.clone(),
+    );
+}
+
+async fn seed_runtime_projection_snapshot(
+    state: &NodeRuntimeState,
+    snapshot: &runtime_projection::RuntimeProjectionSnapshot,
+) {
+    let sync_status = snapshot.sync_status();
+    *state.active_propagation_node_hex.lock().await = sync_status.active_propagation_node_hex.clone();
+    let mut messaging = state.messaging.lock().await;
+    messaging.update_sync_status(|current| {
+        if let Some(sdk_sync_status) = to_sdk_sync_status(sync_status.clone()) {
+            *current = sdk_sync_status;
+        }
+    });
+    for peer in snapshot.peers() {
+        seed_peer_announces(&mut messaging, &peer);
+    }
+    for message in snapshot.messages() {
+        messaging.upsert_message(to_sdk_message_record(message));
     }
 }
 
@@ -662,7 +1246,9 @@ async fn emit_peer_resolved_for_destination(
     bus: &EventBus,
     destination_hex: &str,
 ) {
-    refresh_peer_snapshot(state).await;
+    if !refresh_peer_snapshot(state).await {
+        return;
+    }
     if let Some(peer) = state
         .messaging
         .lock()
@@ -675,7 +1261,9 @@ async fn emit_peer_resolved_for_destination(
 }
 
 async fn emit_peer_changed(state: &NodeRuntimeState, bus: &EventBus, destination_hex: &str) {
-    refresh_peer_snapshot(state).await;
+    if !refresh_peer_snapshot(state).await {
+        return;
+    }
     if let Some(change) = state
         .messaging
         .lock()
@@ -859,8 +1447,9 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
             .await
             .set_active_propagation_node(desired_destination),
     );
-    refresh_sync_status_snapshot(state, &status);
-    bus.emit(NodeEvent::SyncUpdated { status });
+    if refresh_sync_status_snapshot(state, &status) {
+        bus.emit(NodeEvent::SyncUpdated { status });
+    }
 }
 
 async fn resolve_peer_route(
@@ -992,14 +1581,19 @@ async fn upsert_message_record(
     message: MessageRecord,
     emit_received: bool,
 ) {
+    let changed = state
+        .projection_journal
+        .record_message(message.clone(), Some("message-upsert"));
     state.messaging.lock().await.upsert_message(to_sdk_message_record(message.clone()));
 
-    if emit_received {
-        bus.emit(NodeEvent::MessageReceived {
-            message: message.clone(),
-        });
+    if changed {
+        if emit_received {
+            bus.emit(NodeEvent::MessageReceived {
+                message: message.clone(),
+            });
+        }
+        bus.emit(NodeEvent::MessageUpdated { message });
     }
-    bus.emit(NodeEvent::MessageUpdated { message });
 }
 
 async fn message_records_snapshot(
@@ -1105,6 +1699,7 @@ pub enum Command {
 
 #[derive(Clone)]
 struct NodeRuntimeState {
+    app_state: AppStateStore,
     identity: PrivateIdentity,
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
@@ -1119,6 +1714,7 @@ struct NodeRuntimeState {
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
+    projection_journal: Arc<RuntimeProjectionJournal>,
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
     preferred_propagation_node_hex: Option<String>,
@@ -1584,6 +2180,16 @@ async fn emit_received_payload(
                 );
             }
             ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), &metadata).await;
+            persist_received_eam_if_present(
+                state,
+                bus,
+                Some(metadata),
+                fields_bytes.as_deref(),
+                body_utf8.as_str(),
+            )
+            .await;
+            persist_received_event_if_present(state, bus, Some(metadata), fields_bytes.as_deref())
+                .await;
         }
         if !metadata
             .as_ref()
@@ -1913,6 +2519,7 @@ async fn refresh_hub_directory_lxmf(
 pub async fn run_node(
     config: NodeConfig,
     identity: PrivateIdentity,
+    app_state: AppStateStore,
     status: Arc<Mutex<NodeStatus>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
@@ -1996,10 +2603,16 @@ pub async fn run_node(
     let pending_lxmf_acknowledgements: Arc<
         TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>,
     > = Arc::new(TokioMutex::new(HashMap::new()));
-    let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::default()));
+    let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::new(
+        config.stale_after_minutes,
+    )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
     let send_task_semaphore = Arc::new(Semaphore::new(SEND_TASK_CONCURRENCY_LIMIT));
+    let projection_journal = Arc::new(RuntimeProjectionJournal::new(
+        projection_journal_path(config.storage_dir.as_deref()),
+        bus.clone(),
+    ));
     let sdk = Arc::new(RuntimeLxmfSdk::new(
         identity.address_hash().to_hex_string(),
         SdkTransportState {
@@ -2014,6 +2627,7 @@ pub async fn run_node(
     ));
 
     let state = NodeRuntimeState {
+        app_state,
         identity: identity.clone(),
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
@@ -2026,6 +2640,7 @@ pub async fn run_node(
         messaging: messaging.clone(),
         peers_snapshot: peers_snapshot.clone(),
         sync_status_snapshot: sync_status_snapshot.clone(),
+        projection_journal: projection_journal.clone(),
         sdk: sdk.clone(),
         active_propagation_node_hex: active_propagation_node_hex.clone(),
         preferred_propagation_node_hex: config
@@ -2034,6 +2649,17 @@ pub async fn run_node(
             .and_then(|value| normalize_hex_32(value)),
         send_task_semaphore: send_task_semaphore.clone(),
     };
+
+    if let Some(snapshot) = projection_journal.load_snapshot() {
+        projection_journal.seed_snapshot(snapshot.clone());
+        if let Ok(mut guard) = peers_snapshot.lock() {
+            *guard = snapshot.peers();
+        }
+        if let Ok(mut guard) = sync_status_snapshot.lock() {
+            *guard = snapshot.sync_status();
+        }
+        seed_runtime_projection_snapshot(&state, &snapshot).await;
+    }
 
     if let Err(err) = sdk.start().await {
         bus.emit(NodeEvent::Error {
@@ -2044,10 +2670,8 @@ pub async fn run_node(
 
     refresh_peer_snapshot(&state).await;
     sync_auto_propagation_node(&state, &bus).await;
-    refresh_sync_status_snapshot(
-        &state,
-        &from_sdk_sync_status(state.messaging.lock().await.sync_status()),
-    );
+    let initial_sync_status = from_sdk_sync_status(state.messaging.lock().await.sync_status());
+    refresh_sync_status_snapshot(&state, &initial_sync_status);
 
     if let Ok(mut guard) = status.lock() {
         guard.running = true;
@@ -3104,10 +3728,11 @@ pub async fn run_node(
                         .await
                         .set_active_propagation_node(destination_hex),
                 );
-                refresh_sync_status_snapshot(&state, &status_update);
-                bus.emit(NodeEvent::SyncUpdated {
-                    status: status_update,
-                });
+                if refresh_sync_status_snapshot(&state, &status_update) {
+                    bus.emit(NodeEvent::SyncUpdated {
+                        status: status_update,
+                    });
+                }
                 let _ = resp.send(Ok(()));
             }
             Command::RequestLxmfSync { limit, resp } => {
@@ -3121,10 +3746,11 @@ pub async fn run_node(
                         status.detail = None;
                     }),
                 );
-                refresh_sync_status_snapshot(&state, &status_update);
-                bus.emit(NodeEvent::SyncUpdated {
-                    status: status_update,
-                });
+                if refresh_sync_status_snapshot(&state, &status_update) {
+                    bus.emit(NodeEvent::SyncUpdated {
+                        status: status_update,
+                    });
+                }
                 if let Some(value) = limit {
                     info!(
                         "[sync] propagation sync request ignored in mobile runtime requested_limit={value}"
@@ -3230,6 +3856,7 @@ pub async fn run_node(
     }
 
     let _ = state.sdk.shutdown().await;
+    state.projection_journal.flush_now().await;
 
     if let Ok(mut guard) = status.lock() {
         guard.running = false;

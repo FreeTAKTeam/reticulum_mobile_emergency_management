@@ -20,15 +20,15 @@ const route = useRoute();
 onMounted(async () => {
   try {
     await initAppNotifications();
-    messagingStore.init();
-    messagesStore.init();
-    messagesStore.initReplication();
-    eventsStore.init();
-    telemetryStore.init();
-
     await nodeStore.init();
     await nodeStore.startNode();
 
+    messagingStore.init();
+    messagesStore.init();
+    eventsStore.init();
+    telemetryStore.init();
+
+    messagesStore.initReplication();
     eventsStore.initReplication();
     telemetryStore.initReplication();
     await telemetryStore.requestStartupPermission();

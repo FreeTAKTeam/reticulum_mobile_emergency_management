@@ -1,20 +1,21 @@
 import {
+  type AppSettingsRecord,
   DEFAULT_NODE_CONFIG,
   type AnnounceRecord,
   type PeerRecord,
+  type ProjectionInvalidationEvent,
+  type ProjectionScope,
   type SendMode,
+  type SavedPeerRecord,
   type SyncStatus,
   createReticulumNodeClient,
   type AnnounceReceivedEvent,
   type HubDirectoryUpdatedEvent,
-  type LxmfDeliveryEvent,
   type LogLevel,
-  type MessageRecord,
   type NodeConfig,
   type NodeErrorEvent,
   type NodeLogEvent,
   type NodeStatus,
-  type PacketReceivedEvent,
   type PeerChangedEvent,
   type ReticulumNodeClient,
   type StatusChangedEvent,
@@ -36,6 +37,15 @@ import {
   type HubRegistryLinkage,
 } from "../services/hubRegistryBootstrap";
 import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
+import {
+  buildLegacyProjectionState,
+  clearLegacyProjectionStorage,
+  loadUiSettingsProjection,
+  persistUiSettingsProjection as storeUiSettingsProjection,
+  persistWebLegacySavedPeers,
+  persistWebLegacySettings,
+  type NodeUiPreferences,
+} from "../utils/legacyState";
 import type {
   DiscoveredPeer,
   NodeUiSettings,
@@ -45,7 +55,7 @@ import type {
 } from "../types/domain";
 import {
   createPeerListV1,
-  ensureCapabilityTokens,
+  ensureRequiredAnnounceCapabilities,
   extractAnnounceCapabilityText,
   extractAnnouncedName,
   formatAnnounceAppData,
@@ -59,13 +69,13 @@ import {
   TELEMETRY_CAPABILITY,
 } from "../utils/peers";
 import { runtimeProfile } from "../utils/runtimeProfile";
+import {
+  DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+  normalizeTcpCommunityClients,
+} from "../utils/tcpCommunityServers";
 
-const SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
-const SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
-const MESSAGING_SNAPSHOT_COOLDOWN_MS = 60_000;
-const MESSAGING_SNAPSHOT_FALLBACK_INTERVAL_MS = 2 * 60_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
 const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
@@ -84,6 +94,21 @@ const EMPTY_SYNC_STATUS: SyncStatus = {
   messagesReceived: 0,
 };
 
+const EMPTY_OPERATIONAL_SUMMARY = {
+  running: false,
+  peerCountTotal: 0,
+  peerCountCommunicationReady: 0,
+  peerCountMissionReady: 0,
+  peerCountRelayEligible: 0,
+  savedPeerCount: 0,
+  conversationCount: 0,
+  messageCount: 0,
+  eamCount: 0,
+  eventCount: 0,
+  telemetryCount: 0,
+  updatedAtMs: 0,
+};
+
 interface HubRegistrationSnapshot {
   status: HubRegistrationStatus;
   linkage?: HubRegistryLinkage;
@@ -96,8 +121,8 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
   clientMode: "auto",
   autoConnectSaved: true,
-  announceCapabilities: ensureCapabilityTokens("R3AKT,EMergencyMessages", [TELEMETRY_CAPABILITY]),
-  tcpClients: [...DEFAULT_NODE_CONFIG.tcpClients],
+  announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
+  tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   showOnlyCapabilityVerified: true,
@@ -123,9 +148,6 @@ interface UiLogLine {
   message: string;
 }
 
-type PacketListener = (event: PacketReceivedEvent) => void;
-type LxmfDeliveryListener = (event: LxmfDeliveryEvent) => void;
-type MessageListener = (message: MessageRecord) => void;
 type DedicatedFields = Record<string, string>;
 type EventPeerRoute = {
   appDestinationHex: string;
@@ -316,78 +338,94 @@ function normalizeTelemetrySettings(
   };
 }
 
-function normalizeStoredTcpClients(value: unknown): string[] {
-  const tcpClients = Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim())
-    : [...DEFAULT_SETTINGS.tcpClients];
-  const nonEmpty = tcpClients.filter((item) => item.length > 0);
-  if (nonEmpty.length === 1 && nonEmpty[0].toLowerCase() === "rmap.world:4242") {
-    return [];
-  }
-  return nonEmpty;
+function cloneDefaultSettings(): NodeUiSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    telemetry: { ...DEFAULT_SETTINGS.telemetry },
+    hub: { ...DEFAULT_SETTINGS.hub },
+  };
 }
 
-function loadStoredSettings(): NodeUiSettings {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (!raw) {
-      return { ...DEFAULT_SETTINGS, telemetry: { ...DEFAULT_SETTINGS.telemetry }, hub: { ...DEFAULT_SETTINGS.hub } };
+function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
+  return {
+    displayName: settings.displayName,
+    autoConnectSaved: settings.autoConnectSaved,
+    announceCapabilities: settings.announceCapabilities,
+    tcpClients: [...settings.tcpClients],
+    broadcast: settings.broadcast,
+    announceIntervalSeconds: settings.announceIntervalSeconds,
+    telemetry: {
+      enabled: settings.telemetry.enabled,
+      publishIntervalSeconds: settings.telemetry.publishIntervalSeconds,
+      accuracyThresholdMeters: settings.telemetry.accuracyThresholdMeters,
+      staleAfterMinutes: settings.telemetry.staleAfterMinutes,
+      expireAfterMinutes: settings.telemetry.expireAfterMinutes,
+    },
+    hub: {
+      mode: settings.hub.mode,
+      identityHash: settings.hub.identityHash,
+      apiBaseUrl: settings.hub.apiBaseUrl,
+      apiKey: settings.hub.apiKey,
+      refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
+    },
+  };
+}
+
+function toUiSettingsProjection(
+  next: Pick<NodeUiSettings, "clientMode" | "showOnlyCapabilityVerified">,
+): NodeUiPreferences {
+  return {
+    clientMode: normalizeClientMode(next.clientMode),
+    showOnlyCapabilityVerified: Boolean(next.showOnlyCapabilityVerified),
+  };
+}
+
+function normalizeAppSettingsRecord(
+  runtimeSettings: AppSettingsRecord,
+  uiSettings: NodeUiPreferences,
+  tcpFallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+): NodeUiSettings {
+  return {
+    ...cloneDefaultSettings(),
+    ...runtimeSettings,
+    displayName: normalizeStoredDisplayName(runtimeSettings.displayName),
+    clientMode: normalizeClientMode(uiSettings.clientMode),
+    announceCapabilities: ensureRequiredAnnounceCapabilities(runtimeSettings.announceCapabilities),
+    tcpClients: normalizeTcpCommunityClients(
+      runtimeSettings.tcpClients,
+      tcpFallback,
+    ),
+    showOnlyCapabilityVerified: uiSettings.showOnlyCapabilityVerified,
+    telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
+    hub: {
+      ...DEFAULT_SETTINGS.hub,
+      ...runtimeSettings.hub,
+    },
+  };
+}
+
+function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): SavedPeerRecord[] {
+  return Object.values(savedPeers).map((peer) => ({
+    destination: normalizeDestinationHex(peer.destination),
+    label: peer.label?.trim() || undefined,
+    savedAt: Number(peer.savedAt ?? nowMs()),
+  }));
+}
+
+function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedPeer> {
+  const out: Record<string, SavedPeer> = {};
+  for (const peer of records) {
+    const destination = normalizeDestinationHex(peer.destination ?? "");
+    if (!isValidDestinationHex(destination)) {
+      continue;
     }
-    const parsed = JSON.parse(raw) as Partial<NodeUiSettings>;
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      hub: {
-        ...DEFAULT_SETTINGS.hub,
-        ...(parsed.hub ?? {}),
-      },
-      telemetry: normalizeTelemetrySettings(parsed.telemetry),
-      displayName: normalizeStoredDisplayName(parsed.displayName),
-      announceCapabilities: ensureCapabilityTokens(
-        typeof parsed.announceCapabilities === "string"
-          ? parsed.announceCapabilities
-          : DEFAULT_SETTINGS.announceCapabilities,
-        [TELEMETRY_CAPABILITY],
-      ),
-      clientMode: normalizeClientMode(parsed.clientMode),
-      tcpClients: normalizeStoredTcpClients(parsed.tcpClients),
+    out[destination] = {
+      destination,
+      label: peer.label?.trim() || undefined,
+      savedAt: Number(peer.savedAt ?? nowMs()),
     };
-  } catch {
-    return { ...DEFAULT_SETTINGS, telemetry: { ...DEFAULT_SETTINGS.telemetry }, hub: { ...DEFAULT_SETTINGS.hub } };
   }
-}
-
-function saveSettings(settings: NodeUiSettings): void {
-  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-}
-
-function loadSavedPeers(): Record<string, SavedPeer> {
-  try {
-    const raw = localStorage.getItem(SAVED_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as SavedPeer[];
-    const out: Record<string, SavedPeer> = {};
-    for (const peer of parsed) {
-      const destination = normalizeDestinationHex(peer.destination ?? "");
-      if (!isValidDestinationHex(destination)) {
-        continue;
-      }
-      out[destination] = {
-        destination,
-        label: peer.label?.trim() || undefined,
-        savedAt: Number(peer.savedAt ?? nowMs()),
-      };
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function saveSavedPeers(savedPeers: Record<string, SavedPeer>): void {
-  localStorage.setItem(SAVED_STORAGE_KEY, JSON.stringify(Object.values(savedPeers)));
+  return out;
 }
 
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
@@ -395,11 +433,12 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
-    tcpClients: settings.tcpClients.filter((entry) => entry.trim().length > 0),
+    tcpClients: normalizeTcpCommunityClients(settings.tcpClients),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
+    staleAfterMinutes: settings.telemetry.staleAfterMinutes,
     announceCapabilities: formatAnnounceAppData(
-      ensureCapabilityTokens(settings.announceCapabilities, [TELEMETRY_CAPABILITY]),
+      ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
       displayName,
     ),
     hubMode: settings.hub.mode,
@@ -411,10 +450,10 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
 }
 
 export const useNodeStore = defineStore("node", () => {
-  const settings = reactive<NodeUiSettings>(loadStoredSettings());
+  const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
-  const savedByDestination = reactive<Record<string, SavedPeer>>(loadSavedPeers());
+  const savedByDestination = reactive<Record<string, SavedPeer>>({});
   const appDestinationByIdentity = reactive<Record<string, string>>({});
   const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
   const livePresenceByDestination = reactive<Record<string, number>>({});
@@ -423,6 +462,7 @@ export const useNodeStore = defineStore("node", () => {
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
+  const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
   const hubRegistration = reactive<HubRegistrationSnapshot>({
     status: settings.hub.mode === "Disabled" ? "disabled" : "pending",
     linkage: loadHubRegistryLinkage() ?? undefined,
@@ -433,20 +473,27 @@ export const useNodeStore = defineStore("node", () => {
 
   const client = shallowRef<ReticulumNodeClient | null>(null);
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
-  const packetListeners = new Set<PacketListener>();
-  const lxmfDeliveryListeners = new Set<LxmfDeliveryListener>();
-  const messageListeners = new Set<MessageListener>();
   const identityResolutionInFlight = new Set<string>();
   const autoConnectInFlight = new Set<string>();
   const autoConnectQueue: string[] = [];
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
   let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
-  let messagingRefreshTimerId: number | null = null;
-  let lastMessagingSnapshotAtMs = 0;
+  let refreshMessagingStatePromise: Promise<void> | null = null;
+  let refreshSettingsPromise: Promise<void> | null = null;
+  let refreshSavedPeersPromise: Promise<void> | null = null;
+  let refreshOperationalSummaryPromise: Promise<void> | null = null;
+  let initPromise: Promise<void> | null = null;
   const startupSettling = ref(false);
   const autoConnectQueueActive = ref(false);
-  let deferredMessagingRefreshReason: string | null = null;
+
+  applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
+
+  function defaultsWithTcpFallback(): string[] {
+    return DEFAULT_SETTINGS.tcpClients.length > 0
+      ? [...DEFAULT_SETTINGS.tcpClients]
+      : [...DEFAULT_TCP_COMMUNITY_ENDPOINTS];
+  }
 
   function appendLog(level: string, message: string): void {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
@@ -806,12 +853,191 @@ export const useNodeStore = defineStore("node", () => {
     ].join(" ");
   }
 
-  function persistSavedPeers(): void {
-    saveSavedPeers(savedByDestination);
+  function applyUiSettingsProjection(next: NodeUiPreferences): void {
+    settings.clientMode = normalizeClientMode(next.clientMode);
+    settings.showOnlyCapabilityVerified = Boolean(next.showOnlyCapabilityVerified);
   }
 
-  function persistSettings(): void {
-    saveSettings(settings);
+  function applySettingsProjection(next: NodeUiSettings): void {
+    settings.displayName = next.displayName;
+    settings.autoConnectSaved = next.autoConnectSaved;
+    settings.announceCapabilities = next.announceCapabilities;
+    settings.tcpClients = [...next.tcpClients];
+    settings.broadcast = next.broadcast;
+    settings.announceIntervalSeconds = next.announceIntervalSeconds;
+    settings.telemetry = { ...next.telemetry };
+    settings.hub = { ...next.hub };
+    applyUiSettingsProjection(toUiSettingsProjection(next));
+  }
+
+  function applySavedPeersProjection(records: SavedPeerRecord[]): void {
+    const nextSavedPeers = fromSavedPeerRecords(records);
+    const previousDestinations = new Set(Object.keys(savedByDestination));
+
+    for (const [destination, peer] of Object.entries(nextSavedPeers)) {
+      savedByDestination[destination] = peer;
+      upsertDiscovered(
+        destination,
+        {
+          label: peer.label,
+          verifiedCapability: discoveredByDestination[destination]?.verifiedCapability ?? false,
+          lastSeenAt: peer.savedAt,
+          communicationReady: discoveredByDestination[destination]?.communicationReady ?? false,
+          missionReady: discoveredByDestination[destination]?.missionReady ?? false,
+          relayEligible: discoveredByDestination[destination]?.relayEligible ?? false,
+          stale: discoveredByDestination[destination]?.stale ?? false,
+          activeLink: discoveredByDestination[destination]?.activeLink ?? false,
+        },
+        "import",
+      );
+      previousDestinations.delete(destination);
+    }
+
+    for (const destination of previousDestinations) {
+      delete savedByDestination[destination];
+      const peer = discoveredByDestination[destination];
+      if (!peer) {
+        continue;
+      }
+      peer.sources = peer.sources.filter((source) => source !== "import");
+    }
+  }
+
+  async function refreshSettingsProjection(): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    if (refreshSettingsPromise) {
+      return refreshSettingsPromise;
+    }
+    refreshSettingsPromise = (async () => {
+      const record = await client.value!.getAppSettings();
+      if (record) {
+        applySettingsProjection(
+          normalizeAppSettingsRecord(
+            record,
+            loadUiSettingsProjection(DEFAULT_SETTINGS),
+            defaultsWithTcpFallback(),
+          ),
+        );
+      }
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Settings projection refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshSettingsPromise = null;
+      });
+    return refreshSettingsPromise;
+  }
+
+  async function refreshSavedPeersProjection(): Promise<void> {
+    if (!client.value) {
+      return;
+    }
+    if (refreshSavedPeersPromise) {
+      return refreshSavedPeersPromise;
+    }
+    refreshSavedPeersPromise = (async () => {
+      const peers = await client.value!.getSavedPeers();
+      applySavedPeersProjection(peers);
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Saved-peer projection refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshSavedPeersPromise = null;
+      });
+    return refreshSavedPeersPromise;
+  }
+
+  async function refreshOperationalSummaryProjection(): Promise<void> {
+    if (!client.value) {
+      operationalSummary.value = { ...EMPTY_OPERATIONAL_SUMMARY };
+      return;
+    }
+    if (refreshOperationalSummaryPromise) {
+      return refreshOperationalSummaryPromise;
+    }
+    refreshOperationalSummaryPromise = (async () => {
+      operationalSummary.value = await client.value!.getOperationalSummary();
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Operational summary refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshOperationalSummaryPromise = null;
+      });
+    return refreshOperationalSummaryPromise;
+  }
+
+  async function persistSettingsProjection(nextSettings: NodeUiSettings = settings): Promise<void> {
+    const normalizedUiSettings = toUiSettingsProjection(nextSettings);
+    storeUiSettingsProjection(normalizedUiSettings);
+    applyUiSettingsProjection(normalizedUiSettings);
+
+    if (runtimeProfile === "web") {
+      persistWebLegacySettings(nextSettings);
+      applySettingsProjection(nextSettings);
+      return;
+    }
+    if (!client.value) {
+      return;
+    }
+    applySettingsProjection(nextSettings);
+    await client.value.setAppSettings(toAppSettingsRecord(nextSettings));
+    await refreshOperationalSummaryProjection();
+  }
+
+  async function persistSavedPeersProjection(nextSavedPeers: Record<string, SavedPeer>): Promise<void> {
+    const records = toSavedPeerRecords(nextSavedPeers);
+    if (runtimeProfile === "web") {
+      persistWebLegacySavedPeers(records);
+      applySavedPeersProjection(records);
+      return;
+    }
+    if (!client.value) {
+      return;
+    }
+    await client.value.setSavedPeers(records);
+    applySavedPeersProjection(records);
+    await refreshOperationalSummaryProjection();
+  }
+
+  async function importLegacyProjectionState(): Promise<void> {
+    const legacyState = buildLegacyProjectionState(DEFAULT_SETTINGS);
+    if (!legacyState) {
+      return;
+    }
+
+    storeUiSettingsProjection(legacyState.uiSettings);
+    applyUiSettingsProjection(legacyState.uiSettings);
+
+    if (runtimeProfile === "web") {
+      if (legacyState.payload.settings) {
+        applySettingsProjection(
+          normalizeAppSettingsRecord(
+            legacyState.payload.settings,
+            legacyState.uiSettings,
+            defaultsWithTcpFallback(),
+          ),
+        );
+      }
+      if (legacyState.payload.savedPeers.length > 0) {
+        applySavedPeersProjection(legacyState.payload.savedPeers);
+      }
+      return;
+    }
+
+    if (!client.value) {
+      return;
+    }
+
+    const completed = await client.value.legacyImportCompleted();
+    if (!completed) {
+      await client.value.importLegacyState(legacyState.payload);
+    }
+    clearLegacyProjectionStorage();
   }
 
   function recordLivePresence(
@@ -1040,11 +1266,6 @@ export const useNodeStore = defineStore("node", () => {
       await refreshMessagingState();
     } finally {
       startupSettling.value = false;
-      if (deferredMessagingRefreshReason) {
-        const pendingReason = deferredMessagingRefreshReason;
-        deferredMessagingRefreshReason = null;
-        scheduleMessagingSnapshotRefresh(`${reason} settle release (${pendingReason})`, 150);
-      }
     }
   }
 
@@ -1179,7 +1400,7 @@ export const useNodeStore = defineStore("node", () => {
           fieldsBase64: buildMissionCommandFieldsBase64([command]),
         });
       },
-      onPacket: (listener) => onPacket(listener),
+      onPacket: (listener) => client.value?.on("packetReceived", listener) ?? (() => undefined),
     };
   }
 
@@ -1282,27 +1503,36 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
+        void refreshOperationalSummaryProjection();
         void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        scheduleMessagingSnapshotRefresh(
-          `announce ${event.destinationKind}:${normalizeDestinationHex(event.destinationHex)}`,
-        );
+        presenceNow.value = event.receivedAtMs;
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
+        const destination = normalizeDestinationHex(event.change.destinationHex);
+        if (isLocalDestinationIdentityPair(destination, event.change.identityHex)) {
+          return;
+        }
         presenceNow.value = nowMs();
         applyPeerChanged(event.change);
+        void refreshOperationalSummaryProjection();
         logUi(
           "Debug",
-          `[peers] peerChanged destination=${normalizeDestinationHex(event.change.destinationHex)} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(event.change.destinationHex)}.`,
+          `[peers] peerChanged destination=${destination} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(destination)}.`,
         );
       }),
       nodeClient.on("peerResolved", (peer: PeerRecord) => {
+        const destination = normalizeDestinationHex(peer.destinationHex);
+        if (isLocalDestinationIdentityPair(destination, peer.identityHex)) {
+          return;
+        }
         presenceNow.value = peer.lastSeenAtMs;
         upsertResolvedPeer(peer);
+        void refreshOperationalSummaryProjection();
         logUi(
           "Debug",
-          `[peers] peerResolved destination=${normalizeDestinationHex(peer.destinationHex)} state=${peer.state} management=${peer.managementState} availability=${peer.availabilityState} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
+          `[peers] peerResolved destination=${destination} state=${peer.state} management=${peer.managementState} availability=${peer.availabilityState} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
         );
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
@@ -1322,24 +1552,23 @@ export const useNodeStore = defineStore("node", () => {
         }
         lastHubRefreshAt.value = event.receivedAtMs;
       }),
-      nodeClient.on("packetReceived", (event: PacketReceivedEvent) => {
-        for (const listener of packetListeners) {
-          listener(event);
-        }
-      }),
-      nodeClient.on("lxmfDelivery", (event: LxmfDeliveryEvent) => {
-        for (const listener of lxmfDeliveryListeners) {
-          listener(event);
-        }
-      }),
-      nodeClient.on("messageReceived", (message: MessageRecord) => {
-        for (const listener of messageListeners) {
-          listener(message);
-        }
-      }),
-      nodeClient.on("messageUpdated", (message: MessageRecord) => {
-        for (const listener of messageListeners) {
-          listener(message);
+      nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
+        switch (event.scope) {
+          case "AppSettings":
+            void refreshSettingsProjection();
+            break;
+          case "SavedPeers":
+            void refreshSavedPeersProjection();
+            break;
+          case "OperationalSummary":
+            void refreshOperationalSummaryProjection();
+            break;
+          case "Peers":
+          case "SyncStatus":
+            void refreshMessagingState();
+            break;
+          default:
+            break;
         }
       }),
       nodeClient.on("syncUpdated", (statusUpdate: SyncStatus) => {
@@ -1398,86 +1627,62 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
 
-    try {
+    if (refreshMessagingStatePromise) {
+      return refreshMessagingStatePromise;
+    }
+
+    refreshMessagingStatePromise = (async () => {
       const [peers, nextSyncStatus] = await Promise.all([
-        client.value.listPeers(),
-        client.value.getLxmfSyncStatus(),
+        client.value!.listPeers(),
+        client.value!.getLxmfSyncStatus(),
       ]);
-      lastMessagingSnapshotAtMs = nowMs();
       reconcileNativePeerSnapshot(peers);
       for (const peer of peers) {
         upsertResolvedPeer(peer);
       }
       syncStatus.value = { ...nextSyncStatus };
-    } catch (error: unknown) {
-      appendLog("Debug", `Messaging snapshot refresh skipped: ${errorMessage(error)}`);
-    }
-  }
+      await refreshOperationalSummaryProjection();
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshMessagingStatePromise = null;
+      });
 
-  function scheduleMessagingSnapshotRefresh(reason: string, delayMs = 400): void {
-    if (startupSettling.value) {
-      deferredMessagingRefreshReason = reason;
-      return;
-    }
-    const remainingCooldownMs = Math.max(
-      0,
-      MESSAGING_SNAPSHOT_COOLDOWN_MS - (nowMs() - lastMessagingSnapshotAtMs),
-    );
-    const nextDelayMs = Math.max(delayMs, remainingCooldownMs);
-    if (messagingRefreshTimerId !== null) {
-      window.clearTimeout(messagingRefreshTimerId);
-    }
-    messagingRefreshTimerId = window.setTimeout(() => {
-      messagingRefreshTimerId = null;
-      void refreshMessagingState()
-        .then(() => {
-          appendLog("Debug", `[peers] refreshed native peer snapshot after ${reason}.`);
-        })
-        .catch(() => undefined);
-    }, nextDelayMs);
+    return refreshMessagingStatePromise;
   }
 
   async function init(): Promise<void> {
+    if (initPromise) {
+      return initPromise;
+    }
     if (initialized.value) {
       return;
     }
-    initialized.value = true;
 
-    client.value = buildClient();
-    bindClientEvents(client.value);
-    if (presenceTickerId === null) {
-      presenceTickerId = window.setInterval(() => {
-        presenceNow.value = nowMs();
-        if (
-          status.value.running
-          && !startupSettling.value
-          && nowMs() - lastMessagingSnapshotAtMs >= MESSAGING_SNAPSHOT_FALLBACK_INTERVAL_MS
-        ) {
-          scheduleMessagingSnapshotRefresh("presence fallback", 250);
-        }
-      }, PEER_PRESENCE_TICK_MS);
-    }
+    initPromise = (async () => {
+      client.value = buildClient();
+      bindClientEvents(client.value);
+      await importLegacyProjectionState();
+      await Promise.all([
+        refreshSettingsProjection(),
+        refreshSavedPeersProjection(),
+        refreshOperationalSummaryProjection(),
+      ]);
+      if (presenceTickerId === null) {
+        presenceTickerId = window.setInterval(() => {
+          presenceNow.value = nowMs();
+        }, PEER_PRESENCE_TICK_MS);
+      }
+      await refreshHubRegistrationState(false);
+      initialized.value = true;
+    })()
+      .finally(() => {
+        initPromise = null;
+      });
 
-    for (const savedPeer of Object.values(savedByDestination)) {
-      upsertDiscovered(
-        savedPeer.destination,
-        {
-          label: savedPeer.label,
-          verifiedCapability: false,
-          lastSeenAt: savedPeer.savedAt,
-          communicationReady: false,
-          missionReady: false,
-          relayEligible: false,
-          stale: false,
-          activeLink: false,
-        },
-        "import",
-      );
-    }
-
-    await refreshStatusSnapshot();
-    await refreshMessagingState();
-    await refreshHubRegistrationState(status.value.running && settings.hub.mode !== "Disabled");
+    return initPromise;
   }
 
   async function startNode(): Promise<void> {
@@ -1490,6 +1695,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await refreshMessagingState();
       await configureClientLogging();
       await settleStartupDiscovery("startup");
       await refreshHubRegistrationState(true);
@@ -1533,6 +1739,7 @@ export const useNodeStore = defineStore("node", () => {
       clearLastError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
+      await refreshMessagingState();
       await configureClientLogging();
       await settleStartupDiscovery("restart");
       await refreshHubRegistrationState(true);
@@ -1610,7 +1817,7 @@ export const useNodeStore = defineStore("node", () => {
 
   async function refreshHubDirectory(): Promise<void> {
     try {
-      if (!client.value) {
+      if (!client.value || !status.value.running) {
         return;
       }
       clearLastError();
@@ -1628,8 +1835,14 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function setAnnounceCapabilities(capabilityString: string): Promise<void> {
-    settings.announceCapabilities = ensureCapabilityTokens(capabilityString, [TELEMETRY_CAPABILITY]);
-    persistSettings();
+    settings.announceCapabilities = ensureRequiredAnnounceCapabilities(capabilityString);
+    const nextSettings = normalizeAppSettingsRecord(
+      toAppSettingsRecord(settings),
+      toUiSettingsProjection(settings),
+      defaultsWithTcpFallback(),
+    );
+    await init();
+    await persistSettingsProjection(nextSettings);
 
     if (!client.value || !status.value.running) {
       return;
@@ -1643,39 +1856,44 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function savePeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
     if (!isValidDestinationHex(destination)) {
       return;
     }
     const discovered = discoveredByDestination[destination];
-    savedByDestination[destination] = {
-      destination,
-      label: discovered?.label,
-      savedAt: nowMs(),
+    const nextSavedPeers = {
+      ...savedByDestination,
+      [destination]: {
+        destination,
+        label: discovered?.label,
+        savedAt: nowMs(),
+      },
     };
-    persistSavedPeers();
+    await persistSavedPeersProjection(nextSavedPeers);
   }
 
   async function unsavePeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
-    delete savedByDestination[destination];
-    persistSavedPeers();
-    if (discoveredByDestination[destination]) {
-      discoveredByDestination[destination].sources = discoveredByDestination[
-        destination
-      ].sources.filter((source) => source !== "import");
-    }
+    const nextSavedPeers = { ...savedByDestination };
+    delete nextSavedPeers[destination];
+    await persistSavedPeersProjection(nextSavedPeers);
   }
 
   async function setPeerLabel(destinationRaw: string, label: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
     const normalizedLabel = label.trim();
     if (savedByDestination[destination]) {
-      savedByDestination[destination] = {
-        ...savedByDestination[destination],
-        label: normalizedLabel || undefined,
+      const nextSavedPeers = {
+        ...savedByDestination,
+        [destination]: {
+          ...savedByDestination[destination],
+          label: normalizedLabel || undefined,
+        },
       };
-      persistSavedPeers();
+      await persistSavedPeersProjection(nextSavedPeers);
     }
     if (discoveredByDestination[destination]) {
       discoveredByDestination[destination].label = normalizedLabel || undefined;
@@ -1683,20 +1901,22 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function updateSettings(next: Partial<NodeUiSettings>): void {
+    let uiSettingsChanged = false;
     if (next.displayName !== undefined) {
       settings.displayName = normalizeStoredDisplayName(next.displayName);
     }
     if (next.clientMode) {
       settings.clientMode = next.clientMode;
+      uiSettingsChanged = true;
     }
     if (typeof next.autoConnectSaved === "boolean") {
       settings.autoConnectSaved = next.autoConnectSaved;
     }
     if (next.announceCapabilities !== undefined) {
-      settings.announceCapabilities = ensureCapabilityTokens(next.announceCapabilities, [TELEMETRY_CAPABILITY]);
+      settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
     }
-    if (next.tcpClients) {
-      settings.tcpClients = [...next.tcpClients];
+    if (next.tcpClients !== undefined) {
+      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback());
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
@@ -1706,6 +1926,7 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (typeof next.showOnlyCapabilityVerified === "boolean") {
       settings.showOnlyCapabilityVerified = next.showOnlyCapabilityVerified;
+      uiSettingsChanged = true;
     }
     if (next.telemetry) {
       settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
@@ -1716,7 +1937,19 @@ export const useNodeStore = defineStore("node", () => {
         ...next.hub,
       };
     }
-    persistSettings();
+    const nextSettings = normalizeAppSettingsRecord(
+      toAppSettingsRecord(settings),
+      toUiSettingsProjection(settings),
+      defaultsWithTcpFallback(),
+    );
+    if (uiSettingsChanged) {
+      storeUiSettingsProjection(toUiSettingsProjection(settings));
+    }
+    void init()
+      .then(() => persistSettingsProjection(nextSettings))
+      .catch((error: unknown) => {
+        appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
+      });
     void refreshHubRegistrationState(settings.hub.mode !== "Disabled");
   }
 
@@ -1754,33 +1987,15 @@ export const useNodeStore = defineStore("node", () => {
         "import",
       );
     }
-
-    persistSavedPeers();
+    void init()
+      .then(() => persistSavedPeersProjection({ ...savedByDestination }))
+      .catch((error: unknown) => {
+        appendLog("Warn", `Saved-peer projection persist failed: ${errorMessage(error)}`);
+      });
   }
 
   function parsePeerListText(text: string): ReturnType<typeof parsePeerListV1> {
     return parsePeerListV1(text);
-  }
-
-  function onPacket(listener: PacketListener): () => void {
-    packetListeners.add(listener);
-    return () => {
-      packetListeners.delete(listener);
-    };
-  }
-
-  function onLxmfDelivery(listener: LxmfDeliveryListener): () => void {
-    lxmfDeliveryListeners.add(listener);
-    return () => {
-      lxmfDeliveryListeners.delete(listener);
-    };
-  }
-
-  function onMessage(listener: MessageListener): () => void {
-    messageListeners.add(listener);
-    return () => {
-      messageListeners.delete(listener);
-    };
   }
 
   function hasFreshPresence(lastSeenAt?: number): boolean {
@@ -2254,6 +2469,11 @@ function peerByAnyKnownDestination(
       bindClientEvents(client.value);
       await configureClientLogging();
       status.value = { ...EMPTY_STATUS };
+      await Promise.all([
+        refreshSettingsProjection(),
+        refreshSavedPeersProjection(),
+        refreshOperationalSummaryProjection(),
+      ]);
       await refreshHubRegistrationState(false);
       appendLog("Info", "Node client recreated.");
     } catch (error: unknown) {
@@ -2265,6 +2485,7 @@ function peerByAnyKnownDestination(
     settings,
     status,
     syncStatus,
+    operationalSummary,
     hubRegistration,
     hubBootstrapProfile,
     hubRegistrationReady,
@@ -2318,9 +2539,6 @@ function peerByAnyKnownDestination(
     importPeerList,
     parsePeerListText,
     logUi,
-    onPacket,
-    onLxmfDelivery,
-    onMessage,
     announceNow,
     requestPeerIdentity,
     sendBytes,

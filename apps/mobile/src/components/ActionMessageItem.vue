@@ -32,6 +32,22 @@ const overallBand = computed(() => getOverallStatusBand(overallScore.value));
 const ringOffset = computed(() => 276.46 - ((276.46 * overallScore.value) / 100));
 const toggleLabel = computed(() => (isExpanded.value ? "Hide statuses" : "Show statuses"));
 const overallTitle = computed(() => `Overall readiness ${overallScore.value}% (${overallBand.value})`);
+const reporterLabel = computed(() => {
+  const value = props.message.reportedBy?.trim() || props.message.source?.display_name?.trim();
+  return value ? `Reported by ${value}` : "";
+});
+const syncedLabel = computed(() => {
+  const timestamp = props.message.lastSyncedAt ?? props.message.updatedAt;
+  if (!timestamp) {
+    return "";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    day: "numeric",
+  }).format(timestamp);
+});
 const syncLabel = computed(() => {
   if (!props.message.syncState || props.message.syncState === "synced") {
     return "";
@@ -93,6 +109,12 @@ function cycleStatus(field: ActionMessageStatusField): void {
           <p class="group">
             Team: {{ formattedTeam }}
             <span v-if="syncLabel" class="sync-chip">{{ syncLabel }}</span>
+            <span v-else-if="props.message.lastSyncedAt" class="sync-chip sync-chip-success">Synced</span>
+          </p>
+          <p v-if="reporterLabel || syncedLabel" class="meta">
+            <span v-if="reporterLabel">{{ reporterLabel }}</span>
+            <span v-if="reporterLabel && syncedLabel" aria-hidden="true"> • </span>
+            <span v-if="syncedLabel">Updated {{ syncedLabel }}</span>
           </p>
         </div>
 
@@ -201,6 +223,15 @@ function cycleStatus(field: ActionMessageStatusField): void {
   margin: 0.22rem 0 0;
 }
 
+.meta {
+  color: #7ea6dc;
+  font-family: var(--font-ui);
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  margin: 0.28rem 0 0;
+  text-transform: uppercase;
+}
+
 .sync-chip {
   background: rgb(47 64 105 / 78%);
   border: 1px solid rgb(112 147 220 / 38%);
@@ -213,6 +244,12 @@ function cycleStatus(field: ActionMessageStatusField): void {
   margin-left: 0.45rem;
   padding: 0.1rem 0.45rem;
   text-transform: uppercase;
+}
+
+.sync-chip-success {
+  background: rgb(14 67 42 / 82%);
+  border-color: rgb(71 214 145 / 40%);
+  color: #8df3c1;
 }
 
 .overall {

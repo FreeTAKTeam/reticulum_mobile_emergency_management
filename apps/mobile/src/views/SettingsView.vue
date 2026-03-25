@@ -4,7 +4,7 @@ import { computed, reactive, ref, useTemplateRef } from "vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import { ensureCapabilityTokens, parseCapabilityTokens, TELEMETRY_CAPABILITY } from "../utils/peers";
+import { ensureRequiredAnnounceCapabilities, parseCapabilityTokens } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
 interface KnownTcpServerOption {
@@ -20,14 +20,13 @@ interface HubAnnounceCandidate {
 
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
-telemetryStore.init();
 
 const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
   autoConnectSaved: nodeStore.settings.autoConnectSaved,
   showOnlyCapabilityVerified: nodeStore.settings.showOnlyCapabilityVerified,
-  announceCapabilities: ensureCapabilityTokens(nodeStore.settings.announceCapabilities, [TELEMETRY_CAPABILITY]),
+  announceCapabilities: ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
@@ -237,7 +236,7 @@ function applySettings(): void {
     clientMode: form.clientMode,
     autoConnectSaved: form.autoConnectSaved,
     showOnlyCapabilityVerified: form.showOnlyCapabilityVerified,
-    announceCapabilities: ensureCapabilityTokens(form.announceCapabilities.trim(), [TELEMETRY_CAPABILITY]),
+    announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
     announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
     tcpClients: normalizedTcpClients.value,
     broadcast: form.broadcast,

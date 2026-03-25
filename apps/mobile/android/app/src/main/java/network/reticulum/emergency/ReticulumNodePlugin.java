@@ -27,6 +27,7 @@ public class ReticulumNodePlugin extends Plugin {
     @Override
     public void load() {
         super.load();
+        initializeBridgeStorage();
         Logger.info(TAG, "ReticulumNode plugin loaded.");
     }
 
@@ -413,6 +414,199 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void legacyImportCompleted(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to read legacy import state.",
+            "Native legacy import JSON parse failed.",
+            ReticulumBridge::legacyImportCompletedJson
+        );
+    }
+
+    @PluginMethod
+    public void importLegacyState(PluginCall call) {
+        JSObject payload = call.getObject("payload", new JSObject());
+        runIntBridgeCall(
+            call,
+            "Failed to import legacy state.",
+            () -> ReticulumBridge.importLegacyStateJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void getAppSettings(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get app settings.",
+            "Native app settings JSON parse failed.",
+            ReticulumBridge::getAppSettingsJson
+        );
+    }
+
+    @PluginMethod
+    public void setAppSettings(PluginCall call) {
+        JSObject payload = call.getObject("settings", new JSObject());
+        runIntBridgeCall(
+            call,
+            "Failed to save app settings.",
+            () -> ReticulumBridge.setAppSettingsJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void getSavedPeers(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get saved peers.",
+            "Native saved peers JSON parse failed.",
+            ReticulumBridge::getSavedPeersJson
+        );
+    }
+
+    @PluginMethod
+    public void setSavedPeers(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("savedPeers", call.getArray("savedPeers"));
+        runIntBridgeCall(
+            call,
+            "Failed to save peers.",
+            () -> ReticulumBridge.setSavedPeersJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void getOperationalSummary(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get operational summary.",
+            "Native operational summary JSON parse failed.",
+            ReticulumBridge::getOperationalSummaryJson
+        );
+    }
+
+    @PluginMethod
+    public void getEams(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get EAMs.",
+            "Native EAM JSON parse failed.",
+            ReticulumBridge::getEamsJson
+        );
+    }
+
+    @PluginMethod
+    public void upsertEam(PluginCall call) {
+        JSObject payload = call.getObject("eam", new JSObject());
+        runIntBridgeCall(
+            call,
+            "Failed to save EAM.",
+            () -> ReticulumBridge.upsertEamJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void deleteEam(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("callsign", call.getString("callsign"));
+        Long deletedAtMs = call.getLong("deletedAtMs");
+        if (deletedAtMs != null) {
+            payload.put("deletedAtMs", deletedAtMs);
+        }
+        runIntBridgeCall(
+            call,
+            "Failed to delete EAM.",
+            () -> ReticulumBridge.deleteEamJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void getEamTeamSummary(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("teamUid", call.getString("teamUid"));
+        runStringBridgeCall(
+            call,
+            "Failed to get EAM team summary.",
+            "Native EAM team summary JSON parse failed.",
+            () -> ReticulumBridge.getEamTeamSummaryJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getEvents(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get events.",
+            "Native events JSON parse failed.",
+            ReticulumBridge::getEventsJson
+        );
+    }
+
+    @PluginMethod
+    public void upsertEvent(PluginCall call) {
+        JSObject payload = call.getObject("event", new JSObject());
+        runIntBridgeCall(
+            call,
+            "Failed to save event.",
+            () -> ReticulumBridge.upsertEventJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void deleteEvent(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("uid", call.getString("uid"));
+        Long deletedAtMs = call.getLong("deletedAtMs");
+        if (deletedAtMs != null) {
+            payload.put("deletedAtMs", deletedAtMs);
+        }
+        runIntBridgeCall(
+            call,
+            "Failed to delete event.",
+            () -> ReticulumBridge.deleteEventJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void getTelemetryPositions(PluginCall call) {
+        runStringBridgeCall(
+            call,
+            "Failed to get telemetry positions.",
+            "Native telemetry JSON parse failed.",
+            ReticulumBridge::getTelemetryPositionsJson
+        );
+    }
+
+    @PluginMethod
+    public void recordLocalTelemetryFix(PluginCall call) {
+        JSObject payload = call.getObject("position", new JSObject());
+        runIntBridgeCall(
+            call,
+            "Failed to record local telemetry.",
+            () -> ReticulumBridge.recordLocalTelemetryFixJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
+    public void deleteLocalTelemetry(PluginCall call) {
+        JSObject payload = new JSObject();
+        payload.put("callsign", call.getString("callsign"));
+        runIntBridgeCall(
+            call,
+            "Failed to delete local telemetry.",
+            () -> ReticulumBridge.deleteLocalTelemetryJson(payload.toString()),
+            false
+        );
+    }
+
+    @PluginMethod
     public void removeAllListeners(PluginCall call) {
         stopPoller();
         call.resolve();
@@ -601,19 +795,34 @@ public class ReticulumNodePlugin extends Plugin {
         }
     }
 
+    private void initializeBridgeStorage() {
+        File resolved = resolveStorageDir("");
+        int result = ReticulumBridge.initializeStorage(resolved.getAbsolutePath());
+        if (result != 0) {
+            String raw = ReticulumBridge.takeLastErrorJson();
+            Logger.error(
+                TAG,
+                "Failed to initialize native bridge storage: " + (raw == null ? "unknown error" : raw),
+                null
+            );
+        }
+    }
+
     private void normalizeConfig(JSObject config) {
         String rawStorageDir = config.getString("storageDir", "");
+        File resolved = resolveStorageDir(rawStorageDir);
+        config.put("storageDir", resolved.getAbsolutePath());
+    }
+
+    private File resolveStorageDir(String rawStorageDir) {
         String storageDir = rawStorageDir == null ? "" : rawStorageDir.trim();
 
         File filesDir = getContext().getFilesDir();
-        File resolved;
         if (storageDir.isEmpty()) {
-            resolved = new File(filesDir, "reticulum-mobile");
-        } else {
-            File candidate = new File(storageDir);
-            resolved = candidate.isAbsolute() ? candidate : new File(filesDir, storageDir);
+            return new File(filesDir, "reticulum-mobile");
         }
 
-        config.put("storageDir", resolved.getAbsolutePath());
+        File candidate = new File(storageDir);
+        return candidate.isAbsolute() ? candidate : new File(filesDir, storageDir);
     }
 }
