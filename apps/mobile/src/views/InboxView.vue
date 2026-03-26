@@ -7,6 +7,7 @@ import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
+import type { DiscoveredPeer } from "../types/domain";
 import { getMessageOverallScore, getOverallStatusBand } from "../utils/actionMessageStatus";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 
@@ -15,6 +16,12 @@ const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 const mobilePane = shallowRef<"list" | "detail">("list");
+const selectedThreadDestinationHex = shallowRef("");
+
+interface ConnectedPeerOption {
+  value: string;
+  displayName: string;
+}
 
 function safeTrim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -24,18 +31,61 @@ function safeLower(value: unknown): string {
   return safeTrim(value).toLowerCase();
 }
 
+function destinationsMatch(left: unknown, right: unknown): boolean {
+  const normalizedLeft = safeLower(left);
+  const normalizedRight = safeLower(right);
+  return normalizedLeft.length > 0 && normalizedLeft === normalizedRight;
+}
+
 const selectedConversation = computed(() => messagingStore.selectedConversation);
 const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
-const selectedPeerDisplayName = computed(() =>
-  selectedConversation.value?.displayName ?? "",
-);
-
-const selectedDestinationHex = computed(() =>
+const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
+  const seen = new Set<string>();
+  return nodeStore.communicationReadyPeers
+    .map((peer) => {
+      const value = safeTrim(peer.lxmfDestinationHex) || peer.destination;
+      const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
+      return { value, displayName };
+    })
+    .filter((option) => {
+      const normalizedValue = safeLower(option.value);
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return false;
+      }
+      seen.add(normalizedValue);
+      return true;
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+});
+const conversationDestinationHex = computed(() =>
   selectedConversation.value?.destinationHex ?? "",
 );
-const hasSelectedConversation = computed(() => selectedConversation.value !== null);
+const selectedConversationOption = computed<ConnectedPeerOption | null>(() => {
+  const value = conversationDestinationHex.value;
+  if (!safeTrim(value)) {
+    return null;
+  }
+  return {
+    value,
+    displayName: safeTrim(selectedConversation.value?.displayName) || value,
+  };
+});
+const threadDestinationOptions = computed<ConnectedPeerOption[]>(() => {
+  const next = [...connectedPeerOptions.value];
+  const current = selectedConversationOption.value;
+  if (!current) {
+    return next;
+  }
+  if (!next.some((option) => destinationsMatch(option.value, current.value))) {
+    next.unshift(current);
+  }
+  return next;
+});
+const selectedDestinationHex = computed(() =>
+  safeTrim(selectedThreadDestinationHex.value) || conversationDestinationHex.value,
+);
 const conversationCount = computed(() => messagingStore.conversations.length);
 const selectedPeer = computed(() => {
   const destinationHex = safeLower(selectedDestinationHex.value);
@@ -49,6 +99,35 @@ const selectedPeer = computed(() => {
     )
     ?? null;
 });
+const selectedPeerDisplayName = computed(() =>
+  safeTrim(selectedPeer.value?.announcedName)
+  || safeTrim(selectedPeer.value?.label)
+  || safeTrim(selectedConversation.value?.displayName)
+  || selectedDestinationHex.value,
+);
+function findConversationForSelection(
+  destinationHex: string,
+  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex"> | null = null,
+) {
+  return messagingStore.conversations.find((conversation) =>
+    destinationsMatch(conversation.destinationHex, destinationHex)
+    || destinationsMatch(conversation.destinationHex, peer?.destination ?? "")
+    || destinationsMatch(conversation.destinationHex, peer?.lxmfDestinationHex ?? ""),
+  ) ?? null;
+}
+
+const activeThreadConversation = computed(() =>
+  findConversationForSelection(selectedDestinationHex.value, selectedPeer.value),
+);
+const activeThreadMessages = computed(() => {
+  if (!activeThreadConversation.value) {
+    return [];
+  }
+  return activeThreadConversation.value.conversationId === activeConversationId.value
+    ? messagingStore.activeMessages
+    : [];
+});
+
 const targetLookupNames = computed(() =>
   [...new Set([
     selectedPeerDisplayName.value,
@@ -120,7 +199,9 @@ const targetLongitudeLabel = computed(() =>
 );
 
 function handleSelectConversation(conversationId: string): void {
+  const conversation = messagingStore.conversations.find((item) => item.conversationId === conversationId) ?? null;
   messagingStore.selectConversation(conversationId);
+  selectedThreadDestinationHex.value = conversation?.destinationHex ?? "";
   mobilePane.value = "detail";
 }
 
@@ -128,9 +209,15 @@ function showConversationList(): void {
   mobilePane.value = "list";
 }
 
-function showConversationDetail(): void {
-  if (!hasSelectedConversation.value) {
+function handleThreadDestinationSelected(event: Event): void {
+  const nextDestinationHex = safeTrim((event.target as HTMLSelectElement).value);
+  selectedThreadDestinationHex.value = nextDestinationHex;
+  if (!nextDestinationHex) {
     return;
+  }
+  const matchingConversation = findConversationForSelection(nextDestinationHex, selectedPeer.value);
+  if (matchingConversation) {
+    messagingStore.selectConversation(matchingConversation.conversationId);
   }
   mobilePane.value = "detail";
 }
@@ -141,6 +228,10 @@ async function send(bodyUtf8: string): Promise<void> {
     return;
   }
   await messagingStore.sendMessage(destinationHex, bodyUtf8);
+  const matchingConversation = findConversationForSelection(destinationHex, selectedPeer.value);
+  if (matchingConversation) {
+    messagingStore.selectConversation(matchingConversation.conversationId);
+  }
 }
 </script>
 
@@ -158,18 +249,28 @@ async function send(bodyUtf8: string): Promise<void> {
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
         <header class="inbox-panel-header">
-          <div>
-            <p class="panel-kicker">Conversations</p>
-            <h2 class="panel-title">Encrypted Inbox</h2>
-          </div>
-          <button
-            v-if="hasSelectedConversation"
-            type="button"
-            class="pane-toggle mobile-only"
-            @click="showConversationDetail"
+        <div>
+          <p class="panel-kicker">Conversations</p>
+          <h2 class="panel-title">Encrypted Inbox</h2>
+        </div>
+        <label class="peer-thread-picker mobile-only">
+          <select
+            :value="selectedDestinationHex"
+            aria-label="Connect to a peer"
+            class="thread-picker-select"
+            :disabled="threadDestinationOptions.length === 0"
+            @change="handleThreadDestinationSelected"
           >
-            Open Thread
-          </button>
+            <option value="">Connect to a peer</option>
+            <option
+              v-for="option in threadDestinationOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.displayName }}
+            </option>
+          </select>
+        </label>
         </header>
         <p class="panel-copy">
           {{ conversationCount }} conversation{{ conversationCount === 1 ? "" : "s" }} available.
@@ -190,7 +291,7 @@ async function send(bodyUtf8: string): Promise<void> {
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
-          :messages="messagingStore.activeMessages"
+          :messages="activeThreadMessages"
           @back="showConversationList"
           @send="send"
         />
@@ -263,6 +364,10 @@ async function send(bodyUtf8: string): Promise<void> {
   justify-content: space-between;
 }
 
+.inbox-panel-header > div {
+  min-width: 0;
+}
+
 .panel-kicker,
 .panel-title,
 .panel-copy {
@@ -303,28 +408,42 @@ async function send(bodyUtf8: string): Promise<void> {
   min-height: 0;
 }
 
-.pane-toggle {
-  background: linear-gradient(110deg, #00a8ff, #14f0ff);
-  border: 0;
-  border-radius: 11px;
-  color: #032748;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  min-height: 38px;
-  padding: 0 0.95rem;
-  text-transform: uppercase;
-}
-
-.pane-toggle:active {
-  background: linear-gradient(110deg, #0678bf, #10bbd8);
-  transform: translateY(1px) scale(0.985);
-}
-
 .mobile-only {
   display: none;
+}
+
+.peer-thread-picker {
+  display: grid;
+  flex: 1 1 12rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.thread-picker-select {
+  appearance: none;
+  background:
+    linear-gradient(145deg, rgb(8 27 57 / 92%), rgb(5 18 40 / 96%)),
+    linear-gradient(110deg, rgb(0 168 255 / 14%), rgb(20 240 255 / 14%));
+  border: 1px solid rgb(80 145 220 / 32%);
+  border-radius: 11px;
+  color: #dff2ff;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 0.62rem 2rem 0.62rem 0.82rem;
+  width: 100%;
+}
+
+.thread-picker-select:disabled {
+  cursor: default;
+  opacity: 0.82;
+}
+
+.thread-picker-select:active {
+  border-color: rgb(120 227 255 / 42%);
+  transform: translateY(1px) scale(0.99);
 }
 
 @media (max-width: 900px) {
@@ -336,8 +455,13 @@ async function send(bodyUtf8: string): Promise<void> {
     grid-template-columns: 1fr;
   }
 
+  .inbox-panel-header {
+    flex-wrap: wrap;
+  }
+
   .mobile-only {
-    display: inline-flex;
+    display: grid;
+    width: 100%;
   }
 
   .pane-list .detail-panel,
