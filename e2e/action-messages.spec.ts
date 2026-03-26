@@ -84,6 +84,8 @@ test("synced inbound action messages are visible but read-only", async ({ page }
   await expect(messageCard.getByRole("heading", { name: "Pixel" })).toBeVisible();
   await expect(messageCard).toContainText("Synced");
   await expect(messageCard).toContainText("Read only");
+  await expect(messageCard).toContainText("Reported by Pixel");
+  await expect(messageCard).toContainText("Updated");
   await expect(messageCard.getByRole("button", { name: "Edit Pixel" })).toHaveCount(0);
   await expect(messageCard.getByRole("button", { name: "Delete Pixel" })).toHaveCount(0);
 

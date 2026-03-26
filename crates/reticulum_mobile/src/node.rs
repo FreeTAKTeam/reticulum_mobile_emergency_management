@@ -45,8 +45,49 @@ struct NodeInner {
     status: Arc<Mutex<NodeStatus>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
+    active_config: Option<NodeConfigFingerprint>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NodeConfigFingerprint {
+    name: String,
+    storage_dir: Option<String>,
+    tcp_clients: Vec<String>,
+    broadcast: bool,
+    announce_interval_seconds: u32,
+    stale_after_minutes: u32,
+    announce_capabilities: String,
+    hub_mode: crate::types::HubMode,
+    hub_identity_hash: Option<String>,
+    hub_api_base_url: Option<String>,
+    hub_api_key: Option<String>,
+    hub_refresh_interval_seconds: u32,
+}
+
+impl NodeConfigFingerprint {
+    fn from_config(config: &NodeConfig) -> Result<Self, NodeError> {
+        let name = config.name.trim();
+        if name.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            storage_dir: config.storage_dir.clone(),
+            tcp_clients: config.tcp_clients.clone(),
+            broadcast: config.broadcast,
+            announce_interval_seconds: config.announce_interval_seconds,
+            stale_after_minutes: config.stale_after_minutes,
+            announce_capabilities: config.announce_capabilities.clone(),
+            hub_mode: config.hub_mode,
+            hub_identity_hash: config.hub_identity_hash.clone(),
+            hub_api_base_url: config.hub_api_base_url.clone(),
+            hub_api_key: config.hub_api_key.clone(),
+            hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
+        })
+    }
 }
 
 fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
@@ -613,6 +654,7 @@ impl Node {
                     messages_received: 0,
                     detail: None,
                 })),
+                active_config: None,
                 runtime: None,
                 cmd_tx: None,
             }),
@@ -628,14 +670,14 @@ impl Node {
         Ok(())
     }
 
-    pub fn start(&self, config: NodeConfig) -> Result<(), NodeError> {
+    fn start_fresh(
+        &self,
+        config: NodeConfig,
+        config_fingerprint: NodeConfigFingerprint,
+    ) -> Result<(), NodeError> {
         let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         if inner.runtime.is_some() {
             return Err(NodeError::AlreadyRunning {});
-        }
-
-        if config.name.trim().is_empty() {
-            return Err(NodeError::InvalidConfig {});
         }
 
         let identity = load_or_create_identity(config.storage_dir.as_deref(), &config.name)?;
@@ -723,13 +765,35 @@ impl Node {
 
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
+        inner.active_config = Some(config_fingerprint);
 
         Ok(())
+    }
+
+    pub fn start(&self, config: NodeConfig) -> Result<(), NodeError> {
+        let config_fingerprint = NodeConfigFingerprint::from_config(&config)?;
+        let should_restart = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            match (&inner.runtime, &inner.active_config) {
+                (Some(_), Some(active_config)) if active_config == &config_fingerprint => {
+                    return Ok(());
+                }
+                (Some(_), _) => true,
+                _ => false,
+            }
+        };
+
+        if should_restart {
+            self.stop()?;
+        }
+
+        self.start_fresh(config, config_fingerprint)
     }
 
     pub fn stop(&self) -> Result<(), NodeError> {
         let (runtime, cmd_tx, bus, status, peers_snapshot, sync_status_snapshot) = {
             let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.active_config = None;
             (
                 inner.runtime.take(),
                 inner.cmd_tx.take(),
@@ -1555,6 +1619,19 @@ mod tests {
         TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
+    fn wait_until_running(node: &Node) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if node.get_status().running {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("node did not report running in time");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     struct CurrentDirGuard {
         previous: PathBuf,
     }
@@ -2171,6 +2248,109 @@ mod tests {
             }),
             Err(NodeError::NotRunning {})
         ));
+    }
+
+    #[test]
+    fn start_is_idempotent_for_equivalent_config() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let _guard = rt.block_on(test_lock().lock());
+        let _cwd = isolate_current_dir("start_idempotent");
+        let relay = rt.block_on(TcpRelayHandle::start());
+        let storage_dir = prepare_storage_dir("start_idempotent");
+        let config = build_config("start-idempotent", storage_dir.as_path(), relay.address().as_str());
+        let node = Node::new();
+
+        node.start(config.clone()).expect("initial start");
+        node.start(config.clone()).expect("repeat start with same config");
+        wait_until_running(&node);
+        node.announce_now()
+            .expect("runtime command stays available after idempotent start");
+
+        let status = node.get_status();
+        assert!(status.running);
+        assert_eq!(status.name, config.name);
+
+        node.stop().expect("stop idempotent node");
+        rt.block_on(relay.shutdown());
+    }
+
+    #[test]
+    fn start_restarts_when_config_changes_while_running() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let _guard = rt.block_on(test_lock().lock());
+        let _cwd = isolate_current_dir("start_restart_changed");
+        let relay = rt.block_on(TcpRelayHandle::start());
+        let storage_dir = prepare_storage_dir("start_restart_changed");
+        let node = Node::new();
+        let config = build_config("start-restart", storage_dir.as_path(), relay.address().as_str());
+        let mut changed_config = config.clone();
+        changed_config.name = "start-restart-updated".to_string();
+        changed_config.announce_interval_seconds = 2;
+
+        node.start(config).expect("initial start");
+        node.start(changed_config.clone())
+            .expect("start with changed config while running");
+        wait_until_running(&node);
+        node.announce_now()
+            .expect("runtime command stays available after config restart");
+
+        let status = node.get_status();
+        assert!(status.running);
+        assert_eq!(status.name, changed_config.name);
+
+        node.stop().expect("stop restarted node");
+        rt.block_on(relay.shutdown());
+    }
+
+    #[test]
+    fn restart_while_running_keeps_runtime_available() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let _guard = rt.block_on(test_lock().lock());
+        let _cwd = isolate_current_dir("restart_running");
+        let relay = rt.block_on(TcpRelayHandle::start());
+        let storage_dir = prepare_storage_dir("restart_running");
+        let config = build_config("restart-running", storage_dir.as_path(), relay.address().as_str());
+        let node = Node::new();
+
+        node.start(config.clone()).expect("initial start");
+        node.restart(config).expect("restart while running");
+        wait_until_running(&node);
+        node.announce_now()
+            .expect("runtime command stays available after restart");
+
+        let status = node.get_status();
+        assert!(status.running);
+
+        node.stop().expect("stop restarted node");
+        rt.block_on(relay.shutdown());
+    }
+
+    #[test]
+    fn stop_clears_running_state_and_commands_fail_after_stop() {
+        let rt = tokio::runtime::Runtime::new().expect("test runtime");
+        let _guard = rt.block_on(test_lock().lock());
+        let _cwd = isolate_current_dir("stop_after_idle");
+        let relay = rt.block_on(TcpRelayHandle::start());
+        let storage_dir = prepare_storage_dir("stop_after_idle");
+        let config = build_config("stop-after-idle", storage_dir.as_path(), relay.address().as_str());
+        let node = Node::new();
+
+        node.start(config).expect("initial start");
+        wait_until_running(&node);
+        std::thread::sleep(Duration::from_millis(100));
+
+        node.stop().expect("first stop succeeds");
+        node.stop().expect("second stop remains idempotent");
+
+        let status = node.get_status();
+        assert!(!status.running);
+        assert!(matches!(node.announce_now(), Err(NodeError::NotRunning {})));
+        assert!(matches!(
+            node.request_peer_identity("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            Err(NodeError::NotRunning {})
+        ));
+
+        rt.block_on(relay.shutdown());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

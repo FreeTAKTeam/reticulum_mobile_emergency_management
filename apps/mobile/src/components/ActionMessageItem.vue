@@ -45,6 +45,7 @@ const syncedLabel = computed(() => {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
+    year: "numeric",
     month: "short",
     day: "numeric",
   }).format(timestamp);
@@ -118,7 +119,7 @@ function cycleStatus(field: ActionMessageStatusField): void {
           </p>
           <p v-if="reporterLabel || syncedLabel" class="meta">
             <span v-if="reporterLabel">{{ reporterLabel }}</span>
-            <span v-if="reporterLabel && syncedLabel" aria-hidden="true"> • </span>
+            <span v-if="reporterLabel && syncedLabel" aria-hidden="true"> | </span>
             <span v-if="syncedLabel">Updated {{ syncedLabel }}</span>
           </p>
         </div>

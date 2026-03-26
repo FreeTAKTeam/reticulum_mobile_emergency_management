@@ -1593,17 +1593,22 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   private readonly plugin = ReticulumNodePluginInstance;
   private listenerHandles: PluginListenerHandle[] = [];
   private attachPromise: Promise<void> | null = null;
+  private generation = 0;
 
   private async attachListeners(): Promise<void> {
     if (this.attachPromise) {
       return this.attachPromise;
     }
 
+    const generation = this.generation;
     this.attachPromise = (async () => {
       const register = async (
         eventName: keyof NodeClientEvents,
         map: (raw: Record<string, unknown>) => NodeClientEvents[typeof eventName],
       ) => {
+        if (generation !== this.generation) {
+          return;
+        }
         const handle = await Promise.resolve(
           this.plugin.addListener(eventName, (payload: unknown) => {
             const objectPayload =
@@ -1613,6 +1618,10 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
             this.emitter.emit(eventName, map(objectPayload));
           }),
         );
+        if (generation !== this.generation) {
+          await handle.remove().catch(() => undefined);
+          return;
+        }
         this.listenerHandles.push(handle);
       };
 
@@ -1888,6 +1897,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async dispose(): Promise<void> {
+    this.generation += 1;
     for (const handle of this.listenerHandles) {
       await handle.remove().catch(() => undefined);
     }
@@ -2479,7 +2489,6 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async dispose(): Promise<void> {
-    await this.stop();
     this.emitter.clear();
   }
 }
