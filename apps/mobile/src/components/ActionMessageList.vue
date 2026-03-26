@@ -5,6 +5,7 @@ import type { ActionMessage } from "../types/domain";
 
 const props = defineProps<{
   messages: ActionMessage[];
+  editableCallsigns: string[];
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +25,10 @@ function handleDelete(callsign: string): void {
 function handleCycle(callsign: string, field: keyof ActionMessage): void {
   emit("cycle", callsign, field);
 }
+
+function isEditable(message: ActionMessage): boolean {
+  return props.editableCallsigns.includes(message.callsign);
+}
 </script>
 
 <template>
@@ -32,6 +37,7 @@ function handleCycle(callsign: string, field: keyof ActionMessage): void {
       v-for="message in props.messages"
       :key="message.callsign"
       :message="message"
+      :editable="isEditable(message)"
       @edit="handleEdit"
       @delete="handleDelete"
       @cycle="handleCycle"

@@ -47,3 +47,48 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   await messageCard.getByRole("button", { name: "Delete Bravo-2" }).click();
   await expect(page.getByRole("heading", { name: "Bravo-2" })).toHaveCount(0);
 });
+
+test("synced inbound action messages are visible but read-only", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      displayName: "Poco",
+    },
+    messages: [
+      {
+        callsign: "Pixel",
+        groupName: "YELLOW",
+        securityStatus: "Red",
+        capabilityStatus: "Red",
+        preparednessStatus: "Red",
+        medicalStatus: "Red",
+        mobilityStatus: "Red",
+        commsStatus: "Red",
+        updatedAt: Date.UTC(2026, 2, 26, 13, 33, 0),
+        reportedBy: "Pixel",
+        teamMemberUid: "f7a7c54f4e0fb481b73b990b843277df",
+        teamUid: "d6b6e188b910d6bdd24d04b7a7ec5444",
+        source: {
+          rns_identity: "84c51f6385d01217f56b6f36dae81e95",
+          display_name: "Pixel",
+        },
+        syncState: "synced",
+        lastSyncedAt: Date.UTC(2026, 2, 26, 13, 33, 9),
+      },
+    ],
+  });
+
+  await gotoApp(page, "/messages");
+
+  const messageCard = page.locator("article.item:visible").filter({ hasText: "Pixel" });
+  await expect(messageCard.getByRole("heading", { name: "Pixel" })).toBeVisible();
+  await expect(messageCard).toContainText("Synced");
+  await expect(messageCard).toContainText("Read only");
+  await expect(messageCard.getByRole("button", { name: "Edit Pixel" })).toHaveCount(0);
+  await expect(messageCard.getByRole("button", { name: "Delete Pixel" })).toHaveCount(0);
+
+  await messageCard.getByRole("button", { name: "Show statuses" }).click();
+  const securityStatusButton = messageCard.locator(".pill-button").filter({ hasText: "Security" });
+  await expect(securityStatusButton).toBeDisabled();
+  await expect(securityStatusButton).toContainText("Red");
+});

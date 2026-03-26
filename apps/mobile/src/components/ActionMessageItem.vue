@@ -15,6 +15,7 @@ import { formatR3aktTeamColor } from "../utils/r3akt";
 
 const props = defineProps<{
   message: ActionMessage;
+  editable: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -64,6 +65,9 @@ function toggleStatuses(): void {
 }
 
 function cycleStatus(field: ActionMessageStatusField): void {
+  if (!props.editable) {
+    return;
+  }
   emit("cycle", props.message.callsign, field);
 }
 </script>
@@ -76,7 +80,7 @@ function cycleStatus(field: ActionMessageStatusField): void {
           <p class="eyebrow">Call Sign</p>
           <div class="callsign-row">
             <h3 class="callsign">{{ props.message.callsign }}</h3>
-            <div class="item-actions" role="group" aria-label="Message actions">
+            <div v-if="props.editable" class="item-actions" role="group" aria-label="Message actions">
               <button
                 class="action edit"
                 type="button"
@@ -110,6 +114,7 @@ function cycleStatus(field: ActionMessageStatusField): void {
             Team: {{ formattedTeam }}
             <span v-if="syncLabel" class="sync-chip">{{ syncLabel }}</span>
             <span v-else-if="props.message.lastSyncedAt" class="sync-chip sync-chip-success">Synced</span>
+            <span v-if="!props.editable" class="sync-chip sync-chip-muted">Read only</span>
           </p>
           <p v-if="reporterLabel || syncedLabel" class="meta">
             <span v-if="reporterLabel">{{ reporterLabel }}</span>
@@ -158,6 +163,8 @@ function cycleStatus(field: ActionMessageStatusField): void {
         :key="status.field"
         type="button"
         class="pill-button"
+        :disabled="!props.editable"
+        :title="props.editable ? undefined : 'Only your own EAM can be edited.'"
         @click="cycleStatus(status.field)"
       >
         <StatusPill :label="status.label" :value="props.message[status.field]" />
@@ -250,6 +257,12 @@ function cycleStatus(field: ActionMessageStatusField): void {
   background: rgb(14 67 42 / 82%);
   border-color: rgb(71 214 145 / 40%);
   color: #8df3c1;
+}
+
+.sync-chip-muted {
+  background: rgb(35 46 76 / 82%);
+  border-color: rgb(126 166 220 / 24%);
+  color: #b5c7e9;
 }
 
 .overall {
@@ -405,6 +418,14 @@ function cycleStatus(field: ActionMessageStatusField): void {
   display: block;
   padding: 0;
   width: 100%;
+}
+
+.pill-button:disabled {
+  cursor: default;
+}
+
+.pill-button:disabled :deep(.pill) {
+  opacity: 0.88;
 }
 
 .pill-button :deep(.pill) {

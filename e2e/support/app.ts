@@ -21,6 +21,22 @@ export interface ActionMessageSeed {
   commsStatus: "Red" | "Yellow" | "Green" | "Unknown";
   updatedAt: number;
   deletedAt?: number;
+  eamUid?: string;
+  teamMemberUid?: string;
+  teamUid?: string;
+  reportedAt?: string;
+  reportedBy?: string;
+  overallStatus?: "Red" | "Yellow" | "Green";
+  confidence?: number;
+  ttlSeconds?: number;
+  source?: {
+    rns_identity?: string;
+    display_name?: string;
+  };
+  syncState?: "draft" | "syncing" | "synced" | "error";
+  syncError?: string;
+  draftCreatedAt?: number;
+  lastSyncedAt?: number;
 }
 
 export interface EventSeed {

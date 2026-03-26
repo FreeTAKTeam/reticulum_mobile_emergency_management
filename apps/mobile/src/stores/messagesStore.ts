@@ -8,6 +8,11 @@ import {
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 
+import {
+  notifyOperationalUpdateOnce,
+  primeOperationalNotificationScope,
+  truncateNotificationBody,
+} from "../services/operationalNotifications";
 import type { ActionMessage, EamStatus, EamTeamSummary, EamWireStatus } from "../types/domain";
 import { DEFAULT_R3AKT_TEAM_COLOR, normalizeR3aktTeamColor } from "../utils/r3akt";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
@@ -50,6 +55,10 @@ function optionalNumber(value: unknown): number | undefined {
 
 function asTrimmedString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
+function normalizeIdentifier(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function keyFor(callsign: string): string {
@@ -274,6 +283,7 @@ export const useMessagesStore = defineStore("messages", () => {
   const teamSummary = ref<EamTeamSummary | null>(null);
   const initialized = ref(false);
   const replicationInitialized = ref(false);
+  const notificationsPrimed = ref(false);
 
   let refreshPromise: Promise<void> | null = null;
   let teamSummaryPromise: Promise<void> | null = null;
@@ -282,6 +292,65 @@ export const useMessagesStore = defineStore("messages", () => {
   function webPersist(): void {
     if (!supportsNativeNodeRuntime) {
       saveWebMessages(byCallsign.value);
+    }
+  }
+
+  function canManageMessage(message: ActionMessage): boolean {
+    const localAppDestination = normalizeIdentifier(nodeStore.status.appDestinationHex);
+    const localIdentity = normalizeIdentifier(nodeStore.status.identityHex);
+    const localDisplayName = normalizeIdentifier(nodeStore.settings.displayName);
+    const messageTeamMemberUid = normalizeIdentifier(message.teamMemberUid);
+    const messageSourceIdentity = normalizeIdentifier(message.source?.rns_identity);
+    const messageReportedBy = normalizeIdentifier(message.reportedBy);
+    const messageCallsign = normalizeIdentifier(message.callsign);
+    const hasRemoteIdentity = Boolean(messageTeamMemberUid || messageSourceIdentity || message.lastSyncedAt);
+
+    if (message.syncState === "draft") {
+      return true;
+    }
+    if (!hasRemoteIdentity) {
+      return true;
+    }
+    if (localAppDestination && messageTeamMemberUid && messageTeamMemberUid === localAppDestination) {
+      return true;
+    }
+    if (localIdentity && messageSourceIdentity && messageSourceIdentity === localIdentity) {
+      return true;
+    }
+    if (localDisplayName && (messageCallsign === localDisplayName || messageReportedBy === localDisplayName)) {
+      return true;
+    }
+    return false;
+  }
+
+  function eamNotificationKey(message: ActionMessage): string {
+    return `${keyFor(message.callsign)}:${message.updatedAt}`;
+  }
+
+  async function notifyForInboundMessages(messages: StoredMessages): Promise<void> {
+    const activeMessages = Object.values(messages).filter((message) => !message.deletedAt);
+    if (!notificationsPrimed.value) {
+      primeOperationalNotificationScope(
+        "eam",
+        activeMessages.map((message) => eamNotificationKey(message)),
+      );
+      notificationsPrimed.value = true;
+      return;
+    }
+
+    for (const message of activeMessages) {
+      if (canManageMessage(message)) {
+        continue;
+      }
+      const title = `EAM from ${message.reportedBy?.trim() || message.callsign}`;
+      const body = message.notes?.trim()
+        || `${message.groupName} status ${message.overallStatus ?? "updated"}`;
+      await notifyOperationalUpdateOnce(
+        "eam",
+        eamNotificationKey(message),
+        title,
+        truncateNotificationBody(body),
+      );
     }
   }
 
@@ -296,7 +365,9 @@ export const useMessagesStore = defineStore("messages", () => {
     const promise = (async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
       const records = await client.getEams();
-      byCallsign.value = toStoredMessages(records);
+      const nextMessages = toStoredMessages(records);
+      byCallsign.value = nextMessages;
+      await notifyForInboundMessages(nextMessages);
     })();
     refreshPromise = promise;
     try {
@@ -400,6 +471,10 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!normalized.callsign) {
       return;
     }
+    const existing = byCallsign.value[keyFor(normalized.callsign)];
+    if (existing && !canManageMessage(existing)) {
+      return;
+    }
 
     if (!supportsNativeNodeRuntime) {
       byCallsign.value = {
@@ -419,6 +494,10 @@ export const useMessagesStore = defineStore("messages", () => {
   async function deleteLocal(callsign: string): Promise<void> {
     const normalizedCallsign = callsign.trim();
     if (!normalizedCallsign) {
+      return;
+    }
+    const existing = byCallsign.value[keyFor(normalizedCallsign)];
+    if (existing && !canManageMessage(existing)) {
       return;
     }
 
@@ -448,7 +527,7 @@ export const useMessagesStore = defineStore("messages", () => {
 
   function rotateStatus(callsign: string, field: keyof ActionMessage): void {
     const current = byCallsign.value[keyFor(callsign)];
-    if (!current || current.deletedAt) {
+    if (!current || current.deletedAt || !canManageMessage(current)) {
       return;
     }
     const nextStatusKey = String(field);
@@ -505,6 +584,7 @@ export const useMessagesStore = defineStore("messages", () => {
     draftCount,
     syncingCount,
     redCount,
+    canManageMessage,
     init,
     initReplication,
     upsertLocal,

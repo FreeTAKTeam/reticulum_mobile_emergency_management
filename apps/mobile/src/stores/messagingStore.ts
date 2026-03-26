@@ -8,6 +8,10 @@ import {
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
+import {
+  notifyOperationalUpdateOnce,
+  truncateNotificationBody,
+} from "../services/operationalNotifications";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -29,6 +33,10 @@ function cloneMessage(message: MessageRecord): MessageRecord {
 
 function safeMessageBody(message: Pick<MessageRecord, "bodyUtf8">): string {
   return typeof message.bodyUtf8 === "string" ? message.bodyUtf8.trim() : "";
+}
+
+function chatNotificationKey(message: MessageRecord): string {
+  return message.messageIdHex.trim().toLowerCase();
 }
 
 function loadWebMessages(): StoredMessages {
@@ -210,6 +218,12 @@ export const useMessagingStore = defineStore("messaging", () => {
     cleanups.push(client.on("statusChanged", () => {
       void refreshAll();
     }));
+    cleanups.push(client.on("messageReceived", (message) => {
+      void notifyForInboundMessage(message);
+    }));
+    cleanups.push(client.on("messageUpdated", (message) => {
+      void notifyForInboundMessage(message);
+    }));
     void refreshAll();
   }
 
@@ -217,6 +231,20 @@ export const useMessagingStore = defineStore("messaging", () => {
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }
+  }
+
+  async function notifyForInboundMessage(message: MessageRecord): Promise<void> {
+    if (message.direction !== "Inbound") {
+      return;
+    }
+    const peerHex = message.sourceHex?.trim() || message.destinationHex;
+    const displayName = displayNameForDestination(peerHex, nodeStore);
+    await notifyOperationalUpdateOnce(
+      "chat",
+      chatNotificationKey(message),
+      `Message from ${displayName}`,
+      truncateNotificationBody(safeMessageBody(message) || "(empty message)"),
+    );
   }
 
   function upsertWebMessage(message: MessageRecord): void {

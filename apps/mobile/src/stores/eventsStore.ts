@@ -8,6 +8,11 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
+  notifyOperationalUpdateOnce,
+  primeOperationalNotificationScope,
+  truncateNotificationBody,
+} from "../services/operationalNotifications";
+import {
   DEFAULT_R3AKT_MISSION_NAME,
   DEFAULT_R3AKT_MISSION_UID,
 } from "../utils/r3akt";
@@ -282,6 +287,7 @@ export const useEventsStore = defineStore("events", () => {
   const byUid = ref<Record<string, EventProjectionRecord>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
+  const notificationsPrimed = ref(false);
 
   let refreshPromise: Promise<void> | null = null;
   const cleanups: Array<() => void> = [];
@@ -289,6 +295,51 @@ export const useEventsStore = defineStore("events", () => {
   function webPersist(): void {
     if (!supportsNativeNodeRuntime) {
       saveWebEvents(byUid.value);
+    }
+  }
+
+  function eventNotificationKey(record: EventProjectionRecord): string {
+    return `${getEventUid(record)}:${getEventUpdatedAt(record)}`;
+  }
+
+  function isLocalEventRecord(record: EventProjectionRecord): boolean {
+    const localIdentity = asTrimmedString(nodeStore.status.identityHex).toLowerCase();
+    const eventIdentity = asTrimmedString(record.args.source_identity ?? record.source.rns_identity).toLowerCase();
+    if (localIdentity && eventIdentity) {
+      return localIdentity === eventIdentity;
+    }
+    const localDisplayName = asTrimmedString(nodeStore.settings.displayName).toLowerCase();
+    if (!localDisplayName) {
+      return false;
+    }
+    const sourceDisplayName = asTrimmedString(
+      record.args.source_display_name ?? record.source.display_name,
+    ).toLowerCase();
+    const callsign = asTrimmedString(record.args.callsign).toLowerCase();
+    return sourceDisplayName === localDisplayName || callsign === localDisplayName;
+  }
+
+  async function notifyForInboundEvents(records: Record<string, EventProjectionRecord>): Promise<void> {
+    const activeRecords = Object.values(records).filter((record) => !isDeletedEvent(record));
+    if (!notificationsPrimed.value) {
+      primeOperationalNotificationScope(
+        "event",
+        activeRecords.map((record) => eventNotificationKey(record)),
+      );
+      notificationsPrimed.value = true;
+      return;
+    }
+
+    for (const record of activeRecords) {
+      if (isLocalEventRecord(record)) {
+        continue;
+      }
+      await notifyOperationalUpdateOnce(
+        "event",
+        eventNotificationKey(record),
+        `Event from ${asTrimmedString(record.args.callsign) || "Unknown"}`,
+        truncateNotificationBody(getEventContent(record)),
+      );
     }
   }
 
@@ -309,6 +360,7 @@ export const useEventsStore = defineStore("events", () => {
         next[getEventUid(normalized)] = normalized;
       }
       byUid.value = next;
+      await notifyForInboundEvents(next);
     })();
     refreshPromise = promise;
     try {

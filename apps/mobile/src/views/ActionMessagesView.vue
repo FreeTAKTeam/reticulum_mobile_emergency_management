@@ -57,6 +57,11 @@ const isCreateFormVisible = shallowRef(false);
 const editingCallsign = shallowRef<string | null>(null);
 
 const messages = computed(() => messagesStore.messages);
+const editableCallsigns = computed(() =>
+  messages.value
+    .filter((message) => messagesStore.canManageMessage(message))
+    .map((message) => message.callsign),
+);
 const submitLabel = computed(() => (editingCallsign.value ? "Save message" : "Add message"));
 const submitTitle = computed(() => (editingCallsign.value ? "Save message" : "Add message"));
 
@@ -149,7 +154,7 @@ async function createMessage(): Promise<void> {
 
 function editMessage(callsign: string): void {
   const message = messages.value.find((item) => item.callsign === callsign);
-  if (!message) {
+  if (!message || !messagesStore.canManageMessage(message)) {
     return;
   }
   createForm.callsign = message.callsign;
@@ -160,10 +165,18 @@ function editMessage(callsign: string): void {
 }
 
 function cycleMessage(callsign: string, field: keyof ActionMessage | string): void {
+  const message = messages.value.find((item) => item.callsign === callsign);
+  if (!message || !messagesStore.canManageMessage(message)) {
+    return;
+  }
   messagesStore.rotateStatus(callsign, field as keyof ActionMessage);
 }
 
 function deleteMessage(callsign: string): void {
+  const message = messages.value.find((item) => item.callsign === callsign);
+  if (!message || !messagesStore.canManageMessage(message)) {
+    return;
+  }
   messagesStore.deleteLocal(callsign).catch(() => undefined);
 }
 </script>
@@ -262,6 +275,7 @@ function deleteMessage(callsign: string): void {
     <div class="desktop-only">
       <ActionMessageTable
         :messages="messages"
+        :editable-callsigns="editableCallsigns"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"
@@ -270,6 +284,7 @@ function deleteMessage(callsign: string): void {
     <div class="mobile-only">
       <ActionMessageList
         :messages="messages"
+        :editable-callsigns="editableCallsigns"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"
