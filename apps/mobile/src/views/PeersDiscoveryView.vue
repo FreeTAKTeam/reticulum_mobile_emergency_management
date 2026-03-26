@@ -55,6 +55,32 @@ const filteredSaved = computed(() => {
   });
 });
 
+function savedPeerConnectionLabel(destination: string): string {
+  const peer = nodeStore.discoveredByDestination[destination];
+  return peer?.activeLink || peer?.managementState === "managed" ? "Disconnect" : "Connect";
+}
+
+function savedPeerConnectionMessage(destination: string): string {
+  const peer = nodeStore.discoveredByDestination[destination];
+  if (peer?.activeLink) {
+    return "Connected";
+  }
+  if (peer?.managementState === "managed" || peer?.state === "connecting") {
+    return "Connecting";
+  }
+  return "Disconnected";
+}
+
+async function onSavedPeerConnectToggle(destination: string): Promise<void> {
+  const disconnecting = savedPeerConnectionLabel(destination) === "Disconnect";
+  await runNodeAction(
+    () => (disconnecting ? nodeStore.disconnectPeer(destination) : nodeStore.connectPeer(destination)),
+    disconnecting
+      ? `Disconnect requested for ${destination}.`
+      : `Connect requested for ${destination}.`,
+  );
+}
+
 function isSaved(destination: string): boolean {
   return nodeStore.savedDestinations.has(destination);
 }
@@ -145,7 +171,7 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
     <section class="panel">
       <h2>Discovered</h2>
       <p class="section-meta">
-        {{ nodeStore.communicationReadyPeerCount }} communication-ready |
+        {{ nodeStore.communicationReadyPeerCount }}/{{ nodeStore.connectedLinkDestinations.length }} possible/connected |
         {{ nodeStore.missionReadyPeerCount }} mission-ready |
         {{ nodeStore.relayEligiblePeerCount }} relay-eligible |
         {{ filteredDiscovered.length }} peers visible
@@ -202,18 +228,11 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
             <div>
               <p class="dest">{{ peer.destination }}</p>
               <p class="saved-label">{{ peer.label || "No label" }}</p>
+              <p class="saved-state">{{ savedPeerConnectionMessage(peer.destination) }}</p>
             </div>
             <div class="actions">
-              <button
-                type="button"
-                @click="
-                  runNodeAction(
-                    () => nodeStore.connectPeer(peer.destination),
-                    `Connect requested for ${peer.destination}.`,
-                  )
-                "
-              >
-                Connect
+              <button type="button" @click="onSavedPeerConnectToggle(peer.destination)">
+                {{ savedPeerConnectionLabel(peer.destination) }}
               </button>
               <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
             </div>
@@ -426,6 +445,13 @@ h2 {
   color: #8aa5d1;
   font-family: var(--font-body);
   margin: 0.15rem 0 0;
+}
+
+.saved-state {
+  color: #7fd8ff;
+  font-family: var(--font-body);
+  font-size: 0.84rem;
+  margin: 0.12rem 0 0;
 }
 
 .saved-empty {

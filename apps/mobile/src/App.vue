@@ -53,12 +53,17 @@ const runningTitle = computed(() =>
     ? "App ready to send and receive events or messages."
     : "App is still starting. Sending stays blocked until the node is ready.",
 );
-const connectedPeerCount = computed(() => nodeStore.communicationReadyPeerCount);
+const possiblePeerCount = computed(() => nodeStore.communicationReadyPeerCount);
+const connectedPeerCount = computed(() => nodeStore.connectedLinkDestinations.length);
+const peerCountLabel = computed(
+  () => `${possiblePeerCount.value}/${connectedPeerCount.value}`,
+);
 const connectedPeerCountTitle = computed(() => {
-  const count = connectedPeerCount.value;
-  return count === 1
-    ? "1 communication-ready peer"
-    : `${count} communication-ready peers`;
+  const possible = possiblePeerCount.value;
+  const connected = connectedPeerCount.value;
+  const possibleLabel = possible === 1 ? "1 possible peer" : `${possible} possible peers`;
+  const connectedLabel = connected === 1 ? "1 active link" : `${connected} active links`;
+  return `${possibleLabel}, ${connectedLabel}`;
 });
 
 function isTabActive(path: string): boolean {
@@ -80,10 +85,10 @@ function isTabActive(path: string): boolean {
           <span
             class="peer-count"
             data-testid="connected-peer-count"
-            aria-label="Communication-ready peers"
+            aria-label="Possible and connected peers"
             :title="connectedPeerCountTitle"
           >
-            {{ connectedPeerCount }}
+            {{ peerCountLabel }}
           </span>
           <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">
             {{ runningText }}

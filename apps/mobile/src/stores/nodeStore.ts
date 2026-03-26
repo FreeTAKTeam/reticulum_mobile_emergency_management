@@ -827,6 +827,46 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  function markPeerManagedState(destinationRaw: string, managed: boolean): void {
+    const destination = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(destination) || isLocalPeerDestination(destination)) {
+      return;
+    }
+    upsertDiscovered(destination, {
+      managementState: managed ? "managed" : "unmanaged",
+      state: managed ? "connecting" : "disconnected",
+      activeLink: managed ? discoveredByDestination[destination]?.activeLink : false,
+      lastError: undefined,
+      lastResolutionError: undefined,
+    });
+  }
+
+  async function settlePeerConnectionState(
+    destinationRaw: string,
+    target: "connected" | "disconnected",
+  ): Promise<void> {
+    const destination = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(destination) || !status.value.running) {
+      return;
+    }
+
+    const deadline = nowMs() + 6_000;
+    do {
+      await refreshMessagingState();
+      const peer = discoveredByDestination[destination];
+      if (!peer) {
+        return;
+      }
+      if (target === "connected" && peer.activeLink) {
+        return;
+      }
+      if (target === "disconnected" && !peer.activeLink) {
+        return;
+      }
+      await sleep(400);
+    } while (nowMs() < deadline);
+  }
+
   function describePeerState(destinationRaw: string): string {
     const destination = normalizeDestinationHex(destinationRaw);
     const peer = discoveredByDestination[destination];
@@ -1767,8 +1807,10 @@ export const useNodeStore = defineStore("node", () => {
 
     try {
       clearLastError();
+      markPeerManagedState(destination, true);
       logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
       await client.value.connectPeer(destination);
+      void settlePeerConnectionState(destination, "connected");
     } catch (error: unknown) {
       const message = errorMessage(error);
       setPeerState(destination, "disconnected", message);
@@ -1783,8 +1825,10 @@ export const useNodeStore = defineStore("node", () => {
     }
     try {
       clearLastError();
+      markPeerManagedState(destination, false);
       logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
       await client.value.disconnectPeer(destination);
+      await settlePeerConnectionState(destination, "disconnected");
       logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
     } catch (error: unknown) {
       throw captureActionError(`Disconnect peer failed (${destination})`, error);

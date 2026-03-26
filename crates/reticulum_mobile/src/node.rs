@@ -247,29 +247,26 @@ fn build_event_replication_targets(
         if !has_known_lxmf_route(peer) {
             continue;
         }
-        let managed_for_auto_fanout = matches!(peer.management_state, PeerManagementState::Managed {})
-            || saved_destinations.contains(app_destination_hex.as_str());
-        if !managed_for_auto_fanout {
+        let is_saved = saved_destinations.contains(app_destination_hex.as_str());
+        let is_managed = matches!(peer.management_state, PeerManagementState::Managed {});
+        if !is_saved && !is_managed {
             continue;
         }
-        if peer.communication_ready && peer.mission_ready {
+        if peer.active_link && peer.mission_ready {
             direct_targets.push(MissionReplicationTarget {
                 app_destination_hex,
             });
             continue;
         }
-        if has_active_relay && peer.mission_ready && peer.relay_eligible {
+        if is_saved && has_active_relay && peer.mission_ready && peer.relay_eligible {
             relay_targets.push(MissionReplicationTarget {
                 app_destination_hex,
             });
         }
     }
 
-    if !direct_targets.is_empty() {
-        return direct_targets;
-    }
-
-    relay_targets
+    direct_targets.extend(relay_targets);
+    direct_targets
 }
 
 fn eam_status_rank(value: &str) -> u8 {
@@ -1793,6 +1790,7 @@ mod tests {
         communication_ready: bool,
         mission_ready: bool,
         relay_eligible: bool,
+        active_link: bool,
     ) -> PeerRecord {
         PeerRecord {
             destination_hex: destination_hex.to_string(),
@@ -1815,7 +1813,7 @@ mod tests {
             mission_ready,
             relay_eligible,
             stale: false,
-            active_link: communication_ready,
+            active_link,
             last_resolution_error: None,
             last_resolution_attempt_at_ms: Some(now_ms()),
             last_ready_at_ms: communication_ready.then(now_ms),
@@ -2819,6 +2817,20 @@ mod tests {
             .connect_peer(node_b_status.app_destination_hex.clone())
             .expect("connect peer b");
 
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm event link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm event link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm event link")
+        })
+        .expect("node b received warmup message");
+
         let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
         loop {
             let peer_ready = node_a
@@ -2904,7 +2916,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_only_saved_or_managed_direct_peers() {
+    fn event_replication_targets_only_include_intentional_peers() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -2921,11 +2933,13 @@ mod tests {
                 true,
                 true,
                 true,
+                true,
             ),
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
                 PeerManagementState::Unmanaged {},
+                true,
                 true,
                 true,
                 true,
@@ -2937,6 +2951,16 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
+            ),
+            build_peer_record(
+                "99999999999999999999999999999999",
+                "12121212121212121212121212121212",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                false,
             ),
         ];
 
@@ -2949,5 +2973,70 @@ mod tests {
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].app_destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn event_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            label: Some("saved-relay".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                PeerManagementState::Unmanaged {},
+                false,
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "ffffffffffffffffffffffffffffffff",
+                PeerManagementState::Unmanaged {},
+                true,
+                true,
+                true,
+                true,
+            ),
+        ];
+
+        let targets = build_event_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].app_destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(targets[1].app_destination_hex, "cccccccccccccccccccccccccccccccc");
     }
 }

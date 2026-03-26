@@ -5,7 +5,7 @@ This diagram shows the end-to-end mobile event replication flow over LXMF, inclu
 Current mobile behavior differs from the older store-centric sketch below in two important ways:
 - Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
 - When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local app destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
-- Event replication now uses a narrower native fanout policy than EAM replication: it targets saved or explicitly managed peers only, prefers direct-ready mission peers, and only falls back to relay-eligible peers when no direct target is available.
+- Event replication now uses a narrower native fanout policy than EAM replication: it never targets merely discovered peers, it sends directly to saved or explicitly managed peers that currently have an active link, and it uses relay fallback only for saved peers when a relay is available. Each target send is handled independently so one unavailable peer does not block the rest.
 
 ```mermaid
 sequenceDiagram
@@ -174,9 +174,10 @@ Transport:
 - LXMF fields used: none.
 
 Routing:
-- Native `upsert_event()` fanout is scoped to saved or explicitly managed peers.
-- If any direct-ready mission peers are available, events are sent only to that direct-ready set.
-- Relay-eligible event sends are used only as a fallback when no direct-ready saved/managed peers exist.
+- Native `upsert_event()` fanout never includes merely discovered peers.
+- Event direct sends are scoped to saved or explicitly managed peers with `active_link=true`.
+- Event relay fallback is used only for saved peers when a propagation relay is active and the peer is relay-eligible.
+- Each event target is attempted independently. One target timing out or returning a network error does not cancel the other target attempts.
 - Broadcast or direct send over the peer's **app destination** (`r3akt/emergency` path).
 
 ### Event
