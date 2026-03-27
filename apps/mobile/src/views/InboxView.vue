@@ -41,11 +41,13 @@ const selectedConversation = computed(() => messagingStore.selectedConversation)
 const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
-const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
-  const seen = new Set<string>();
-  return nodeStore.communicationReadyPeers
+  const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
+    const seen = new Set<string>();
+  return nodeStore.discoveredPeers
+    .filter((peer) => peer.activeLink)
+    .filter((peer) => peer.managementState === "managed" || nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
-      const value = safeTrim(peer.lxmfDestinationHex) || peer.destination;
+      const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
       const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
       return { value, displayName };
     })
@@ -215,10 +217,10 @@ function handleThreadDestinationSelected(event: Event): void {
   if (!nextDestinationHex) {
     return;
   }
-  const matchingConversation = findConversationForSelection(nextDestinationHex, selectedPeer.value);
-  if (matchingConversation) {
-    messagingStore.selectConversation(matchingConversation.conversationId);
-  }
+  const option = threadDestinationOptions.value.find((entry) =>
+    destinationsMatch(entry.value, nextDestinationHex),
+  );
+  messagingStore.ensureConversationForDestination(nextDestinationHex, option?.displayName);
   mobilePane.value = "detail";
 }
 
@@ -256,12 +258,12 @@ async function send(bodyUtf8: string): Promise<void> {
         <label class="peer-thread-picker mobile-only">
           <select
             :value="selectedDestinationHex"
-            aria-label="Connect to a peer"
+            aria-label="Select connected peer"
             class="thread-picker-select"
             :disabled="threadDestinationOptions.length === 0"
             @change="handleThreadDestinationSelected"
           >
-            <option value="">Connect to a peer</option>
+            <option value="">Select connected peer</option>
             <option
               v-for="option in threadDestinationOptions"
               :key="option.value"

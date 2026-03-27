@@ -130,8 +130,6 @@ public final class ReticulumNodeService extends Service {
             return;
         }
         listeners.add(listener);
-        emitCachedState(listener);
-        emitProjectionRefreshSweep(listener);
     }
 
     public void removeListener(ServiceEventListener listener) {

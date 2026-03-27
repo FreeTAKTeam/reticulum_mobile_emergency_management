@@ -206,7 +206,8 @@ fn runtime_message_from_persisted(record: PersistedMessageRecord) -> MessageReco
     MessageRecord {
         message_id_hex: record.message_id_hex,
         conversation_id: record.conversation_id,
-        direction: message_direction_from_string(record.direction).unwrap_or(MessageDirection::Outbound {}),
+        direction: message_direction_from_string(record.direction)
+            .unwrap_or(MessageDirection::Outbound {}),
         destination_hex: record.destination_hex,
         source_hex: record.source_hex,
         title: record.title,
@@ -425,11 +426,7 @@ impl RuntimeProjectionJournal {
         }
     }
 
-    pub(crate) fn record_peers(
-        &self,
-        peers: Vec<PeerRecord>,
-        reason: Option<&str>,
-    ) -> bool {
+    pub(crate) fn record_peers(&self, peers: Vec<PeerRecord>, reason: Option<&str>) -> bool {
         let Some(persisted) = peers
             .iter()
             .map(persisted_peer_from_runtime)
@@ -457,11 +454,7 @@ impl RuntimeProjectionJournal {
         true
     }
 
-    pub(crate) fn record_sync_status(
-        &self,
-        status: SyncStatus,
-        reason: Option<&str>,
-    ) -> bool {
+    pub(crate) fn record_sync_status(&self, status: SyncStatus, reason: Option<&str>) -> bool {
         let Some(persisted) = persisted_sync_from_runtime(&status) else {
             return false;
         };
@@ -485,11 +478,7 @@ impl RuntimeProjectionJournal {
         true
     }
 
-    pub(crate) fn record_message(
-        &self,
-        message: MessageRecord,
-        reason: Option<&str>,
-    ) -> bool {
+    pub(crate) fn record_message(&self, message: MessageRecord, reason: Option<&str>) -> bool {
         let Some(persisted) = persisted_message_from_runtime(&message) else {
             return false;
         };
@@ -628,7 +617,12 @@ impl RuntimeProjectionJournal {
             tokio::time::sleep(INVALIDATION_DEBOUNCE).await;
             this.flush_once().await;
             this.flush_scheduled.store(false, Ordering::Release);
-            let pending = this.pending.lock().ok().map(|guard| !guard.is_empty()).unwrap_or(false);
+            let pending = this
+                .pending
+                .lock()
+                .ok()
+                .map(|guard| !guard.is_empty())
+                .unwrap_or(false);
             if pending {
                 this.schedule_flush();
             }
@@ -641,7 +635,10 @@ impl RuntimeProjectionJournal {
                 Ok(v) => v,
                 Err(_) => return,
             };
-            guard.drain(..).map(|entry| entry.invalidation).collect::<Vec<_>>()
+            guard
+                .drain(..)
+                .map(|entry| entry.invalidation)
+                .collect::<Vec<_>>()
         };
 
         if pending.is_empty() {
@@ -687,7 +684,8 @@ impl RuntimeProjectionJournal {
         }
 
         for invalidation in pending {
-            self.bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            self.bus
+                .emit(NodeEvent::ProjectionInvalidated { invalidation });
         }
     }
 }

@@ -14,10 +14,10 @@ use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord,
-    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LogLevel,
-    MessageRecord, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary,
-    PeerManagementState, PeerRecord, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LogLevel, MessageRecord,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerManagementState,
+    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
     SendLxmfRequest, SendMode, SyncStatus, TelemetryPositionRecord,
 };
 
@@ -128,6 +128,7 @@ const TEAM_UID_BROWN: &str = "4efe72ac30f5b85142fdcab6d96c7631";
 #[derive(Debug, Clone)]
 struct MissionReplicationTarget {
     app_destination_hex: String,
+    send_mode: SendMode,
 }
 
 fn normalize_hex_32(value: &str) -> Option<String> {
@@ -211,21 +212,35 @@ fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
     let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
         return false;
     };
-    let Some(lxmf_destination_hex) =
-        peer.lxmf_destination_hex.as_deref().and_then(normalize_hex_32)
+    let Some(lxmf_destination_hex) = peer
+        .lxmf_destination_hex
+        .as_deref()
+        .and_then(normalize_hex_32)
     else {
         return false;
     };
     app_destination_hex != lxmf_destination_hex
 }
 
+fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
+    peer.active_link || peer.communication_ready || matches!(peer.state, PeerState::Connected {})
+}
+
 fn build_mission_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
     active_propagation_node_hex: Option<&str>,
 ) -> Vec<MissionReplicationTarget> {
-    let mut targets = Vec::new();
+    let saved_destinations = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<Vec<_>>();
+    let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
     let mut seen_app_destinations = HashSet::<String>::new();
+    let mut direct_destination_set = HashSet::<String>::new();
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let has_active_relay = active_propagation_node_hex
         .and_then(normalize_hex_32)
@@ -241,20 +256,40 @@ fn build_mission_replication_targets(
         if !seen_app_destinations.insert(app_destination_hex.clone()) {
             continue;
         }
-        if !has_known_lxmf_route(peer) {
+        let is_saved = saved_destination_set.contains(app_destination_hex.as_str());
+        let is_managed = matches!(peer.management_state, PeerManagementState::Managed {});
+        if !is_saved && !is_managed {
             continue;
         }
-        let eligible_direct = peer.mission_ready;
-        let eligible_relay = has_active_relay && peer.relay_eligible;
-        if !eligible_direct && !eligible_relay {
+        let direct_ready = peer.mission_ready && peer_is_directly_reachable(peer);
+        if direct_ready {
+            direct_destination_set.insert(app_destination_hex.clone());
+            direct_targets.push(MissionReplicationTarget {
+                app_destination_hex,
+                send_mode: SendMode::Auto {},
+            });
+        }
+    }
+
+    for app_destination_hex in saved_destinations {
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
             continue;
         }
-        targets.push(MissionReplicationTarget {
+        if direct_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
+        }
+        relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
+            send_mode: if has_active_relay {
+                SendMode::PropagationOnly {}
+            } else {
+                SendMode::Auto {}
+            },
         });
     }
 
-    targets
+    direct_targets.extend(relay_targets);
+    direct_targets
 }
 
 fn build_event_replication_targets(
@@ -266,10 +301,12 @@ fn build_event_replication_targets(
     let saved_destinations = saved_peers
         .iter()
         .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
+    let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
     let mut direct_targets = Vec::new();
     let mut relay_targets = Vec::new();
     let mut seen_app_destinations = HashSet::<String>::new();
+    let mut direct_destination_set = HashSet::<String>::new();
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let has_active_relay = active_propagation_node_hex
         .and_then(normalize_hex_32)
@@ -288,22 +325,36 @@ fn build_event_replication_targets(
         if !has_known_lxmf_route(peer) {
             continue;
         }
-        let is_saved = saved_destinations.contains(app_destination_hex.as_str());
+        let is_saved = saved_destination_set.contains(app_destination_hex.as_str());
         let is_managed = matches!(peer.management_state, PeerManagementState::Managed {});
         if !is_saved && !is_managed {
             continue;
         }
-        if peer.active_link && peer.mission_ready {
+        let direct_ready = peer.mission_ready && peer_is_directly_reachable(peer);
+        if direct_ready {
+            direct_destination_set.insert(app_destination_hex.clone());
             direct_targets.push(MissionReplicationTarget {
                 app_destination_hex,
+                send_mode: SendMode::Auto {},
             });
+        }
+    }
+
+    for app_destination_hex in saved_destinations {
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
             continue;
         }
-        if is_saved && has_active_relay && peer.mission_ready && peer.relay_eligible {
-            relay_targets.push(MissionReplicationTarget {
-                app_destination_hex,
-            });
+        if direct_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
         }
+        relay_targets.push(MissionReplicationTarget {
+            app_destination_hex,
+            send_mode: if has_active_relay {
+                SendMode::PropagationOnly {}
+            } else {
+                SendMode::Auto {}
+            },
+        });
     }
 
     direct_targets.extend(relay_targets);
@@ -429,7 +480,10 @@ fn build_eam_replication_payload(
             ("callsign", MsgPackValue::from(record.callsign.as_str())),
             ("team_member_uid", MsgPackValue::from(team_member_uid)),
             ("team_uid", MsgPackValue::from(team_uid)),
-            ("security_status", MsgPackValue::from(record.security_status.as_str())),
+            (
+                "security_status",
+                MsgPackValue::from(record.security_status.as_str()),
+            ),
             (
                 "capability_status",
                 MsgPackValue::from(record.capability_status.as_str()),
@@ -438,9 +492,18 @@ fn build_eam_replication_payload(
                 "preparedness_status",
                 MsgPackValue::from(record.preparedness_status.as_str()),
             ),
-            ("medical_status", MsgPackValue::from(record.medical_status.as_str())),
-            ("mobility_status", MsgPackValue::from(record.mobility_status.as_str())),
-            ("comms_status", MsgPackValue::from(record.comms_status.as_str())),
+            (
+                "medical_status",
+                MsgPackValue::from(record.medical_status.as_str()),
+            ),
+            (
+                "mobility_status",
+                MsgPackValue::from(record.mobility_status.as_str()),
+            ),
+            (
+                "comms_status",
+                MsgPackValue::from(record.comms_status.as_str()),
+            ),
             (
                 "source",
                 msgpack_map(vec![
@@ -499,6 +562,36 @@ fn build_eam_replication_payload(
     Ok((body, fields))
 }
 
+fn build_eam_delete_replication_payload(
+    callsign: &str,
+    deleted_at_ms: u64,
+    target: &MissionReplicationTarget,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let normalized_callsign = callsign.trim();
+    if normalized_callsign.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let correlation_id = format!(
+        "eam-delete-{}-{}-{deleted_at_ms}",
+        normalized_callsign.to_ascii_lowercase(),
+        &target.app_destination_hex[..8],
+    );
+    let command_id = format!("cmd-{correlation_id}");
+    let body = format!("EAM deleted {normalized_callsign}").into_bytes();
+    let fields = build_mission_command_fields(
+        command_id.as_str(),
+        correlation_id.as_str(),
+        "mission.registry.eam.delete",
+        vec![
+            ("callsign", MsgPackValue::from(normalized_callsign)),
+            ("deleted_at_ms", MsgPackValue::from(deleted_at_ms)),
+        ],
+    )?;
+
+    Ok((body, fields))
+}
+
 fn build_event_replication_payload(
     status: &NodeStatus,
     record: &EventProjectionRecord,
@@ -530,7 +623,12 @@ fn build_event_replication_payload(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| format!("event-upsert-{uid}-{}-{send_ts_ms}", &target.app_destination_hex[..8]));
+        .unwrap_or_else(|| {
+            format!(
+                "event-upsert-{uid}-{}-{send_ts_ms}",
+                &target.app_destination_hex[..8]
+            )
+        });
     let display_name = record
         .source_display_name
         .as_deref()
@@ -545,76 +643,79 @@ fn build_event_replication_payload(
         });
     let body = content.as_bytes().to_vec();
 
-    let fields = MsgPackValue::Map(vec![(
-        MsgPackValue::from(LXMF_FIELD_COMMANDS),
-        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
-            (MsgPackValue::from("command_id"), MsgPackValue::from(command_id)),
-            (
-                MsgPackValue::from("correlation_id"),
-                MsgPackValue::from(correlation_id.as_str()),
-            ),
-            (
-                MsgPackValue::from("command_type"),
-                MsgPackValue::from(command_type),
-            ),
-            (
-                MsgPackValue::from("source"),
-                msgpack_map(vec![
-                    ("rns_identity", MsgPackValue::from(source_identity)),
-                    ("display_name", MsgPackValue::from(display_name)),
-                ]),
-            ),
-            (MsgPackValue::from("timestamp"), MsgPackValue::from(timestamp)),
-            (
-                MsgPackValue::from("args"),
-                msgpack_map(vec![
-                    ("entry_uid", MsgPackValue::from(uid)),
-                    ("mission_uid", MsgPackValue::from(mission_uid)),
-                    ("content", MsgPackValue::from(content)),
-                    ("callsign", MsgPackValue::from(callsign)),
-                    (
-                        "source_identity",
-                        MsgPackValue::from(source_identity),
+    let fields =
+        MsgPackValue::Map(vec![(
+            MsgPackValue::from(LXMF_FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from(command_id),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from(correlation_id.as_str()),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from(command_type),
+                ),
+                (
+                    MsgPackValue::from("source"),
+                    msgpack_map(vec![
+                        ("rns_identity", MsgPackValue::from(source_identity)),
+                        ("display_name", MsgPackValue::from(display_name)),
+                    ]),
+                ),
+                (
+                    MsgPackValue::from("timestamp"),
+                    MsgPackValue::from(timestamp),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    msgpack_map(
+                        vec![
+                            ("entry_uid", MsgPackValue::from(uid)),
+                            ("mission_uid", MsgPackValue::from(mission_uid)),
+                            ("content", MsgPackValue::from(content)),
+                            ("callsign", MsgPackValue::from(callsign)),
+                            ("source_identity", MsgPackValue::from(source_identity)),
+                            ("source_display_name", MsgPackValue::from(display_name)),
+                        ]
+                        .into_iter()
+                        .chain(
+                            record
+                                .server_time
+                                .as_deref()
+                                .filter(|value| !value.trim().is_empty())
+                                .map(|value| ("server_time", MsgPackValue::from(value)))
+                                .into_iter(),
+                        )
+                        .chain(
+                            record
+                                .client_time
+                                .as_deref()
+                                .filter(|value| !value.trim().is_empty())
+                                .map(|value| ("client_time", MsgPackValue::from(value)))
+                                .into_iter(),
+                        )
+                        .chain((!record.keywords.is_empty()).then(|| {
+                            ("keywords", msgpack_string_array(record.keywords.as_slice()))
+                        }))
+                        .chain((!record.content_hashes.is_empty()).then(|| {
+                            (
+                                "content_hashes",
+                                msgpack_string_array(record.content_hashes.as_slice()),
+                            )
+                        }))
+                        .collect(),
                     ),
-                    (
-                        "source_display_name",
-                        MsgPackValue::from(display_name),
-                    ),
-                ]
-                .into_iter()
-                .chain(
-                    record
-                        .server_time
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .map(|value| ("server_time", MsgPackValue::from(value)))
-                        .into_iter(),
-                )
-                .chain(
-                    record
-                        .client_time
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                        .map(|value| ("client_time", MsgPackValue::from(value)))
-                        .into_iter(),
-                )
-                .chain((!record.keywords.is_empty()).then(|| {
-                    ("keywords", msgpack_string_array(record.keywords.as_slice()))
-                }))
-                .chain((!record.content_hashes.is_empty()).then(|| {
-                    (
-                        "content_hashes",
-                        msgpack_string_array(record.content_hashes.as_slice()),
-                    )
-                }))
-                .collect()),
-            ),
-            (
-                MsgPackValue::from("topics"),
-                msgpack_string_array(record.topics.as_slice()),
-            ),
-        ])]),
-    )]);
+                ),
+                (
+                    MsgPackValue::from("topics"),
+                    msgpack_string_array(record.topics.as_slice()),
+                ),
+            ])]),
+        )]);
     let fields_bytes = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
 
     Ok((body, fields_bytes))
@@ -877,11 +978,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::ConnectPeer {
-            destination_hex,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::ConnectPeer {
+                destination_hex,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -894,11 +997,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::DisconnectPeer {
-            destination_hex,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::DisconnectPeer {
+                destination_hex,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -917,14 +1022,44 @@ impl Node {
         };
 
         let (resp_tx, _resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::SendBytes {
-            destination_hex,
-            bytes,
-            fields_bytes,
-            send_mode,
-            resp: resp_tx,
-        })
-        
+        dispatch_command(
+            &tx,
+            Command::SendBytes {
+                destination_hex,
+                bytes,
+                fields_bytes,
+                send_mode,
+                resp: resp_tx,
+            },
+        )
+    }
+
+    fn send_bytes_sync(
+        &self,
+        destination_hex: String,
+        bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
+        send_mode: SendMode,
+    ) -> Result<(), NodeError> {
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(
+            &tx,
+            Command::SendBytes {
+                destination_hex,
+                bytes,
+                fields_bytes,
+                send_mode,
+                resp: resp_tx,
+            },
+        )?;
+        resp_rx
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {
@@ -934,11 +1069,13 @@ impl Node {
         };
 
         let (resp_tx, _resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::BroadcastBytes {
-            bytes,
-            resp: resp_tx,
-        })
-        
+        dispatch_command(
+            &tx,
+            Command::BroadcastBytes {
+                bytes,
+                resp: resp_tx,
+            },
+        )
     }
 
     pub fn announce_now(&self) -> Result<(), NodeError> {
@@ -957,11 +1094,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::RequestPeerIdentity {
-            destination_hex,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::RequestPeerIdentity {
+                destination_hex,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(20))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -974,11 +1113,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::SendLxmf {
-            request,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::SendLxmf {
+                request,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -991,11 +1132,13 @@ impl Node {
         };
 
         let (resp_tx, _resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::RetryLxmf {
-            message_id_hex,
-            resp: resp_tx,
-        })
-        
+        dispatch_command(
+            &tx,
+            Command::RetryLxmf {
+                message_id_hex,
+                resp: resp_tx,
+            },
+        )
     }
 
     pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
@@ -1005,11 +1148,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::CancelLxmf {
-            message_id_hex,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::CancelLxmf {
+                message_id_hex,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -1025,11 +1170,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::SetActivePropagationNode {
-            destination_hex,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::SetActivePropagationNode {
+                destination_hex,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(10))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -1042,11 +1189,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::RequestLxmfSync {
-            limit,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::RequestLxmfSync {
+                limit,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(30))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -1084,9 +1233,7 @@ impl Node {
         conversation_id: Option<String>,
     ) -> Result<Vec<MessageRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        inner
-            .app_state
-            .list_messages(conversation_id.as_deref())
+        inner.app_state.list_messages(conversation_id.as_deref())
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
@@ -1105,11 +1252,13 @@ impl Node {
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::SetAnnounceCapabilities {
-            capability_string,
-            resp: resp_tx,
-        })
-        ?;
+        dispatch_command(
+            &tx,
+            Command::SetAnnounceCapabilities {
+                capability_string,
+                resp: resp_tx,
+            },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -1180,7 +1329,7 @@ impl Node {
     }
 
     pub fn upsert_eam(&self, record: EamProjectionRecord) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>)>::new();
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let status = inner
@@ -1204,6 +1353,7 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
@@ -1212,12 +1362,18 @@ impl Node {
                 let replication_targets = build_mission_replication_targets(
                     &status,
                     peers.as_slice(),
+                    saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                 );
                 for target in replication_targets {
                     match build_eam_replication_payload(&status, &normalized_record, &target) {
                         Ok((body, fields)) => {
-                            scheduled_sends.push((target.app_destination_hex.clone(), body, fields));
+                            scheduled_sends.push((
+                                target.app_destination_hex.clone(),
+                                body,
+                                fields,
+                                target.send_mode,
+                            ));
                         }
                         Err(err) => {
                             inner.bus.emit(NodeEvent::Error {
@@ -1235,9 +1391,9 @@ impl Node {
             inner.bus.clone()
         };
 
-        for (destination_hex, body, fields_bytes) in scheduled_sends {
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), SendMode::Auto {})
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -1253,15 +1409,81 @@ impl Node {
     }
 
     pub fn delete_eam(&self, callsign: String, deleted_at_ms: u64) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let invalidation = inner.app_state.delete_eam(&callsign, deleted_at_ms)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        let summary = inner.app_state.bump_projection_revision(
-            ProjectionScope::OperationalSummary {},
-            None,
-            Some("eam-deleted".to_string()),
-        )?;
-        emit_projection_invalidation(&inner.bus, summary);
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let invalidation = inner.app_state.delete_eam(&callsign, deleted_at_ms)?;
+            emit_projection_invalidation(&inner.bus, invalidation);
+            let summary = inner.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("eam-deleted".to_string()),
+            )?;
+            emit_projection_invalidation(&inner.bus, summary);
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                );
+                for target in replication_targets {
+                    match build_eam_delete_replication_payload(&callsign, deleted_at_ms, &target) {
+                        Ok((body, fields)) => {
+                            scheduled_sends.push((
+                                target.app_destination_hex.clone(),
+                                body,
+                                fields,
+                                target.send_mode,
+                            ));
+                        }
+                        Err(err) => {
+                            inner.bus.emit(NodeEvent::Error {
+                                code: "InvalidConfig".to_string(),
+                                message: format!(
+                                    "eam delete replication skipped destination={} callsign={} reason={}",
+                                    target.app_destination_hex, callsign, err
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes_sync(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "eam delete replication enqueue failed destination={} callsign={} reason={}",
+                        destination_hex, callsign, err
+                    ),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -1279,7 +1501,7 @@ impl Node {
     }
 
     pub fn upsert_event(&self, record: EventProjectionRecord) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>)>::new();
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let status = inner
@@ -1317,7 +1539,12 @@ impl Node {
                 for target in replication_targets {
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
-                            scheduled_sends.push((target.app_destination_hex.clone(), body, fields));
+                            scheduled_sends.push((
+                                target.app_destination_hex.clone(),
+                                body,
+                                fields,
+                                target.send_mode,
+                            ));
                         }
                         Err(err) => {
                             inner.bus.emit(NodeEvent::Error {
@@ -1335,9 +1562,9 @@ impl Node {
             inner.bus.clone()
         };
 
-        for (destination_hex, body, fields_bytes) in scheduled_sends {
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), SendMode::Auto {})
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -1425,9 +1652,13 @@ impl Node {
         Ok(OperationalSummary {
             running: status.running,
             peer_count_total: peers.len() as u32,
-            peer_count_communication_ready: peers.iter().filter(|peer| peer.communication_ready).count() as u32,
+            peer_count_communication_ready: peers
+                .iter()
+                .filter(|peer| peer.communication_ready)
+                .count() as u32,
             peer_count_mission_ready: peers.iter().filter(|peer| peer.mission_ready).count() as u32,
-            peer_count_relay_eligible: peers.iter().filter(|peer| peer.relay_eligible).count() as u32,
+            peer_count_relay_eligible: peers.iter().filter(|peer| peer.relay_eligible).count()
+                as u32,
             saved_peer_count: inner.app_state.get_saved_peers()?.len() as u32,
             conversation_count,
             message_count: persisted_messages.len() as u32,
@@ -1700,10 +1931,7 @@ mod tests {
                 return None;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let timeout_ms = remaining
-                .as_millis()
-                .min(u32::MAX as u128)
-                .max(1) as u32;
+            let timeout_ms = remaining.as_millis().min(u32::MAX as u128).max(1) as u32;
             if let Some(event) = subscription.next(timeout_ms.min(250)) {
                 if predicate(&event) {
                     return Some(event);
@@ -1747,8 +1975,14 @@ mod tests {
         let fields = msgpack_map(vec![(
             "13",
             MsgPackValue::Map(vec![
-                (MsgPackValue::from("event_type"), MsgPackValue::from(event_type)),
-                (MsgPackValue::from("event_id"), MsgPackValue::from(event_uid)),
+                (
+                    MsgPackValue::from("event_type"),
+                    MsgPackValue::from(event_type),
+                ),
+                (
+                    MsgPackValue::from("event_id"),
+                    MsgPackValue::from(event_uid),
+                ),
                 (MsgPackValue::from("payload"), msgpack_map(payload)),
             ]),
         )]);
@@ -1944,6 +2178,7 @@ mod tests {
         let record = build_eam();
         let target = MissionReplicationTarget {
             app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
         };
 
         let (_, fields) =
@@ -2201,7 +2436,9 @@ mod tests {
         assert_eq!(persisted_peers.len(), 1);
         assert_eq!(persisted_peers[0].destination_hex, peer.destination_hex);
         assert_eq!(persisted_peers[0].label, peer.label);
-        assert!(node.legacy_import_completed().expect("legacy import status"));
+        assert!(node
+            .legacy_import_completed()
+            .expect("legacy import status"));
         let eams = node.get_eams().expect("get eams");
         assert_eq!(eams.len(), 1);
         assert_eq!(eams[0].callsign, "ALPHA-1");
@@ -2238,7 +2475,10 @@ mod tests {
         let _cwd = isolate_current_dir("prestart_runtime_commands");
         let node = Node::new();
 
-        assert!(matches!(node.connect_peer("ABCDEF".to_string()), Err(NodeError::NotRunning {})));
+        assert!(matches!(
+            node.connect_peer("ABCDEF".to_string()),
+            Err(NodeError::NotRunning {})
+        ));
         assert!(matches!(
             node.send_lxmf(SendLxmfRequest {
                 destination_hex: "ABCDEF".to_string(),
@@ -2257,11 +2497,16 @@ mod tests {
         let _cwd = isolate_current_dir("start_idempotent");
         let relay = rt.block_on(TcpRelayHandle::start());
         let storage_dir = prepare_storage_dir("start_idempotent");
-        let config = build_config("start-idempotent", storage_dir.as_path(), relay.address().as_str());
+        let config = build_config(
+            "start-idempotent",
+            storage_dir.as_path(),
+            relay.address().as_str(),
+        );
         let node = Node::new();
 
         node.start(config.clone()).expect("initial start");
-        node.start(config.clone()).expect("repeat start with same config");
+        node.start(config.clone())
+            .expect("repeat start with same config");
         wait_until_running(&node);
         node.announce_now()
             .expect("runtime command stays available after idempotent start");
@@ -2282,7 +2527,11 @@ mod tests {
         let relay = rt.block_on(TcpRelayHandle::start());
         let storage_dir = prepare_storage_dir("start_restart_changed");
         let node = Node::new();
-        let config = build_config("start-restart", storage_dir.as_path(), relay.address().as_str());
+        let config = build_config(
+            "start-restart",
+            storage_dir.as_path(),
+            relay.address().as_str(),
+        );
         let mut changed_config = config.clone();
         changed_config.name = "start-restart-updated".to_string();
         changed_config.announce_interval_seconds = 2;
@@ -2309,7 +2558,11 @@ mod tests {
         let _cwd = isolate_current_dir("restart_running");
         let relay = rt.block_on(TcpRelayHandle::start());
         let storage_dir = prepare_storage_dir("restart_running");
-        let config = build_config("restart-running", storage_dir.as_path(), relay.address().as_str());
+        let config = build_config(
+            "restart-running",
+            storage_dir.as_path(),
+            relay.address().as_str(),
+        );
         let node = Node::new();
 
         node.start(config.clone()).expect("initial start");
@@ -2332,7 +2585,11 @@ mod tests {
         let _cwd = isolate_current_dir("stop_after_idle");
         let relay = rt.block_on(TcpRelayHandle::start());
         let storage_dir = prepare_storage_dir("stop_after_idle");
-        let config = build_config("stop-after-idle", storage_dir.as_path(), relay.address().as_str());
+        let config = build_config(
+            "stop-after-idle",
+            storage_dir.as_path(),
+            relay.address().as_str(),
+        );
         let node = Node::new();
 
         node.start(config).expect("initial start");
@@ -2421,7 +2678,10 @@ mod tests {
 
         let persisted_saved_peers = node.get_saved_peers().expect("saved peers");
         assert_eq!(persisted_saved_peers.len(), 1);
-        assert_eq!(persisted_saved_peers[0].destination_hex, saved_peer.destination_hex);
+        assert_eq!(
+            persisted_saved_peers[0].destination_hex,
+            saved_peer.destination_hex
+        );
         assert_eq!(persisted_saved_peers[0].label, saved_peer.label);
 
         let persisted_eams = node.get_eams().expect("eams");
@@ -2437,7 +2697,10 @@ mod tests {
         let persisted_messages = node.list_messages(None).expect("messages");
         assert_eq!(persisted_messages.len(), 1);
         assert_eq!(persisted_messages[0].message_id_hex, message.message_id_hex);
-        assert_eq!(persisted_messages[0].conversation_id, message.conversation_id);
+        assert_eq!(
+            persisted_messages[0].conversation_id,
+            message.conversation_id
+        );
 
         let conversations = node.list_conversations().expect("conversations");
         assert_eq!(conversations.len(), 1);
@@ -2479,10 +2742,7 @@ mod tests {
             node.request_peer_identity("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
             Err(NodeError::NotRunning {})
         ));
-        assert!(matches!(
-            node.announce_now(),
-            Err(NodeError::NotRunning {})
-        ));
+        assert!(matches!(node.announce_now(), Err(NodeError::NotRunning {})));
         assert!(matches!(
             node.send_lxmf(SendLxmfRequest {
                 destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -2726,6 +2986,7 @@ mod tests {
         };
         let target = MissionReplicationTarget {
             app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
         };
         let (body, fields) =
             build_eam_replication_payload(&node_a_status, &record, &target).expect("eam payload");
@@ -2758,7 +3019,10 @@ mod tests {
 
         assert_eq!(received.eam_uid.as_deref(), record.eam_uid.as_deref());
         assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
-        assert_eq!(received.team_member_uid.as_deref(), record.team_member_uid.as_deref());
+        assert_eq!(
+            received.team_member_uid.as_deref(),
+            record.team_member_uid.as_deref()
+        );
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -2784,6 +3048,20 @@ mod tests {
             .connect_peer(node_b_status.app_destination_hex.clone())
             .expect("connect peer b");
 
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm eam link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm eam link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm eam link")
+        })
+        .expect("node b received eam warmup message");
+
         let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
         loop {
             let peer_ready = node_a
@@ -2794,26 +3072,35 @@ mod tests {
                 .is_some_and(|peer| {
                     peer.mission_ready
                         && peer.communication_ready
+                        && peer.active_link
                         && peer.lxmf_destination_hex.as_deref()
                             == Some(node_b_status.lxmf_destination_hex.as_str())
                 });
             if peer_ready {
                 break;
             }
-            assert!(Instant::now() < peer_ready_deadline, "peer b never became mission-ready");
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
         let replication_targets = build_mission_replication_targets(
             &node_a.get_status(),
             node_a.list_peers().expect("list peers").as_slice(),
+            node_a.get_saved_peers().expect("saved peers").as_slice(),
             node_a
                 .get_lxmf_sync_status()
                 .expect("sync status")
                 .active_propagation_node_hex
                 .as_deref(),
         );
-        assert_eq!(replication_targets.len(), 1, "expected one eam replication target");
+        assert_eq!(
+            replication_targets.len(),
+            1,
+            "expected one eam replication target"
+        );
         assert_eq!(
             replication_targets[0].app_destination_hex,
             node_b_status.app_destination_hex
@@ -2870,12 +3157,21 @@ mod tests {
 
         assert_eq!(received.callsign, record.callsign);
         assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
-        assert_eq!(received.team_member_uid.as_deref(), record.team_member_uid.as_deref());
+        assert_eq!(
+            received.team_member_uid.as_deref(),
+            record.team_member_uid.as_deref()
+        );
         assert_eq!(received.eam_uid.as_deref(), record.eam_uid.as_deref());
         assert_eq!(received.security_status, record.security_status);
         assert_eq!(received.capability_status, record.capability_status);
         assert_eq!(received.overall_status.as_deref(), Some("Yellow"));
-        assert_eq!(received.source.as_ref().map(|source| source.rns_identity.as_str()), Some(node_a_status.identity_hex.as_str()));
+        assert_eq!(
+            received
+                .source
+                .as_ref()
+                .map(|source| source.rns_identity.as_str()),
+            Some(node_a_status.identity_hex.as_str())
+        );
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -2891,8 +3187,29 @@ mod tests {
         let node_a_status = node_a.get_status();
         let node_b_status = node_b.get_status();
         node_a
+            .set_saved_peers(vec![SavedPeerRecord {
+                destination_hex: node_b_status.app_destination_hex.clone(),
+                label: Some("peer-b".to_string()),
+                saved_at_ms: now_ms(),
+            }])
+            .expect("save peer b");
+        node_a
             .connect_peer(node_b_status.app_destination_hex.clone())
             .expect("connect peer b");
+
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm eam defaults link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm eam defaults link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm eam defaults link")
+        })
+        .expect("node b received eam defaults warmup message");
 
         let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
         loop {
@@ -2901,11 +3218,16 @@ mod tests {
                 .expect("list peers")
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-                .is_some_and(|peer| peer.mission_ready && peer.communication_ready);
+                .is_some_and(|peer| {
+                    peer.mission_ready && peer.communication_ready && peer.active_link
+                });
             if peer_ready {
                 break;
             }
-            assert!(Instant::now() < peer_ready_deadline, "peer b never became mission-ready");
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
@@ -2979,6 +3301,140 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn delete_eam_replicates_to_native_peer_projection() {
+        const EAM_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("eam_delete_projection").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        node_a
+            .set_saved_peers(vec![SavedPeerRecord {
+                destination_hex: node_b_status.app_destination_hex.clone(),
+                label: Some("peer-b".to_string()),
+                saved_at_ms: now_ms(),
+            }])
+            .expect("save peer b");
+        node_a
+            .connect_peer(node_b_status.app_destination_hex.clone())
+            .expect("connect peer b");
+
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm eam delete link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm eam delete link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm eam delete link")
+        })
+        .expect("node b received eam delete warmup message");
+
+        let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let peer_ready = node_a
+                .list_peers()
+                .expect("list peers")
+                .into_iter()
+                .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
+                .is_some_and(|peer| {
+                    peer.mission_ready && peer.communication_ready && peer.active_link
+                });
+            if peer_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let record = EamProjectionRecord {
+            callsign: "Ciccio".to_string(),
+            group_name: "Yellow".to_string(),
+            security_status: "Red".to_string(),
+            capability_status: "Yellow".to_string(),
+            preparedness_status: "Red".to_string(),
+            medical_status: "Unknown".to_string(),
+            mobility_status: "Unknown".to_string(),
+            comms_status: "Unknown".to_string(),
+            notes: Some("native eam delete replication".to_string()),
+            updated_at_ms: now_ms(),
+            deleted_at_ms: None,
+            eam_uid: Some("eam-delete-native".to_string()),
+            team_member_uid: Some(node_a_status.app_destination_hex.clone()),
+            team_uid: Some(TEAM_UID_YELLOW.to_string()),
+            reported_at: Some("2026-03-27T14:00:00Z".to_string()),
+            reported_by: Some(node_a_status.name.clone()),
+            overall_status: Some("Red".to_string()),
+            confidence: Some(0.9),
+            ttl_seconds: Some(3600),
+            source: Some(EamSourceRecord {
+                rns_identity: node_a_status.identity_hex.clone(),
+                display_name: Some(node_a_status.name.clone()),
+            }),
+            sync_state: Some("draft".to_string()),
+            sync_error: None,
+            draft_created_at_ms: Some(now_ms()),
+            last_synced_at_ms: None,
+        };
+
+        node_a.upsert_eam(record.clone()).expect("upsert local eam");
+
+        let received_deadline = Instant::now() + EAM_REPLICATION_TIMEOUT;
+        loop {
+            let received = node_b
+                .get_eams()
+                .expect("get eams")
+                .into_iter()
+                .find(|eam| eam.callsign == record.callsign && eam.deleted_at_ms.is_none());
+            if received.is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted replicated eam before delete"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let deleted_at_ms = now_ms();
+        node_a
+            .delete_eam(record.callsign.clone(), deleted_at_ms)
+            .expect("delete local eam");
+
+        let delete_deadline = Instant::now() + EAM_REPLICATION_TIMEOUT;
+        let deleted = loop {
+            let deleted = node_b
+                .get_eams()
+                .expect("get eams")
+                .into_iter()
+                .find(|eam| {
+                    eam.callsign == record.callsign && eam.deleted_at_ms == Some(deleted_at_ms)
+                });
+            if let Some(deleted) = deleted {
+                break deleted;
+            }
+            assert!(
+                Instant::now() < delete_deadline,
+                "node b never persisted replicated eam delete"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(deleted.callsign, record.callsign);
+        assert_eq!(deleted.deleted_at_ms, Some(deleted_at_ms));
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn upsert_event_replicates_to_native_peer_projection() {
         const EVENT_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
         let _guard = test_lock().lock().await;
@@ -3022,7 +3478,10 @@ mod tests {
             if peer_ready {
                 break;
             }
-            assert!(Instant::now() < peer_ready_deadline, "peer b never became mission-ready");
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
@@ -3036,7 +3495,11 @@ mod tests {
                 .active_propagation_node_hex
                 .as_deref(),
         );
-        assert_eq!(replication_targets.len(), 1, "expected one event replication target");
+        assert_eq!(
+            replication_targets.len(),
+            1,
+            "expected one event replication target"
+        );
         assert_eq!(
             replication_targets[0].app_destination_hex,
             node_b_status.app_destination_hex
@@ -3151,8 +3614,52 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "99999999999999999999999999999999"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_include_connected_peer_without_active_link() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-connected".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            PeerManagementState::Managed {},
+            true,
+            true,
+            true,
+            false,
+        )];
+
+        let targets =
+            build_event_replication_targets(&status, peers.as_slice(), &[saved_peer], None);
+
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].app_destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -3216,7 +3723,339 @@ mod tests {
         );
 
         assert_eq!(targets.len(), 2);
-        assert_eq!(targets[0].app_destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        assert_eq!(targets[1].app_destination_hex, "cccccccccccccccccccccccccccccccc");
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "cccccccccccccccccccccccccccccccc"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_only_include_intentional_peers() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let peers = vec![
+            build_peer_record(
+                saved_peer.destination_hex.as_str(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                PeerManagementState::Unmanaged {},
+                true,
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                PeerManagementState::Unmanaged {},
+                true,
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "ffffffffffffffffffffffffffffffff",
+                PeerManagementState::Managed {},
+                false,
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "99999999999999999999999999999999",
+                "12121212121212121212121212121212",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                false,
+            ),
+        ];
+
+        let targets = build_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "99999999999999999999999999999999"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            label: Some("saved-relay".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                PeerManagementState::Managed {},
+                true,
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                PeerManagementState::Unmanaged {},
+                false,
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "ffffffffffffffffffffffffffffffff",
+                PeerManagementState::Unmanaged {},
+                true,
+                true,
+                true,
+                true,
+            ),
+        ];
+
+        let targets = build_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "cccccccccccccccccccccccccccccccc"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_include_connected_peer_without_active_link() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            PeerManagementState::Managed {},
+            true,
+            true,
+            true,
+            false,
+        )];
+
+        let targets = build_mission_replication_targets(&status, peers.as_slice(), &[], None);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_include_direct_peer_without_lxmf_snapshot() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let peer = PeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: Some("identity-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            lxmf_destination_hex: None,
+            display_name: Some("peer-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            app_data: Some("R3AKT,EMergencyMessages,Telemetry".to_string()),
+            state: crate::types::PeerState::Connected {},
+            management_state: PeerManagementState::Managed {},
+            availability_state: crate::types::PeerAvailabilityState::Ready {},
+            communication_ready: true,
+            mission_ready: true,
+            relay_eligible: false,
+            stale: false,
+            active_link: true,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: Some(now_ms()),
+            last_ready_at_ms: Some(now_ms()),
+            last_seen_at_ms: now_ms(),
+            announce_last_seen_at_ms: Some(now_ms()),
+            lxmf_last_seen_at_ms: None,
+        };
+
+        let targets = build_mission_replication_targets(&status, &[peer], &[], None);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let peers = vec![build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            PeerManagementState::Managed {},
+            false,
+            true,
+            false,
+            false,
+        )];
+
+        let targets = build_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let peers = vec![build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            PeerManagementState::Managed {},
+            false,
+            true,
+            false,
+            false,
+        )];
+
+        let targets = build_event_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn eam_replication_targets_keep_saved_peer_target_without_active_relay() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+
+        let targets = build_mission_replication_targets(&status, &[], &[saved_peer], None);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_keep_saved_peer_target_without_active_relay() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+
+        let targets = build_event_replication_targets(&status, &[], &[saved_peer], None);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 }

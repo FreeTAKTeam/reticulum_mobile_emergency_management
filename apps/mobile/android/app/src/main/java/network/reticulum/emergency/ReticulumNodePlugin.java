@@ -88,7 +88,6 @@ public class ReticulumNodePlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        bindToService();
         Logger.info(TAG, "ReticulumNode plugin loaded.");
     }
 

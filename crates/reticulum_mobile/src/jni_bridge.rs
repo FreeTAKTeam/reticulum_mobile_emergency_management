@@ -11,13 +11,12 @@ use serde_json::json;
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode,
-    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
-    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
-    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerAvailabilityState, PeerManagementState, PeerChange, PeerRecord, PeerState,
-    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord,
+    AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode, HubSettingsRecord,
+    LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
+    LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
+    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerAvailabilityState, PeerChange,
+    PeerManagementState, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest,
+    SendMode, SendOutcome, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -1074,10 +1073,7 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "updatedAtMs": update.updated_at_ms
             }),
         ),
-        NodeEvent::PeerResolved { peer } => (
-            "peerResolved",
-            peer_record_json(&peer),
-        ),
+        NodeEvent::PeerResolved { peer } => ("peerResolved", peer_record_json(&peer)),
         NodeEvent::MessageReceived { message } => (
             "messageReceived",
             json!({
@@ -1603,7 +1599,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setActiv
     let payload: OptionalDestinationInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            return err_result("InvalidConfig", format!("invalid propagation node payload: {e}"))
+            return err_result(
+                "InvalidConfig",
+                format!("invalid propagation node payload: {e}"),
+            )
         }
     };
 
@@ -1858,7 +1857,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
     let payload: MessageListInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            set_last_error("InvalidConfig", format!("invalid message list payload: {e}"));
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid message list payload: {e}"),
+            );
             return ptr::null_mut();
         }
     };
@@ -1942,7 +1944,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLe
     };
     let payload: LegacyImportInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return err_result("InvalidConfig", format!("invalid legacy import payload: {e}")),
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid legacy import payload: {e}"),
+            )
+        }
     };
     let mut guard = match bridge_state().lock() {
         Ok(v) => v,
@@ -2094,7 +2101,11 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node(&mut guard);
-    let peers = payload.saved_peers.into_iter().map(to_saved_peer_record).collect();
+    let peers = payload
+        .saved_peers
+        .into_iter()
+        .map(to_saved_peer_record)
+        .collect();
     match node.set_saved_peers(peers) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -2140,7 +2151,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamsJ
     };
     let node = ensure_node(&mut guard);
     match node.get_eams() {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(eam_projection_json).collect::<Vec<_>>() })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(eam_projection_json).collect::<Vec<_>>() }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -2195,7 +2209,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEa
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node(&mut guard);
-    match node.delete_eam(payload.callsign, payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms)) {
+    match node.delete_eam(
+        payload.callsign,
+        payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
+    ) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);
@@ -2220,7 +2237,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTe
     let payload: TeamUidInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            set_last_error("InvalidConfig", format!("invalid eam team summary payload: {e}"));
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid eam team summary payload: {e}"),
+            );
             return ptr::null_mut();
         }
     };
@@ -2256,7 +2276,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEvent
     };
     let node = ensure_node(&mut guard);
     match node.get_events() {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(event_projection_json).collect::<Vec<_>>() })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(event_projection_json).collect::<Vec<_>>() }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -2304,14 +2327,22 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEv
     };
     let payload: DeleteEventInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return err_result("InvalidConfig", format!("invalid event delete payload: {e}")),
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid event delete payload: {e}"),
+            )
+        }
     };
     let mut guard = match bridge_state().lock() {
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node(&mut guard);
-    match node.delete_event(payload.uid, payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms)) {
+    match node.delete_event(
+        payload.uid,
+        payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
+    ) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);
@@ -2334,7 +2365,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelem
     };
     let node = ensure_node(&mut guard);
     match node.get_telemetry_positions() {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items.iter().map(telemetry_position_json).collect::<Vec<_>>() })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(telemetry_position_json).collect::<Vec<_>>() }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -2382,7 +2416,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLo
     };
     let payload: CallsignInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return err_result("InvalidConfig", format!("invalid telemetry delete payload: {e}")),
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid telemetry delete payload: {e}"),
+            )
+        }
     };
     let mut guard = match bridge_state().lock() {
         Ok(v) => v,

@@ -255,11 +255,7 @@ impl MessagingStore {
         }
     }
 
-    fn update_app_destination_mapping(
-        &mut self,
-        destination_hex: String,
-        identity_hex: String,
-    ) {
+    fn update_app_destination_mapping(&mut self, destination_hex: String, identity_hex: String) {
         if let Some(previous_destination_hex) = self
             .resolved_app_destination_by_identity
             .insert(identity_hex.clone(), destination_hex.clone())
@@ -297,7 +293,8 @@ impl MessagingStore {
             .collect::<Vec<_>>();
 
         for replaced_destination_hex in replaced_destinations {
-            self.announce_records.remove(replaced_destination_hex.as_str());
+            self.announce_records
+                .remove(replaced_destination_hex.as_str());
         }
     }
 
@@ -325,14 +322,19 @@ impl MessagingStore {
         if !destination_hex.is_empty() && !identity_hex.is_empty() {
             if record.destination_kind == "app" {
                 self.update_app_destination_mapping(destination_hex.clone(), identity_hex.clone());
-                self.replace_announce_for_identity("app", identity_hex.as_str(), destination_hex.as_str());
+                self.replace_announce_for_identity(
+                    "app",
+                    identity_hex.as_str(),
+                    destination_hex.as_str(),
+                );
             } else if record.destination_kind == "lxmf_delivery" {
                 if let Some(previous_destination_hex) = self
                     .resolved_lxmf_by_identity
                     .insert(identity_hex.clone(), destination_hex.clone())
                 {
                     if previous_destination_hex != destination_hex {
-                        self.announce_records.remove(previous_destination_hex.as_str());
+                        self.announce_records
+                            .remove(previous_destination_hex.as_str());
                     }
                 }
                 self.replace_announce_for_identity(
@@ -354,7 +356,8 @@ impl MessagingStore {
                 .peer_by_destination(destination_hex.as_str())
                 .is_some_and(|peer| matches!(peer.availability_state, PeerAvailabilityState::Ready))
             {
-                self.last_ready_at_ms.insert(destination_hex, received_at_ms);
+                self.last_ready_at_ms
+                    .insert(destination_hex, received_at_ms);
             }
         }
     }
@@ -408,7 +411,10 @@ impl MessagingStore {
         if normalized_destination.is_empty() || normalized_identity.is_empty() {
             return;
         }
-        self.update_app_destination_mapping(normalized_destination.clone(), normalized_identity.clone());
+        self.update_app_destination_mapping(
+            normalized_destination.clone(),
+            normalized_identity.clone(),
+        );
         if !normalized_lxmf_destination.is_empty() {
             self.resolved_lxmf_by_identity
                 .insert(normalized_identity, normalized_lxmf_destination);
@@ -416,11 +422,7 @@ impl MessagingStore {
         self.last_resolution_errors.remove(&normalized_destination);
     }
 
-    pub fn record_resolution_error(
-        &mut self,
-        destination_hex: &str,
-        error: Option<String>,
-    ) {
+    pub fn record_resolution_error(&mut self, destination_hex: &str, error: Option<String>) {
         let normalized = normalize_hex(destination_hex);
         if normalized.is_empty() {
             return;
@@ -432,7 +434,12 @@ impl MessagingStore {
         }
     }
 
-    pub fn set_peer_active_link(&mut self, destination_hex: &str, active: bool, changed_at_ms: u64) {
+    pub fn set_peer_active_link(
+        &mut self,
+        destination_hex: &str,
+        active: bool,
+        changed_at_ms: u64,
+    ) {
         let normalized = normalize_hex(destination_hex);
         if normalized.is_empty() {
             return;
@@ -460,7 +467,8 @@ impl MessagingStore {
 
         for record in self.announce_records.values() {
             if record.destination_kind == "app" {
-                app_dest_by_identity.insert(record.identity_hex.clone(), record.destination_hex.clone());
+                app_dest_by_identity
+                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
                 app_records.insert(record.destination_hex.clone(), record.clone());
             } else if record.destination_kind == "lxmf_delivery" {
                 lxmf_dest_by_identity
@@ -491,7 +499,11 @@ impl MessagingStore {
             let app_record = app_records.get(&destination_hex);
             let identity_hex = app_record
                 .map(|record| record.identity_hex.clone())
-                .or_else(|| self.resolved_app_identity_by_destination.get(&destination_hex).cloned());
+                .or_else(|| {
+                    self.resolved_app_identity_by_destination
+                        .get(&destination_hex)
+                        .cloned()
+                });
             let lxmf_destination_hex = identity_hex
                 .as_ref()
                 .and_then(|identity| lxmf_dest_by_identity.get(identity).cloned());
@@ -503,7 +515,9 @@ impl MessagingStore {
             } else {
                 PeerManagementState::Unmanaged
             };
-            let active_link = self.active_link_destinations.contains(destination_hex.as_str())
+            let active_link = self
+                .active_link_destinations
+                .contains(destination_hex.as_str())
                 || lxmf_destination_hex
                     .as_ref()
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
@@ -525,17 +539,15 @@ impl MessagingStore {
                 stale,
             );
             let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
-            let relay_eligible = identity_hex.is_some()
-                && lxmf_destination_hex.is_some()
-                && mission_ready;
+            let relay_eligible =
+                identity_hex.is_some() && lxmf_destination_hex.is_some() && mission_ready;
             peers.push(PeerRecord {
                 destination_hex: destination_hex.clone(),
                 identity_hex,
                 lxmf_destination_hex: lxmf_destination_hex.clone(),
-                display_name: lxmf_record
-                    .and_then(|record| record.display_name.clone()),
+                display_name: lxmf_record.and_then(|record| record.display_name.clone()),
                 app_data: peer_app_data.map(ToOwned::to_owned),
-                state: compatibility_peer_state(management_state, availability_state),
+                state: compatibility_peer_state(management_state, availability_state, active_link),
                 management_state,
                 availability_state,
                 communication_ready,
@@ -579,15 +591,15 @@ impl MessagingStore {
             .get(normalized.as_str())
             .cloned()
             .or_else(|| {
-                self.resolved_app_identity_by_destination
-                    .iter()
-                    .find_map(|(destination_hex, resolved_identity_hex)| {
+                self.resolved_app_identity_by_destination.iter().find_map(
+                    |(destination_hex, resolved_identity_hex)| {
                         if normalize_hex(resolved_identity_hex.as_str()) == normalized {
                             Some(destination_hex.clone())
                         } else {
                             None
                         }
-                    })
+                    },
+                )
             })
     }
 
@@ -599,11 +611,14 @@ impl MessagingStore {
     }
 
     pub fn peer_change_for_destination(&self, destination_hex: &str) -> Option<PeerChange> {
-        self.peer_by_destination(destination_hex).map(peer_change_from_record)
+        self.peer_by_destination(destination_hex)
+            .map(peer_change_from_record)
     }
 
     pub fn upsert_message(&mut self, message: MessageRecord) -> bool {
-        let is_new = !self.message_records.contains_key(message.message_id_hex.as_str());
+        let is_new = !self
+            .message_records
+            .contains_key(message.message_id_hex.as_str());
         self.message_records
             .insert(message.message_id_hex.clone(), message.clone());
         if is_new {
@@ -638,7 +653,10 @@ impl MessagingStore {
             out.push(record);
         }
         out.sort_by(|left, right| {
-            let left_time = left.received_at_ms.or(left.sent_at_ms).unwrap_or(left.updated_at_ms);
+            let left_time = left
+                .received_at_ms
+                .or(left.sent_at_ms)
+                .unwrap_or(left.updated_at_ms);
             let right_time = right
                 .received_at_ms
                 .or(right.sent_at_ms)
@@ -675,7 +693,10 @@ impl MessagingStore {
                     last_message_state: None,
                 });
 
-            let event_time = record.received_at_ms.or(record.sent_at_ms).unwrap_or(record.updated_at_ms);
+            let event_time = record
+                .received_at_ms
+                .or(record.sent_at_ms)
+                .unwrap_or(record.updated_at_ms);
             if event_time >= entry.last_message_at_ms {
                 entry.peer_destination_hex = record.destination_hex.clone();
                 entry.peer_display_name = peer_map
@@ -705,7 +726,8 @@ impl MessagingStore {
     }
 
     pub fn set_active_propagation_node(&mut self, destination_hex: Option<String>) -> SyncStatus {
-        self.sync_status.active_propagation_node_hex = destination_hex.map(|value| normalize_hex(value.as_str()));
+        self.sync_status.active_propagation_node_hex =
+            destination_hex.map(|value| normalize_hex(value.as_str()));
         self.sync_status.clone()
     }
 
@@ -759,9 +781,7 @@ fn parse_capability_tokens(app_data: &str) -> Vec<String> {
 }
 
 fn supports_mission_traffic(app_data: Option<&str>) -> bool {
-    let tokens = app_data
-        .map(parse_capability_tokens)
-        .unwrap_or_default();
+    let tokens = app_data.map(parse_capability_tokens).unwrap_or_default();
     REQUIRED_MISSION_CAPABILITIES
         .iter()
         .all(|required| tokens.iter().any(|token| token == required))
@@ -788,16 +808,24 @@ fn peer_is_stale(
     .max()
     .unwrap_or(0);
 
-    latest_known_activity > 0
-        && now_ms.saturating_sub(latest_known_activity) > stale_after_ms
+    latest_known_activity > 0 && now_ms.saturating_sub(latest_known_activity) > stale_after_ms
 }
 
 fn compatibility_peer_state(
     management_state: PeerManagementState,
     availability_state: PeerAvailabilityState,
+    active_link: bool,
 ) -> PeerState {
+    if active_link {
+        return PeerState::Connected;
+    }
+
     match availability_state {
-        PeerAvailabilityState::Ready => PeerState::Connected,
+        PeerAvailabilityState::Ready
+            if matches!(management_state, PeerManagementState::Managed) =>
+        {
+            PeerState::Connected
+        }
         _ if matches!(management_state, PeerManagementState::Managed) => PeerState::Connecting,
         _ => PeerState::Disconnected,
     }
@@ -982,7 +1010,7 @@ mod tests {
         assert_eq!(peers[0].destination_hex, "appdest");
         assert_eq!(peers[0].management_state, PeerManagementState::Unmanaged);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert_eq!(peers[0].state, PeerState::Connected);
+        assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(peers[0].communication_ready);
         assert!(peers[0].mission_ready);
         assert!(peers[0].relay_eligible);
@@ -1068,7 +1096,10 @@ mod tests {
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].destination_hex, "appdest");
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Discovered);
+        assert_eq!(
+            peers[0].availability_state,
+            PeerAvailabilityState::Discovered
+        );
         assert_eq!(peers[0].state, PeerState::Connecting);
         assert_eq!(peers[0].lxmf_destination_hex, None);
         assert!(!peers[0].communication_ready);
@@ -1152,7 +1183,7 @@ mod tests {
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert_eq!(peers[0].state, PeerState::Connected);
+        assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(peers[0].communication_ready);
         assert!(peers[0].mission_ready);
         assert!(peers[0].relay_eligible);
@@ -1196,7 +1227,10 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].app_data.as_deref(), Some("R3AKT,EMergencyMessages,Telemetry"));
+        assert_eq!(
+            peers[0].app_data.as_deref(),
+            Some("R3AKT,EMergencyMessages,Telemetry")
+        );
         assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
         assert!(peers[0].communication_ready);
         assert!(peers[0].mission_ready);

@@ -57,12 +57,12 @@ const filteredSaved = computed(() => {
 
 function savedPeerConnectionLabel(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
-  return peer?.activeLink || peer?.managementState === "managed" ? "Disconnect" : "Connect";
+  return peer?.managementState === "managed" || peer?.activeLink ? "Disconnect" : "Connect";
 }
 
 function savedPeerConnectionMessage(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
-  if (peer?.activeLink) {
+  if (peer?.managementState === "managed" && (peer?.state === "connected" || peer?.activeLink)) {
     return "Connected";
   }
   if (peer?.managementState === "managed" || peer?.state === "connecting") {
@@ -98,6 +98,10 @@ async function onSaveToggle(destination: string, next: boolean): Promise<void> {
 }
 
 async function onConnectToggle(destination: string, next: boolean): Promise<void> {
+  if (next && !isSaved(destination)) {
+    feedback.value = `Save peer ${destination} before connecting.`;
+    return;
+  }
   try {
     if (next) {
       await nodeStore.connectPeer(destination);
@@ -170,12 +174,12 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
 
     <section class="panel">
       <h2>Discovered</h2>
-      <p class="section-meta">
-        {{ nodeStore.communicationReadyPeerCount }}/{{ nodeStore.connectedLinkDestinations.length }} possible/connected |
-        {{ nodeStore.missionReadyPeerCount }} mission-ready |
-        {{ nodeStore.relayEligiblePeerCount }} relay-eligible |
-        {{ filteredDiscovered.length }} peers visible
-      </p>
+        <p class="section-meta">
+          {{ nodeStore.communicationReadyPeerCount }}/{{ nodeStore.connectedLinkDestinations.length }} saved/connected |
+          {{ nodeStore.missionReadyPeerCount }} mission-ready |
+          {{ nodeStore.relayEligiblePeerCount }} relay-eligible |
+          {{ filteredDiscovered.length }} peers visible
+        </p>
       <div class="rows">
         <PeerRow
           v-for="peer in filteredDiscovered"

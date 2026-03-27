@@ -16,6 +16,7 @@ use lxmf_sdk::{
     RuntimeState, SdkBackend, SdkConfig, SdkError, SdkEvent, SendRequest, Severity, ShutdownMode,
     StartRequest,
 };
+use rand_core::OsRng;
 use reticulum::destination::link::{Link, LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
 use reticulum::hash::AddressHash;
@@ -27,7 +28,6 @@ use reticulum::packet::{
 };
 use reticulum::resource::ResourceEventKind;
 use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport};
-use rand_core::OsRng;
 use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
@@ -108,9 +108,7 @@ fn transport_method_for_send_mode(
     }
 }
 
-fn lxmf_identity(
-    identity: &reticulum::identity::Identity,
-) -> lxmf::identity::Identity {
+fn lxmf_identity(identity: &reticulum::identity::Identity) -> lxmf::identity::Identity {
     lxmf::identity::Identity::new_from_slices(
         identity.public_key_bytes(),
         identity.verifying_key_bytes(),
@@ -356,7 +354,8 @@ impl CompatBackendState {
     fn record_send_report(&mut self, report: CompatSendReport) {
         let message_id_hex = report.message_id_hex.clone();
         self.send_reports.insert(message_id_hex.clone(), report);
-        self.send_report_order.retain(|value| value != &message_id_hex);
+        self.send_report_order
+            .retain(|value| value != &message_id_hex);
         self.send_report_order.push_back(message_id_hex);
         while self.send_report_order.len() > COMPAT_SEND_REPORT_RETENTION_LIMIT {
             if let Some(evicted) = self.send_report_order.pop_front() {
@@ -751,11 +750,14 @@ impl RuntimeLxmfSdk {
                 json!(BASE64_STANDARD.encode(fields_bytes)),
             );
         }
-        request = request.with_extension(EXT_SEND_MODE, json!(match send_mode {
-            SendMode::Auto {} => "Auto",
-            SendMode::DirectOnly {} => "DirectOnly",
-            SendMode::PropagationOnly {} => "PropagationOnly",
-        }));
+        request = request.with_extension(
+            EXT_SEND_MODE,
+            json!(match send_mode {
+                SendMode::Auto {} => "Auto",
+                SendMode::DirectOnly {} => "DirectOnly",
+                SendMode::PropagationOnly {} => "PropagationOnly",
+            }),
+        );
         if matches!(send_mode, SendMode::PropagationOnly {}) {
             request = request.with_extension(EXT_USE_PROPAGATION_NODE, json!(true));
         }
@@ -1087,9 +1089,14 @@ async fn compat_send_lxmf(
         has_cached_direct_link,
         has_delivery_ratchet(&state, &remote_desc.address_hash),
     );
-    let DeliveryDecision { method, representation } =
-        decide_delivery(desired_method, false, wire.len())
-            .map_err(|err| sdk_validation(format!("failed to choose lxmf delivery representation: {err}")))?;
+    let DeliveryDecision {
+        method,
+        representation,
+    } = decide_delivery(desired_method, false, wire.len()).map_err(|err| {
+        sdk_validation(format!(
+            "failed to choose lxmf delivery representation: {err}"
+        ))
+    })?;
     let method_value = delivery_method_from_transport(method);
     let representation_value = delivery_representation_from_lxmf(representation);
 
@@ -1312,7 +1319,9 @@ async fn compat_send_lxmf_via_propagation(
             .transport
             .send_resource(&link_id, propagated_payload.clone(), None)
             .await
-            .map_err(|_| sdk_transport("failed to start propagated lxmf relay resource transfer"))?;
+            .map_err(|_| {
+                sdk_transport("failed to start propagated lxmf relay resource transfer")
+            })?;
         let resource_hash_hex = hex::encode(resource_hash.as_slice());
         info!(
             "[lxmf][events][sdk] path=propagation representation=resource requested_destination={} resolved_destination={} relay_destination={} message_id={} resource_hash={} propagated_bytes={} max_wire_bytes={}",
@@ -1328,7 +1337,9 @@ async fn compat_send_lxmf_via_propagation(
         let deadline = tokio::time::Instant::now() + RESOURCE_TRANSFER_TIMEOUT;
         loop {
             if tokio::time::Instant::now() >= deadline {
-                return Err(sdk_transport("propagated lxmf relay resource transfer timed out"));
+                return Err(sdk_transport(
+                    "propagated lxmf relay resource transfer timed out",
+                ));
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout(remaining, resource_events.recv()).await {
@@ -1377,11 +1388,15 @@ async fn compat_send_lxmf_via_propagation(
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    return Err(sdk_transport("propagation relay resource event stream closed"));
+                    return Err(sdk_transport(
+                        "propagation relay resource event stream closed",
+                    ));
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
                 Err(_) => {
-                    return Err(sdk_transport("propagated lxmf relay resource transfer timed out"));
+                    return Err(sdk_transport(
+                        "propagated lxmf relay resource transfer timed out",
+                    ));
                 }
             }
         }
@@ -1408,7 +1423,10 @@ async fn compat_send_lxmf_via_propagation(
         data: relay_data,
     };
     let outcome = state.transport.send_packet_with_outcome(relay_packet).await;
-    if !matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast) {
+    if !matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    ) {
         return Err(sdk_transport(format!(
             "propagated relay send failed: {outcome:?}"
         )));
@@ -1746,7 +1764,10 @@ mod tests {
 
         let state = backend.state.lock().expect("state lock");
         assert_eq!(state.events.len(), COMPAT_EVENT_RETENTION_LIMIT);
-        assert_eq!(state.last_seq_no(), (COMPAT_EVENT_RETENTION_LIMIT + 8) as u64);
+        assert_eq!(
+            state.last_seq_no(),
+            (COMPAT_EVENT_RETENTION_LIMIT + 8) as u64
+        );
         assert_eq!(state.events.front().map(|event| event.seq_no), Some(9));
     }
 
@@ -1812,9 +1833,8 @@ mod tests {
         let state = backend.state.lock().expect("state lock");
         assert_eq!(state.send_reports.len(), COMPAT_SEND_REPORT_RETENTION_LIMIT);
         assert!(!state.send_reports.contains_key("msg-0"));
-        assert!(state.send_reports.contains_key(&format!(
-            "msg-{}",
-            COMPAT_SEND_REPORT_RETENTION_LIMIT + 7
-        )));
+        assert!(state
+            .send_reports
+            .contains_key(&format!("msg-{}", COMPAT_SEND_REPORT_RETENTION_LIMIT + 7)));
     }
 }

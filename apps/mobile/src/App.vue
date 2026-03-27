@@ -61,8 +61,8 @@ const peerCountLabel = computed(
 const connectedPeerCountTitle = computed(() => {
   const possible = possiblePeerCount.value;
   const connected = connectedPeerCount.value;
-  const possibleLabel = possible === 1 ? "1 possible peer" : `${possible} possible peers`;
-  const connectedLabel = connected === 1 ? "1 active link" : `${connected} active links`;
+  const possibleLabel = possible === 1 ? "1 saved or managed peer" : `${possible} saved or managed peers`;
+  const connectedLabel = connected === 1 ? "1 intentional connection" : `${connected} intentional connections`;
   return `${possibleLabel}, ${connectedLabel}`;
 });
 
@@ -82,12 +82,12 @@ function isTabActive(path: string): boolean {
           <p class="title">R.E.M.</p>
         </div>
         <div class="mast-actions">
-          <span
-            class="peer-count"
-            data-testid="connected-peer-count"
-            aria-label="Possible and connected peers"
-            :title="connectedPeerCountTitle"
-          >
+            <span
+              class="peer-count"
+              data-testid="connected-peer-count"
+              aria-label="Saved and connected peers"
+              :title="connectedPeerCountTitle"
+            >
             {{ peerCountLabel }}
           </span>
           <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">

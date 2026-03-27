@@ -7,8 +7,8 @@ use serde::Serialize;
 use crate::runtime::now_ms;
 use crate::types::{
     AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, LegacyImportPayload, MessageRecord, NodeError,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, TelemetryPositionRecord,
+    EventProjectionRecord, LegacyImportPayload, MessageRecord, NodeError, ProjectionInvalidation,
+    ProjectionScope, SavedPeerRecord, TelemetryPositionRecord,
 };
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
@@ -120,7 +120,9 @@ impl AppStateStore {
         payload: &LegacyImportPayload,
     ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         let mut invalidations = Vec::new();
 
         if let Some(settings) = payload.settings.as_ref() {
@@ -216,7 +218,9 @@ impl AppStateStore {
     pub fn get_app_settings(&self) -> Result<Option<AppSettingsRecord>, NodeError> {
         let connection = self.connect()?;
         let raw: Option<String> = connection
-            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| row.get(0))
+            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(|_| NodeError::IoError {})?;
         raw.map(|value| deserialize_json(&value)).transpose()
@@ -227,7 +231,9 @@ impl AppStateStore {
         settings: &AppSettingsRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         self.write_app_settings_tx(&transaction, settings)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -240,7 +246,10 @@ impl AppStateStore {
     }
 
     pub fn get_saved_peers(&self) -> Result<Vec<SavedPeerRecord>, NodeError> {
-        query_json_records(&self.connect()?, "SELECT json FROM saved_peers ORDER BY updated_at_ms DESC")
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM saved_peers ORDER BY updated_at_ms DESC",
+        )
     }
 
     pub fn set_saved_peers(
@@ -248,7 +257,9 @@ impl AppStateStore {
         peers: &[SavedPeerRecord],
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         transaction
             .execute("DELETE FROM saved_peers", [])
             .map_err(|_| NodeError::IoError {})?;
@@ -266,7 +277,10 @@ impl AppStateStore {
     }
 
     pub fn get_eams(&self) -> Result<Vec<EamProjectionRecord>, NodeError> {
-        query_json_records(&self.connect()?, "SELECT json FROM eams ORDER BY updated_at_ms DESC")
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM eams ORDER BY updated_at_ms DESC",
+        )
     }
 
     pub fn upsert_eam(
@@ -274,7 +288,9 @@ impl AppStateStore {
         record: &EamProjectionRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         self.write_eam_tx(&transaction, record)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -292,7 +308,9 @@ impl AppStateStore {
         deleted_at_ms: u64,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         if let Some(raw) = transaction
             .query_row(
                 "SELECT json FROM eams WHERE callsign_key = ?1",
@@ -367,7 +385,10 @@ impl AppStateStore {
     }
 
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
-        query_json_records(&self.connect()?, "SELECT json FROM events ORDER BY updated_at_ms DESC")
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM events ORDER BY updated_at_ms DESC",
+        )
     }
 
     pub fn upsert_event(
@@ -375,7 +396,9 @@ impl AppStateStore {
         record: &EventProjectionRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         self.write_event_tx(&transaction, record)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -393,9 +416,15 @@ impl AppStateStore {
         deleted_at_ms: u64,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         if let Some(raw) = transaction
-            .query_row("SELECT json FROM events WHERE uid = ?1", params![uid], |row| row.get::<_, String>(0))
+            .query_row(
+                "SELECT json FROM events WHERE uid = ?1",
+                params![uid],
+                |row| row.get::<_, String>(0),
+            )
             .optional()
             .map_err(|_| NodeError::IoError {})?
         {
@@ -456,8 +485,7 @@ impl AppStateStore {
             .into_iter()
             .map(|peer| (peer.destination_hex, peer.label))
             .collect::<std::collections::HashMap<_, _>>();
-        let mut conversations =
-            std::collections::HashMap::<String, ConversationRecord>::new();
+        let mut conversations = std::collections::HashMap::<String, ConversationRecord>::new();
 
         for message in messages {
             let updated_at_ms = message
@@ -500,7 +528,9 @@ impl AppStateStore {
         message: &MessageRecord,
     ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         self.write_message_tx(&transaction, message)?;
         let messages = self.bump_projection_revision_tx(
             &transaction,
@@ -530,7 +560,9 @@ impl AppStateStore {
         position: &TelemetryPositionRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         self.write_telemetry_tx(&transaction, position)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -547,7 +579,9 @@ impl AppStateStore {
         callsign: &str,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         transaction
             .execute(
                 "DELETE FROM telemetry_positions WHERE callsign_key = ?1",
@@ -571,7 +605,9 @@ impl AppStateStore {
         reason: Option<String>,
     ) -> Result<ProjectionInvalidation, NodeError> {
         let mut connection = self.connect()?;
-        let transaction = connection.transaction().map_err(|_| NodeError::IoError {})?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
         let invalidation = self.bump_projection_revision_tx(&transaction, scope, key, reason)?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(invalidation)

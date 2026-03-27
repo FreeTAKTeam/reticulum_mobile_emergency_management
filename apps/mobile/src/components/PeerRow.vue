@@ -47,7 +47,18 @@ const relayLabel = computed(() =>
   props.peer.relayEligible ? "Relay-eligible" : "No relay route",
 );
 const staleLabel = computed(() => (props.peer.stale ? "Stale" : "Current"));
-const linkLabel = computed(() => (props.peer.activeLink ? "Active link" : "No active link"));
+const linkLabel = computed(() =>
+  props.peer.managementState === "managed" && (props.peer.state === "connected" || props.peer.activeLink)
+    ? "Connected"
+    : "Not connected",
+);
+const connectButtonDisabled = computed(() => !props.isSaved && props.peer.managementState !== "managed");
+const connectButtonLabel = computed(() => {
+  if (props.peer.managementState === "managed") {
+    return "Disconnect";
+  }
+  return props.isSaved ? "Connect" : "Save first";
+});
 const lastSeenLabel = computed(() =>
   props.peer.lastSeenAt ? new Date(props.peer.lastSeenAt).toLocaleTimeString() : "never",
 );
@@ -105,13 +116,14 @@ const resolutionLabel = computed(() => {
       >
         {{ props.isSaved ? "Unsave" : "Save" }}
       </button>
-      <button
-        class="btn connect"
-        type="button"
-        @click="emit('connectToggle', props.peer.destination, props.peer.managementState !== 'managed')"
-      >
-        {{ props.peer.managementState === "managed" ? "Disconnect" : "Connect" }}
-      </button>
+        <button
+          class="btn connect"
+          type="button"
+          :disabled="connectButtonDisabled"
+          @click="emit('connectToggle', props.peer.destination, props.peer.managementState !== 'managed')"
+        >
+          {{ connectButtonLabel }}
+        </button>
     </div>
   </article>
 </template>
