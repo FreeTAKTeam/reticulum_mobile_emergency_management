@@ -45,7 +45,7 @@ const activeConversationId = computed(() =>
     const seen = new Set<string>();
   return nodeStore.discoveredPeers
     .filter((peer) => peer.activeLink)
-    .filter((peer) => peer.managementState === "managed" || nodeStore.savedDestinations.has(peer.destination))
+    .filter((peer) => peer.saved || nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
       const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
       const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;

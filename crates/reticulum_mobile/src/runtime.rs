@@ -44,9 +44,9 @@ use crate::types::{
     AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EventProjectionRecord, HubMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
     LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
-    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord, PeerState, ProjectionScope,
-    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
+    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange,
+    PeerRecord, PeerState, ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    SyncStatus,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -766,22 +766,6 @@ fn from_sdk_peer_state(state: sdkmsg::PeerState) -> PeerState {
     }
 }
 
-fn from_sdk_peer_management_state(state: sdkmsg::PeerManagementState) -> PeerManagementState {
-    match state {
-        sdkmsg::PeerManagementState::Unmanaged => PeerManagementState::Unmanaged {},
-        sdkmsg::PeerManagementState::Managed => PeerManagementState::Managed {},
-    }
-}
-
-fn from_sdk_peer_availability_state(state: sdkmsg::PeerAvailabilityState) -> PeerAvailabilityState {
-    match state {
-        sdkmsg::PeerAvailabilityState::Unseen => PeerAvailabilityState::Unseen {},
-        sdkmsg::PeerAvailabilityState::Discovered => PeerAvailabilityState::Discovered {},
-        sdkmsg::PeerAvailabilityState::Resolved => PeerAvailabilityState::Resolved {},
-        sdkmsg::PeerAvailabilityState::Ready => PeerAvailabilityState::Ready {},
-    }
-}
-
 fn to_sdk_message_method(method: MessageMethod) -> sdkmsg::MessageMethod {
     match method {
         MessageMethod::Direct {} => sdkmsg::MessageMethod::Direct,
@@ -936,16 +920,11 @@ fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
         display_name: record.display_name,
         app_data: record.app_data,
         state: from_sdk_peer_state(record.state),
-        management_state: from_sdk_peer_management_state(record.management_state),
-        availability_state: from_sdk_peer_availability_state(record.availability_state),
-        communication_ready: record.communication_ready,
-        mission_ready: record.mission_ready,
-        relay_eligible: record.relay_eligible,
+        saved: record.saved,
         stale: record.stale,
         active_link: record.active_link,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
@@ -960,17 +939,12 @@ fn from_sdk_peer_change(change: sdkmsg::PeerChange) -> PeerChange {
         display_name: change.display_name,
         app_data: change.app_data,
         state: from_sdk_peer_state(change.state),
-        management_state: from_sdk_peer_management_state(change.management_state),
-        availability_state: from_sdk_peer_availability_state(change.availability_state),
-        communication_ready: change.communication_ready,
-        mission_ready: change.mission_ready,
-        relay_eligible: change.relay_eligible,
+        saved: change.saved,
         stale: change.stale,
         active_link: change.active_link,
         last_error: change.last_error,
         last_resolution_error: change.last_resolution_error,
         last_resolution_attempt_at_ms: change.last_resolution_attempt_at_ms,
-        last_ready_at_ms: change.last_ready_at_ms,
         last_seen_at_ms: change.last_seen_at_ms,
         announce_last_seen_at_ms: change.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: change.lxmf_last_seen_at_ms,
@@ -1357,10 +1331,7 @@ fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord
         });
     }
 
-    messaging.mark_peer_managed(
-        peer.destination_hex.as_str(),
-        matches!(peer.management_state, PeerManagementState::Managed {}),
-    );
+    messaging.mark_peer_saved(peer.destination_hex.as_str(), peer.saved);
     messaging.set_peer_active_link(
         peer.destination_hex.as_str(),
         peer.active_link,
@@ -1390,7 +1361,7 @@ fn restore_saved_peer_management(
         if !seen_destinations.insert(destination_hex.clone()) {
             continue;
         }
-        messaging.mark_peer_managed(destination_hex.as_str(), true);
+        messaging.mark_peer_saved(destination_hex.as_str(), true);
         restored_destinations.push(destination_hex);
     }
     restored_destinations
@@ -1418,9 +1389,7 @@ async fn seed_runtime_projection_snapshot(
 }
 
 fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
-    peer.active_link
-        || peer.communication_ready
-        || matches!(peer.state, sdkmsg::PeerState::Connected {})
+    peer.active_link || matches!(peer.state, sdkmsg::PeerState::Connected)
 }
 
 async fn saved_peer_prefers_propagation(
@@ -1700,15 +1669,12 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
 
             let should_retry = {
                 let messaging = state.messaging.lock().await;
-                if !messaging.is_peer_managed(destination_hex.as_str()) {
+                if !messaging.is_peer_saved(destination_hex.as_str()) {
                     false
                 } else {
-                    !matches!(
-                        messaging
-                            .peer_by_destination(destination_hex.as_str())
-                            .map(|peer| peer.availability_state),
-                        Some(sdkmsg::PeerAvailabilityState::Ready)
-                    )
+                    messaging
+                        .peer_by_destination(destination_hex.as_str())
+                        .is_none_or(|peer| !sdk_peer_is_directly_reachable(&peer))
                 }
             };
 
@@ -1736,11 +1702,8 @@ fn spawn_passive_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
             let messaging = state.messaging.lock().await;
             match messaging.peer_by_destination(destination_hex.as_str()) {
                 Some(peer) => {
-                    !matches!(
-                        peer.availability_state,
-                        sdkmsg::PeerAvailabilityState::Ready
-                            | sdkmsg::PeerAvailabilityState::Resolved
-                    ) && peer
+                    (peer.identity_hex.is_none() || peer.lxmf_destination_hex.is_none())
+                        && peer
                         .last_resolution_attempt_at_ms
                         .is_none_or(|attempted_at_ms| {
                             now_ms().saturating_sub(attempted_at_ms)
@@ -3515,7 +3478,7 @@ pub async fn run_node(
                         .messaging
                         .lock()
                         .await
-                        .mark_peer_managed(&destination_hex, true);
+                        .mark_peer_saved(&destination_hex, true);
                     emit_peer_changed(&state, &bus, &destination_hex).await;
                     state
                         .sdk
@@ -3554,7 +3517,7 @@ pub async fn run_node(
                         .messaging
                         .lock()
                         .await
-                        .mark_peer_managed(&destination_hex, false);
+                        .mark_peer_saved(&destination_hex, false);
                     connected_peers.lock().await.remove(&dest);
                     // Clean up any stale link from older builds if present.
                     if let Some(link) = out_links.lock().await.remove(&dest) {
@@ -4574,13 +4537,7 @@ mod tests {
         );
         let mut peers = messaging.list_peers();
         peers.sort_by(|left, right| left.destination_hex.cmp(&right.destination_hex));
-        assert!(matches!(
-            peers[0].management_state,
-            sdkmsg::PeerManagementState::Managed {}
-        ));
-        assert!(matches!(
-            peers[1].management_state,
-            sdkmsg::PeerManagementState::Unmanaged {}
-        ));
+        assert!(peers[0].saved);
+        assert!(!peers[1].saved);
     }
 }

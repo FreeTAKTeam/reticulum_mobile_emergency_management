@@ -17,9 +17,9 @@ pub use types::{
     LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
     MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary,
-    PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord, PeerState,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SyncPhase, SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
+    PeerChange, PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

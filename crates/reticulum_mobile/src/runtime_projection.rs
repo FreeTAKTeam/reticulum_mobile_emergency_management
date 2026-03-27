@@ -10,9 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::event_bus::EventBus;
 use crate::runtime::now_ms;
 use crate::types::{
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent, PeerAvailabilityState,
-    PeerManagementState, PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase,
-    SyncStatus,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent, PeerRecord,
+    PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
 };
 
 const PERSIST_FILENAME: &str = "runtime_projection.json";
@@ -26,16 +25,14 @@ struct PersistedPeerRecord {
     display_name: Option<String>,
     app_data: Option<String>,
     state: String,
-    management_state: String,
-    availability_state: String,
-    communication_ready: bool,
-    mission_ready: bool,
-    relay_eligible: bool,
+    #[serde(default)]
+    saved: Option<bool>,
+    #[serde(default)]
+    management_state: Option<String>,
     stale: bool,
     active_link: bool,
     last_resolution_error: Option<String>,
     last_resolution_attempt_at_ms: Option<u64>,
-    last_ready_at_ms: Option<u64>,
     last_seen_at_ms: u64,
     announce_last_seen_at_ms: Option<u64>,
     lxmf_last_seen_at_ms: Option<u64>,
@@ -131,16 +128,12 @@ fn persisted_peer_from_runtime(record: &PeerRecord) -> Option<PersistedPeerRecor
         display_name: record.display_name.clone(),
         app_data: record.app_data.clone(),
         state: peer_state_to_string(record.state),
-        management_state: peer_management_state_to_string(record.management_state),
-        availability_state: peer_availability_state_to_string(record.availability_state),
-        communication_ready: record.communication_ready,
-        mission_ready: record.mission_ready,
-        relay_eligible: record.relay_eligible,
+        saved: Some(record.saved),
+        management_state: None,
         stale: record.stale,
         active_link: record.active_link,
         last_resolution_error: record.last_resolution_error.clone(),
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
@@ -184,18 +177,16 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
         display_name: record.display_name,
         app_data: record.app_data,
         state: peer_state_from_string(record.state).unwrap_or(PeerState::Disconnected {}),
-        management_state: peer_management_state_from_string(record.management_state)
-            .unwrap_or(PeerManagementState::Unmanaged {}),
-        availability_state: peer_availability_state_from_string(record.availability_state)
-            .unwrap_or(PeerAvailabilityState::Unseen {}),
-        communication_ready: record.communication_ready,
-        mission_ready: record.mission_ready,
-        relay_eligible: record.relay_eligible,
+        saved: record.saved.unwrap_or_else(|| {
+            record
+                .management_state
+                .as_deref()
+                .is_some_and(|value| value == "managed")
+        }),
         stale: record.stale,
         active_link: record.active_link,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
@@ -245,40 +236,6 @@ fn peer_state_from_string(value: String) -> Option<PeerState> {
         "connecting" => Some(PeerState::Connecting {}),
         "connected" => Some(PeerState::Connected {}),
         "disconnected" => Some(PeerState::Disconnected {}),
-        _ => None,
-    }
-}
-
-fn peer_management_state_to_string(state: PeerManagementState) -> String {
-    match state {
-        PeerManagementState::Unmanaged {} => "unmanaged".to_string(),
-        PeerManagementState::Managed {} => "managed".to_string(),
-    }
-}
-
-fn peer_management_state_from_string(value: String) -> Option<PeerManagementState> {
-    match value.as_str() {
-        "unmanaged" => Some(PeerManagementState::Unmanaged {}),
-        "managed" => Some(PeerManagementState::Managed {}),
-        _ => None,
-    }
-}
-
-fn peer_availability_state_to_string(state: PeerAvailabilityState) -> String {
-    match state {
-        PeerAvailabilityState::Unseen {} => "unseen".to_string(),
-        PeerAvailabilityState::Discovered {} => "discovered".to_string(),
-        PeerAvailabilityState::Resolved {} => "resolved".to_string(),
-        PeerAvailabilityState::Ready {} => "ready".to_string(),
-    }
-}
-
-fn peer_availability_state_from_string(value: String) -> Option<PeerAvailabilityState> {
-    match value.as_str() {
-        "unseen" => Some(PeerAvailabilityState::Unseen {}),
-        "discovered" => Some(PeerAvailabilityState::Discovered {}),
-        "resolved" => Some(PeerAvailabilityState::Resolved {}),
-        "ready" => Some(PeerAvailabilityState::Ready {}),
         _ => None,
     }
 }

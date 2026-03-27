@@ -10,12 +10,6 @@ pub enum PeerState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PeerManagementState {
-    Unmanaged,
-    Managed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerAvailabilityState {
     Unseen,
     Discovered,
@@ -91,16 +85,11 @@ pub struct PeerRecord {
     pub display_name: Option<String>,
     pub app_data: Option<String>,
     pub state: PeerState,
-    pub management_state: PeerManagementState,
-    pub availability_state: PeerAvailabilityState,
-    pub communication_ready: bool,
-    pub mission_ready: bool,
-    pub relay_eligible: bool,
+    pub saved: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
-    pub last_ready_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
     pub announce_last_seen_at_ms: Option<u64>,
     pub lxmf_last_seen_at_ms: Option<u64>,
@@ -114,17 +103,12 @@ pub struct PeerChange {
     pub display_name: Option<String>,
     pub app_data: Option<String>,
     pub state: PeerState,
-    pub management_state: PeerManagementState,
-    pub availability_state: PeerAvailabilityState,
-    pub communication_ready: bool,
-    pub mission_ready: bool,
-    pub relay_eligible: bool,
+    pub saved: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_error: Option<String>,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
-    pub last_ready_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
     pub announce_last_seen_at_ms: Option<u64>,
     pub lxmf_last_seen_at_ms: Option<u64>,
@@ -201,11 +185,10 @@ pub struct MessagingStore {
     resolved_app_destination_by_identity: HashMap<String, String>,
     resolved_app_identity_by_destination: HashMap<String, String>,
     resolved_lxmf_by_identity: HashMap<String, String>,
-    managed_destinations: HashSet<String>,
+    saved_destinations: HashSet<String>,
     active_link_destinations: HashSet<String>,
     last_resolution_errors: HashMap<String, String>,
     last_resolution_attempt_at_ms: HashMap<String, u64>,
-    last_ready_at_ms: HashMap<String, u64>,
     message_records: HashMap<String, MessageRecord>,
     message_order: Vec<String>,
     outbound_messages: HashMap<String, StoredOutboundMessage>,
@@ -242,11 +225,10 @@ impl MessagingStore {
             resolved_app_destination_by_identity: HashMap::new(),
             resolved_app_identity_by_destination: HashMap::new(),
             resolved_lxmf_by_identity: HashMap::new(),
-            managed_destinations: HashSet::new(),
+            saved_destinations: HashSet::new(),
             active_link_destinations: HashSet::new(),
             last_resolution_errors: HashMap::new(),
             last_resolution_attempt_at_ms: HashMap::new(),
-            last_ready_at_ms: HashMap::new(),
             message_records: HashMap::new(),
             message_order: Vec::new(),
             outbound_messages: HashMap::new(),
@@ -346,20 +328,8 @@ impl MessagingStore {
         }
         self.announce_records.insert(destination_hex, record);
 
-        let ready_destination = match destination_kind.as_str() {
-            "app" => self.app_destination_for_identity(identity_hex.as_str()),
-            "lxmf_delivery" => self.app_destination_for_identity(identity_hex.as_str()),
-            _ => None,
-        };
-        if let Some(destination_hex) = ready_destination {
-            if self
-                .peer_by_destination(destination_hex.as_str())
-                .is_some_and(|peer| matches!(peer.availability_state, PeerAvailabilityState::Ready))
-            {
-                self.last_ready_at_ms
-                    .insert(destination_hex, received_at_ms);
-            }
-        }
+        let _ = destination_kind;
+        let _ = received_at_ms;
     }
 
     pub fn list_announces(&self) -> Vec<AnnounceRecord> {
@@ -368,25 +338,25 @@ impl MessagingStore {
         records
     }
 
-    pub fn mark_peer_managed(&mut self, destination_hex: &str, managed: bool) {
+    pub fn mark_peer_saved(&mut self, destination_hex: &str, saved: bool) {
         let normalized = normalize_hex(destination_hex);
         if normalized.is_empty() {
             return;
         }
-        if managed {
-            self.managed_destinations.insert(normalized.clone());
+        if saved {
+            self.saved_destinations.insert(normalized.clone());
             self.last_resolution_errors.remove(&normalized);
         } else {
-            self.managed_destinations.remove(&normalized);
+            self.saved_destinations.remove(&normalized);
             self.active_link_destinations.remove(&normalized);
             self.last_resolution_errors.remove(&normalized);
             self.last_resolution_attempt_at_ms.remove(&normalized);
         }
     }
 
-    pub fn is_peer_managed(&self, destination_hex: &str) -> bool {
+    pub fn is_peer_saved(&self, destination_hex: &str) -> bool {
         let normalized = normalize_hex(destination_hex);
-        !normalized.is_empty() && self.managed_destinations.contains(normalized.as_str())
+        !normalized.is_empty() && self.saved_destinations.contains(normalized.as_str())
     }
 
     pub fn record_resolution_attempt(&mut self, destination_hex: &str, attempted_at_ms: u64) {
@@ -450,12 +420,7 @@ impl MessagingStore {
             self.active_link_destinations.remove(&normalized);
         }
 
-        if let Some(peer) = self.peer_by_destination(destination_hex) {
-            if matches!(peer.availability_state, PeerAvailabilityState::Ready) {
-                self.last_ready_at_ms
-                    .insert(peer.destination_hex, changed_at_ms);
-            }
-        }
+        let _ = changed_at_ms;
     }
 
     pub fn list_peers(&self) -> Vec<PeerRecord> {
@@ -491,7 +456,7 @@ impl MessagingStore {
 
         let mut candidate_destinations = HashSet::<String>::new();
         candidate_destinations.extend(app_records.keys().cloned());
-        candidate_destinations.extend(self.managed_destinations.iter().cloned());
+        candidate_destinations.extend(self.saved_destinations.iter().cloned());
         candidate_destinations.extend(self.resolved_app_identity_by_destination.keys().cloned());
 
         let mut peers = Vec::<PeerRecord>::new();
@@ -510,25 +475,27 @@ impl MessagingStore {
             let lxmf_record = lxmf_destination_hex
                 .as_ref()
                 .and_then(|value| lxmf_records.get(value));
-            let management_state = if self.managed_destinations.contains(destination_hex.as_str()) {
-                PeerManagementState::Managed
-            } else {
-                PeerManagementState::Unmanaged
-            };
+            let saved = self.saved_destinations.contains(destination_hex.as_str());
             let active_link = self
                 .active_link_destinations
                 .contains(destination_hex.as_str())
                 || lxmf_destination_hex
                     .as_ref()
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
-            let last_ready_at_ms = self.last_ready_at_ms.get(&destination_hex).copied();
             let peer_app_data = app_record.map(|record| record.app_data.as_str());
-            let mission_ready = app_record.is_some() && supports_mission_traffic(peer_app_data);
+            let mission_capable = app_record.is_some() && supports_mission_traffic(peer_app_data);
+            if !saved && !mission_capable {
+                continue;
+            }
+            let latest_seen_at_ms = app_record
+                .map(|record| record.received_at_ms)
+                .unwrap_or(0)
+                .max(lxmf_record.map(|record| record.received_at_ms).unwrap_or(0));
             let stale = peer_is_stale(
+                saved,
                 active_link,
                 app_record.map(|record| record.received_at_ms),
                 lxmf_record.map(|record| record.received_at_ms),
-                last_ready_at_ms,
                 now_ms,
                 self.peer_stale_after_ms,
             );
@@ -538,21 +505,14 @@ impl MessagingStore {
                 lxmf_destination_hex.as_ref(),
                 stale,
             );
-            let communication_ready = matches!(availability_state, PeerAvailabilityState::Ready);
-            let relay_eligible =
-                identity_hex.is_some() && lxmf_destination_hex.is_some() && mission_ready;
             peers.push(PeerRecord {
                 destination_hex: destination_hex.clone(),
                 identity_hex,
                 lxmf_destination_hex: lxmf_destination_hex.clone(),
                 display_name: lxmf_record.and_then(|record| record.display_name.clone()),
                 app_data: peer_app_data.map(ToOwned::to_owned),
-                state: compatibility_peer_state(management_state, availability_state, active_link),
-                management_state,
-                availability_state,
-                communication_ready,
-                mission_ready,
-                relay_eligible,
+                state: compatibility_peer_state(saved, availability_state, active_link),
+                saved,
                 stale,
                 active_link,
                 last_resolution_error: self.last_resolution_errors.get(&destination_hex).cloned(),
@@ -560,12 +520,7 @@ impl MessagingStore {
                     .last_resolution_attempt_at_ms
                     .get(&destination_hex)
                     .copied(),
-                last_ready_at_ms,
-                last_seen_at_ms: app_record
-                    .map(|record| record.received_at_ms)
-                    .unwrap_or(0)
-                    .max(lxmf_record.map(|record| record.received_at_ms).unwrap_or(0))
-                    .max(last_ready_at_ms.unwrap_or(0)),
+                last_seen_at_ms: latest_seen_at_ms,
                 announce_last_seen_at_ms: app_record.map(|record| record.received_at_ms),
                 lxmf_last_seen_at_ms: lxmf_record.map(|record| record.received_at_ms),
             });
@@ -788,21 +743,20 @@ fn supports_mission_traffic(app_data: Option<&str>) -> bool {
 }
 
 fn peer_is_stale(
+    saved: bool,
     active_link: bool,
     announce_last_seen_at_ms: Option<u64>,
     lxmf_last_seen_at_ms: Option<u64>,
-    last_ready_at_ms: Option<u64>,
     now_ms: u64,
     stale_after_ms: u64,
 ) -> bool {
-    if active_link {
+    if !saved || active_link {
         return false;
     }
 
     let latest_known_activity = [
         announce_last_seen_at_ms.unwrap_or(0),
         lxmf_last_seen_at_ms.unwrap_or(0),
-        last_ready_at_ms.unwrap_or(0),
     ]
     .into_iter()
     .max()
@@ -812,7 +766,7 @@ fn peer_is_stale(
 }
 
 fn compatibility_peer_state(
-    management_state: PeerManagementState,
+    saved: bool,
     availability_state: PeerAvailabilityState,
     active_link: bool,
 ) -> PeerState {
@@ -821,12 +775,8 @@ fn compatibility_peer_state(
     }
 
     match availability_state {
-        PeerAvailabilityState::Ready
-            if matches!(management_state, PeerManagementState::Managed) =>
-        {
-            PeerState::Connected
-        }
-        _ if matches!(management_state, PeerManagementState::Managed) => PeerState::Connecting,
+        PeerAvailabilityState::Ready if saved => PeerState::Connected,
+        _ if saved => PeerState::Connecting,
         _ => PeerState::Disconnected,
     }
 }
@@ -861,17 +811,12 @@ fn peer_change_from_record(record: PeerRecord) -> PeerChange {
         display_name: record.display_name,
         app_data: record.app_data,
         state: record.state,
-        management_state: record.management_state,
-        availability_state: record.availability_state,
-        communication_ready: record.communication_ready,
-        mission_ready: record.mission_ready,
-        relay_eligible: record.relay_eligible,
+        saved: record.saved,
         stale: record.stale,
         active_link: record.active_link,
         last_error: record.last_resolution_error.clone(),
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
@@ -907,7 +852,7 @@ mod tests {
             received_at_ms: now.saturating_sub(10),
         });
 
-        store.mark_peer_managed("appdest", true);
+        store.mark_peer_saved("appdest", true);
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
@@ -915,11 +860,8 @@ mod tests {
         assert_eq!(peers[0].lxmf_destination_hex.as_deref(), Some("lxmfdest"));
         assert_eq!(peers[0].display_name.as_deref(), Some("Alice"));
         assert_eq!(peers[0].state, PeerState::Connected);
-        assert_eq!(peers[0].management_state, PeerManagementState::Managed);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert!(peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(peers[0].relay_eligible);
+        assert!(peers[0].saved);
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
         assert!(!peers[0].stale);
     }
 
@@ -969,19 +911,21 @@ mod tests {
     }
 
     #[test]
-    fn managed_peer_without_resolution_stays_connecting() {
+    fn saved_peer_without_resolution_stays_connecting() {
         let mut store = MessagingStore::default();
-        store.mark_peer_managed("appdest", true);
+        store.mark_peer_saved("appdest", true);
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].destination_hex, "appdest");
+        assert!(peers[0].saved);
         assert_eq!(peers[0].state, PeerState::Connecting);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Unseen);
+        assert_eq!(peers[0].last_seen_at_ms, 0);
+        assert!(!peers[0].stale);
     }
 
     #[test]
-    fn announced_peer_with_identity_and_lxmf_route_is_ready_without_management() {
+    fn capability_relevant_unsaved_peer_appears_in_possible_peers() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1008,16 +952,13 @@ mod tests {
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].destination_hex, "appdest");
-        assert_eq!(peers[0].management_state, PeerManagementState::Unmanaged);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
+        assert!(!peers[0].saved);
         assert_eq!(peers[0].state, PeerState::Disconnected);
-        assert!(peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(peers[0].relay_eligible);
+        assert!(!peers[0].stale);
     }
 
     #[test]
-    fn direct_ready_peer_without_mission_capability_is_not_mission_ready() {
+    fn capability_irrelevant_peer_is_excluded_from_possible_peers() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1025,7 +966,7 @@ mod tests {
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
             app_data: "chat".into(),
-            display_name: Some("Chat Only".into()),
+            display_name: Some("Ignored".into()),
             hops: 1,
             interface_hex: "iface".into(),
             received_at_ms: now.saturating_sub(20),
@@ -1041,70 +982,7 @@ mod tests {
             received_at_ms: now.saturating_sub(10),
         });
 
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert!(peers[0].communication_ready);
-        assert!(!peers[0].mission_ready);
-        assert!(!peers[0].relay_eligible);
-    }
-
-    #[test]
-    fn managed_peer_with_resolved_route_stays_resolved_without_announces() {
-        let mut store = MessagingStore::default();
-        store.mark_peer_managed("appdest", true);
-        store.record_resolution_result("appdest", "identity", "lxmfdest", 42);
-
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].destination_hex, "appdest");
-        assert_eq!(peers[0].management_state, PeerManagementState::Managed);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
-        assert_eq!(peers[0].state, PeerState::Connecting);
-        assert_eq!(peers[0].last_ready_at_ms, None);
-    }
-
-    #[test]
-    fn unmanaged_peer_with_resolved_route_but_no_app_announce_stays_resolved() {
-        let mut store = MessagingStore::default();
-        store.record_resolution_result("appdest", "identity", "lxmfdest", 42);
-
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].destination_hex, "appdest");
-        assert_eq!(peers[0].management_state, PeerManagementState::Unmanaged);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
-        assert_eq!(peers[0].state, PeerState::Disconnected);
-    }
-
-    #[test]
-    fn managed_peer_with_app_announce_and_identity_stays_discovered_before_lxmf_announce() {
-        let mut store = MessagingStore::default();
-        let now = current_time_ms();
-        store.mark_peer_managed("appdest", true);
-        store.record_announce(AnnounceRecord {
-            destination_hex: "appdest".into(),
-            identity_hex: "identity".into(),
-            destination_kind: "app".into(),
-            app_data: "R3AKT,EMergencyMessages".into(),
-            display_name: None,
-            hops: 1,
-            interface_hex: "iface".into(),
-            received_at_ms: now.saturating_sub(10),
-        });
-
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].destination_hex, "appdest");
-        assert_eq!(
-            peers[0].availability_state,
-            PeerAvailabilityState::Discovered
-        );
-        assert_eq!(peers[0].state, PeerState::Connecting);
-        assert_eq!(peers[0].lxmf_destination_hex, None);
-        assert!(!peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(!peers[0].relay_eligible);
+        assert!(store.list_peers().is_empty());
     }
 
     #[test]
@@ -1156,41 +1034,6 @@ mod tests {
     }
 
     #[test]
-    fn ready_peer_stays_ready_without_recent_announce_until_stale_policy_expires() {
-        let mut store = MessagingStore::default();
-        let stale = current_time_ms().saturating_sub(120_000);
-        store.record_announce(AnnounceRecord {
-            destination_hex: "appdest".into(),
-            identity_hex: "identity".into(),
-            destination_kind: "app".into(),
-            app_data: "R3AKT,EMergencyMessages".into(),
-            display_name: Some("Poco".into()),
-            hops: 1,
-            interface_hex: "iface".into(),
-            received_at_ms: stale,
-        });
-        store.record_announce(AnnounceRecord {
-            destination_hex: "lxmfdest".into(),
-            identity_hex: "identity".into(),
-            destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
-            display_name: Some("Poco".into()),
-            hops: 1,
-            interface_hex: "iface".into(),
-            received_at_ms: stale,
-        });
-
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert_eq!(peers[0].state, PeerState::Disconnected);
-        assert!(peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(peers[0].relay_eligible);
-        assert!(!peers[0].stale);
-    }
-
-    #[test]
     fn empty_app_announce_does_not_erase_mission_capabilities() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
@@ -1232,13 +1075,11 @@ mod tests {
             Some("R3AKT,EMergencyMessages,Telemetry")
         );
         assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
-        assert!(peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(peers[0].relay_eligible);
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
     }
 
     #[test]
-    fn ready_peer_drops_to_resolved_once_configured_stale_window_expires() {
+    fn capability_relevant_saved_peer_becomes_stale_after_timeout() {
         let mut store = MessagingStore::new(1);
         let stale = current_time_ms().saturating_sub(70_000);
         store.record_announce(AnnounceRecord {
@@ -1261,14 +1102,11 @@ mod tests {
             interface_hex: "iface".into(),
             received_at_ms: stale,
         });
+        store.mark_peer_saved("appdest", true);
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Resolved);
-        assert_eq!(peers[0].state, PeerState::Disconnected);
-        assert!(!peers[0].communication_ready);
-        assert!(peers[0].mission_ready);
-        assert!(peers[0].relay_eligible);
+        assert!(peers[0].saved);
         assert!(peers[0].stale);
     }
 
@@ -1290,18 +1128,18 @@ mod tests {
     }
 
     #[test]
-    fn peer_without_required_mission_capabilities_is_still_direct_ready() {
+    fn last_seen_comes_only_from_announce_and_lxmf_timestamps() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
-            app_data: "R3AKT".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
-            received_at_ms: now.saturating_sub(20),
+            received_at_ms: now.saturating_sub(40),
         });
         store.record_announce(AnnounceRecord {
             destination_hex: "lxmfdest".into(),
@@ -1316,10 +1154,6 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].availability_state, PeerAvailabilityState::Ready);
-        assert!(peers[0].communication_ready);
-        assert!(!peers[0].mission_ready);
-        assert!(!peers[0].relay_eligible);
-        assert!(!peers[0].stale);
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
     }
 }

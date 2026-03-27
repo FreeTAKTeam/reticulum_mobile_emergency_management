@@ -16,9 +16,9 @@ use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::types::{
     AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LogLevel, MessageRecord,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerManagementState,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SyncStatus, TelemetryPositionRecord,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SyncStatus, TelemetryPositionRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -223,7 +223,7 @@ fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
 }
 
 fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
-    peer.active_link || peer.communication_ready || matches!(peer.state, PeerState::Connected {})
+    peer.active_link || matches!(peer.state, PeerState::Connected {})
 }
 
 fn build_mission_replication_targets(
@@ -256,12 +256,10 @@ fn build_mission_replication_targets(
         if !seen_app_destinations.insert(app_destination_hex.clone()) {
             continue;
         }
-        let is_saved = saved_destination_set.contains(app_destination_hex.as_str());
-        let is_managed = matches!(peer.management_state, PeerManagementState::Managed {});
-        if !is_saved && !is_managed {
+        if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = peer.mission_ready && peer_is_directly_reachable(peer);
+        let direct_ready = has_known_lxmf_route(peer) && peer_is_directly_reachable(peer);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
             direct_targets.push(MissionReplicationTarget {
@@ -325,12 +323,10 @@ fn build_event_replication_targets(
         if !has_known_lxmf_route(peer) {
             continue;
         }
-        let is_saved = saved_destination_set.contains(app_destination_hex.as_str());
-        let is_managed = matches!(peer.management_state, PeerManagementState::Managed {});
-        if !is_saved && !is_managed {
+        if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = peer.mission_ready && peer_is_directly_reachable(peer);
+        let direct_ready = has_known_lxmf_route(peer) && peer_is_directly_reachable(peer);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
             direct_targets.push(MissionReplicationTarget {
@@ -1652,14 +1648,8 @@ impl Node {
         Ok(OperationalSummary {
             running: status.running,
             peer_count_total: peers.len() as u32,
-            peer_count_communication_ready: peers
-                .iter()
-                .filter(|peer| peer.communication_ready)
-                .count() as u32,
-            peer_count_mission_ready: peers.iter().filter(|peer| peer.mission_ready).count() as u32,
-            peer_count_relay_eligible: peers.iter().filter(|peer| peer.relay_eligible).count()
-                as u32,
             saved_peer_count: inner.app_state.get_saved_peers()?.len() as u32,
+            connected_peer_count: peers.iter().filter(|peer| peer.active_link).count() as u32,
             conversation_count,
             message_count: persisted_messages.len() as u32,
             eam_count: inner.app_state.get_eams()?.len() as u32,
@@ -2097,10 +2087,8 @@ mod tests {
     fn build_peer_record(
         destination_hex: &str,
         lxmf_destination_hex: &str,
-        management_state: PeerManagementState,
-        communication_ready: bool,
-        mission_ready: bool,
-        relay_eligible: bool,
+        saved: bool,
+        connected: bool,
         active_link: bool,
     ) -> PeerRecord {
         PeerRecord {
@@ -2109,25 +2097,16 @@ mod tests {
             lxmf_destination_hex: Some(lxmf_destination_hex.to_string()),
             display_name: Some(format!("peer-{destination_hex}")),
             app_data: Some("R3AKT,EMergencyMessages,Telemetry".to_string()),
-            state: if communication_ready {
+            state: if connected {
                 crate::types::PeerState::Connected {}
             } else {
                 crate::types::PeerState::Disconnected {}
             },
-            management_state,
-            availability_state: if communication_ready {
-                crate::types::PeerAvailabilityState::Ready {}
-            } else {
-                crate::types::PeerAvailabilityState::Resolved {}
-            },
-            communication_ready,
-            mission_ready,
-            relay_eligible,
+            saved,
             stale: false,
             active_link,
             last_resolution_error: None,
             last_resolution_attempt_at_ms: Some(now_ms()),
-            last_ready_at_ms: communication_ready.then(now_ms),
             last_seen_at_ms: now_ms(),
             announce_last_seen_at_ms: Some(now_ms()),
             lxmf_last_seen_at_ms: Some(now_ms()),
@@ -3070,8 +3049,7 @@ mod tests {
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
                 .is_some_and(|peer| {
-                    peer.mission_ready
-                        && peer.communication_ready
+                    peer.saved
                         && peer.active_link
                         && peer.lxmf_destination_hex.as_deref()
                             == Some(node_b_status.lxmf_destination_hex.as_str())
@@ -3218,9 +3196,7 @@ mod tests {
                 .expect("list peers")
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-                .is_some_and(|peer| {
-                    peer.mission_ready && peer.communication_ready && peer.active_link
-                });
+                .is_some_and(|peer| peer.saved && peer.active_link);
             if peer_ready {
                 break;
             }
@@ -3340,9 +3316,7 @@ mod tests {
                 .expect("list peers")
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-                .is_some_and(|peer| {
-                    peer.mission_ready && peer.communication_ready && peer.active_link
-                });
+                .is_some_and(|peer| peer.saved && peer.active_link);
             if peer_ready {
                 break;
             }
@@ -3474,7 +3448,7 @@ mod tests {
                 .expect("list peers")
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-                .is_some_and(|peer| peer.mission_ready && peer.communication_ready);
+                .is_some_and(|peer| peer.saved && has_known_lxmf_route(&peer));
             if peer_ready {
                 break;
             }
@@ -3598,7 +3572,7 @@ mod tests {
                 .expect("list peers")
                 .into_iter()
                 .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-                .is_some_and(|peer| peer.mission_ready && peer.communication_ready);
+                .is_some_and(|peer| peer.saved && has_known_lxmf_route(&peer));
             if peer_ready {
                 break;
             }
@@ -3719,8 +3693,6 @@ mod tests {
             build_peer_record(
                 saved_peer.destination_hex.as_str(),
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                PeerManagementState::Unmanaged {},
-                true,
                 true,
                 true,
                 true,
@@ -3728,27 +3700,21 @@ mod tests {
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Unmanaged {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
-                PeerManagementState::Managed {},
                 false,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "99999999999999999999999999999999",
                 "12121212121212121212121212121212",
-                PeerManagementState::Managed {},
-                true,
-                true,
+                false,
                 true,
                 false,
             ),
@@ -3761,17 +3727,12 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
-        assert_eq!(
-            targets[1].app_destination_hex,
-            "99999999999999999999999999999999"
-        );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -3791,8 +3752,6 @@ mod tests {
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            PeerManagementState::Managed {},
-            true,
             true,
             true,
             false,
@@ -3827,36 +3786,28 @@ mod tests {
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                PeerManagementState::Managed {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Managed {},
                 true,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Unmanaged {},
                 false,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
-                PeerManagementState::Unmanaged {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
@@ -3869,17 +3820,12 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
-        assert_eq!(
-            targets[1].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -3896,8 +3842,6 @@ mod tests {
             build_peer_record(
                 saved_peer.destination_hex.as_str(),
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                PeerManagementState::Unmanaged {},
-                true,
                 true,
                 true,
                 true,
@@ -3905,27 +3849,21 @@ mod tests {
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Unmanaged {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
-                PeerManagementState::Managed {},
                 false,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "99999999999999999999999999999999",
                 "12121212121212121212121212121212",
-                PeerManagementState::Managed {},
-                true,
-                true,
+                false,
                 true,
                 false,
             ),
@@ -3938,17 +3876,12 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
-        assert_eq!(
-            targets[1].app_destination_hex,
-            "99999999999999999999999999999999"
-        );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -3969,36 +3902,28 @@ mod tests {
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                PeerManagementState::Managed {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Managed {},
                 true,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "cccccccccccccccccccccccccccccccc",
                 "dddddddddddddddddddddddddddddddd",
-                PeerManagementState::Unmanaged {},
                 false,
-                true,
-                true,
+                false,
                 false,
             ),
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
-                PeerManagementState::Unmanaged {},
-                true,
-                true,
+                false,
                 true,
                 true,
             ),
@@ -4011,21 +3936,16 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
-        assert_eq!(
-            targets[1].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn eam_replication_targets_include_connected_peer_without_active_link() {
+    fn eam_replication_targets_include_saved_connected_peer_without_active_link() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -4033,17 +3953,21 @@ mod tests {
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-connected".to_string()),
+            saved_at_ms: now_ms(),
+        };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            PeerManagementState::Managed {},
-            true,
             true,
             true,
             false,
         )];
 
-        let targets = build_mission_replication_targets(&status, peers.as_slice(), &[], None);
+        let targets =
+            build_mission_replication_targets(&status, peers.as_slice(), &[saved_peer], None);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(
@@ -4054,13 +3978,18 @@ mod tests {
     }
 
     #[test]
-    fn eam_replication_targets_include_direct_peer_without_lxmf_snapshot() {
+    fn eam_replication_targets_include_saved_direct_peer_without_lxmf_snapshot() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-direct".to_string()),
+            saved_at_ms: now_ms(),
         };
         let peer = PeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -4069,22 +3998,17 @@ mod tests {
             display_name: Some("peer-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
             app_data: Some("R3AKT,EMergencyMessages,Telemetry".to_string()),
             state: crate::types::PeerState::Connected {},
-            management_state: PeerManagementState::Managed {},
-            availability_state: crate::types::PeerAvailabilityState::Ready {},
-            communication_ready: true,
-            mission_ready: true,
-            relay_eligible: false,
+            saved: true,
             stale: false,
             active_link: true,
             last_resolution_error: None,
             last_resolution_attempt_at_ms: Some(now_ms()),
-            last_ready_at_ms: Some(now_ms()),
             last_seen_at_ms: now_ms(),
             announce_last_seen_at_ms: Some(now_ms()),
             lxmf_last_seen_at_ms: None,
         };
 
-        let targets = build_mission_replication_targets(&status, &[peer], &[], None);
+        let targets = build_mission_replication_targets(&status, &[peer], &[saved_peer], None);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(
@@ -4107,8 +4031,6 @@ mod tests {
         let peers = vec![build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            PeerManagementState::Managed {},
-            false,
             true,
             false,
             false,
@@ -4142,8 +4064,6 @@ mod tests {
         let peers = vec![build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            PeerManagementState::Managed {},
-            false,
             true,
             false,
             false,

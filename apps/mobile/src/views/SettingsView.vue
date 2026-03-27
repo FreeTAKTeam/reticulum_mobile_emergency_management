@@ -25,7 +25,6 @@ const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
   autoConnectSaved: nodeStore.settings.autoConnectSaved,
-  showOnlyCapabilityVerified: nodeStore.settings.showOnlyCapabilityVerified,
   announceCapabilities: ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
@@ -235,7 +234,6 @@ function applySettings(): void {
     displayName: form.displayName,
     clientMode: form.clientMode,
     autoConnectSaved: form.autoConnectSaved,
-    showOnlyCapabilityVerified: form.showOnlyCapabilityVerified,
     announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
     announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
     tcpClients: normalizedTcpClients.value,
@@ -329,7 +327,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
     <header class="view-header">
       <div>
         <h1>Settings</h1>
-        <p>Node runtime, discovery filters, and directory source controls.</p>
+        <p>Node runtime, saved peers, and directory source controls.</p>
       </div>
       <div class="header-actions">
         <span class="badge">{{ nodeStore.status.running ? "Node Active" : "Node Offline" }}</span>
@@ -384,10 +382,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />
             Broadcast enabled
-          </label>
-          <label class="checkbox">
-            <input v-model="form.showOnlyCapabilityVerified" type="checkbox" />
-            Show capability-verified peers by default
           </label>
         </div>
 

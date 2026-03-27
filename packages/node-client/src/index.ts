@@ -3,8 +3,6 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Disabled" | "RchLxmf" | "RchHttp";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
-export type PeerManagementState = "Unmanaged" | "Managed";
-export type PeerAvailabilityState = "Unseen" | "Discovered" | "Resolved" | "Ready";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type SendOutcome =
   | "SentDirect"
@@ -76,17 +74,12 @@ export interface PeerChange {
   displayName?: string;
   appData?: string;
   state?: PeerState;
-  managementState?: PeerManagementState;
-  availabilityState?: PeerAvailabilityState;
-  communicationReady: boolean;
-  missionReady: boolean;
-  relayEligible: boolean;
+  saved: boolean;
   stale: boolean;
   activeLink: boolean;
   lastError?: string;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
-  lastReadyAtMs?: number;
   lastSeenAtMs?: number;
   announceLastSeenAtMs?: number;
   lxmfLastSeenAtMs?: number;
@@ -183,16 +176,11 @@ export interface PeerRecord {
   displayName?: string;
   appData?: string;
   state: PeerState;
-  managementState: PeerManagementState;
-  availabilityState: PeerAvailabilityState;
-  communicationReady: boolean;
-  missionReady: boolean;
-  relayEligible: boolean;
+  saved: boolean;
   stale: boolean;
   activeLink: boolean;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
-  lastReadyAtMs?: number;
   lastSeenAtMs: number;
   announceLastSeenAtMs?: number;
   lxmfLastSeenAtMs?: number;
@@ -367,10 +355,8 @@ export interface ProjectionInvalidationEvent {
 export interface OperationalSummary {
   running: boolean;
   peerCountTotal: number;
-  peerCountCommunicationReady: number;
-  peerCountMissionReady: number;
-  peerCountRelayEligible: number;
   savedPeerCount: number;
+  connectedPeerCount: number;
   conversationCount: number;
   messageCount: number;
   eamCount: number;
@@ -680,23 +666,14 @@ function toPeerState(raw: unknown): PeerState {
   }
 }
 
-function toPeerManagementState(raw: unknown): PeerManagementState {
-  return enumVariantName(raw).toLowerCase() === "managed" ? "Managed" : "Unmanaged";
-}
-
-function toPeerAvailabilityState(raw: unknown): PeerAvailabilityState {
-  switch (enumVariantName(raw).toLowerCase()) {
-    case "discovered":
-      return "Discovered";
-    case "resolved":
-      return "Resolved";
-    case "ready":
-      return "Ready";
-    case "unseen":
-      return "Unseen";
-    default:
-      return "Unseen";
+function toSavedFlag(raw: unknown, legacyManagementRaw?: unknown): boolean {
+  if (typeof raw === "boolean") {
+    return raw;
   }
+  if (hasValue(raw)) {
+    return Boolean(raw);
+  }
+  return enumVariantName(legacyManagementRaw).toLowerCase() === "managed";
 }
 
 function toSendOutcome(raw: unknown): SendOutcome {
@@ -762,12 +739,6 @@ function toAnnounceRecord(raw: Record<string, unknown>): AnnounceRecord {
 
 function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
   const changeRaw = (raw.change as Record<string, unknown> | undefined) ?? raw;
-  const managementStateRaw = hasValue(changeRaw.managementState)
-    ? changeRaw.managementState
-    : changeRaw.management_state;
-  const availabilityStateRaw = hasValue(changeRaw.availabilityState)
-    ? changeRaw.availabilityState
-    : changeRaw.availability_state;
   const activeLinkRaw = hasValue(changeRaw.activeLink)
     ? changeRaw.activeLink
     : changeRaw.active_link;
@@ -800,27 +771,7 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
             ? changeRaw.app_data
             : undefined,
       state: hasValue(changeRaw.state) ? toPeerState(changeRaw.state) : undefined,
-      managementState: hasValue(managementStateRaw)
-        ? toPeerManagementState(managementStateRaw)
-        : undefined,
-      availabilityState: hasValue(availabilityStateRaw)
-        ? toPeerAvailabilityState(availabilityStateRaw)
-        : undefined,
-      communicationReady: Boolean(
-        hasValue(changeRaw.communicationReady)
-          ? changeRaw.communicationReady
-          : changeRaw.communication_ready,
-      ),
-      missionReady: Boolean(
-        hasValue(changeRaw.missionReady)
-          ? changeRaw.missionReady
-          : changeRaw.mission_ready,
-      ),
-      relayEligible: Boolean(
-        hasValue(changeRaw.relayEligible)
-          ? changeRaw.relayEligible
-          : changeRaw.relay_eligible,
-      ),
+      saved: toSavedFlag(changeRaw.saved, changeRaw.managementState ?? changeRaw.management_state),
       stale: Boolean(changeRaw.stale),
       activeLink: Boolean(activeLinkRaw),
       lastError: (changeRaw.lastError ?? changeRaw.last_error) as
@@ -836,11 +787,6 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
         hasValue(changeRaw.lastResolutionAttemptAtMs)
           ? changeRaw.lastResolutionAttemptAtMs
           : changeRaw.last_resolution_attempt_at_ms,
-      ),
-      lastReadyAtMs: toOptionalNumber(
-        hasValue(changeRaw.lastReadyAtMs)
-          ? changeRaw.lastReadyAtMs
-          : changeRaw.last_ready_at_ms,
       ),
       lastSeenAtMs: toOptionalNumber(lastSeenAtMsRaw),
       announceLastSeenAtMs: toOptionalNumber(
@@ -881,17 +827,7 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
           ? raw.app_data
           : undefined,
     state: toPeerState(raw.state),
-    managementState: toPeerManagementState(raw.managementState ?? raw.management_state),
-    availabilityState: toPeerAvailabilityState(raw.availabilityState ?? raw.availability_state),
-    communicationReady: Boolean(
-      hasValue(raw.communicationReady) ? raw.communicationReady : raw.communication_ready,
-    ),
-    missionReady: Boolean(
-      hasValue(raw.missionReady) ? raw.missionReady : raw.mission_ready,
-    ),
-    relayEligible: Boolean(
-      hasValue(raw.relayEligible) ? raw.relayEligible : raw.relay_eligible,
-    ),
+    saved: toSavedFlag(raw.saved, raw.managementState ?? raw.management_state),
     stale: Boolean(raw.stale),
     activeLink: Boolean(raw.activeLink ?? raw.active_link),
     lastResolutionError:
@@ -904,9 +840,6 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
       hasValue(raw.lastResolutionAttemptAtMs)
         ? raw.lastResolutionAttemptAtMs
         : raw.last_resolution_attempt_at_ms,
-    ),
-    lastReadyAtMs: toOptionalNumber(
-      hasValue(raw.lastReadyAtMs) ? raw.lastReadyAtMs : raw.last_ready_at_ms,
     ),
     lastSeenAtMs: toOptionalNumber(
       hasValue(raw.lastSeenAtMs) ? raw.lastSeenAtMs : raw.last_seen_at_ms,
@@ -1557,10 +1490,8 @@ function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary 
   return {
     running: Boolean(raw.running),
     peerCountTotal: Number(raw.peerCountTotal ?? 0),
-    peerCountCommunicationReady: Number(raw.peerCountCommunicationReady ?? 0),
-    peerCountMissionReady: Number(raw.peerCountMissionReady ?? 0),
-    peerCountRelayEligible: Number(raw.peerCountRelayEligible ?? 0),
     savedPeerCount: Number(raw.savedPeerCount ?? 0),
+    connectedPeerCount: Number(raw.connectedPeerCount ?? raw.connected_peer_count ?? 0),
     conversationCount: Number(raw.conversationCount ?? 0),
     messageCount: Number(raw.messageCount ?? 0),
     eamCount: Number(raw.eamCount ?? 0),
@@ -1937,11 +1868,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         change: {
           destinationHex,
           state: "Disconnected",
-          managementState: "Unmanaged",
-          availabilityState: "Unseen",
-          communicationReady: false,
-          missionReady: false,
-          relayEligible: false,
+          saved: false,
           stale: false,
           activeLink: false,
           lastSeenAtMs: Date.now(),
@@ -1970,11 +1897,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connecting",
-        managementState: "Managed",
-        availabilityState: "Unseen",
-        communicationReady: false,
-        missionReady: false,
-        relayEligible: false,
+        saved: true,
         stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
@@ -1985,11 +1908,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connected",
-        managementState: "Managed",
-        availabilityState: "Ready",
-        communicationReady: true,
-        missionReady: true,
-        relayEligible: true,
+        saved: true,
         stale: false,
         activeLink: true,
         lastSeenAtMs: Date.now(),
@@ -2004,11 +1923,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        managementState: "Unmanaged",
-        availabilityState: "Unseen",
-        communicationReady: false,
-        missionReady: false,
-        relayEligible: false,
+        saved: false,
         stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
@@ -2114,10 +2029,8 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return {
       running: this.status.running,
       peerCountTotal: 0,
-      peerCountCommunicationReady: 0,
-      peerCountMissionReady: 0,
-      peerCountRelayEligible: 0,
       savedPeerCount: 0,
+      connectedPeerCount: 0,
       conversationCount: 0,
       messageCount: 0,
       eamCount: 0,
@@ -2284,11 +2197,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connecting",
-        managementState: "Managed",
-        availabilityState: "Unseen",
-        communicationReady: false,
-        missionReady: false,
-        relayEligible: false,
+        saved: true,
         stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
@@ -2300,11 +2209,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Connected",
-        managementState: "Managed",
-        availabilityState: "Ready",
-        communicationReady: true,
-        missionReady: true,
-        relayEligible: true,
+        saved: true,
         stale: false,
         activeLink: true,
         lastSeenAtMs: Date.now(),
@@ -2319,11 +2224,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        managementState: "Unmanaged",
-        availabilityState: "Unseen",
-        communicationReady: false,
-        missionReady: false,
-        relayEligible: false,
+        saved: false,
         stale: false,
         activeLink: false,
         lastSeenAtMs: Date.now(),
@@ -2447,10 +2348,8 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return {
       running: this.status.running,
       peerCountTotal: 0,
-      peerCountCommunicationReady: 0,
-      peerCountMissionReady: 0,
-      peerCountRelayEligible: 0,
       savedPeerCount: 0,
+      connectedPeerCount: 0,
       conversationCount: 0,
       messageCount: 0,
       eamCount: 0,

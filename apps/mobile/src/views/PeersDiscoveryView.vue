@@ -14,16 +14,6 @@ const isSavedSectionOpen = ref(true);
 const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
   return nodeStore.discoveredPeers.filter((peer: DiscoveredPeer) => {
-    const requiresCapabilityVerification =
-      peer.sources.includes("announce") && !peer.sources.includes("hub");
-
-    if (
-      nodeStore.settings.showOnlyCapabilityVerified &&
-      requiresCapabilityVerification &&
-      !peer.verifiedCapability
-    ) {
-      return false;
-    }
     if (!query) {
       return true;
     }
@@ -57,15 +47,15 @@ const filteredSaved = computed(() => {
 
 function savedPeerConnectionLabel(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
-  return peer?.managementState === "managed" || peer?.activeLink ? "Disconnect" : "Connect";
+  return peer?.activeLink ? "Disconnect" : "Connect";
 }
 
 function savedPeerConnectionMessage(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
-  if (peer?.managementState === "managed" && (peer?.state === "connected" || peer?.activeLink)) {
+  if (peer?.activeLink) {
     return "Connected";
   }
-  if (peer?.managementState === "managed" || peer?.state === "connecting") {
+  if (peer?.state === "connecting") {
     return "Connecting";
   }
   return "Disconnected";
@@ -158,26 +148,12 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
         type="search"
         placeholder="Search destination, label, or announced name"
       />
-      <label class="checkbox">
-        <input
-          :checked="nodeStore.settings.showOnlyCapabilityVerified"
-          type="checkbox"
-          @change="
-            nodeStore.updateSettings({
-              showOnlyCapabilityVerified: ($event.target as HTMLInputElement).checked,
-            })
-          "
-        />
-        Show only capability-verified peers
-      </label>
     </section>
 
     <section class="panel">
       <h2>Discovered</h2>
         <p class="section-meta">
-          {{ nodeStore.communicationReadyPeerCount }}/{{ nodeStore.connectedLinkDestinations.length }} saved/connected |
-          {{ nodeStore.missionReadyPeerCount }} mission-ready |
-          {{ nodeStore.relayEligiblePeerCount }} relay-eligible |
+          {{ nodeStore.savedPeerCount }}/{{ nodeStore.connectedPeerCount }} saved/connected |
           {{ filteredDiscovered.length }} peers visible
         </p>
       <div class="rows">
