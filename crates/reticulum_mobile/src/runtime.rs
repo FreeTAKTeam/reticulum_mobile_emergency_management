@@ -65,6 +65,9 @@ const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
+const MISSION_SEND_TASK_RESERVED_LIMIT: usize = 2;
+const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize =
+    SEND_TASK_CONCURRENCY_LIMIT - MISSION_SEND_TASK_RESERVED_LIMIT;
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
 
 pub(crate) fn now_ms() -> u64 {
@@ -1072,6 +1075,76 @@ struct ReceiptMessageTracking {
     recorded_at_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendTaskClass {
+    Mission,
+    General,
+}
+
+impl SendTaskClass {
+    fn from_metadata(metadata: Option<&MissionSyncMetadata>) -> Self {
+        if metadata.is_some_and(MissionSyncMetadata::is_mission_related) {
+            Self::Mission
+        } else {
+            Self::General
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mission => "mission",
+            Self::General => "general",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SendTaskPermits {
+    general: Arc<Semaphore>,
+    mission: Arc<Semaphore>,
+}
+
+impl SendTaskPermits {
+    fn new() -> Self {
+        Self {
+            general: Arc::new(Semaphore::new(GENERAL_SEND_TASK_CONCURRENCY_LIMIT)),
+            mission: Arc::new(Semaphore::new(MISSION_SEND_TASK_RESERVED_LIMIT)),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limits(general: usize, mission: usize) -> Self {
+        Self {
+            general: Arc::new(Semaphore::new(general)),
+            mission: Arc::new(Semaphore::new(mission)),
+        }
+    }
+
+    async fn acquire(&self, class: SendTaskClass) -> Result<OwnedSemaphorePermit, NodeError> {
+        match class {
+            SendTaskClass::Mission => self
+                .mission
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+            SendTaskClass::General => self
+                .general
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+        }
+    }
+}
+
+fn log_send_task(class: SendTaskClass, message: String) {
+    match class {
+        SendTaskClass::Mission => info!("{message}"),
+        SendTaskClass::General => debug!("{message}"),
+    }
+}
+
 impl ReceiptHandler for RuntimeReceiptBridge {
     fn on_receipt(&self, receipt: &DeliveryReceipt) {
         let packet_hash_hex = hex::encode(receipt.message_id);
@@ -1843,7 +1916,7 @@ struct NodeRuntimeState {
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
     preferred_propagation_node_hex: Option<String>,
-    send_task_semaphore: Arc<Semaphore>,
+    send_task_permits: SendTaskPermits,
 }
 
 fn prune_expired_buffered_acknowledgements(
@@ -1870,14 +1943,10 @@ fn prune_expired_receipt_tracking(
 }
 
 async fn acquire_send_task_permit(
-    state: &NodeRuntimeState,
+    permits: &SendTaskPermits,
+    class: SendTaskClass,
 ) -> Result<OwnedSemaphorePermit, NodeError> {
-    state
-        .send_task_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| NodeError::InternalError {})
+    permits.acquire(class).await
 }
 
 async fn ensure_destination_desc(
@@ -2174,6 +2243,7 @@ async fn send_lxmf_with_delivery_policy(
     fields_bytes: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
     send_mode: SendMode,
+    send_task_class: SendTaskClass,
 ) -> Result<LxmfSendReport, NodeError> {
     const DIRECT_ATTEMPTS: usize = 5;
     const RETRY_DELAY: Duration = Duration::from_secs(10);
@@ -2191,6 +2261,23 @@ async fn send_lxmf_with_delivery_policy(
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
+                send_task_class.label(),
+                requested_destination_hex,
+            ),
+        );
+        let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
+                send_task_class.label(),
+                requested_destination_hex,
+            ),
+        );
         return state
             .sdk
             .send_lxmf(
@@ -2210,18 +2297,40 @@ async fn send_lxmf_with_delivery_policy(
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
-        match state
-            .sdk
-            .send_lxmf(
-                destination,
-                body,
-                title.clone(),
-                fields_bytes.clone(),
-                metadata.clone(),
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] waiting for {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                send_task_class.label(),
+                requested_destination_hex,
                 send_mode,
-            )
-            .await
-        {
+            ),
+        );
+        let send_result = {
+            let _permit =
+                acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+            log_send_task(
+                send_task_class,
+                format!(
+                    "[lxmf][queue] acquired {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                    send_task_class.label(),
+                    requested_destination_hex,
+                    send_mode,
+                ),
+            );
+            state
+                .sdk
+                .send_lxmf(
+                    destination,
+                    body,
+                    title.clone(),
+                    fields_bytes.clone(),
+                    metadata.clone(),
+                    send_mode,
+                )
+                .await
+        };
+        match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
                 return Ok(report);
             }
@@ -2250,6 +2359,17 @@ async fn send_lxmf_with_delivery_policy(
         }
 
         if attempt < DIRECT_ATTEMPTS {
+            log_send_task(
+                send_task_class,
+                format!(
+                    "[lxmf][queue] sleeping before retry destination={} mode={:?} next_attempt={}/{} delay_ms={}",
+                    requested_destination_hex,
+                    send_mode,
+                    attempt + 1,
+                    DIRECT_ATTEMPTS,
+                    RETRY_DELAY.as_millis(),
+                ),
+            );
             tokio::time::sleep(RETRY_DELAY).await;
         }
     }
@@ -2265,6 +2385,23 @@ async fn send_lxmf_with_delivery_policy(
     let resolved_destination_hex =
         resolve_lxmf_destination_hex(state, requested_destination_hex).await;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+    log_send_task(
+        send_task_class,
+        format!(
+            "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=fallback",
+            send_task_class.label(),
+            requested_destination_hex,
+        ),
+    );
+    let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+    log_send_task(
+        send_task_class,
+        format!(
+            "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=fallback",
+            send_task_class.label(),
+            requested_destination_hex,
+        ),
+    );
     let mut report = state
         .sdk
         .send_lxmf(
@@ -2742,7 +2879,7 @@ pub async fn run_node(
     )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
-    let send_task_semaphore = Arc::new(Semaphore::new(SEND_TASK_CONCURRENCY_LIMIT));
+    let send_task_permits = SendTaskPermits::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
         projection_journal_path(config.storage_dir.as_deref()),
         bus.clone(),
@@ -2781,7 +2918,7 @@ pub async fn run_node(
             .hub_identity_hash
             .as_ref()
             .and_then(|value| normalize_hex_32(value)),
-        send_task_semaphore: send_task_semaphore.clone(),
+        send_task_permits: send_task_permits.clone(),
     };
 
     if let Some(snapshot) = projection_journal.load_snapshot() {
@@ -3445,208 +3582,231 @@ pub async fn run_node(
                 let state = state.clone();
                 let bus = bus.clone();
                 let transport = transport.clone();
+                let metadata = fields_bytes
+                    .as_deref()
+                    .and_then(parse_mission_sync_metadata);
+                let send_task_class = if fields_bytes.is_some() {
+                    SendTaskClass::from_metadata(metadata.as_ref())
+                } else {
+                    SendTaskClass::General
+                };
+                log_send_task(
+                    send_task_class,
+                    format!(
+                        "[lxmf][queue] enqueued {} send destination={} mode={:?} has_fields={}",
+                        send_task_class.label(),
+                        destination_hex,
+                        send_mode,
+                        fields_bytes.is_some(),
+                    ),
+                );
                 tokio::spawn(async move {
-                    let _send_task_permit = match acquire_send_task_permit(&state).await {
-                        Ok(permit) => permit,
-                        Err(err) => {
-                            let _ = resp.send(Err(err));
-                            return;
-                        }
-                    };
                     let result = async {
-                    let metadata = fields_bytes
-                        .as_deref()
-                        .and_then(parse_mission_sync_metadata);
-                    let lxmf_report = if fields_bytes.is_some() {
-                        Some(
-                            send_lxmf_with_delivery_policy(
-                                &state,
-                                &destination_hex,
-                                &bytes,
-                                None,
-                                fields_bytes.clone(),
-                                metadata.clone(),
-                                send_mode,
-                            )
-                            .await?,
-                        )
-                    } else {
-                        None
-                    };
-                    let outcome = if let Some(report) = lxmf_report.as_ref() {
-                        report.outcome
-                    } else {
-                        let dest = parse_address_hash(&destination_hex)?;
-                        send_transport_packet_with_path_retry(&transport, dest, &bytes).await
-                    };
-                    let mapped = send_outcome_to_udl(outcome);
-                    bus.emit(NodeEvent::PacketSent {
-                        destination_hex: destination_hex.clone(),
-                        bytes: bytes.clone(),
-                        outcome: mapped,
-                    });
-
-                    if let Some(report) = lxmf_report.as_ref() {
-                        if let Some(metadata) = report.metadata.as_ref() {
-                            if metadata.is_mission_related() {
-                                info!(
-                                    "[lxmf][mission] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
-                                    metadata.primary_kind(),
-                                    metadata.primary_name().unwrap_or("-"),
-                                    report.resolved_destination_hex.as_str(),
-                                    report.message_id_hex,
-                                    metadata.event_uid.as_deref().unwrap_or("-"),
-                                    metadata.mission_uid.as_deref().unwrap_or("-"),
-                                    metadata.correlation_id.as_deref().unwrap_or("-"),
-                                );
-                            }
-                        }
-
-                        if let Some(registered) = register_pending_lxmf_delivery(
-                            &state,
-                            report,
-                        )
-                        .await
-                        {
-                            let pending = &registered.pending;
-                            if matches!(
-                                report.outcome,
-                                RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                            ) {
-                                state.sdk.record_delivery_sent(
-                                    &pending.message_id_hex,
-                                    &pending.destination_hex,
-                                    pending.correlation_id.as_deref(),
-                                    pending.command_id.as_deref(),
-                                    pending.command_type.as_deref(),
-                                    pending.event_uid.as_deref(),
-                                    pending.mission_uid.as_deref(),
-                                );
-                                emit_lxmf_delivery(
-                                    &bus,
-                                    &pending,
-                                    lxmf_delivery_status_for(report),
+                        let lxmf_report = if fields_bytes.is_some() {
+                            Some(
+                                send_lxmf_with_delivery_policy(
+                                    &state,
+                                    &destination_hex,
+                                    &bytes,
                                     None,
-                                );
-                                info!(
-                                    "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
-                                    pending.message_id_hex,
-                                    pending.destination_hex,
-                                    pending.command_type.as_deref().unwrap_or("-"),
-                                    pending.correlation_id.as_deref().unwrap_or("-"),
-                                );
-                                if let Some(buffered_ack) = registered.buffered_ack {
-                                    let tracking_key = pending
-                                        .correlation_id
-                                        .as_deref()
-                                        .or(pending.command_id.as_deref())
-                                        .map(ToOwned::to_owned);
-                                    if peer_destinations_equivalent(
-                                        &state,
-                                        pending.destination_hex.as_str(),
-                                        buffered_ack.source_hex.as_str(),
-                                    )
-                                    .await
+                                    fields_bytes.clone(),
+                                    metadata.clone(),
+                                    send_mode,
+                                    send_task_class,
+                                )
+                                .await?,
+                            )
+                        } else {
+                            None
+                        };
+                        let outcome = if let Some(report) = lxmf_report.as_ref() {
+                            report.outcome
+                        } else {
+                            log_send_task(
+                                SendTaskClass::General,
+                                format!(
+                                    "[lxmf][queue] waiting for general send slot destination={} mode=transport-bytes",
+                                    destination_hex,
+                                ),
+                            );
+                            let _permit = acquire_send_task_permit(
+                                &state.send_task_permits,
+                                SendTaskClass::General,
+                            )
+                            .await?;
+                            log_send_task(
+                                SendTaskClass::General,
+                                format!(
+                                    "[lxmf][queue] acquired general send slot destination={} mode=transport-bytes",
+                                    destination_hex,
+                                ),
+                            );
+                            let dest = parse_address_hash(&destination_hex)?;
+                            send_transport_packet_with_path_retry(&transport, dest, &bytes).await
+                        };
+                        let mapped = send_outcome_to_udl(outcome);
+                        bus.emit(NodeEvent::PacketSent {
+                            destination_hex: destination_hex.clone(),
+                            bytes: bytes.clone(),
+                            outcome: mapped,
+                        });
+
+                        if let Some(report) = lxmf_report.as_ref() {
+                            if let Some(metadata) = report.metadata.as_ref() {
+                                if metadata.is_mission_related() {
+                                    info!(
+                                        "[lxmf][mission] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
+                                        metadata.primary_kind(),
+                                        metadata.primary_name().unwrap_or("-"),
+                                        report.resolved_destination_hex.as_str(),
+                                        report.message_id_hex,
+                                        metadata.event_uid.as_deref().unwrap_or("-"),
+                                        metadata.mission_uid.as_deref().unwrap_or("-"),
+                                        metadata.correlation_id.as_deref().unwrap_or("-"),
+                                    );
+                                }
+                            }
+
+                            if let Some(registered) = register_pending_lxmf_delivery(&state, report).await {
+                                let pending = &registered.pending;
+                                if matches!(
+                                    report.outcome,
+                                    RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                                ) {
+                                    state.sdk.record_delivery_sent(
+                                        &pending.message_id_hex,
+                                        &pending.destination_hex,
+                                        pending.correlation_id.as_deref(),
+                                        pending.command_id.as_deref(),
+                                        pending.command_type.as_deref(),
+                                        pending.event_uid.as_deref(),
+                                        pending.mission_uid.as_deref(),
+                                    );
+                                    emit_lxmf_delivery(
+                                        &bus,
+                                        &pending,
+                                        lxmf_delivery_status_for(report),
+                                        None,
+                                    );
+                                    info!(
+                                        "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
+                                        pending.message_id_hex,
+                                        pending.destination_hex,
+                                        pending.command_type.as_deref().unwrap_or("-"),
+                                        pending.correlation_id.as_deref().unwrap_or("-"),
+                                    );
+                                    if let Some(buffered_ack) = registered.buffered_ack {
+                                        let tracking_key = pending
+                                            .correlation_id
+                                            .as_deref()
+                                            .or(pending.command_id.as_deref())
+                                            .map(ToOwned::to_owned);
+                                        if peer_destinations_equivalent(
+                                            &state,
+                                            pending.destination_hex.as_str(),
+                                            buffered_ack.source_hex.as_str(),
+                                        )
+                                        .await
+                                        {
+                                            if let Some(tracking_key) = tracking_key.as_deref() {
+                                                state
+                                                    .pending_lxmf_deliveries
+                                                    .lock()
+                                                    .await
+                                                    .remove(tracking_key);
+                                            }
+                                            state.sdk.record_delivery_acknowledged(
+                                                &pending.message_id_hex,
+                                                &pending.destination_hex,
+                                                Some(buffered_ack.source_hex.as_str()),
+                                                pending.correlation_id.as_deref(),
+                                                pending.command_id.as_deref(),
+                                                pending.command_type.as_deref(),
+                                                pending.event_uid.as_deref(),
+                                                pending.mission_uid.as_deref(),
+                                                buffered_ack.detail.as_deref(),
+                                            );
+                                            emit_lxmf_delivery_with_source(
+                                                &bus,
+                                                pending,
+                                                Some(buffered_ack.source_hex.clone()),
+                                                LxmfDeliveryStatus::Acknowledged {},
+                                                buffered_ack.detail.clone(),
+                                            );
+                                            info!(
+                                                "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
+                                                pending.message_id_hex,
+                                                pending.destination_hex,
+                                                pending.command_type.as_deref().unwrap_or("-"),
+                                                pending.correlation_id.as_deref().unwrap_or("-"),
+                                                buffered_ack.detail.as_deref().unwrap_or("-"),
+                                            );
+                                        } else {
+                                            if let Some(tracking_key) = tracking_key {
+                                                state
+                                                    .pending_lxmf_acknowledgements
+                                                    .lock()
+                                                    .await
+                                                    .insert(tracking_key, buffered_ack.clone());
+                                            }
+                                            info!(
+                                                "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
+                                                pending.message_id_hex,
+                                                pending.destination_hex,
+                                                buffered_ack.source_hex,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    let failure_detail = format!("{mapped:?}");
                                     {
-                                        if let Some(tracking_key) = tracking_key.as_deref() {
-                                            state
-                                                .pending_lxmf_deliveries
-                                                .lock()
-                                                .await
-                                                .remove(tracking_key);
-                                        }
-                                        state.sdk.record_delivery_acknowledged(
-                                            &pending.message_id_hex,
-                                            &pending.destination_hex,
-                                            Some(buffered_ack.source_hex.as_str()),
-                                            pending.correlation_id.as_deref(),
-                                            pending.command_id.as_deref(),
-                                            pending.command_type.as_deref(),
-                                            pending.event_uid.as_deref(),
-                                            pending.mission_uid.as_deref(),
-                                            buffered_ack.detail.as_deref(),
-                                        );
-                                        emit_lxmf_delivery_with_source(
-                                            &bus,
-                                            pending,
-                                            Some(buffered_ack.source_hex.clone()),
-                                            LxmfDeliveryStatus::Acknowledged {},
-                                            buffered_ack.detail.clone(),
-                                        );
-                                        info!(
-                                            "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
-                                            pending.message_id_hex,
-                                            pending.destination_hex,
-                                            pending.command_type.as_deref().unwrap_or("-"),
-                                            pending.correlation_id.as_deref().unwrap_or("-"),
-                                            buffered_ack.detail.as_deref().unwrap_or("-"),
-                                        );
-                                    } else {
+                                        let tracking_key = pending
+                                            .correlation_id
+                                            .as_deref()
+                                            .or(pending.command_id.as_deref())
+                                            .map(ToOwned::to_owned);
                                         if let Some(tracking_key) = tracking_key {
-                                            state
-                                                .pending_lxmf_acknowledgements
-                                                .lock()
-                                                .await
-                                                .insert(tracking_key, buffered_ack.clone());
+                                            state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
                                         }
-                                        info!(
-                                            "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
-                                            pending.message_id_hex,
-                                            pending.destination_hex,
-                                            buffered_ack.source_hex,
-                                        );
                                     }
+                                    state.sdk.record_delivery_failed(
+                                        &pending.message_id_hex,
+                                        &pending.destination_hex,
+                                        pending.correlation_id.as_deref(),
+                                        pending.command_id.as_deref(),
+                                        pending.command_type.as_deref(),
+                                        pending.event_uid.as_deref(),
+                                        pending.mission_uid.as_deref(),
+                                        Some(failure_detail.as_str()),
+                                    );
+                                    emit_lxmf_delivery(
+                                        &bus,
+                                        &pending,
+                                        LxmfDeliveryStatus::Failed {},
+                                        Some(failure_detail.clone()),
+                                    );
+                                    info!(
+                                        "[lxmf][mission] failed message_id={} destination={} command={} correlation={} outcome={:?}",
+                                        pending.message_id_hex,
+                                        pending.destination_hex,
+                                        pending.command_type.as_deref().unwrap_or("-"),
+                                        pending.correlation_id.as_deref().unwrap_or("-"),
+                                        mapped,
+                                    );
                                 }
-                            } else {
-                                let failure_detail = format!("{mapped:?}");
-                                {
-                                    let tracking_key = pending
-                                        .correlation_id
-                                        .as_deref()
-                                        .or(pending.command_id.as_deref())
-                                        .map(ToOwned::to_owned);
-                                    if let Some(tracking_key) = tracking_key {
-                                        state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
-                                    }
-                                }
-                                state.sdk.record_delivery_failed(
-                                    &pending.message_id_hex,
-                                    &pending.destination_hex,
-                                    pending.correlation_id.as_deref(),
-                                    pending.command_id.as_deref(),
-                                    pending.command_type.as_deref(),
-                                    pending.event_uid.as_deref(),
-                                    pending.mission_uid.as_deref(),
-                                    Some(failure_detail.as_str()),
-                                );
-                                emit_lxmf_delivery(
-                                    &bus,
-                                    &pending,
-                                    LxmfDeliveryStatus::Failed {},
-                                    Some(failure_detail.clone()),
-                                );
-                                info!(
-                                    "[lxmf][mission] failed message_id={} destination={} command={} correlation={} outcome={:?}",
-                                    pending.message_id_hex,
-                                    pending.destination_hex,
-                                    pending.command_type.as_deref().unwrap_or("-"),
-                                    pending.correlation_id.as_deref().unwrap_or("-"),
-                                    mapped,
-                                );
                             }
                         }
-                    }
 
-                    if matches!(
-                        outcome,
-                        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                    ) {
-                        Ok(())
-                    } else {
-                        Err(NodeError::NetworkError {})
+                        if matches!(
+                            outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        ) {
+                            Ok(())
+                        } else {
+                            Err(NodeError::NetworkError {})
+                        }
                     }
-                }
-                .await;
+                    .await;
                     if let Err(err) = &result {
                         bus.emit(NodeEvent::Error {
                             code: node_error_code(err).to_string(),
@@ -3663,14 +3823,15 @@ pub async fn run_node(
                 let state = state.clone();
                 let bus = bus.clone();
                 let receipt_message_ids = receipt_message_ids.clone();
+                log_send_task(
+                    SendTaskClass::General,
+                    format!(
+                        "[lxmf][queue] enqueued general send destination={} mode={:?} has_fields=false",
+                        request.destination_hex,
+                        request.send_mode,
+                    ),
+                );
                 tokio::spawn(async move {
-                    let _send_task_permit = match acquire_send_task_permit(&state).await {
-                        Ok(permit) => permit,
-                        Err(err) => {
-                            let _ = resp.send(Err(err));
-                            return;
-                        }
-                    };
                     let result = async {
                         let body_bytes = request.body_utf8.as_bytes().to_vec();
                         let report = send_lxmf_with_delivery_policy(
@@ -3681,6 +3842,7 @@ pub async fn run_node(
                             None,
                             None,
                             request.send_mode,
+                            SendTaskClass::General,
                         )
                         .await?;
                         let method = match (report.method, report.representation) {
@@ -3770,14 +3932,14 @@ pub async fn run_node(
             } => {
                 let state = state.clone();
                 let bus = bus.clone();
+                log_send_task(
+                    SendTaskClass::General,
+                    format!(
+                        "[lxmf][queue] enqueued general retry message_id={}",
+                        message_id_hex,
+                    ),
+                );
                 tokio::spawn(async move {
-                    let _send_task_permit = match acquire_send_task_permit(&state).await {
-                        Ok(permit) => permit,
-                        Err(err) => {
-                            let _ = resp.send(Err(err));
-                            return;
-                        }
-                    };
                     let result = async {
                         let outbound = state
                             .messaging
@@ -3797,6 +3959,7 @@ pub async fn run_node(
                                 sdkmsg::SendMode::DirectOnly => SendMode::DirectOnly {},
                                 sdkmsg::SendMode::PropagationOnly => SendMode::PropagationOnly {},
                             },
+                            SendTaskClass::General,
                         )
                         .await?;
                         let retried_state = if report.used_propagation_node
@@ -4066,6 +4229,7 @@ pub fn load_or_create_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
 
     #[test]
     fn parse_mission_sync_metadata_extracts_command_fields() {
@@ -4307,6 +4471,60 @@ mod tests {
         assert_eq!(pruned, 1);
         assert!(tracking.contains_key("fresh"));
         assert!(!tracking.contains_key("stale"));
+    }
+
+    #[tokio::test]
+    async fn retry_backoff_releases_general_send_permit_before_sleep() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let permits_for_retry = permits.clone();
+        let (sleeping_tx, sleeping_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            {
+                let _permit = acquire_send_task_permit(&permits_for_retry, SendTaskClass::General)
+                    .await
+                    .expect("first attempt permit");
+            }
+            let _ = sleeping_tx.send(());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        sleeping_rx.await.expect("retry task entered backoff");
+        let permit = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::General),
+        )
+        .await
+        .expect("general permit should be available during retry sleep")
+        .expect("general permit acquisition should succeed");
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn mission_sends_keep_reserved_capacity_when_general_pool_is_full() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let _general = acquire_send_task_permit(&permits, SendTaskClass::General)
+            .await
+            .expect("saturate general pool");
+
+        let mission = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::Mission),
+        )
+        .await
+        .expect("mission permit should not wait on general pool saturation")
+        .expect("mission permit acquisition should succeed");
+        drop(mission);
+
+        let blocked_general = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::General),
+        )
+        .await;
+        assert!(
+            blocked_general.is_err(),
+            "general pool should remain saturated while the original permit is held"
+        );
     }
 
     #[test]

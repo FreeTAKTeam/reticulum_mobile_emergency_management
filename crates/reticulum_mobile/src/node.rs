@@ -3558,6 +3558,153 @@ mod tests {
         relay.shutdown().await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn repeated_eam_updates_with_same_callsign_replicate_latest_projection() {
+        const EAM_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("eam_repeated_updates").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        node_a
+            .set_saved_peers(vec![SavedPeerRecord {
+                destination_hex: node_b_status.app_destination_hex.clone(),
+                label: Some("peer-b".to_string()),
+                saved_at_ms: now_ms(),
+            }])
+            .expect("save peer b");
+        node_a
+            .connect_peer(node_b_status.app_destination_hex.clone())
+            .expect("connect peer b");
+
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm repeated eam link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm repeated eam link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm repeated eam link")
+        })
+        .expect("node b received repeated eam warmup message");
+
+        let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let peer_ready = node_a
+                .list_peers()
+                .expect("list peers")
+                .into_iter()
+                .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
+                .is_some_and(|peer| peer.mission_ready && peer.communication_ready);
+            if peer_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let first_record = EamProjectionRecord {
+            callsign: "Pippo".to_string(),
+            group_name: "Yellow".to_string(),
+            security_status: "Green".to_string(),
+            capability_status: "Green".to_string(),
+            preparedness_status: "Yellow".to_string(),
+            medical_status: "Unknown".to_string(),
+            mobility_status: "Unknown".to_string(),
+            comms_status: "Unknown".to_string(),
+            notes: Some("first native eam".to_string()),
+            updated_at_ms: now_ms(),
+            deleted_at_ms: None,
+            eam_uid: Some("eam-repeated-native".to_string()),
+            team_member_uid: Some(node_a_status.app_destination_hex.clone()),
+            team_uid: Some(TEAM_UID_YELLOW.to_string()),
+            reported_at: Some("2026-03-27T15:00:00Z".to_string()),
+            reported_by: Some(node_a_status.name.clone()),
+            overall_status: Some("Yellow".to_string()),
+            confidence: Some(0.9),
+            ttl_seconds: Some(3600),
+            source: Some(EamSourceRecord {
+                rns_identity: node_a_status.identity_hex.clone(),
+                display_name: Some(node_a_status.name.clone()),
+            }),
+            sync_state: Some("draft".to_string()),
+            sync_error: None,
+            draft_created_at_ms: Some(now_ms()),
+            last_synced_at_ms: None,
+        };
+
+        node_a
+            .upsert_eam(first_record.clone())
+            .expect("upsert initial eam");
+
+        let first_received_deadline = Instant::now() + EAM_REPLICATION_TIMEOUT;
+        let first_received = loop {
+            let received = node_b
+                .get_eams()
+                .expect("get eams")
+                .into_iter()
+                .find(|eam| eam.callsign == first_record.callsign && eam.deleted_at_ms.is_none());
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < first_received_deadline,
+                "node b never persisted initial eam update"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        assert_eq!(first_received.callsign, first_record.callsign);
+
+        let mut second_record = first_record.clone();
+        second_record.preparedness_status = "Red".to_string();
+        second_record.notes = Some("second native eam".to_string());
+        second_record.updated_at_ms = first_received.updated_at_ms.saturating_add(1);
+        second_record.overall_status = Some("Red".to_string());
+
+        node_a
+            .upsert_eam(second_record.clone())
+            .expect("upsert repeated eam");
+
+        let second_received_deadline = Instant::now() + EAM_REPLICATION_TIMEOUT;
+        let received = loop {
+            let received = node_b
+                .get_eams()
+                .expect("get eams")
+                .into_iter()
+                .find(|eam| {
+                    eam.callsign == second_record.callsign
+                        && eam.preparedness_status == second_record.preparedness_status
+                        && eam.notes == second_record.notes
+                });
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < second_received_deadline,
+                "node b never persisted repeated eam update"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(received.callsign, second_record.callsign);
+        assert!(received.updated_at_ms >= second_record.updated_at_ms);
+        assert_eq!(
+            received.preparedness_status,
+            second_record.preparedness_status
+        );
+        assert_eq!(received.notes, second_record.notes);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
     #[test]
     fn event_replication_targets_only_include_intentional_peers() {
         let status = NodeStatus {

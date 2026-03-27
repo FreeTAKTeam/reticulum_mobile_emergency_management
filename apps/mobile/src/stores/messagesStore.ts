@@ -32,6 +32,14 @@ function nowMs(): number {
   return Date.now();
 }
 
+function nextLocalUpdatedAt(previousUpdatedAt?: number): number {
+  const now = nowMs();
+  if (typeof previousUpdatedAt !== "number" || !Number.isFinite(previousUpdatedAt)) {
+    return now;
+  }
+  return Math.max(now, previousUpdatedAt + 1);
+}
+
 function normalizeStatus(value: unknown): EamStatus {
   return value === "Green" || value === "Yellow" || value === "Red" ? value : "Unknown";
 }
@@ -479,7 +487,7 @@ export const useMessagesStore = defineStore("messages", () => {
   ): Promise<void> {
     const normalized = normalizeMessage({
       ...next,
-      updatedAt: optionalNumber(next.updatedAt) ?? nowMs(),
+      updatedAt: nextLocalUpdatedAt(optionalNumber(next.updatedAt)),
     });
     if (!normalized.callsign) {
       return;

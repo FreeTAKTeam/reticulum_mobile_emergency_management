@@ -3,6 +3,17 @@ import { expect, test } from "@playwright/test";
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
 test("operators can create, edit statuses, cycle status, view help, and delete an action message", async ({ page }) => {
+  const updatedAtFor = async (callsign: string): Promise<number> =>
+    page.evaluate((targetCallsign) => {
+      const raw = globalThis.localStorage.getItem("reticulum.mobile.messages.v1");
+      if (!raw) {
+        return 0;
+      }
+      const entries = JSON.parse(raw) as Record<string, { callsign?: string; updatedAt?: number }>;
+      const match = Object.values(entries).find((entry) => entry.callsign === targetCallsign);
+      return typeof match?.updatedAt === "number" ? match.updatedAt : 0;
+    }, callsign);
+
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -23,6 +34,8 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   const messageCard = page.locator("article.item:visible").filter({ hasText: "Bravo-2" });
   await expect(messageCard.getByRole("heading", { name: "Bravo-2" })).toBeVisible();
   await expect(messageCard).toContainText("Team: Red");
+  const createdUpdatedAt = await updatedAtFor("Bravo-2");
+  expect(createdUpdatedAt).toBeGreaterThan(0);
 
   await messageCard.getByRole("button", { name: "Edit Bravo-2" }).click();
   await expect(createForm.getByLabel("Call Sign")).toHaveValue("Bravo-2");
@@ -31,6 +44,8 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   await createForm.getByLabel("Comms status").selectOption("Red");
   await createForm.getByRole("button", { name: "Save message" }).click();
   await expect(messageCard).toContainText("Team: Blue");
+  const editedUpdatedAt = await updatedAtFor("Bravo-2");
+  expect(editedUpdatedAt).toBeGreaterThan(createdUpdatedAt);
   await messageCard.getByRole("button", { name: "Show statuses" }).click();
   await expect(messageCard.locator(".pill-button").filter({ hasText: "Security" })).toContainText("Yellow");
   await expect(messageCard.locator(".pill-button").filter({ hasText: "Comms" })).toContainText("Red");
@@ -38,6 +53,8 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   const securityStatusButton = messageCard.locator(".pill-button").filter({ hasText: "Security" });
   await securityStatusButton.click();
   await expect(securityStatusButton).toContainText("Red");
+  const rotatedUpdatedAt = await updatedAtFor("Bravo-2");
+  expect(rotatedUpdatedAt).toBeGreaterThan(editedUpdatedAt);
 
   await page.getByRole("button", { name: "Open status color help" }).click();
   await expect(page).toHaveURL(/\/messages\/help$/);
