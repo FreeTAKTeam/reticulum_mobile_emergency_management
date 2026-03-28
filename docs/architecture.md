@@ -372,6 +372,7 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 - Rust owns the native app-state store, projection versioning, and `ProjectionInvalidated` events.
 - Mobile settings, saved peers, EAMs, events, telemetry positions, and conversation/message projections are queried from native state on mobile builds.
 - Peer availability on mobile now follows the configured stale window instead of a short announce-freshness heuristic. A peer can remain `Ready` without a fresh announce while its app and LXMF destinations are still known and the configured stale window has not expired; `active_link` is tracked separately from availability.
+- Native `connectPeer()` now does more than request a route: it resolves the saved peer destination, opens an output link, and waits for `LinkEvent::Activated` before the runtime treats that peer as having a direct active link.
 - TypeScript stores on mobile are being reduced to:
   - view filters and drafts
   - command dispatch

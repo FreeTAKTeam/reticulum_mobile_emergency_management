@@ -482,20 +482,25 @@ impl MessagingStore {
                 || lxmf_destination_hex
                     .as_ref()
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
+            let announce_last_seen_at_ms = app_record.map(|record| record.received_at_ms);
+            let lxmf_last_seen_at_ms = lxmf_record.map(|record| record.received_at_ms);
             let peer_app_data = app_record.map(|record| record.app_data.as_str());
             let mission_capable = app_record.is_some() && supports_mission_traffic(peer_app_data);
-            if !saved && !mission_capable {
+            let unsaved_recent = announce_last_seen_at_ms.is_some_and(|seen_at_ms| {
+                now_ms.saturating_sub(seen_at_ms) <= self.peer_stale_after_ms
+            });
+            if !saved && (!mission_capable || !unsaved_recent) {
                 continue;
             }
             let latest_seen_at_ms = app_record
                 .map(|record| record.received_at_ms)
                 .unwrap_or(0)
-                .max(lxmf_record.map(|record| record.received_at_ms).unwrap_or(0));
+                .max(lxmf_last_seen_at_ms.unwrap_or(0));
             let stale = peer_is_stale(
                 saved,
                 active_link,
-                app_record.map(|record| record.received_at_ms),
-                lxmf_record.map(|record| record.received_at_ms),
+                announce_last_seen_at_ms,
+                lxmf_last_seen_at_ms,
                 now_ms,
                 self.peer_stale_after_ms,
             );
@@ -521,8 +526,8 @@ impl MessagingStore {
                     .get(&destination_hex)
                     .copied(),
                 last_seen_at_ms: latest_seen_at_ms,
-                announce_last_seen_at_ms: app_record.map(|record| record.received_at_ms),
-                lxmf_last_seen_at_ms: lxmf_record.map(|record| record.received_at_ms),
+                announce_last_seen_at_ms,
+                lxmf_last_seen_at_ms,
             });
         }
 
@@ -955,6 +960,35 @@ mod tests {
         assert!(!peers[0].saved);
         assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(!peers[0].stale);
+    }
+
+    #[test]
+    fn stale_capability_relevant_unsaved_peer_is_excluded_from_possible_peers() {
+        let mut store = MessagingStore::new(30);
+        let now = current_time_ms();
+        let stale_seen_at = now.saturating_sub((31 * 60 * 1000) as u64);
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
+            display_name: Some("S8".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale_seen_at,
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "chat".into(),
+            display_name: Some("S8".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale_seen_at,
+        });
+
+        assert!(store.list_peers().is_empty());
     }
 
     #[test]

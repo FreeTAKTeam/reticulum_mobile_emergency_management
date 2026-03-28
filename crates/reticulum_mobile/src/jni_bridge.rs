@@ -14,9 +14,9 @@ use crate::types::{
     AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode, HubSettingsRecord,
     LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
     LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord,
-    PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
-    SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
+    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState,
+    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;

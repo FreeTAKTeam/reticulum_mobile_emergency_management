@@ -3009,6 +3009,46 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connect_peer_establishes_active_link_without_message_send() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("connect_peer_link").await;
+
+        let node_b_status = node_b.get_status();
+        node_a
+            .set_saved_peers(vec![SavedPeerRecord {
+                destination_hex: node_b_status.app_destination_hex.clone(),
+                label: Some("peer-b".to_string()),
+                saved_at_ms: now_ms(),
+            }])
+            .expect("save peer b");
+        node_a
+            .connect_peer(node_b_status.app_destination_hex.clone())
+            .expect("connect peer b");
+
+        let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let peer_ready = node_a
+                .list_peers()
+                .expect("list peers")
+                .into_iter()
+                .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
+                .is_some_and(|peer| peer.saved && peer.active_link);
+            if peer_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never established an active link from connect_peer"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn upsert_eam_replicates_to_native_peer_projection() {
         const EAM_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
         let _guard = test_lock().lock().await;

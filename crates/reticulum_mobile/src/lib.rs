@@ -16,8 +16,8 @@ pub use types::{
     EamTeamSummaryRecord, EventProjectionRecord, HubMode, HubSettingsRecord, LegacyImportPayload,
     LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary,
-    PeerChange, PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerChange,
+    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
     SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus, TelemetryPositionRecord,
     TelemetrySettingsRecord,
 };

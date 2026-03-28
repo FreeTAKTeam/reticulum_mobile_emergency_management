@@ -74,6 +74,7 @@ import {
 } from "../utils/tcpCommunityServers";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
+const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
@@ -162,10 +163,16 @@ type PacketSendOptions = {
 };
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
-  return peer.saved
-    || peer.sources.includes("announce")
-    || peer.sources.includes("hub")
-    || peer.sources.includes("import");
+  if (peer.saved) {
+    return true;
+  }
+
+  if (!peer.sources.includes("announce")) {
+    return false;
+  }
+
+  const seenAt = Math.max(peer.announceLastSeenAt ?? 0, peer.lxmfLastSeenAt ?? 0, peer.lastSeenAt ?? 0);
+  return seenAt > 0 && (nowMs() - seenAt) <= PEER_VISIBLE_UNSAVED_MAX_AGE_MS;
 }
 
 function nowMs(): number {
@@ -751,7 +758,7 @@ export const useNodeStore = defineStore("node", () => {
         continue;
       }
 
-      const retainedSources = peer.sources.filter((source) => source !== "announce");
+      const retainedSources = peer.saved ? peer.sources.filter((source) => source === "import") : [];
       if (retainedSources.length === 0) {
         delete discoveredByDestination[destination];
         continue;
@@ -1028,6 +1035,9 @@ export const useNodeStore = defineStore("node", () => {
     const records = toSavedPeerRecords(nextSavedPeers);
     logSavedPeerProjectionDelta(reason, records);
     if (runtimeProfile === "web") {
+      if (client.value) {
+        await client.value.setSavedPeers(records);
+      }
       persistWebLegacySavedPeers(records);
       applySavedPeersProjection(records);
       return;
@@ -1060,6 +1070,9 @@ export const useNodeStore = defineStore("node", () => {
         );
       }
       if (legacyState.payload.savedPeers.length > 0) {
+        if (client.value) {
+          await client.value.setSavedPeers(legacyState.payload.savedPeers);
+        }
         applySavedPeersProjection(legacyState.payload.savedPeers);
       }
       return;
@@ -1124,23 +1137,38 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function shouldAutoConnectSavedPeer(destination: string): boolean {
+    return autoConnectSavedPeerSkipReason(destination) === undefined;
+  }
+
+  function autoConnectSavedPeerSkipReason(destination: string): string | undefined {
     const normalizedDestination = normalizeDestinationHex(destination);
     if (!settings.autoConnectSaved || !status.value.running) {
-      return false;
+      return "auto-connect disabled or node not running";
     }
     if (isLocalPeerDestination(normalizedDestination) || !savedByDestination[normalizedDestination]) {
-      return false;
+      return "peer is local or not saved";
     }
     const peer = discoveredByDestination[normalizedDestination];
-    if (peer?.saved || peer?.state === "connecting" || peer?.activeLink) {
-      return false;
+    if (peer?.state === "connecting") {
+      return "peer is already connecting";
     }
-    return !autoConnectInFlight.has(normalizedDestination);
+    if (peer?.activeLink) {
+      return "peer already has an active link";
+    }
+    if (autoConnectInFlight.has(normalizedDestination)) {
+      return "connect already in flight";
+    }
+    return undefined;
   }
 
   function scheduleSavedPeerAutoConnect(destination: string, reason: string): void {
     const normalizedDestination = normalizeDestinationHex(destination);
-    if (!shouldAutoConnectSavedPeer(normalizedDestination)) {
+    const skipReason = autoConnectSavedPeerSkipReason(normalizedDestination);
+    if (skipReason) {
+      appendLog(
+        "Debug",
+        `[peers] auto-connect not scheduled destination=${normalizedDestination} reason=${reason}: ${skipReason}.`,
+      );
       return;
     }
     autoConnectInFlight.add(normalizedDestination);
@@ -1161,7 +1189,12 @@ export const useNodeStore = defineStore("node", () => {
         if (!nextDestination) {
           continue;
         }
-        if (!shouldAutoConnectSavedPeer(nextDestination)) {
+        const skipReason = autoConnectSavedPeerSkipReason(nextDestination);
+        if (skipReason) {
+          appendLog(
+            "Debug",
+            `[peers] auto-connect cancelled destination=${nextDestination} reason=${reason}: ${skipReason}.`,
+          );
           autoConnectInFlight.delete(nextDestination);
           continue;
         }
@@ -1784,13 +1817,27 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function connectPeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
-    if (!client.value || !isValidDestinationHex(destination)) {
-      return;
+    if (!isValidDestinationHex(destination)) {
+      const message = `Invalid peer destination: ${destinationRaw}.`;
+      appendLog("Debug", `[peers] connect blocked invalid-destination raw=${destinationRaw}.`);
+      throw new Error(message);
+    }
+    if (!client.value) {
+      const message = "Node client unavailable. Reinitialize the app and try again.";
+      appendLog("Debug", `[peers] connect blocked destination=${destination}: client unavailable.`);
+      throw new Error(message);
+    }
+    if (!status.value.running) {
+      const message = "Start node before connecting to a peer.";
+      appendLog("Debug", `[peers] connect blocked destination=${destination}: node not running.`);
+      throw new Error(message);
     }
     if (isLocalPeerDestination(destination)) {
-      appendLog("Warn", `Skipped self-connect for ${destination}.`);
-      return;
+      const message = `Cannot connect to local destination ${destination}.`;
+      appendLog("Debug", `[peers] connect blocked self destination=${destination}.`);
+      throw new Error(message);
     }
     const savedPeer = savedByDestination[destination];
     const existingPeer = discoveredByDestination[destination];
@@ -1800,9 +1847,10 @@ export const useNodeStore = defineStore("node", () => {
 
     try {
       clearLastError();
-      markPeerManagedState(destination, true);
       logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
-      await client.value.connectPeer(destination);
+      const connectPromise = client.value.connectPeer(destination);
+      markPeerManagedState(destination, true);
+      await connectPromise;
       void settlePeerConnectionState(destination, "connected");
     } catch (error: unknown) {
       const message = errorMessage(error);
@@ -1812,15 +1860,29 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function disconnectPeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
-    if (!client.value || !isValidDestinationHex(destination)) {
-      return;
+    if (!isValidDestinationHex(destination)) {
+      const message = `Invalid peer destination: ${destinationRaw}.`;
+      appendLog("Debug", `[peers] disconnect blocked invalid-destination raw=${destinationRaw}.`);
+      throw new Error(message);
+    }
+    if (!client.value) {
+      const message = "Node client unavailable. Reinitialize the app and try again.";
+      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: client unavailable.`);
+      throw new Error(message);
+    }
+    if (!status.value.running) {
+      const message = "Start node before disconnecting a peer.";
+      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: node not running.`);
+      throw new Error(message);
     }
     try {
       clearLastError();
-      markPeerManagedState(destination, false);
       logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
-      await client.value.disconnectPeer(destination);
+      const disconnectPromise = client.value.disconnectPeer(destination);
+      markPeerManagedState(destination, false);
+      await disconnectPromise;
       await settlePeerConnectionState(destination, "disconnected");
       logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
     } catch (error: unknown) {

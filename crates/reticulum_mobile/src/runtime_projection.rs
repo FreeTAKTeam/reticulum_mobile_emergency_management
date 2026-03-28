@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::event_bus::EventBus;
 use crate::runtime::now_ms;
 use crate::types::{
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent, PeerRecord,
-    PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent, PeerRecord, PeerState,
+    ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
 };
 
 const PERSIST_FILENAME: &str = "runtime_projection.json";
@@ -103,6 +103,20 @@ impl RuntimeProjectionSnapshot {
             .collect::<Vec<_>>()
     }
 
+    pub(crate) fn restored_peers(&self) -> Vec<PeerRecord> {
+        self.peers()
+            .into_iter()
+            .filter(|peer| peer.saved)
+            .collect::<Vec<_>>()
+    }
+
+    pub(crate) fn pruned_for_restore(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.peers =
+            persisted_saved_peers(self.restored_peers().as_slice()).unwrap_or_default();
+        snapshot
+    }
+
     pub(crate) fn messages(&self) -> Vec<MessageRecord> {
         self.messages
             .clone()
@@ -113,6 +127,160 @@ impl RuntimeProjectionSnapshot {
 
     pub(crate) fn sync_status(&self) -> SyncStatus {
         runtime_sync_from_persisted(self.sync_status.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        PersistedPeerRecord, PersistedSyncStatus, ProjectionRevisionEntry,
+        RuntimeProjectionJournal, RuntimeProjectionSnapshot,
+    };
+    use crate::event_bus::EventBus;
+    use crate::types::{PeerRecord, PeerState, ProjectionScope};
+
+    fn build_persisted_peer(
+        destination_hex: &str,
+        saved: Option<bool>,
+        management_state: Option<&str>,
+    ) -> PersistedPeerRecord {
+        PersistedPeerRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: Some(format!("identity-{destination_hex}")),
+            lxmf_destination_hex: Some(format!("lxmf-{destination_hex}")),
+            display_name: Some(format!("peer-{destination_hex}")),
+            app_data: Some("R3AKT,EMergencyMessages,Telemetry".to_string()),
+            state: "connected".to_string(),
+            saved,
+            management_state: management_state.map(str::to_string),
+            stale: false,
+            active_link: false,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: Some(1),
+            last_seen_at_ms: 2,
+            announce_last_seen_at_ms: Some(2),
+            lxmf_last_seen_at_ms: Some(2),
+        }
+    }
+
+    #[test]
+    fn restored_peers_only_keep_saved_entries() {
+        let snapshot = RuntimeProjectionSnapshot {
+            peers: vec![
+                build_persisted_peer("saved-peer", Some(true), None),
+                build_persisted_peer("unsaved-peer", Some(false), None),
+            ],
+            ..RuntimeProjectionSnapshot::default()
+        };
+
+        let restored = snapshot.restored_peers();
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].destination_hex, "saved-peer");
+        assert!(restored[0].saved);
+    }
+
+    #[test]
+    fn restored_peers_respect_legacy_managed_flag() {
+        let snapshot = RuntimeProjectionSnapshot {
+            peers: vec![
+                build_persisted_peer("legacy-managed", None, Some("managed")),
+                build_persisted_peer("legacy-unmanaged", None, Some("unmanaged")),
+            ],
+            ..RuntimeProjectionSnapshot::default()
+        };
+
+        let restored = snapshot.restored_peers();
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].destination_hex, "legacy-managed");
+        assert!(restored[0].saved);
+    }
+
+    #[test]
+    fn pruned_for_restore_drops_unsaved_peers_but_keeps_other_projection_data() {
+        let snapshot = RuntimeProjectionSnapshot {
+            peers: vec![
+                build_persisted_peer("saved-peer", Some(true), None),
+                build_persisted_peer("unsaved-peer", Some(false), None),
+            ],
+            revisions: vec![ProjectionRevisionEntry {
+                scope: ProjectionScope::Peers {},
+                revision: 7,
+                updated_at_ms: 123,
+            }],
+            sync_status: PersistedSyncStatus {
+                phase: "idle".to_string(),
+                active_propagation_node_hex: Some("relay".to_string()),
+                requested_at_ms: Some(456),
+                completed_at_ms: Some(789),
+                messages_received: 0,
+                detail: Some("none".to_string()),
+            },
+            updated_at_ms: 999,
+            ..RuntimeProjectionSnapshot::default()
+        };
+
+        let pruned = snapshot.pruned_for_restore();
+        let restored = pruned.peers();
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].destination_hex, "saved-peer");
+        assert_eq!(
+            pruned.sync_status().active_propagation_node_hex.as_deref(),
+            Some("relay")
+        );
+        assert_eq!(pruned.updated_at_ms, 999);
+    }
+
+    #[test]
+    fn record_peers_persists_saved_entries_only() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let journal = RuntimeProjectionJournal::new(None, EventBus::new());
+            let changed = journal.record_peers(
+                vec![
+                    PeerRecord {
+                        destination_hex: "saved-peer".to_string(),
+                        identity_hex: Some("identity-a".to_string()),
+                        lxmf_destination_hex: Some("lxmf-a".to_string()),
+                        display_name: Some("Saved".to_string()),
+                        app_data: Some("R3AKT,EMergencyMessages".to_string()),
+                        state: PeerState::Connected {},
+                        saved: true,
+                        stale: false,
+                        active_link: true,
+                        last_resolution_error: None,
+                        last_resolution_attempt_at_ms: Some(10),
+                        last_seen_at_ms: 20,
+                        announce_last_seen_at_ms: Some(20),
+                        lxmf_last_seen_at_ms: Some(20),
+                    },
+                    PeerRecord {
+                        destination_hex: "unsaved-peer".to_string(),
+                        identity_hex: Some("identity-b".to_string()),
+                        lxmf_destination_hex: Some("lxmf-b".to_string()),
+                        display_name: Some("Unsaved".to_string()),
+                        app_data: Some("R3AKT,EMergencyMessages".to_string()),
+                        state: PeerState::Disconnected {},
+                        saved: false,
+                        stale: false,
+                        active_link: false,
+                        last_resolution_error: None,
+                        last_resolution_attempt_at_ms: Some(30),
+                        last_seen_at_ms: 40,
+                        announce_last_seen_at_ms: Some(40),
+                        lxmf_last_seen_at_ms: Some(40),
+                    },
+                ],
+                Some("test"),
+            );
+
+            assert!(changed);
+            let current = journal.current_peers().unwrap_or_default();
+            assert_eq!(current.len(), 1);
+            assert_eq!(current[0].destination_hex, "saved-peer");
+            assert!(current[0].saved);
+        });
     }
 }
 
@@ -138,6 +306,14 @@ fn persisted_peer_from_runtime(record: &PeerRecord) -> Option<PersistedPeerRecor
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
     })
+}
+
+fn persisted_saved_peers(records: &[PeerRecord]) -> Option<Vec<PersistedPeerRecord>> {
+    records
+        .iter()
+        .filter(|record| record.saved)
+        .map(persisted_peer_from_runtime)
+        .collect::<Option<Vec<_>>>()
 }
 
 fn persisted_message_from_runtime(record: &MessageRecord) -> Option<PersistedMessageRecord> {
@@ -384,11 +560,7 @@ impl RuntimeProjectionJournal {
     }
 
     pub(crate) fn record_peers(&self, peers: Vec<PeerRecord>, reason: Option<&str>) -> bool {
-        let Some(persisted) = peers
-            .iter()
-            .map(persisted_peer_from_runtime)
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(persisted) = persisted_saved_peers(peers.as_slice()) else {
             return false;
         };
 

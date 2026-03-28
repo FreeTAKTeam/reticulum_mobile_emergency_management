@@ -1848,6 +1848,23 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     lxmfDestinationHex: randomHex32(),
   };
   private readonly connected = new Set<string>();
+  private readonly savedPeers = new Map<string, SavedPeerRecord>();
+
+  private currentPeerRecords(): PeerRecord[] {
+    const destinations = new Set<string>([
+      ...this.savedPeers.keys(),
+      ...this.connected.values(),
+    ]);
+    const now = Date.now();
+    return [...destinations].map((destinationHex) => ({
+      destinationHex,
+      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
+      saved: this.savedPeers.has(destinationHex),
+      stale: false,
+      activeLink: this.connected.has(destinationHex),
+      lastSeenAtMs: now,
+    }));
+  }
 
   async start(config: NodeConfig): Promise<void> {
     this.status = {
@@ -2001,7 +2018,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async listPeers(): Promise<PeerRecord[]> {
-    return [];
+    return this.currentPeerRecords();
   }
 
   async listConversations(): Promise<ConversationRecord[]> {
@@ -2023,14 +2040,30 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
-  async getSavedPeers(): Promise<SavedPeerRecord[]> { return []; }
-  async setSavedPeers(_peers: SavedPeerRecord[]): Promise<void> {}
+  async getSavedPeers(): Promise<SavedPeerRecord[]> {
+    return [...this.savedPeers.values()];
+  }
+  async setSavedPeers(peers: SavedPeerRecord[]): Promise<void> {
+    this.savedPeers.clear();
+    for (const peer of peers) {
+      const destination = normalizeHex(peer.destination);
+      if (!destination) {
+        continue;
+      }
+      this.savedPeers.set(destination, {
+        destination,
+        label: peer.label,
+        savedAt: peer.savedAt,
+      });
+    }
+  }
   async getOperationalSummary(): Promise<OperationalSummary> {
+    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
     return {
       running: this.status.running,
-      peerCountTotal: 0,
-      savedPeerCount: 0,
-      connectedPeerCount: 0,
+      peerCountTotal: this.currentPeerRecords().length,
+      savedPeerCount: this.savedPeers.size,
+      connectedPeerCount,
       conversationCount: 0,
       messageCount: 0,
       eamCount: 0,
@@ -2109,6 +2142,23 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
   private announceTimer: number | null = null;
   private readonly connected = new Set<string>();
+  private readonly savedPeers = new Map<string, SavedPeerRecord>();
+
+  private currentPeerRecords(): PeerRecord[] {
+    const destinations = new Set<string>([
+      ...this.savedPeers.keys(),
+      ...this.connected.values(),
+    ]);
+    const now = Date.now();
+    return [...destinations].map((destinationHex) => ({
+      destinationHex,
+      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
+      saved: this.savedPeers.has(destinationHex),
+      stale: false,
+      activeLink: this.connected.has(destinationHex),
+      lastSeenAtMs: now,
+    }));
+  }
 
   private emitAnnounce(
     destinationHex: string,
@@ -2320,7 +2370,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async listPeers(): Promise<PeerRecord[]> {
-    return [];
+    return this.currentPeerRecords();
   }
 
   async listConversations(): Promise<ConversationRecord[]> {
@@ -2342,14 +2392,30 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
-  async getSavedPeers(): Promise<SavedPeerRecord[]> { return []; }
-  async setSavedPeers(_peers: SavedPeerRecord[]): Promise<void> {}
+  async getSavedPeers(): Promise<SavedPeerRecord[]> {
+    return [...this.savedPeers.values()];
+  }
+  async setSavedPeers(peers: SavedPeerRecord[]): Promise<void> {
+    this.savedPeers.clear();
+    for (const peer of peers) {
+      const destination = normalizeHex(peer.destination);
+      if (!destination) {
+        continue;
+      }
+      this.savedPeers.set(destination, {
+        destination,
+        label: peer.label,
+        savedAt: peer.savedAt,
+      });
+    }
+  }
   async getOperationalSummary(): Promise<OperationalSummary> {
+    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
     return {
       running: this.status.running,
-      peerCountTotal: 0,
-      savedPeerCount: 0,
-      connectedPeerCount: 0,
+      peerCountTotal: this.currentPeerRecords().length,
+      savedPeerCount: this.savedPeers.size,
+      connectedPeerCount,
       conversationCount: 0,
       messageCount: 0,
       eamCount: 0,

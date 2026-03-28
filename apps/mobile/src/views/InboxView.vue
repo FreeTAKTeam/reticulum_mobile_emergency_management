@@ -37,12 +37,16 @@ function destinationsMatch(left: unknown, right: unknown): boolean {
   return normalizedLeft.length > 0 && normalizedLeft === normalizedRight;
 }
 
+function isDraftConversationId(value: string): boolean {
+  return safeLower(value).startsWith("draft:");
+}
+
 const selectedConversation = computed(() => messagingStore.selectedConversation);
 const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
-  const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
-    const seen = new Set<string>();
+const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
+  const seen = new Set<string>();
   return nodeStore.discoveredPeers
     .filter((peer) => peer.activeLink)
     .filter((peer) => peer.saved || nodeStore.savedDestinations.has(peer.destination))
@@ -61,11 +65,8 @@ const activeConversationId = computed(() =>
     })
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 });
-const conversationDestinationHex = computed(() =>
-  selectedConversation.value?.destinationHex ?? "",
-);
 const selectedConversationOption = computed<ConnectedPeerOption | null>(() => {
-  const value = conversationDestinationHex.value;
+  const value = safeTrim(selectedConversation.value?.destinationHex);
   if (!safeTrim(value)) {
     return null;
   }
@@ -85,12 +86,12 @@ const threadDestinationOptions = computed<ConnectedPeerOption[]>(() => {
   }
   return next;
 });
-const selectedDestinationHex = computed(() =>
-  safeTrim(selectedThreadDestinationHex.value) || conversationDestinationHex.value,
+const explicitDestinationHex = computed(() =>
+  safeTrim(selectedConversation.value?.destinationHex) || safeTrim(selectedThreadDestinationHex.value),
 );
 const conversationCount = computed(() => messagingStore.conversations.length);
 const selectedPeer = computed(() => {
-  const destinationHex = safeLower(selectedDestinationHex.value);
+  const destinationHex = safeLower(explicitDestinationHex.value);
   if (!destinationHex) {
     return null;
   }
@@ -105,29 +106,44 @@ const selectedPeerDisplayName = computed(() =>
   safeTrim(selectedPeer.value?.announcedName)
   || safeTrim(selectedPeer.value?.label)
   || safeTrim(selectedConversation.value?.displayName)
+  || safeTrim(activeThreadConversation.value?.displayName)
   || selectedDestinationHex.value,
 );
 function findConversationForSelection(
   destinationHex: string,
   peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex"> | null = null,
 ) {
-  return messagingStore.conversations.find((conversation) =>
+  const matches = messagingStore.conversations.filter((conversation) =>
     destinationsMatch(conversation.destinationHex, destinationHex)
     || destinationsMatch(conversation.destinationHex, peer?.destination ?? "")
     || destinationsMatch(conversation.destinationHex, peer?.lxmfDestinationHex ?? ""),
-  ) ?? null;
+  );
+  return matches.find((conversation) => !isDraftConversationId(conversation.conversationId))
+    ?? matches[0]
+    ?? null;
 }
 
 const activeThreadConversation = computed(() =>
-  findConversationForSelection(selectedDestinationHex.value, selectedPeer.value),
+  findConversationForSelection(explicitDestinationHex.value, selectedPeer.value),
+);
+const selectedDestinationHex = computed(() =>
+  safeTrim(selectedConversation.value?.destinationHex)
+  || safeTrim(activeThreadConversation.value?.destinationHex)
+  || safeTrim(explicitDestinationHex.value),
 );
 const activeThreadMessages = computed(() => {
-  if (!activeThreadConversation.value) {
-    return [];
+  const selectedConversationRecord = selectedConversation.value ?? activeThreadConversation.value;
+  const destinationHex = selectedDestinationHex.value;
+  if (!selectedConversationRecord) {
+    return messagingStore.messagesForDestination(destinationHex);
   }
-  return activeThreadConversation.value.conversationId === activeConversationId.value
-    ? messagingStore.activeMessages
-    : [];
+  const conversationMessages = messagingStore.messagesForConversation(
+    selectedConversationRecord.conversationId,
+  );
+  if (conversationMessages.length > 0) {
+    return conversationMessages;
+  }
+  return messagingStore.messagesForDestination(destinationHex);
 });
 
 const targetLookupNames = computed(() =>
@@ -201,9 +217,8 @@ const targetLongitudeLabel = computed(() =>
 );
 
 function handleSelectConversation(conversationId: string): void {
-  const conversation = messagingStore.conversations.find((item) => item.conversationId === conversationId) ?? null;
   messagingStore.selectConversation(conversationId);
-  selectedThreadDestinationHex.value = conversation?.destinationHex ?? "";
+  selectedThreadDestinationHex.value = "";
   mobilePane.value = "detail";
 }
 
@@ -230,7 +245,8 @@ async function send(bodyUtf8: string): Promise<void> {
     return;
   }
   await messagingStore.sendMessage(destinationHex, bodyUtf8);
-  const matchingConversation = findConversationForSelection(destinationHex, selectedPeer.value);
+  const matchingConversation = messagingStore.selectedConversation
+    ?? findConversationForSelection(destinationHex, selectedPeer.value);
   if (matchingConversation) {
     messagingStore.selectConversation(matchingConversation.conversationId);
   }

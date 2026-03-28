@@ -1380,7 +1380,9 @@ async fn seed_runtime_projection_snapshot(
             *current = sdk_sync_status;
         }
     });
-    for peer in snapshot.peers() {
+    // Only saved peers survive restart. Unsaved discovered peers must be rebuilt
+    // from fresh announces after startup instead of being revived from cache.
+    for peer in snapshot.restored_peers() {
         seed_peer_announces(&mut messaging, &peer);
     }
     for message in snapshot.messages() {
@@ -1704,11 +1706,11 @@ fn spawn_passive_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
                 Some(peer) => {
                     (peer.identity_hex.is_none() || peer.lxmf_destination_hex.is_none())
                         && peer
-                        .last_resolution_attempt_at_ms
-                        .is_none_or(|attempted_at_ms| {
-                            now_ms().saturating_sub(attempted_at_ms)
-                                >= PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS
-                        })
+                            .last_resolution_attempt_at_ms
+                            .is_none_or(|attempted_at_ms| {
+                                now_ms().saturating_sub(attempted_at_ms)
+                                    >= PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS
+                            })
                 }
                 None => false,
             }
@@ -1960,8 +1962,7 @@ async fn resolve_lxmf_destination_desc(
     Ok(lxmf_destination.desc)
 }
 
-#[cfg(feature = "legacy-lxmf-runtime")]
-async fn ensure_lxmf_output_link(
+async fn ensure_output_link(
     state: &NodeRuntimeState,
     desc: DestinationDesc,
 ) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
@@ -2006,6 +2007,14 @@ async fn ensure_lxmf_output_link(
     }
 
     Err(NodeError::Timeout {})
+}
+
+#[cfg(feature = "legacy-lxmf-runtime")]
+async fn ensure_lxmf_output_link(
+    state: &NodeRuntimeState,
+    desc: DestinationDesc,
+) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
+    ensure_output_link(state, desc).await
 }
 
 #[cfg(feature = "legacy-lxmf-runtime")]
@@ -2885,14 +2894,15 @@ pub async fn run_node(
     };
 
     if let Some(snapshot) = projection_journal.load_snapshot() {
-        projection_journal.seed_snapshot(snapshot.clone());
+        let restored_snapshot = snapshot.pruned_for_restore();
+        projection_journal.seed_snapshot(restored_snapshot.clone());
         if let Ok(mut guard) = peers_snapshot.lock() {
-            *guard = snapshot.peers();
+            *guard = restored_snapshot.peers();
         }
         if let Ok(mut guard) = sync_status_snapshot.lock() {
-            *guard = snapshot.sync_status();
+            *guard = restored_snapshot.sync_status();
         }
-        seed_runtime_projection_snapshot(&state, &snapshot).await;
+        seed_runtime_projection_snapshot(&state, &restored_snapshot).await;
     }
 
     let restored_saved_destinations = {
@@ -3483,12 +3493,9 @@ pub async fn run_node(
                     state
                         .sdk
                         .record_peer_changed(&destination_hex, PeerState::Connecting {}, None);
-                    transport.request_path(&dest, None, None).await;
-                    spawn_managed_peer_resolution(
-                        state.clone(),
-                        bus.clone(),
-                        destination_hex.clone(),
-                    );
+                    resolve_peer_route(&state, &bus, &destination_hex).await?;
+                    let desc = ensure_destination_desc(&state, dest, None).await?;
+                    let _link = ensure_output_link(&state, desc).await?;
                     sync_auto_propagation_node(&state, &bus).await;
                     Ok::<(), NodeError>(())
                 }
