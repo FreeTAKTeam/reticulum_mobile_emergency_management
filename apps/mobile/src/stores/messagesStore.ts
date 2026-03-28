@@ -32,6 +32,14 @@ function nowMs(): number {
   return Date.now();
 }
 
+function nextLocalUpdatedAt(previousUpdatedAt?: number): number {
+  const now = nowMs();
+  if (typeof previousUpdatedAt !== "number" || !Number.isFinite(previousUpdatedAt)) {
+    return now;
+  }
+  return Math.max(now, previousUpdatedAt + 1);
+}
+
 function normalizeStatus(value: unknown): EamStatus {
   return value === "Green" || value === "Yellow" || value === "Red" ? value : "Unknown";
 }
@@ -286,7 +294,9 @@ export const useMessagesStore = defineStore("messages", () => {
   const notificationsPrimed = ref(false);
 
   let refreshPromise: Promise<void> | null = null;
+  let refreshQueued = false;
   let teamSummaryPromise: Promise<void> | null = null;
+  let teamSummaryQueued = false;
   const cleanups: Array<() => void> = [];
 
   function webPersist(): void {
@@ -359,15 +369,19 @@ export const useMessagesStore = defineStore("messages", () => {
       return;
     }
     if (refreshPromise) {
+      refreshQueued = true;
       await refreshPromise;
       return;
     }
     const promise = (async () => {
-      const client = getProjectionClient(nodeStore.settings.clientMode);
-      const records = await client.getEams();
-      const nextMessages = toStoredMessages(records);
-      byCallsign.value = nextMessages;
-      await notifyForInboundMessages(nextMessages);
+      do {
+        refreshQueued = false;
+        const client = getProjectionClient(nodeStore.settings.clientMode);
+        const records = await client.getEams();
+        const nextMessages = toStoredMessages(records);
+        byCallsign.value = nextMessages;
+        await notifyForInboundMessages(nextMessages);
+      } while (refreshQueued);
     })();
     refreshPromise = promise;
     try {
@@ -392,13 +406,17 @@ export const useMessagesStore = defineStore("messages", () => {
     }
 
     if (teamSummaryPromise) {
+      teamSummaryQueued = true;
       await teamSummaryPromise;
       return;
     }
 
     const promise = (async () => {
-      const client = getProjectionClient(nodeStore.settings.clientMode);
-      teamSummary.value = toTeamSummary(await client.getEamTeamSummary(teamUid));
+      do {
+        teamSummaryQueued = false;
+        const client = getProjectionClient(nodeStore.settings.clientMode);
+        teamSummary.value = toTeamSummary(await client.getEamTeamSummary(teamUid));
+      } while (teamSummaryQueued);
     })();
     teamSummaryPromise = promise;
     try {
@@ -417,6 +435,9 @@ export const useMessagesStore = defineStore("messages", () => {
 
   function init(): void {
     if (initialized.value) {
+      if (supportsNativeNodeRuntime) {
+        void refreshAll();
+      }
       return;
     }
     initialized.value = true;
@@ -466,7 +487,7 @@ export const useMessagesStore = defineStore("messages", () => {
   ): Promise<void> {
     const normalized = normalizeMessage({
       ...next,
-      updatedAt: optionalNumber(next.updatedAt) ?? nowMs(),
+      updatedAt: nextLocalUpdatedAt(optionalNumber(next.updatedAt)),
     });
     if (!normalized.callsign) {
       return;

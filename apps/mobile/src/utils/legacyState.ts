@@ -41,7 +41,6 @@ export const UI_SETTINGS_STORAGE_KEY = "reticulum.mobile.uiSettings.v1";
 
 export interface NodeUiPreferences {
   clientMode: NodeUiSettings["clientMode"];
-  showOnlyCapabilityVerified: boolean;
 }
 
 export interface LegacyProjectionState {
@@ -153,14 +152,10 @@ function normalizeStringArray(value: unknown): string[] {
 
 function normalizeUiPreferences(
   value: Partial<NodeUiSettings> | Partial<NodeUiPreferences> | null,
-  defaults: Pick<NodeUiSettings, "clientMode" | "showOnlyCapabilityVerified">,
+  defaults: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
   return {
     clientMode: normalizeClientMode(value?.clientMode, defaults.clientMode),
-    showOnlyCapabilityVerified:
-      typeof value?.showOnlyCapabilityVerified === "boolean"
-        ? value.showOnlyCapabilityVerified
-        : defaults.showOnlyCapabilityVerified,
   };
 }
 
@@ -409,7 +404,7 @@ function normalizeLegacyTelemetry(): TelemetryPositionRecord[] {
 }
 
 export function loadUiSettingsProjection(
-  defaults: Pick<NodeUiSettings, "clientMode" | "showOnlyCapabilityVerified">,
+  defaults: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
   const stored = readJson<Partial<NodeUiPreferences>>(UI_SETTINGS_STORAGE_KEY);
   if (stored) {

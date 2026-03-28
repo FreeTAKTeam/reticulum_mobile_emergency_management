@@ -5,7 +5,8 @@ This diagram shows the end-to-end mobile event replication flow over LXMF, inclu
 Current mobile behavior differs from the older store-centric sketch below in two important ways:
 - Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
 - When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local app destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
-- Event replication now uses a narrower native fanout policy than EAM replication: it never targets merely discovered peers, it sends directly to saved or explicitly managed peers that currently have an active link, and it uses relay fallback only for saved peers when a relay is available. Each target send is handled independently so one unavailable peer does not block the rest.
+- The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
+- Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends target saved or explicitly managed peers that are mission-ready and currently direct-reachable (`active_link`, `communication_ready`, or native `Connected` state). If a saved peer is not directly reachable and a propagation relay is active, Rust sends that target via propagation instead of stalling on direct delivery first. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
 
 ```mermaid
 sequenceDiagram
@@ -175,8 +176,8 @@ Transport:
 
 Routing:
 - Native `upsert_event()` fanout never includes merely discovered peers.
-- Event direct sends are scoped to saved or explicitly managed peers with `active_link=true`.
-- Event relay fallback is used only for saved peers when a propagation relay is active and the peer is relay-eligible.
+- Event direct sends are scoped to saved or explicitly managed peers that are mission-ready and direct-reachable (`active_link=true`, `communication_ready=true`, or native `state=Connected`).
+- Saved peers that are not currently direct-reachable are sent via propagation when an active relay is available; merely discovered peers are never used as relay targets.
 - Each event target is attempted independently. One target timing out or returning a network error does not cancel the other target attempts.
 - Broadcast or direct send over the peer's **app destination** (`r3akt/emergency` path).
 
@@ -371,6 +372,7 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 - Rust owns the native app-state store, projection versioning, and `ProjectionInvalidated` events.
 - Mobile settings, saved peers, EAMs, events, telemetry positions, and conversation/message projections are queried from native state on mobile builds.
 - Peer availability on mobile now follows the configured stale window instead of a short announce-freshness heuristic. A peer can remain `Ready` without a fresh announce while its app and LXMF destinations are still known and the configured stale window has not expired; `active_link` is tracked separately from availability.
+- Native `connectPeer()` now does more than request a route: it resolves the saved peer destination, opens an output link, and waits for `LinkEvent::Activated` before the runtime treats that peer as having a direct active link.
 - TypeScript stores on mobile are being reduced to:
   - view filters and drafts
   - command dispatch
@@ -381,6 +383,7 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 - The legacy `rmap.world:4242` placeholder is treated as unset and is normalized to that first community server during migration and settings persistence.
 - Pre-start app-state/projection queries are valid through the JNI bridge; only runtime transport commands still require an initialized node.
 - Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
+- Saved peers are rehydrated into the Rust managed-peer set during runtime startup, so the app does not depend on a later UI-driven connect pass before EAM/Event/message sends can target intentional peers.
 
 This cutover is incomplete. Telemetry permission/fix acquisition still originates in TypeScript, and remaining long-session validation must prove that every operational lifecycle is fully native-owned.
 

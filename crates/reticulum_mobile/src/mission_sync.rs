@@ -155,8 +155,18 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
     metadata.command_present = true;
     let entries = map.as_slice();
     parse_string_field(entries, &["command_id"], &mut metadata.command_id, false);
-    parse_string_field(entries, &["correlation_id"], &mut metadata.correlation_id, false);
-    parse_string_field(entries, &["command_type"], &mut metadata.command_type, false);
+    parse_string_field(
+        entries,
+        &["correlation_id"],
+        &mut metadata.correlation_id,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["command_type"],
+        &mut metadata.command_type,
+        false,
+    );
     if let Some(args) = msgpack_get_named(entries, &["args"]) {
         if let Some(args_entries) = msgpack_map_entries(args) {
             parse_string_field(
@@ -173,7 +183,12 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
             );
             parse_string_field(
                 args_entries,
-                &["team_member_uid", "teamMemberUid", "subject_id", "subjectId"],
+                &[
+                    "team_member_uid",
+                    "teamMemberUid",
+                    "subject_id",
+                    "subjectId",
+                ],
                 &mut metadata.team_member_uid,
                 false,
             );
@@ -200,7 +215,12 @@ fn parse_result_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMeta
     metadata.result_present = true;
     let entries = map.as_slice();
     parse_string_field(entries, &["command_id"], &mut metadata.command_id, false);
-    parse_string_field(entries, &["correlation_id"], &mut metadata.correlation_id, false);
+    parse_string_field(
+        entries,
+        &["correlation_id"],
+        &mut metadata.correlation_id,
+        false,
+    );
     parse_string_field(entries, &["status"], &mut metadata.result_status, true);
 }
 
@@ -226,15 +246,15 @@ fn parse_event_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetad
                 &mut metadata.event_uid,
                 false,
             );
+            parse_string_field(payload_entries, &["eam_uid"], &mut metadata.eam_uid, false);
             parse_string_field(
                 payload_entries,
-                &["eam_uid"],
-                &mut metadata.eam_uid,
-                false,
-            );
-            parse_string_field(
-                payload_entries,
-                &["team_member_uid", "teamMemberUid", "subject_id", "subjectId"],
+                &[
+                    "team_member_uid",
+                    "teamMemberUid",
+                    "subject_id",
+                    "subjectId",
+                ],
                 &mut metadata.team_member_uid,
                 false,
             );
@@ -321,10 +341,7 @@ mod tests {
                     (
                         MsgPackValue::from("args"),
                         MsgPackValue::Map(vec![
-                            (
-                                MsgPackValue::from("eam_uid"),
-                                MsgPackValue::from("eam-123"),
-                            ),
+                            (MsgPackValue::from("eam_uid"), MsgPackValue::from("eam-123")),
                             (
                                 MsgPackValue::from("team_member_uid"),
                                 MsgPackValue::from("member-1"),
@@ -372,10 +389,7 @@ mod tests {
                         MsgPackValue::from("payload"),
                         MsgPackValue::Map(vec![
                             (MsgPackValue::from("eam_uid"), MsgPackValue::from("eam-123")),
-                            (
-                                MsgPackValue::from("team_uid"),
-                                MsgPackValue::from("team-1"),
-                            ),
+                            (MsgPackValue::from("team_uid"), MsgPackValue::from("team-1")),
                         ]),
                     ),
                 ]),

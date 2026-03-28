@@ -61,7 +61,6 @@ import {
   formatAnnounceAppData,
   hasCapability,
   isValidDestinationHex,
-  matchesEmergencyCapabilities,
   normalizeDisplayName,
   normalizeDestinationHex,
   parseCapabilityTokens,
@@ -75,11 +74,14 @@ import {
 } from "../utils/tcpCommunityServers";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
+const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
 const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
 const AUTO_CONNECT_SERIAL_DELAY_MS = 300;
+const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
+const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -97,10 +99,8 @@ const EMPTY_SYNC_STATUS: SyncStatus = {
 const EMPTY_OPERATIONAL_SUMMARY = {
   running: false,
   peerCountTotal: 0,
-  peerCountCommunicationReady: 0,
-  peerCountMissionReady: 0,
-  peerCountRelayEligible: 0,
   savedPeerCount: 0,
+  connectedPeerCount: 0,
   conversationCount: 0,
   messageCount: 0,
   eamCount: 0,
@@ -125,7 +125,6 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
-  showOnlyCapabilityVerified: true,
   telemetry: {
     enabled: false,
     publishIntervalSeconds: 10,
@@ -164,11 +163,16 @@ type PacketSendOptions = {
 };
 
 function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
-  return peer.managementState === "managed"
-    || peer.sources.includes("hub")
-    || peer.sources.includes("import")
-    || peer.communicationReady
-    || peer.availabilityState !== "unseen";
+  if (peer.saved) {
+    return true;
+  }
+
+  if (!peer.sources.includes("announce")) {
+    return false;
+  }
+
+  const seenAt = Math.max(peer.announceLastSeenAt ?? 0, peer.lxmfLastSeenAt ?? 0, peer.lastSeenAt ?? 0);
+  return seenAt > 0 && (nowMs() - seenAt) <= PEER_VISIBLE_UNSAVED_MAX_AGE_MS;
 }
 
 function nowMs(): number {
@@ -212,41 +216,18 @@ function toUiPeerState(
   return "disconnected";
 }
 
-function toUiManagementState(
-  state: PeerRecord["managementState"] | PeerChangedEvent["change"]["managementState"] | undefined,
-): DiscoveredPeer["managementState"] {
-  return state === "Managed" ? "managed" : "unmanaged";
-}
-
-function toUiAvailabilityState(
-  state: PeerRecord["availabilityState"] | PeerChangedEvent["change"]["availabilityState"] | undefined,
-): DiscoveredPeer["availabilityState"] {
-  switch (state) {
-    case "Discovered":
-      return "discovered";
-    case "Resolved":
-      return "resolved";
-    case "Ready":
-      return "ready";
-    default:
-      return "unseen";
+function peerSortRank(peer: Pick<DiscoveredPeer, "saved" | "activeLink" | "lastSeenAt">): number {
+  let rank = 0;
+  if (peer.saved) {
+    rank += 2;
   }
-}
-
-function availabilityRank(peer: Pick<DiscoveredPeer, "availabilityState" | "managementState">): number {
-  const availabilityRankValue = (() => {
-    switch (peer.availabilityState) {
-      case "ready":
-        return 4;
-      case "resolved":
-        return 3;
-      case "discovered":
-        return 2;
-      default:
-        return 1;
-    }
-  })();
-  return availabilityRankValue + (peer.managementState === "managed" ? 1 : 0);
+  if (peer.activeLink) {
+    rank += 4;
+  }
+  if (peer.lastSeenAt > 0) {
+    rank += 1;
+  }
+  return rank;
 }
 
 function peerExposesPropagationCapability(appData?: string): boolean {
@@ -372,11 +353,10 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
 }
 
 function toUiSettingsProjection(
-  next: Pick<NodeUiSettings, "clientMode" | "showOnlyCapabilityVerified">,
+  next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
   return {
     clientMode: normalizeClientMode(next.clientMode),
-    showOnlyCapabilityVerified: Boolean(next.showOnlyCapabilityVerified),
   };
 }
 
@@ -395,7 +375,6 @@ function normalizeAppSettingsRecord(
       runtimeSettings.tcpClients,
       tcpFallback,
     ),
-    showOnlyCapabilityVerified: uiSettings.showOnlyCapabilityVerified,
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     hub: {
       ...DEFAULT_SETTINGS.hub,
@@ -483,6 +462,9 @@ export const useNodeStore = defineStore("node", () => {
   let refreshSettingsPromise: Promise<void> | null = null;
   let refreshSavedPeersPromise: Promise<void> | null = null;
   let refreshOperationalSummaryPromise: Promise<void> | null = null;
+  let refreshOperationalSummaryTimerId: number | null = null;
+  let refreshOperationalSummaryQueued = false;
+  let refreshOperationalSummaryLastRunAt = 0;
   let initPromise: Promise<void> | null = null;
   const startupSettling = ref(false);
   const autoConnectQueueActive = ref(false);
@@ -589,14 +571,9 @@ export const useNodeStore = defineStore("node", () => {
     const base: DiscoveredPeer = existing ?? {
       destination,
       lastSeenAt: nowMs(),
-      verifiedCapability: false,
       sources,
       state: "disconnected",
-      managementState: "unmanaged",
-      availabilityState: "unseen",
-      communicationReady: false,
-      missionReady: false,
-      relayEligible: false,
+      saved: false,
       stale: false,
       activeLink: false,
     };
@@ -615,11 +592,7 @@ export const useNodeStore = defineStore("node", () => {
       appData: patch.appData ?? base.appData,
       hops: patch.hops ?? base.hops,
       interfaceHex: patch.interfaceHex ?? base.interfaceHex,
-      managementState: patch.managementState ?? base.managementState,
-      availabilityState: patch.availabilityState ?? base.availabilityState,
-      communicationReady: patch.communicationReady ?? base.communicationReady,
-      missionReady: patch.missionReady ?? base.missionReady,
-      relayEligible: patch.relayEligible ?? base.relayEligible,
+      saved: patch.saved ?? base.saved,
       stale: patch.stale ?? base.stale,
       activeLink: patch.activeLink ?? base.activeLink,
       lastError: Object.prototype.hasOwnProperty.call(patch, "lastError")
@@ -629,7 +602,6 @@ export const useNodeStore = defineStore("node", () => {
         ? patch.lastResolutionError
         : base.lastResolutionError,
       lastResolutionAttemptAt: patch.lastResolutionAttemptAt ?? base.lastResolutionAttemptAt,
-      lastReadyAt: patch.lastReadyAt ?? base.lastReadyAt,
       lastSeenAt: patch.lastSeenAt ?? base.lastSeenAt,
     };
   }
@@ -729,18 +701,12 @@ export const useNodeStore = defineStore("node", () => {
         lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
         lastSeenAt: peer.lastSeenAtMs,
         state: toUiPeerState(peer.state),
-        managementState: toUiManagementState(peer.managementState),
-        availabilityState: toUiAvailabilityState(peer.availabilityState),
-        communicationReady: peer.communicationReady,
-        missionReady: peer.missionReady,
-        relayEligible: peer.relayEligible,
+        saved: peer.saved,
         stale: peer.stale,
         activeLink: peer.activeLink,
         lastError: peer.lastResolutionError,
         lastResolutionError: peer.lastResolutionError,
         lastResolutionAttemptAt: peer.lastResolutionAttemptAtMs,
-        lastReadyAt: peer.lastReadyAtMs,
-        verifiedCapability: matchesEmergencyCapabilities(peer.appData ?? ""),
       },
       "announce",
     );
@@ -766,21 +732,12 @@ export const useNodeStore = defineStore("node", () => {
         label: saved?.label ?? discoveredByDestination[destination]?.label,
         appData: change.appData ?? discoveredByDestination[destination]?.appData,
         state: change.state ? toUiPeerState(change.state) : undefined,
-        managementState: change.managementState
-          ? toUiManagementState(change.managementState)
-          : undefined,
-        availabilityState: change.availabilityState
-          ? toUiAvailabilityState(change.availabilityState)
-          : undefined,
-        communicationReady: change.communicationReady,
-        missionReady: change.missionReady,
-        relayEligible: change.relayEligible,
+        saved: change.saved,
         stale: change.stale,
         activeLink: change.activeLink,
         lastError: change.lastError,
         lastResolutionError: change.lastResolutionError,
         lastResolutionAttemptAt: change.lastResolutionAttemptAtMs,
-        lastReadyAt: change.lastReadyAtMs,
         lastSeenAt: change.lastSeenAtMs,
         announceLastSeenAt: change.announceLastSeenAtMs,
         lxmfLastSeenAt: change.lxmfLastSeenAtMs,
@@ -801,7 +758,7 @@ export const useNodeStore = defineStore("node", () => {
         continue;
       }
 
-      const retainedSources = peer.sources.filter((source) => source !== "announce");
+      const retainedSources = peer.saved ? peer.sources.filter((source) => source === "import") : [];
       if (retainedSources.length === 0) {
         delete discoveredByDestination[destination];
         continue;
@@ -814,11 +771,7 @@ export const useNodeStore = defineStore("node", () => {
         lxmfDestinationHex: undefined,
         announceLastSeenAt: undefined,
         lxmfLastSeenAt: undefined,
-        state: peer.managementState === "managed" ? "connecting" : "disconnected",
-        availabilityState: "unseen",
-        communicationReady: false,
-        missionReady: false,
-        relayEligible: false,
+        state: peer.saved ? "connecting" : "disconnected",
         stale: false,
         activeLink: false,
         lastError: undefined,
@@ -833,7 +786,7 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     upsertDiscovered(destination, {
-      managementState: managed ? "managed" : "unmanaged",
+      saved: managed,
       state: managed ? "connecting" : "disconnected",
       activeLink: managed ? discoveredByDestination[destination]?.activeLink : false,
       lastError: undefined,
@@ -877,11 +830,7 @@ export const useNodeStore = defineStore("node", () => {
     return [
       `destination=${destination}`,
       `state=${peer.state}`,
-      `management=${peer.managementState}`,
-      `availability=${peer.availabilityState}`,
-      `communicationReady=${peer.communicationReady}`,
-      `missionReady=${peer.missionReady}`,
-      `relayEligible=${peer.relayEligible}`,
+      `saved=${peer.saved}`,
       `stale=${peer.stale}`,
       `activeLink=${peer.activeLink}`,
       `label=${peer.label ?? "-"}`,
@@ -889,13 +838,11 @@ export const useNodeStore = defineStore("node", () => {
       `identity=${peer.identityHex ?? "-"}`,
       `lxmf=${peer.lxmfDestinationHex ?? "-"}`,
       `sources=${peer.sources.join("+") || "-"}`,
-      `verified=${peer.verifiedCapability}`,
     ].join(" ");
   }
 
   function applyUiSettingsProjection(next: NodeUiPreferences): void {
     settings.clientMode = normalizeClientMode(next.clientMode);
-    settings.showOnlyCapabilityVerified = Boolean(next.showOnlyCapabilityVerified);
   }
 
   function applySettingsProjection(next: NodeUiSettings): void {
@@ -920,11 +867,8 @@ export const useNodeStore = defineStore("node", () => {
         destination,
         {
           label: peer.label,
-          verifiedCapability: discoveredByDestination[destination]?.verifiedCapability ?? false,
-          lastSeenAt: peer.savedAt,
-          communicationReady: discoveredByDestination[destination]?.communicationReady ?? false,
-          missionReady: discoveredByDestination[destination]?.missionReady ?? false,
-          relayEligible: discoveredByDestination[destination]?.relayEligible ?? false,
+          saved: true,
+          lastSeenAt: discoveredByDestination[destination]?.lastSeenAt ?? 0,
           stale: discoveredByDestination[destination]?.stale ?? false,
           activeLink: discoveredByDestination[destination]?.activeLink ?? false,
         },
@@ -941,6 +885,31 @@ export const useNodeStore = defineStore("node", () => {
       }
       peer.sources = peer.sources.filter((source) => source !== "import");
     }
+  }
+
+  function savedPeerProjectionDelta(records: SavedPeerRecord[]): {
+    added: string[];
+    removed: string[];
+  } {
+    const nextDestinations = new Set(records.map((peer) => normalizeDestinationHex(peer.destination)));
+    const previousDestinations = new Set(Object.keys(savedByDestination));
+    const added = [...nextDestinations].filter((destination) => !previousDestinations.has(destination));
+    const removed = [...previousDestinations].filter((destination) => !nextDestinations.has(destination));
+    return { added, removed };
+  }
+
+  function logSavedPeerProjectionDelta(
+    reason: string,
+    records: SavedPeerRecord[],
+  ): void {
+    const { added, removed } = savedPeerProjectionDelta(records);
+    if (added.length === 0 && removed.length === 0) {
+      return;
+    }
+    appendLog(
+      "Debug",
+      `[saved-peers] ${reason} added=[${added.join(",") || "-"}] removed=[${removed.join(",") || "-"}] total=${records.length}.`,
+    );
   }
 
   async function refreshSettingsProjection(): Promise<void> {
@@ -980,6 +949,7 @@ export const useNodeStore = defineStore("node", () => {
     }
     refreshSavedPeersPromise = (async () => {
       const peers = await client.value!.getSavedPeers();
+      logSavedPeerProjectionDelta("native projection", peers);
       applySavedPeersProjection(peers);
     })()
       .catch((error: unknown) => {
@@ -1011,6 +981,35 @@ export const useNodeStore = defineStore("node", () => {
     return refreshOperationalSummaryPromise;
   }
 
+  function scheduleOperationalSummaryRefresh(delayMs = PROJECTION_REFRESH_DEBOUNCE_MS): void {
+    refreshOperationalSummaryQueued = true;
+    if (refreshOperationalSummaryTimerId !== null) {
+      return;
+    }
+
+    const elapsed = nowMs() - refreshOperationalSummaryLastRunAt;
+    const nextDelay = Math.max(
+      delayMs,
+      Math.max(0, OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS - elapsed),
+    );
+
+    refreshOperationalSummaryTimerId = window.setTimeout(() => {
+      refreshOperationalSummaryTimerId = null;
+      if (!refreshOperationalSummaryQueued) {
+        return;
+      }
+      refreshOperationalSummaryQueued = false;
+      refreshOperationalSummaryLastRunAt = nowMs();
+      void refreshOperationalSummaryProjection()
+        .catch(() => undefined)
+        .finally(() => {
+          if (refreshOperationalSummaryQueued) {
+            scheduleOperationalSummaryRefresh(delayMs);
+          }
+        });
+    }, nextDelay);
+  }
+
   async function persistSettingsProjection(nextSettings: NodeUiSettings = settings): Promise<void> {
     const normalizedUiSettings = toUiSettingsProjection(nextSettings);
     storeUiSettingsProjection(normalizedUiSettings);
@@ -1029,9 +1028,16 @@ export const useNodeStore = defineStore("node", () => {
     await refreshOperationalSummaryProjection();
   }
 
-  async function persistSavedPeersProjection(nextSavedPeers: Record<string, SavedPeer>): Promise<void> {
+  async function persistSavedPeersProjection(
+    nextSavedPeers: Record<string, SavedPeer>,
+    reason = "projection update",
+  ): Promise<void> {
     const records = toSavedPeerRecords(nextSavedPeers);
+    logSavedPeerProjectionDelta(reason, records);
     if (runtimeProfile === "web") {
+      if (client.value) {
+        await client.value.setSavedPeers(records);
+      }
       persistWebLegacySavedPeers(records);
       applySavedPeersProjection(records);
       return;
@@ -1064,6 +1070,9 @@ export const useNodeStore = defineStore("node", () => {
         );
       }
       if (legacyState.payload.savedPeers.length > 0) {
+        if (client.value) {
+          await client.value.setSavedPeers(legacyState.payload.savedPeers);
+        }
         applySavedPeersProjection(legacyState.payload.savedPeers);
       }
       return;
@@ -1128,23 +1137,38 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function shouldAutoConnectSavedPeer(destination: string): boolean {
+    return autoConnectSavedPeerSkipReason(destination) === undefined;
+  }
+
+  function autoConnectSavedPeerSkipReason(destination: string): string | undefined {
     const normalizedDestination = normalizeDestinationHex(destination);
     if (!settings.autoConnectSaved || !status.value.running) {
-      return false;
+      return "auto-connect disabled or node not running";
     }
     if (isLocalPeerDestination(normalizedDestination) || !savedByDestination[normalizedDestination]) {
-      return false;
+      return "peer is local or not saved";
     }
     const peer = discoveredByDestination[normalizedDestination];
-    if (peer?.managementState === "managed" || peer?.state === "connecting" || peer?.activeLink) {
-      return false;
+    if (peer?.state === "connecting") {
+      return "peer is already connecting";
     }
-    return !autoConnectInFlight.has(normalizedDestination);
+    if (peer?.activeLink) {
+      return "peer already has an active link";
+    }
+    if (autoConnectInFlight.has(normalizedDestination)) {
+      return "connect already in flight";
+    }
+    return undefined;
   }
 
   function scheduleSavedPeerAutoConnect(destination: string, reason: string): void {
     const normalizedDestination = normalizeDestinationHex(destination);
-    if (!shouldAutoConnectSavedPeer(normalizedDestination)) {
+    const skipReason = autoConnectSavedPeerSkipReason(normalizedDestination);
+    if (skipReason) {
+      appendLog(
+        "Debug",
+        `[peers] auto-connect not scheduled destination=${normalizedDestination} reason=${reason}: ${skipReason}.`,
+      );
       return;
     }
     autoConnectInFlight.add(normalizedDestination);
@@ -1165,7 +1189,12 @@ export const useNodeStore = defineStore("node", () => {
         if (!nextDestination) {
           continue;
         }
-        if (!shouldAutoConnectSavedPeer(nextDestination)) {
+        const skipReason = autoConnectSavedPeerSkipReason(nextDestination);
+        if (skipReason) {
+          appendLog(
+            "Debug",
+            `[peers] auto-connect cancelled destination=${nextDestination} reason=${reason}: ${skipReason}.`,
+          );
           autoConnectInFlight.delete(nextDestination);
           continue;
         }
@@ -1237,7 +1266,6 @@ export const useNodeStore = defineStore("node", () => {
         ? event.displayName.trim()
         : undefined);
     const capabilityText = extractAnnounceCapabilityText(event.appData);
-    const verifiedCapability = matchesEmergencyCapabilities(event.appData);
     const knownLxmfDestination = isValidDestinationHex(identityHex)
       ? lxmfDestinationByIdentity[identityHex]
       : undefined;
@@ -1261,7 +1289,6 @@ export const useNodeStore = defineStore("node", () => {
         label: saved?.label,
         announceLastSeenAt: event.receivedAtMs,
         lastSeenAt: event.receivedAtMs,
-        verifiedCapability,
       },
       "announce",
     );
@@ -1543,7 +1570,6 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
-        void refreshOperationalSummaryProjection();
         void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
@@ -1556,7 +1582,6 @@ export const useNodeStore = defineStore("node", () => {
         }
         presenceNow.value = nowMs();
         applyPeerChanged(event.change);
-        void refreshOperationalSummaryProjection();
         logUi(
           "Debug",
           `[peers] peerChanged destination=${destination} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(destination)}.`,
@@ -1569,10 +1594,9 @@ export const useNodeStore = defineStore("node", () => {
         }
         presenceNow.value = peer.lastSeenAtMs;
         upsertResolvedPeer(peer);
-        void refreshOperationalSummaryProjection();
         logUi(
           "Debug",
-          `[peers] peerResolved destination=${destination} state=${peer.state} management=${peer.managementState} availability=${peer.availabilityState} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
+          `[peers] peerResolved destination=${destination} state=${peer.state} saved=${peer.saved} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
         );
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
@@ -1585,7 +1609,6 @@ export const useNodeStore = defineStore("node", () => {
             {
               label: existing?.label ?? saved?.label,
               announcedName: existing?.announcedName,
-              verifiedCapability: existing?.verifiedCapability ?? false,
             },
             "hub",
           );
@@ -1601,11 +1624,7 @@ export const useNodeStore = defineStore("node", () => {
             void refreshSavedPeersProjection();
             break;
           case "OperationalSummary":
-            void refreshOperationalSummaryProjection();
-            break;
-          case "Peers":
-          case "SyncStatus":
-            void refreshMessagingState();
+            scheduleOperationalSummaryRefresh();
             break;
           default:
             break;
@@ -1681,7 +1700,6 @@ export const useNodeStore = defineStore("node", () => {
         upsertResolvedPeer(peer);
       }
       syncStatus.value = { ...nextSyncStatus };
-      await refreshOperationalSummaryProjection();
     })()
       .catch((error: unknown) => {
         appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
@@ -1736,6 +1754,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery("startup");
       await refreshHubRegistrationState(true);
@@ -1760,6 +1779,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.stop();
       appendLog("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      await refreshOperationalSummaryProjection();
       await refreshHubRegistrationState(false);
 
       for (const destination of Object.keys(discoveredByDestination)) {
@@ -1780,6 +1800,7 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery("restart");
       await refreshHubRegistrationState(true);
@@ -1796,20 +1817,40 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function connectPeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
-    if (!client.value || !isValidDestinationHex(destination)) {
-      return;
+    if (!isValidDestinationHex(destination)) {
+      const message = `Invalid peer destination: ${destinationRaw}.`;
+      appendLog("Debug", `[peers] connect blocked invalid-destination raw=${destinationRaw}.`);
+      throw new Error(message);
+    }
+    if (!client.value) {
+      const message = "Node client unavailable. Reinitialize the app and try again.";
+      appendLog("Debug", `[peers] connect blocked destination=${destination}: client unavailable.`);
+      throw new Error(message);
+    }
+    if (!status.value.running) {
+      const message = "Start node before connecting to a peer.";
+      appendLog("Debug", `[peers] connect blocked destination=${destination}: node not running.`);
+      throw new Error(message);
     }
     if (isLocalPeerDestination(destination)) {
-      appendLog("Warn", `Skipped self-connect for ${destination}.`);
-      return;
+      const message = `Cannot connect to local destination ${destination}.`;
+      appendLog("Debug", `[peers] connect blocked self destination=${destination}.`);
+      throw new Error(message);
+    }
+    const savedPeer = savedByDestination[destination];
+    const existingPeer = discoveredByDestination[destination];
+    if (!savedPeer && !existingPeer?.saved) {
+      throw new Error(`Save peer ${destination} before connecting.`);
     }
 
     try {
       clearLastError();
-      markPeerManagedState(destination, true);
       logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
-      await client.value.connectPeer(destination);
+      const connectPromise = client.value.connectPeer(destination);
+      markPeerManagedState(destination, true);
+      await connectPromise;
       void settlePeerConnectionState(destination, "connected");
     } catch (error: unknown) {
       const message = errorMessage(error);
@@ -1819,15 +1860,29 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function disconnectPeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
-    if (!client.value || !isValidDestinationHex(destination)) {
-      return;
+    if (!isValidDestinationHex(destination)) {
+      const message = `Invalid peer destination: ${destinationRaw}.`;
+      appendLog("Debug", `[peers] disconnect blocked invalid-destination raw=${destinationRaw}.`);
+      throw new Error(message);
+    }
+    if (!client.value) {
+      const message = "Node client unavailable. Reinitialize the app and try again.";
+      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: client unavailable.`);
+      throw new Error(message);
+    }
+    if (!status.value.running) {
+      const message = "Start node before disconnecting a peer.";
+      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: node not running.`);
+      throw new Error(message);
     }
     try {
       clearLastError();
-      markPeerManagedState(destination, false);
       logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
-      await client.value.disconnectPeer(destination);
+      const disconnectPromise = client.value.disconnectPeer(destination);
+      markPeerManagedState(destination, false);
+      await disconnectPromise;
       await settlePeerConnectionState(destination, "disconnected");
       logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
     } catch (error: unknown) {
@@ -1914,7 +1969,7 @@ export const useNodeStore = defineStore("node", () => {
         savedAt: nowMs(),
       },
     };
-    await persistSavedPeersProjection(nextSavedPeers);
+    await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
   }
 
   async function unsavePeer(destinationRaw: string): Promise<void> {
@@ -1922,7 +1977,7 @@ export const useNodeStore = defineStore("node", () => {
     const destination = normalizeDestinationHex(destinationRaw);
     const nextSavedPeers = { ...savedByDestination };
     delete nextSavedPeers[destination];
-    await persistSavedPeersProjection(nextSavedPeers);
+    await persistSavedPeersProjection(nextSavedPeers, `explicit unsave ${destination}`);
   }
 
   async function setPeerLabel(destinationRaw: string, label: string): Promise<void> {
@@ -1937,7 +1992,7 @@ export const useNodeStore = defineStore("node", () => {
           label: normalizedLabel || undefined,
         },
       };
-      await persistSavedPeersProjection(nextSavedPeers);
+      await persistSavedPeersProjection(nextSavedPeers, `label update ${destination}`);
     }
     if (discoveredByDestination[destination]) {
       discoveredByDestination[destination].label = normalizedLabel || undefined;
@@ -1967,10 +2022,6 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (next.announceIntervalSeconds !== undefined) {
       settings.announceIntervalSeconds = next.announceIntervalSeconds;
-    }
-    if (typeof next.showOnlyCapabilityVerified === "boolean") {
-      settings.showOnlyCapabilityVerified = next.showOnlyCapabilityVerified;
-      uiSettingsChanged = true;
     }
     if (next.telemetry) {
       settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
@@ -2025,14 +2076,14 @@ export const useNodeStore = defineStore("node", () => {
         destination,
         {
           label: peer.label?.trim() || undefined,
-          verifiedCapability: discoveredByDestination[destination]?.verifiedCapability ?? false,
-          lastSeenAt: nowMs(),
+          saved: true,
+          lastSeenAt: discoveredByDestination[destination]?.lastSeenAt ?? 0,
         },
         "import",
       );
     }
     void init()
-      .then(() => persistSavedPeersProjection({ ...savedByDestination }))
+      .then(() => persistSavedPeersProjection({ ...savedByDestination }, `peer list import (${mode})`))
       .catch((error: unknown) => {
         appendLog("Warn", `Saved-peer projection persist failed: ${errorMessage(error)}`);
       });
@@ -2049,9 +2100,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function peerPresenceTimestamp(
-    peer: Pick<DiscoveredPeer, "lastReadyAt" | "lastSeenAt">,
+    peer: Pick<DiscoveredPeer, "lastSeenAt">,
   ): number | undefined {
-    const seenAt = Math.max(peer.lastReadyAt ?? 0, peer.lastSeenAt ?? 0);
+    const seenAt = peer.lastSeenAt ?? 0;
     return seenAt > 0 ? seenAt : undefined;
   }
 
@@ -2068,128 +2119,76 @@ export const useNodeStore = defineStore("node", () => {
     return peer.state;
   }
 
-function peerPresenceState(
-  peer: Pick<DiscoveredPeer, "availabilityState" | "activeLink">,
-): "online" | "offline" {
-  return peer.activeLink || peer.availabilityState === "ready" ? "online" : "offline";
-}
-
-function peerHasKnownLxmfRoute(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
-): boolean {
-  const appDestinationHex = normalizeDestinationHex(peer.destination);
-  const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-  return isValidDestinationHex(appDestinationHex)
-    && isValidDestinationHex(lxmfDestinationHex)
-    && appDestinationHex !== lxmfDestinationHex;
-}
-
-function peerHasKnownMissionRoute(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
-): boolean {
-  return peerHasKnownLxmfRoute(peer);
-}
-
-function peerHasDirectLxmfDelivery(
-  peer: Pick<DiscoveredPeer, "communicationReady">,
-): boolean {
-  return peer.communicationReady;
-}
-
-function peerCanAcceptMissionTraffic(
-  peer: Pick<
-    DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "communicationReady" | "missionReady"
-  >,
-): boolean {
-  return peer.communicationReady && peer.missionReady && peerHasKnownMissionRoute(peer);
-}
-
-function peerCanRelayMissionTraffic(
-  peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "relayEligible">,
-): boolean {
-  return peer.relayEligible && peerHasKnownMissionRoute(peer);
-}
-
-function peerIsManagedForAutoFanout(
-  peer: Pick<DiscoveredPeer, "destination" | "managementState">,
-  savedByDestination: Record<string, SavedPeer>,
-): boolean {
-  const destination = normalizeDestinationHex(peer.destination);
-  return peer.managementState === "managed" || Boolean(savedByDestination[destination]);
-}
-
-function peerHasEventRoute(
-  peer: Pick<
-    DiscoveredPeer,
-    "destination" | "lxmfDestinationHex" | "communicationReady" | "missionReady"
-  >,
-): boolean {
-  return peerCanAcceptMissionTraffic(peer);
-}
-
-function peerByAnyKnownDestination(
-  peers: Record<string, DiscoveredPeer>,
-  destinationRaw: string,
-): DiscoveredPeer | undefined {
-  const destinationHex = normalizeDestinationHex(destinationRaw);
-  if (!isValidDestinationHex(destinationHex)) {
-    return undefined;
+  function peerIsSaved(
+    peer: Pick<DiscoveredPeer, "destination" | "saved">,
+    savedDestinations: Set<string>,
+  ): boolean {
+    return peer.saved || savedDestinations.has(peer.destination);
   }
-  return Object.values(peers).find((peer) =>
-    destinationHex === normalizeDestinationHex(peer.destination)
-      || destinationHex === normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
-      || destinationHex === normalizeDestinationHex(peer.identityHex ?? ""),
-  );
-}
+
+  function peerHasConnectedSession(
+    peer: Pick<DiscoveredPeer, "destination" | "activeLink" | "saved">,
+    savedDestinations: Set<string>,
+  ): boolean {
+    return peerIsSaved(peer, savedDestinations) && peer.activeLink;
+  }
+
+  function peerPresenceState(
+    peer: Pick<DiscoveredPeer, "activeLink">,
+  ): "online" | "offline" {
+    return peer.activeLink ? "online" : "offline";
+  }
+
+  function peerHasKnownLxmfRoute(
+    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
+  ): boolean {
+    const appDestinationHex = normalizeDestinationHex(peer.destination);
+    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
+    return isValidDestinationHex(appDestinationHex)
+      && isValidDestinationHex(lxmfDestinationHex)
+      && appDestinationHex !== lxmfDestinationHex;
+  }
+
+  function peerByAnyKnownDestination(
+    peers: Record<string, DiscoveredPeer>,
+    destinationRaw: string,
+  ): DiscoveredPeer | undefined {
+    const destinationHex = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(destinationHex)) {
+      return undefined;
+    }
+    return Object.values(peers).find((peer) =>
+      destinationHex === normalizeDestinationHex(peer.destination)
+        || destinationHex === normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+        || destinationHex === normalizeDestinationHex(peer.identityHex ?? ""),
+    );
+  }
 
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
       .filter((peer) => !isLocalPeer(peer))
       .sort((a, b) => {
-        const byAvailabilityRank = availabilityRank(b) - availabilityRank(a);
-        if (byAvailabilityRank !== 0) {
-          return byAvailabilityRank;
+        const byRank = peerSortRank(b) - peerSortRank(a);
+        if (byRank !== 0) {
+          return byRank;
         }
         return b.lastSeenAt - a.lastSeenAt;
       }),
   );
   const allPeers = discoveredPeers;
 
-  const communicationReadyPeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peer.communicationReady)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-  );
-
-  const missionReadyPeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peer.missionReady)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-  );
-
-  const relayEligiblePeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerCanRelayMissionTraffic(peer))
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-  );
-
   const autoFanoutPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerIsManagedForAutoFanout(peer, savedByDestination))
+      .filter((peer) => peerIsSaved(peer, savedDestinations.value))
+      .filter((peer) => peerHasKnownLxmfRoute(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 
   const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
     (!bestPropagationNodeHex.value ? [] : autoFanoutPeers.value)
-      .filter((peer) => peer.missionReady)
-      .filter((peer) => peerCanRelayMissionTraffic(peer))
-      .filter((peer) => !peer.communicationReady)
+      .filter((peer) => !peer.activeLink)
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
       .map((peer) => ({
         appDestinationHex: peer.destination,
@@ -2205,19 +2204,29 @@ function peerByAnyKnownDestination(
     Object.values(savedByDestination).sort((a, b) => b.savedAt - a.savedAt),
   );
 
+  const savedVisiblePeers = computed(() =>
+    discoveredPeers.value.filter((peer) => peerIsSaved(peer, savedDestinations.value)),
+  );
+
+  const connectedPeers = computed(() =>
+    savedVisiblePeers.value.filter((peer) => peer.activeLink),
+  );
+
   const connectedDestinations = computed(() =>
-    communicationReadyPeers.value.map((peer) => peer.destination),
+    connectedPeers.value.map((peer) => peer.destination),
+  );
+
+  const intentionalPeerDestinations = computed(() =>
+    savedVisiblePeers.value.map((peer) => peer.destination),
   );
 
   const connectedLinkDestinations = computed(() =>
-    discoveredPeers.value
-      .filter((peer) => peer.activeLink)
-      .map((peer) => peer.destination),
+    connectedPeers.value.map((peer) => peer.destination),
   );
 
   const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    autoFanoutPeers.value
-      .filter((peer) => peerHasEventRoute(peer))
+    connectedPeers.value
+      .filter((peer) => peerHasKnownLxmfRoute(peer))
       .map((peer) => ({
         appDestinationHex: peer.destination,
         lxmfDestinationHex: peer.lxmfDestinationHex!,
@@ -2228,9 +2237,9 @@ function peerByAnyKnownDestination(
       })),
   );
 
-  const communicationReadyPeerCount = computed(() => communicationReadyPeers.value.length);
-  const missionReadyPeerCount = computed(() => missionReadyPeers.value.length);
-  const relayEligiblePeerCount = computed(() => relayEligiblePeers.value.length);
+  const visiblePeerCount = computed(() => discoveredPeers.value.length);
+  const savedPeerCount = computed(() => savedVisiblePeers.value.length);
+  const connectedPeerCount = computed(() => connectedPeers.value.length);
   const propagationCandidateDestinations = computed(() =>
     activePropagationNodeHex(syncStatus.value)
       ? [activePropagationNodeHex(syncStatus.value)!]
@@ -2239,7 +2248,7 @@ function peerByAnyKnownDestination(
   const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
 
   const telemetryDestinations = computed(() =>
-    communicationReadyPeers.value
+    connectedPeers.value
       .filter((peer) => hasCapability(peer.appData ?? "", TELEMETRY_CAPABILITY))
       .map((peer) => peer.destination),
   );
@@ -2543,16 +2552,16 @@ function peerByAnyKnownDestination(
     allPeers,
     discoveredPeers,
     savedPeers,
-    communicationReadyPeers,
-    missionReadyPeers,
-    relayEligiblePeers,
+    savedVisiblePeers,
+    connectedPeers,
     propagationEligibleEventPeerRoutes,
     connectedDestinations,
+    intentionalPeerDestinations,
     connectedLinkDestinations,
     connectedEventPeerRoutes,
-    communicationReadyPeerCount,
-    missionReadyPeerCount,
-    relayEligiblePeerCount,
+    visiblePeerCount,
+    savedPeerCount,
+    connectedPeerCount,
     startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,

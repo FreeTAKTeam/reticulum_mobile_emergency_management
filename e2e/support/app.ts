@@ -97,7 +97,6 @@ export interface SettingsSeed {
   tcpClients: string[];
   broadcast: boolean;
   announceIntervalSeconds: number;
-  showOnlyCapabilityVerified: boolean;
   telemetry: {
     enabled: boolean;
     publishIntervalSeconds: number;
@@ -136,7 +135,6 @@ export const defaultSettings: SettingsSeed = {
   tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
   broadcast: true,
   announceIntervalSeconds: 1800,
-  showOnlyCapabilityVerified: true,
   telemetry: {
     enabled: false,
     publishIntervalSeconds: 10,

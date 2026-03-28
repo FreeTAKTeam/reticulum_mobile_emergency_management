@@ -53,16 +53,16 @@ const runningTitle = computed(() =>
     ? "App ready to send and receive events or messages."
     : "App is still starting. Sending stays blocked until the node is ready.",
 );
-const possiblePeerCount = computed(() => nodeStore.communicationReadyPeerCount);
-const connectedPeerCount = computed(() => nodeStore.connectedLinkDestinations.length);
+const possiblePeerCount = computed(() => nodeStore.savedPeerCount);
+const connectedPeerCount = computed(() => nodeStore.connectedPeerCount);
 const peerCountLabel = computed(
   () => `${possiblePeerCount.value}/${connectedPeerCount.value}`,
 );
 const connectedPeerCountTitle = computed(() => {
   const possible = possiblePeerCount.value;
   const connected = connectedPeerCount.value;
-  const possibleLabel = possible === 1 ? "1 possible peer" : `${possible} possible peers`;
-  const connectedLabel = connected === 1 ? "1 active link" : `${connected} active links`;
+  const possibleLabel = possible === 1 ? "1 saved peer" : `${possible} saved peers`;
+  const connectedLabel = connected === 1 ? "1 saved peer connected" : `${connected} saved peers connected`;
   return `${possibleLabel}, ${connectedLabel}`;
 });
 
@@ -82,12 +82,12 @@ function isTabActive(path: string): boolean {
           <p class="title">R.E.M.</p>
         </div>
         <div class="mast-actions">
-          <span
-            class="peer-count"
-            data-testid="connected-peer-count"
-            aria-label="Possible and connected peers"
-            :title="connectedPeerCountTitle"
-          >
+            <span
+              class="peer-count"
+              data-testid="connected-peer-count"
+              aria-label="Saved peers and connected saved peers"
+              :title="connectedPeerCountTitle"
+            >
             {{ peerCountLabel }}
           </span>
           <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">

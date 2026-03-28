@@ -11,10 +11,6 @@ enum HubMode { "Disabled", "RchLxmf", "RchHttp" };
 
 enum PeerState { "Connecting", "Connected", "Disconnected" };
 
-enum PeerManagementState { "Unmanaged", "Managed" };
-
-enum PeerAvailabilityState { "Unseen", "Discovered", "Resolved", "Ready" };
-
 enum SendOutcome {
   "SentDirect",
   "SentBroadcast",
@@ -143,17 +139,12 @@ dictionary PeerChange {
   string? display_name;
   string? app_data;
   PeerState state;
-  PeerManagementState management_state;
-  PeerAvailabilityState availability_state;
-  boolean communication_ready;
-  boolean mission_ready;
-  boolean relay_eligible;
+  boolean saved;
   boolean stale;
   boolean active_link;
   string? last_error;
   string? last_resolution_error;
   u64? last_resolution_attempt_at_ms;
-  u64? last_ready_at_ms;
   u64 last_seen_at_ms;
   u64? announce_last_seen_at_ms;
   u64? lxmf_last_seen_at_ms;
@@ -196,16 +187,11 @@ dictionary PeerRecord {
   string? display_name;
   string? app_data;
   PeerState state;
-  PeerManagementState management_state;
-  PeerAvailabilityState availability_state;
-  boolean communication_ready;
-  boolean mission_ready;
-  boolean relay_eligible;
+  boolean saved;
   boolean stale;
   boolean active_link;
   string? last_resolution_error;
   u64? last_resolution_attempt_at_ms;
-  u64? last_ready_at_ms;
   u64 last_seen_at_ms;
   u64? announce_last_seen_at_ms;
   u64? lxmf_last_seen_at_ms;
@@ -381,10 +367,8 @@ dictionary ProjectionInvalidation {
 dictionary OperationalSummary {
   boolean running;
   u32 peer_count_total;
-  u32 peer_count_communication_ready;
-  u32 peer_count_mission_ready;
-  u32 peer_count_relay_eligible;
   u32 saved_peer_count;
+  u32 connected_peer_count;
   u32 conversation_count;
   u32 message_count;
   u32 eam_count;

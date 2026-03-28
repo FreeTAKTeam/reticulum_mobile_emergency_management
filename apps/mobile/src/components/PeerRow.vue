@@ -22,35 +22,33 @@ watch(
   },
 );
 
-const stateLabel = computed(() => {
-  switch (props.peer.availabilityState) {
-    case "ready":
-      return "Ready";
-    case "resolved":
-      return "Resolved";
-    case "discovered":
-      return "Seen";
-    default:
-      return "Unseen";
-  }
-});
-const managementLabel = computed(() =>
-  props.peer.managementState === "managed" ? "Managed" : "Unmanaged",
-);
-const readinessLabel = computed(() =>
-  props.peer.communicationReady ? "Direct-ready" : "Not direct-ready",
-);
-const missionLabel = computed(() =>
-  props.peer.missionReady ? "Mission-ready" : "Not mission-ready",
-);
-const relayLabel = computed(() =>
-  props.peer.relayEligible ? "Relay-eligible" : "No relay route",
-);
+const saveStateLabel = computed(() => (props.isSaved || props.peer.saved ? "Saved" : "Unsaved"));
 const staleLabel = computed(() => (props.peer.stale ? "Stale" : "Current"));
-const linkLabel = computed(() => (props.peer.activeLink ? "Active link" : "No active link"));
-const lastSeenLabel = computed(() =>
-  props.peer.lastSeenAt ? new Date(props.peer.lastSeenAt).toLocaleTimeString() : "never",
-);
+const linkLabel = computed(() => (props.peer.activeLink ? "Connected" : "Not connected"));
+const connectButtonDisabled = computed(() => !props.isSaved && !props.peer.saved);
+const connectButtonLabel = computed(() => {
+  if (props.peer.activeLink) {
+    return "Disconnect";
+  }
+  return props.isSaved ? "Connect" : "Save first";
+});
+const lastSeenLabel = computed(() => {
+  const lastSeenAt = props.peer.lastSeenAt;
+  if (!lastSeenAt) {
+    return "never";
+  }
+  const elapsedMs = Math.max(0, Date.now() - lastSeenAt);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 60) {
+    return `seen ${Math.max(1, elapsedMinutes)} min ago`;
+  }
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `seen ${elapsedHours} hr ago`;
+  }
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `seen ${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
+});
 const resolutionErrorText = computed(() =>
   typeof props.peer.lastResolutionError === "string"
     ? props.peer.lastResolutionError.trim()
@@ -61,7 +59,7 @@ const resolutionLabel = computed(() => {
     return `Resolution error: ${resolutionErrorText.value}`;
   }
   if (props.peer.lastResolutionAttemptAt) {
-    return `Resolution tried ${new Date(props.peer.lastResolutionAttemptAt).toLocaleTimeString()}`;
+    return "Resolution attempted";
   }
   return "No resolution attempts";
 });
@@ -75,16 +73,16 @@ const resolutionLabel = computed(() => {
         {{ props.peer.announcedName }}
       </p>
       <p class="details">
-        {{ managementLabel }} | {{ stateLabel }} | {{ readinessLabel }} | {{ missionLabel }} | {{ relayLabel }}
+        {{ saveStateLabel }} | {{ linkLabel }} | {{ staleLabel }}
       </p>
       <p class="details">
-        {{ staleLabel }} | {{ linkLabel }} | last seen {{ lastSeenLabel }}
+        {{ lastSeenLabel }}
       </p>
       <p class="details">
         {{ resolutionLabel }}
       </p>
-      <p class="details" v-if="props.peer.hops !== undefined || props.peer.verifiedCapability">
-        {{ props.peer.hops !== undefined ? `${props.peer.hops} hops` : "hops unknown" }} | {{ props.peer.verifiedCapability ? "verified" : "unverified" }}
+      <p class="details" v-if="props.peer.hops !== undefined">
+        {{ props.peer.hops }} hops
       </p>
     </div>
     <label class="label-input-wrap">
@@ -105,13 +103,14 @@ const resolutionLabel = computed(() => {
       >
         {{ props.isSaved ? "Unsave" : "Save" }}
       </button>
-      <button
-        class="btn connect"
-        type="button"
-        @click="emit('connectToggle', props.peer.destination, props.peer.managementState !== 'managed')"
-      >
-        {{ props.peer.managementState === "managed" ? "Disconnect" : "Connect" }}
-      </button>
+        <button
+          class="btn connect"
+          type="button"
+          :disabled="connectButtonDisabled"
+          @click="emit('connectToggle', props.peer.destination, !props.peer.activeLink)"
+        >
+          {{ connectButtonLabel }}
+        </button>
     </div>
   </article>
 </template>

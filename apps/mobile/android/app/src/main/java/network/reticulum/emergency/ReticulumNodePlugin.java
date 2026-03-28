@@ -1,6 +1,14 @@
 package network.reticulum.emergency;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.os.Build;
+import android.os.IBinder;
 import android.util.Log;
+
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
@@ -9,122 +17,179 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import java.io.File;
+import org.json.JSONException;
+
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.json.JSONException;
+import java.util.concurrent.TimeUnit;
 
 @CapacitorPlugin(name = "ReticulumNode")
 public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
+    private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
 
-    private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
-    private ExecutorService poller;
+    private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
+        final JSObject safePayload = payload == null ? new JSObject() : payload;
+        mirrorEventToLogcat(eventName, safePayload);
+        notifyListeners(eventName, safePayload);
+    };
+
+    private final ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            if (!(service instanceof ReticulumNodeService.LocalBinder)) {
+                Logger.error(TAG, "Unexpected binder for ReticulumNodeService", null);
+                return;
+            }
+
+            final ReticulumNodeService.LocalBinder localBinder = (ReticulumNodeService.LocalBinder) service;
+            boundService = localBinder.getService();
+            serviceBound = true;
+            tryRegisterServiceListener();
+            serviceFuture.complete(boundService);
+            Logger.info(TAG, "Bound to ReticulumNodeService.");
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            unregisterServiceListener();
+            boundService = null;
+            serviceBound = false;
+            resetServiceFuture();
+            Logger.info(TAG, "ReticulumNodeService disconnected.");
+        }
+
+        @Override
+        public void onBindingDied(ComponentName name) {
+            unregisterServiceListener();
+            boundService = null;
+            serviceBound = false;
+            resetServiceFuture();
+            bindToService();
+        }
+
+        @Override
+        public void onNullBinding(ComponentName name) {
+            unregisterServiceListener();
+            boundService = null;
+            serviceBound = false;
+            resetServiceFuture();
+            Logger.error(TAG, "ReticulumNodeService returned null binding.", null);
+        }
+    };
+
+    private volatile ReticulumNodeService boundService;
+    private volatile boolean serviceBound = false;
+    private volatile boolean serviceListenerRegistered = false;
+    private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
 
     @Override
     public void load() {
         super.load();
-        initializeBridgeStorage();
         Logger.info(TAG, "ReticulumNode plugin loaded.");
     }
 
     @Override
     protected void handleOnDestroy() {
-        stopPoller();
+        unregisterServiceListener();
+        unbindFromService();
         bridgeExecutor.shutdownNow();
-        ReticulumBridge.stop();
         super.handleOnDestroy();
     }
 
     @PluginMethod
     public void startNode(PluginCall call) {
-        JSObject config = call.getObject("config", new JSObject());
-        normalizeConfig(config);
+        final JSObject config = call.getObject("config", new JSObject());
         Logger.info(TAG, "startNode called.");
-        runIntBridgeCall(
-            call,
-            "Failed to start native Reticulum node.",
-            () -> ReticulumBridge.start(config.toString()),
-            true
-        );
+        bridgeExecutor.execute(() -> {
+            try {
+                startServiceForRuntime();
+                final ReticulumNodeService service = awaitService();
+                final int result = service.startNode(config.toString());
+                if (result != 0) {
+                    rejectFromNative(call, "Failed to start native Reticulum node.");
+                    return;
+                }
+                call.resolve();
+            } catch (Exception ex) {
+                call.reject("Failed to start native Reticulum node.", ex);
+            }
+        });
     }
 
     @PluginMethod
     public void stopNode(PluginCall call) {
         Logger.info(TAG, "stopNode called.");
-        runIntBridgeCall(
-            call,
-            "Failed to stop native Reticulum node.",
-            ReticulumBridge::stop,
-            false
-        );
+        runIntServiceCall(call, "Failed to stop native Reticulum node.", ReticulumNodeService::stopNode);
     }
 
     @PluginMethod
     public void restartNode(PluginCall call) {
-        JSObject config = call.getObject("config", new JSObject());
-        normalizeConfig(config);
+        final JSObject config = call.getObject("config", new JSObject());
         Logger.info(TAG, "restartNode called.");
-        runIntBridgeCall(
-            call,
-            "Failed to restart native Reticulum node.",
-            () -> ReticulumBridge.restart(config.toString()),
-            true
-        );
+        bridgeExecutor.execute(() -> {
+            try {
+                startServiceForRuntime();
+                final ReticulumNodeService service = awaitService();
+                final int result = service.restartNode(config.toString());
+                if (result != 0) {
+                    rejectFromNative(call, "Failed to restart native Reticulum node.");
+                    return;
+                }
+                call.resolve();
+            } catch (Exception ex) {
+                call.reject("Failed to restart native Reticulum node.", ex);
+            }
+        });
     }
 
     @PluginMethod
     public void getStatus(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to fetch node status.",
             "Native status JSON parse failed.",
-            ReticulumBridge::getStatusJson
+            ReticulumNodeService::getStatusJson
         );
     }
 
     @PluginMethod
     public void connectPeer(PluginCall call) {
-        String destinationHex = call.getString("destinationHex");
+        final String destinationHex = call.getString("destinationHex");
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
         }
-
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to connect peer.",
-            () -> ReticulumBridge.connectPeer(destinationHex),
-            false
+            service -> service.connectPeer(destinationHex)
         );
     }
 
     @PluginMethod
     public void disconnectPeer(PluginCall call) {
-        String destinationHex = call.getString("destinationHex");
+        final String destinationHex = call.getString("destinationHex");
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
         }
-
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to disconnect peer.",
-            () -> ReticulumBridge.disconnectPeer(destinationHex),
-            false
+            service -> service.disconnectPeer(destinationHex)
         );
     }
 
     @PluginMethod
     public void send(PluginCall call) {
-        String destinationHex = call.getString("destinationHex");
-        String bytesBase64 = call.getString("bytesBase64");
-        String fieldsBase64 = call.getString("fieldsBase64");
-        String sendMode = call.getString("sendMode");
-        boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
+        final String destinationHex = call.getString("destinationHex");
+        final String bytesBase64 = call.getString("bytesBase64");
+        final String fieldsBase64 = call.getString("fieldsBase64");
+        final String sendMode = call.getString("sendMode");
+        final boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
@@ -134,7 +199,7 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
 
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("destinationHex", destinationHex);
         payload.put("bytesBase64", bytesBase64);
         if (fieldsBase64 != null && !fieldsBase64.isEmpty()) {
@@ -161,28 +226,27 @@ public class ReticulumNodePlugin extends Plugin {
                 + usePropagationNode
         );
 
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to send bytes.",
-            () -> ReticulumBridge.sendJson(payload.toString()),
-            false,
+            service -> service.sendJson(payload.toString()),
             () -> Log.d(TAG, "send native accepted destination=" + destinationHex)
         );
     }
 
     @PluginMethod
     public void sendLxmf(PluginCall call) {
-        String destinationHex = call.getString("destinationHex");
-        String bodyUtf8 = call.getString("bodyUtf8", "");
-        String title = call.getString("title");
-        String sendMode = call.getString("sendMode");
-        boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
+        final String destinationHex = call.getString("destinationHex");
+        final String bodyUtf8 = call.getString("bodyUtf8", "");
+        final String title = call.getString("title");
+        final String sendMode = call.getString("sendMode");
+        final boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
         }
 
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("destinationHex", destinationHex);
         payload.put("bodyUtf8", bodyUtf8);
         if (title != null && !title.isEmpty()) {
@@ -195,80 +259,69 @@ public class ReticulumNodePlugin extends Plugin {
             payload.put("usePropagationNode", true);
         }
 
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to send LXMF message.",
             "Native LXMF send JSON parse failed.",
-            () -> ReticulumBridge.sendLxmfJson(payload.toString())
+            service -> service.sendLxmfJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void retryLxmf(PluginCall call) {
-        String messageIdHex = call.getString("messageIdHex");
+        final String messageIdHex = call.getString("messageIdHex");
         if (messageIdHex == null || messageIdHex.isEmpty()) {
             call.reject("messageIdHex is required.");
             return;
         }
-
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("messageIdHex", messageIdHex);
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to retry LXMF message.",
-            () -> ReticulumBridge.retryLxmfJson(payload.toString()),
-            false
+            service -> service.retryLxmfJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void cancelLxmf(PluginCall call) {
-        String messageIdHex = call.getString("messageIdHex");
+        final String messageIdHex = call.getString("messageIdHex");
         if (messageIdHex == null || messageIdHex.isEmpty()) {
             call.reject("messageIdHex is required.");
             return;
         }
-
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("messageIdHex", messageIdHex);
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to cancel LXMF message.",
-            () -> ReticulumBridge.cancelLxmfJson(payload.toString()),
-            false
+            service -> service.cancelLxmfJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void announceNow(PluginCall call) {
-        runIntBridgeCall(
-            call,
-            "Failed to send announce.",
-            ReticulumBridge::announceNow,
-            false
-        );
+        runIntServiceCall(call, "Failed to send announce.", ReticulumNodeService::announceNow);
     }
 
     @PluginMethod
     public void requestPeerIdentity(PluginCall call) {
-        String destinationHex = call.getString("destinationHex");
+        final String destinationHex = call.getString("destinationHex");
         if (destinationHex == null || destinationHex.isEmpty()) {
             call.reject("destinationHex is required.");
             return;
         }
-
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to request peer identity.",
-            () -> ReticulumBridge.requestPeerIdentity(destinationHex),
-            false
+            service -> service.requestPeerIdentity(destinationHex)
         );
     }
 
     @PluginMethod
     public void broadcast(PluginCall call) {
-        String bytesBase64 = call.getString("bytesBase64");
-        String fieldsBase64 = call.getString("fieldsBase64");
+        final String bytesBase64 = call.getString("bytesBase64");
+        final String fieldsBase64 = call.getString("fieldsBase64");
         if (bytesBase64 == null) {
             call.reject("bytesBase64 is required.");
             return;
@@ -277,46 +330,41 @@ public class ReticulumNodePlugin extends Plugin {
             call.reject("fieldsBase64 is not supported for broadcast.");
             return;
         }
-
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to broadcast bytes.",
-            () -> ReticulumBridge.broadcastBase64(bytesBase64),
-            false
+            service -> service.broadcastBase64(bytesBase64)
         );
     }
 
     @PluginMethod
     public void setAnnounceCapabilities(PluginCall call) {
-        String capabilityString = call.getString("capabilityString");
+        final String capabilityString = call.getString("capabilityString");
         if (capabilityString == null) {
             call.reject("capabilityString is required.");
             return;
         }
-
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to set announce capabilities.",
-            () -> ReticulumBridge.setAnnounceCapabilities(capabilityString),
-            false
+            service -> service.setAnnounceCapabilities(capabilityString)
         );
     }
 
     @PluginMethod
     public void setLogLevel(PluginCall call) {
-        String level = call.getString("level", "Info");
-        runIntBridgeCall(
+        final String level = call.getString("level", "Info");
+        runIntServiceCall(
             call,
             "Failed to set log level.",
-            () -> ReticulumBridge.setLogLevel(level),
-            false
+            service -> service.setLogLevel(level)
         );
     }
 
     @PluginMethod
     public void logMessage(PluginCall call) {
-        String level = call.getString("level", "Info");
-        String message = call.getString("message", "");
+        final String level = call.getString("level", "Info");
+        final String message = call.getString("message", "");
         writeLogcat(level, "[ui][" + level + "] " + message);
         call.resolve();
     }
@@ -324,326 +372,401 @@ public class ReticulumNodePlugin extends Plugin {
     @PluginMethod
     public void refreshHubDirectory(PluginCall call) {
         Logger.info(TAG, "refreshHubDirectory called.");
-        runIntBridgeCall(
-            call,
-            "Failed to refresh hub directory.",
-            ReticulumBridge::refreshHubDirectory,
-            false
-        );
+        runIntServiceCall(call, "Failed to refresh hub directory.", ReticulumNodeService::refreshHubDirectory);
     }
 
     @PluginMethod
     public void setActivePropagationNode(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("destinationHex", call.getString("destinationHex"));
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to set active propagation node.",
-            () -> ReticulumBridge.setActivePropagationNodeJson(payload.toString()),
-            false
+            service -> service.setActivePropagationNodeJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void requestLxmfSync(PluginCall call) {
-        JSObject payload = new JSObject();
-        Integer limit = call.getInt("limit");
+        final JSObject payload = new JSObject();
+        final Integer limit = call.getInt("limit");
         if (limit != null) {
             payload.put("limit", limit);
         } else {
             payload.put("limit", null);
         }
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to request LXMF sync.",
-            () -> ReticulumBridge.requestLxmfSyncJson(payload.toString()),
-            false
+            service -> service.requestLxmfSyncJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void listAnnounces(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to list announces.",
             "Native announce list JSON parse failed.",
-            ReticulumBridge::listAnnouncesJson
+            ReticulumNodeService::listAnnouncesJson
         );
     }
 
     @PluginMethod
     public void listPeers(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to list peers.",
             "Native peer list JSON parse failed.",
-            ReticulumBridge::listPeersJson
+            ReticulumNodeService::listPeersJson
         );
     }
 
     @PluginMethod
     public void listConversations(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to list conversations.",
             "Native conversation list JSON parse failed.",
-            ReticulumBridge::listConversationsJson
+            ReticulumNodeService::listConversationsJson
         );
     }
 
     @PluginMethod
     public void listMessages(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("conversationId", call.getString("conversationId"));
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to list messages.",
             "Native message list JSON parse failed.",
-            () -> ReticulumBridge.listMessagesJson(payload.toString())
+            service -> service.listMessagesJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getLxmfSyncStatus(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get LXMF sync status.",
             "Native sync status JSON parse failed.",
-            ReticulumBridge::getLxmfSyncStatusJson
+            ReticulumNodeService::getLxmfSyncStatusJson
         );
     }
 
     @PluginMethod
     public void legacyImportCompleted(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to read legacy import state.",
             "Native legacy import JSON parse failed.",
-            ReticulumBridge::legacyImportCompletedJson
+            ReticulumNodeService::legacyImportCompletedJson
         );
     }
 
     @PluginMethod
     public void importLegacyState(PluginCall call) {
-        JSObject payload = call.getObject("payload", new JSObject());
-        runIntBridgeCall(
+        final JSObject payload = call.getObject("payload", new JSObject());
+        runIntServiceCall(
             call,
             "Failed to import legacy state.",
-            () -> ReticulumBridge.importLegacyStateJson(payload.toString()),
-            false
+            service -> service.importLegacyStateJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getAppSettings(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get app settings.",
             "Native app settings JSON parse failed.",
-            ReticulumBridge::getAppSettingsJson
+            ReticulumNodeService::getAppSettingsJson
         );
     }
 
     @PluginMethod
     public void setAppSettings(PluginCall call) {
-        JSObject payload = call.getObject("settings", new JSObject());
-        runIntBridgeCall(
+        final JSObject payload = call.getObject("settings", new JSObject());
+        runIntServiceCall(
             call,
             "Failed to save app settings.",
-            () -> ReticulumBridge.setAppSettingsJson(payload.toString()),
-            false
+            service -> service.setAppSettingsJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getSavedPeers(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get saved peers.",
             "Native saved peers JSON parse failed.",
-            ReticulumBridge::getSavedPeersJson
+            ReticulumNodeService::getSavedPeersJson
         );
     }
 
     @PluginMethod
     public void setSavedPeers(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("savedPeers", call.getArray("savedPeers"));
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to save peers.",
-            () -> ReticulumBridge.setSavedPeersJson(payload.toString()),
-            false
+            service -> service.setSavedPeersJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getOperationalSummary(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get operational summary.",
             "Native operational summary JSON parse failed.",
-            ReticulumBridge::getOperationalSummaryJson
+            ReticulumNodeService::getOperationalSummaryJson
         );
     }
 
     @PluginMethod
     public void getEams(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get EAMs.",
             "Native EAM JSON parse failed.",
-            ReticulumBridge::getEamsJson
+            ReticulumNodeService::getEamsJson
         );
     }
 
     @PluginMethod
     public void upsertEam(PluginCall call) {
-        JSObject payload = call.getObject("eam", new JSObject());
-        runIntBridgeCall(
+        final JSObject payload = call.getObject("eam", new JSObject());
+        runIntServiceCall(
             call,
             "Failed to save EAM.",
-            () -> ReticulumBridge.upsertEamJson(payload.toString()),
-            false
+            service -> service.upsertEamJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void deleteEam(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("callsign", call.getString("callsign"));
-        Long deletedAtMs = call.getLong("deletedAtMs");
+        final Long deletedAtMs = call.getLong("deletedAtMs");
         if (deletedAtMs != null) {
             payload.put("deletedAtMs", deletedAtMs);
         }
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to delete EAM.",
-            () -> ReticulumBridge.deleteEamJson(payload.toString()),
-            false
+            service -> service.deleteEamJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getEamTeamSummary(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("teamUid", call.getString("teamUid"));
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get EAM team summary.",
             "Native EAM team summary JSON parse failed.",
-            () -> ReticulumBridge.getEamTeamSummaryJson(payload.toString())
+            service -> service.getEamTeamSummaryJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getEvents(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get events.",
             "Native events JSON parse failed.",
-            ReticulumBridge::getEventsJson
+            ReticulumNodeService::getEventsJson
         );
     }
 
     @PluginMethod
     public void upsertEvent(PluginCall call) {
-        JSObject payload = call.getObject("event", new JSObject());
-        runIntBridgeCall(
+        final JSObject payload = call.getObject("event", new JSObject());
+        runIntServiceCall(
             call,
             "Failed to save event.",
-            () -> ReticulumBridge.upsertEventJson(payload.toString()),
-            false
+            service -> service.upsertEventJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void deleteEvent(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("uid", call.getString("uid"));
-        Long deletedAtMs = call.getLong("deletedAtMs");
+        final Long deletedAtMs = call.getLong("deletedAtMs");
         if (deletedAtMs != null) {
             payload.put("deletedAtMs", deletedAtMs);
         }
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to delete event.",
-            () -> ReticulumBridge.deleteEventJson(payload.toString()),
-            false
+            service -> service.deleteEventJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void getTelemetryPositions(PluginCall call) {
-        runStringBridgeCall(
+        runStringServiceCall(
             call,
             "Failed to get telemetry positions.",
             "Native telemetry JSON parse failed.",
-            ReticulumBridge::getTelemetryPositionsJson
+            ReticulumNodeService::getTelemetryPositionsJson
         );
     }
 
     @PluginMethod
     public void recordLocalTelemetryFix(PluginCall call) {
-        JSObject payload = call.getObject("position", new JSObject());
-        runIntBridgeCall(
+        final JSObject payload = call.getObject("position", new JSObject());
+        runIntServiceCall(
             call,
             "Failed to record local telemetry.",
-            () -> ReticulumBridge.recordLocalTelemetryFixJson(payload.toString()),
-            false
+            service -> service.recordLocalTelemetryFixJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void deleteLocalTelemetry(PluginCall call) {
-        JSObject payload = new JSObject();
+        final JSObject payload = new JSObject();
         payload.put("callsign", call.getString("callsign"));
-        runIntBridgeCall(
+        runIntServiceCall(
             call,
             "Failed to delete local telemetry.",
-            () -> ReticulumBridge.deleteLocalTelemetryJson(payload.toString()),
-            false
+            service -> service.deleteLocalTelemetryJson(payload.toString())
         );
     }
 
     @PluginMethod
     public void removeAllListeners(PluginCall call) {
-        stopPoller();
         call.resolve();
     }
 
-    private void ensurePoller() {
-        if (!pollerRunning.compareAndSet(false, true)) {
+    private void bindToService() {
+        if (serviceBound) {
             return;
         }
+        final Context appContext = getContext().getApplicationContext();
+        final Intent serviceIntent = new Intent(appContext, ReticulumNodeService.class);
+        final boolean bound = appContext.bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
+        if (!bound) {
+            Logger.error(TAG, "Failed to bind ReticulumNodeService.", null);
+        }
+    }
 
-        poller = Executors.newSingleThreadExecutor();
-        poller.execute(() -> {
-            while (pollerRunning.get()) {
-                try {
-                    String raw = ReticulumBridge.nextEventJson(500);
-                    if (raw == null || raw.isEmpty()) {
-                        continue;
-                    }
+    private void unbindFromService() {
+        if (!serviceBound) {
+            return;
+        }
+        final Context appContext = getContext().getApplicationContext();
+        appContext.unbindService(serviceConnection);
+        serviceBound = false;
+        boundService = null;
+        resetServiceFuture();
+    }
 
-                    JSObject envelope = new JSObject(raw);
-                    String eventName = envelope.getString("event");
-                    JSObject payload = envelope.getJSObject("payload", new JSObject());
-                    if (eventName != null && !eventName.isEmpty()) {
-                        mirrorEventToLogcat(eventName, payload);
-                        notifyListeners(eventName, payload);
-                    }
-                } catch (Exception ex) {
-                    Logger.error(TAG, "Event poll loop error", ex);
+    private void startServiceForRuntime() {
+        final Context appContext = getContext().getApplicationContext();
+        final Intent serviceIntent = new Intent(appContext, ReticulumNodeService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(appContext, serviceIntent);
+        } else {
+            appContext.startService(serviceIntent);
+        }
+        bindToService();
+    }
+
+    private ReticulumNodeService awaitService() throws Exception {
+        bindToService();
+        return serviceFuture.get(SERVICE_BIND_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private void tryRegisterServiceListener() {
+        if (boundService == null || serviceListenerRegistered) {
+            return;
+        }
+        boundService.addListener(serviceEventListener);
+        serviceListenerRegistered = true;
+    }
+
+    private void unregisterServiceListener() {
+        if (boundService == null || !serviceListenerRegistered) {
+            return;
+        }
+        boundService.removeListener(serviceEventListener);
+        serviceListenerRegistered = false;
+    }
+
+    private void resetServiceFuture() {
+        serviceFuture = new CompletableFuture<>();
+    }
+
+    private void runIntServiceCall(
+        PluginCall call,
+        String fallbackMessage,
+        ServiceIntOperation operation
+    ) {
+        runIntServiceCall(call, fallbackMessage, operation, null);
+    }
+
+    private void runIntServiceCall(
+        PluginCall call,
+        String fallbackMessage,
+        ServiceIntOperation operation,
+        Runnable onSuccess
+    ) {
+        bridgeExecutor.execute(() -> {
+            try {
+                final ReticulumNodeService service = awaitService();
+                final int result = operation.run(service);
+                if (result != 0) {
+                    rejectFromNative(call, fallbackMessage);
+                    return;
                 }
+                if (onSuccess != null) {
+                    onSuccess.run();
+                }
+                call.resolve();
+            } catch (Exception ex) {
+                call.reject(fallbackMessage, ex);
             }
         });
     }
 
+    private void runStringServiceCall(
+        PluginCall call,
+        String fallbackMessage,
+        String parseFallbackMessage,
+        ServiceStringOperation operation
+    ) {
+        bridgeExecutor.execute(() -> {
+            try {
+                final ReticulumNodeService service = awaitService();
+                final String raw = operation.run(service);
+                if (raw == null || raw.isEmpty()) {
+                    rejectFromNative(call, fallbackMessage);
+                    return;
+                }
+                resolveJson(call, raw, parseFallbackMessage);
+            } catch (Exception ex) {
+                call.reject(fallbackMessage, ex);
+            }
+        });
+    }
+
+    private interface ServiceIntOperation {
+        int run(ReticulumNodeService service) throws Exception;
+    }
+
+    private interface ServiceStringOperation {
+        String run(ReticulumNodeService service) throws Exception;
+    }
+
     private void mirrorEventToLogcat(String eventName, JSObject payload) {
         if ("log".equals(eventName)) {
-            String level = payload.getString("level", "Info");
-            String message = payload.getString("message", payload.toString());
+            final String level = payload.getString("level", "Info");
+            final String message = payload.getString("message", payload.toString());
             writeLogcat(level, message);
             return;
         }
@@ -659,7 +782,7 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     private void writeLogcat(String level, String message) {
-        int priority;
+        final int priority;
         switch (level) {
             case "Trace":
             case "Debug":
@@ -688,87 +811,11 @@ public class ReticulumNodePlugin extends Plugin {
         if (value.length() <= maxLength) {
             return value;
         }
-        return value.substring(0, maxLength) + "…";
-    }
-
-    private void stopPoller() {
-        pollerRunning.set(false);
-        if (poller != null) {
-            poller.shutdownNow();
-            poller = null;
-        }
-    }
-
-    private void runIntBridgeCall(
-        PluginCall call,
-        String fallbackMessage,
-        NativeIntOperation operation,
-        boolean onSuccessEnsurePoller
-    ) {
-        runIntBridgeCall(call, fallbackMessage, operation, onSuccessEnsurePoller, null);
-    }
-
-    private void runIntBridgeCall(
-        PluginCall call,
-        String fallbackMessage,
-        NativeIntOperation operation,
-        boolean onSuccessEnsurePoller,
-        Runnable onSuccess
-    ) {
-        bridgeExecutor.execute(
-            () -> {
-                try {
-                    int result = operation.run();
-                    if (result != 0) {
-                        rejectFromNative(call, fallbackMessage);
-                        return;
-                    }
-                    if (onSuccessEnsurePoller) {
-                        ensurePoller();
-                    }
-                    if (onSuccess != null) {
-                        onSuccess.run();
-                    }
-                    call.resolve();
-                } catch (Exception ex) {
-                    call.reject(fallbackMessage, ex);
-                }
-            }
-        );
-    }
-
-    private void runStringBridgeCall(
-        PluginCall call,
-        String fallbackMessage,
-        String parseFallbackMessage,
-        NativeStringOperation operation
-    ) {
-        bridgeExecutor.execute(
-            () -> {
-                try {
-                    String raw = operation.run();
-                    if (raw == null || raw.isEmpty()) {
-                        rejectFromNative(call, fallbackMessage);
-                        return;
-                    }
-                    resolveJson(call, raw, parseFallbackMessage);
-                } catch (Exception ex) {
-                    call.reject(fallbackMessage, ex);
-                }
-            }
-        );
-    }
-
-    private interface NativeIntOperation {
-        int run() throws Exception;
-    }
-
-    private interface NativeStringOperation {
-        String run() throws Exception;
+        return value.substring(0, maxLength) + "...";
     }
 
     private void rejectFromNative(PluginCall call, String fallbackMessage) {
-        String raw = ReticulumBridge.takeLastErrorJson();
+        final String raw = ReticulumBridge.takeLastErrorJson();
         if (raw == null || raw.isEmpty()) {
             Logger.error(TAG, fallbackMessage, new Exception(fallbackMessage));
             call.reject(fallbackMessage);
@@ -776,9 +823,9 @@ public class ReticulumNodePlugin extends Plugin {
         }
 
         try {
-            JSObject payload = new JSObject(raw);
-            String code = payload.getString("code", "NativeError");
-            String message = payload.getString("message", fallbackMessage);
+            final JSObject payload = new JSObject(raw);
+            final String code = payload.getString("code", "NativeError");
+            final String message = payload.getString("message", fallbackMessage);
             Log.e(TAG, "rejectFromNative code=" + code + " message=" + message);
             Logger.error(TAG, "Native error [" + code + "]: " + message, new Exception(message));
             call.reject(message, code);
@@ -793,36 +840,5 @@ public class ReticulumNodePlugin extends Plugin {
         } catch (JSONException ex) {
             call.reject(fallbackMessage, ex);
         }
-    }
-
-    private void initializeBridgeStorage() {
-        File resolved = resolveStorageDir("");
-        int result = ReticulumBridge.initializeStorage(resolved.getAbsolutePath());
-        if (result != 0) {
-            String raw = ReticulumBridge.takeLastErrorJson();
-            Logger.error(
-                TAG,
-                "Failed to initialize native bridge storage: " + (raw == null ? "unknown error" : raw),
-                null
-            );
-        }
-    }
-
-    private void normalizeConfig(JSObject config) {
-        String rawStorageDir = config.getString("storageDir", "");
-        File resolved = resolveStorageDir(rawStorageDir);
-        config.put("storageDir", resolved.getAbsolutePath());
-    }
-
-    private File resolveStorageDir(String rawStorageDir) {
-        String storageDir = rawStorageDir == null ? "" : rawStorageDir.trim();
-
-        File filesDir = getContext().getFilesDir();
-        if (storageDir.isEmpty()) {
-            return new File(filesDir, "reticulum-mobile");
-        }
-
-        File candidate = new File(storageDir);
-        return candidate.isAbsolute() ? candidate : new File(filesDir, storageDir);
     }
 }

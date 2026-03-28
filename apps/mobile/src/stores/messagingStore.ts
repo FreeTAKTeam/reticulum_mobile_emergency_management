@@ -21,6 +21,14 @@ type StoredMessages = Record<string, MessageRecord>;
 type ProjectionClientCache = typeof globalThis & {
   __reticulumMessagingProjectionClient?: ReticulumNodeClient;
 };
+type ConversationListItem = {
+  conversationId: string;
+  destinationHex: string;
+  displayName: string;
+  preview: string;
+  updatedAtMs: number;
+  state: string;
+};
 
 function cloneMessage(message: MessageRecord): MessageRecord {
   return {
@@ -86,17 +94,84 @@ function displayNameForDestination(
   return peer?.label ?? peer?.announcedName ?? destinationHex;
 }
 
+function normalizeDestinationHex(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function peerForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+) {
+  const normalized = normalizeDestinationHex(destinationHex);
+  if (!normalized) {
+    return null;
+  }
+  return nodeStore.discoveredByDestination[normalized]
+    ?? Object.values(nodeStore.discoveredByDestination).find((candidate) =>
+      normalizeDestinationHex(candidate.destination) === normalized
+      || normalizeDestinationHex(candidate.lxmfDestinationHex ?? "") === normalized,
+    )
+    ?? null;
+}
+
+function knownConversationDestinations(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): Set<string> {
+  const known = new Set<string>();
+  const normalized = normalizeDestinationHex(destinationHex);
+  if (!normalized) {
+    return known;
+  }
+
+  known.add(normalized);
+  const peer = peerForDestination(normalized, nodeStore);
+  if (!peer) {
+    return known;
+  }
+
+  known.add(normalizeDestinationHex(peer.destination));
+  if (peer.lxmfDestinationHex) {
+    known.add(normalizeDestinationHex(peer.lxmfDestinationHex));
+  }
+  return known;
+}
+
+function conversationMatchesDestination(
+  conversation: Pick<ConversationRecord, "peerDestinationHex">,
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  const conversationDestination = normalizeDestinationHex(conversation.peerDestinationHex);
+  if (!conversationDestination) {
+    return false;
+  }
+  return knownConversationDestinations(destinationHex, nodeStore).has(conversationDestination);
+}
+
+function draftConversationId(destinationHex: string): string {
+  return `draft:${normalizeDestinationHex(destinationHex)}`;
+}
+
+function isDraftConversationId(value: string): boolean {
+  return value.startsWith("draft:");
+}
+
+function canonicalConversationIdForDraft(conversationId: string): string {
+  if (!isDraftConversationId(conversationId)) {
+    return conversationId.trim();
+  }
+  return normalizeDestinationHex(conversationId.slice("draft:".length));
+}
+
+function messageTimestamp(message: MessageRecord): number {
+  return message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs;
+}
+
 function mapConversationRecord(
   record: ConversationRecord,
   nodeStore: ReturnType<typeof useNodeStore>,
-): {
-  conversationId: string;
-  destinationHex: string;
-  displayName: string;
-  preview: string;
-  updatedAtMs: number;
-  state: string;
-} {
+): ConversationListItem {
   const displayName = record.peerDisplayName
     ?? displayNameForDestination(record.peerDestinationHex, nodeStore);
   return {
@@ -114,15 +189,203 @@ export const useMessagingStore = defineStore("messaging", () => {
   const byMessageId = ref<StoredMessages>({});
   const nativeConversations = ref<ConversationRecord[]>([]);
   const selectedConversationId = ref<string>("");
+  const pendingConversation = ref<ConversationListItem | null>(null);
   const initialized = ref(false);
   const cleanups: Array<() => void> = [];
 
   let conversationsRefreshPromise: Promise<void> | null = null;
   let messagesRefreshPromise: Promise<void> | null = null;
+  let conversationsRefreshQueued = false;
+  let queuedMessagesConversationId: string | null = null;
 
   function persistWeb(): void {
     if (!supportsNativeNodeRuntime) {
       saveWebMessages(byMessageId.value);
+    }
+  }
+
+  function findNativeConversationByDestination(destinationHex: string): ConversationRecord | null {
+    const normalizedDestination = normalizeDestinationHex(destinationHex);
+    if (!normalizedDestination) {
+      return null;
+    }
+    return nativeConversations.value.find((conversation) =>
+      conversationMatchesDestination(conversation, normalizedDestination, nodeStore),
+    ) ?? null;
+  }
+
+  function upsertMessage(message: MessageRecord): void {
+    byMessageId.value = {
+      ...byMessageId.value,
+      [message.messageIdHex]: cloneMessage(message),
+    };
+  }
+
+  function conversationSetForRefresh(conversationId: string): Set<string> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) {
+      return new Set();
+    }
+    return resolvedConversationIds(normalizedConversationId);
+  }
+
+  function mergeFetchedMessages(
+    requestedConversationId: string,
+    items: MessageRecord[],
+  ): void {
+    const fetchedMessages = items.map((message) => cloneMessage(message));
+
+    const next: StoredMessages = {};
+    for (const message of Object.values(byMessageId.value)) {
+      next[message.messageIdHex] = cloneMessage(message);
+    }
+
+    for (const message of fetchedMessages) {
+      next[message.messageIdHex] = message;
+    }
+    byMessageId.value = next;
+  }
+
+  function pendingConversationForDestination(destinationHex: string): ConversationListItem | null {
+    const currentPending = pendingConversation.value;
+    if (!currentPending) {
+      return null;
+    }
+    return normalizeDestinationHex(currentPending.destinationHex) === normalizeDestinationHex(destinationHex)
+      ? currentPending
+      : null;
+  }
+
+  function resolvedConversationIds(conversationId: string): Set<string> {
+    const ids = new Set<string>();
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) {
+      return ids;
+    }
+    ids.add(normalizedConversationId);
+    const canonicalConversationId = canonicalConversationIdForDraft(normalizedConversationId);
+    if (canonicalConversationId) {
+      ids.add(canonicalConversationId);
+    }
+    if (!isDraftConversationId(normalizedConversationId)) {
+      return ids;
+    }
+    const currentPending = pendingConversation.value;
+    if (!currentPending || currentPending.conversationId !== normalizedConversationId) {
+      return ids;
+    }
+    const matchedConversation = findNativeConversationByDestination(currentPending.destinationHex);
+    if (matchedConversation) {
+      ids.add(matchedConversation.conversationId);
+    }
+    return ids;
+  }
+
+  function matchingNativeConversationForDraft(
+    conversationId: string,
+  ): ConversationRecord | null {
+    const canonicalConversationId = canonicalConversationIdForDraft(conversationId);
+    if (!canonicalConversationId) {
+      return null;
+    }
+
+    return nativeConversations.value.find((conversation) =>
+      conversation.conversationId === canonicalConversationId
+      || conversationMatchesDestination(conversation, canonicalConversationId, nodeStore),
+    ) ?? null;
+  }
+
+  function pendingConversationMatchesMessage(message: MessageRecord): boolean {
+    const currentPending = pendingConversation.value;
+    if (!currentPending) {
+      return false;
+    }
+
+    const knownDestinations = knownConversationDestinations(currentPending.destinationHex, nodeStore);
+    const messageDestination = normalizeDestinationHex(message.destinationHex);
+    const messageSource = normalizeDestinationHex(message.sourceHex ?? "");
+    const messageConversationId = normalizeDestinationHex(message.conversationId);
+
+    return knownDestinations.has(messageDestination)
+      || knownDestinations.has(messageSource)
+      || knownDestinations.has(messageConversationId);
+  }
+
+  function adoptCanonicalConversationFromMessage(message: MessageRecord): void {
+    if (!pendingConversationMatchesMessage(message)) {
+      return;
+    }
+
+    const currentPending = pendingConversation.value;
+    if (!currentPending) {
+      return;
+    }
+
+    const nextConversationId = message.conversationId.trim()
+      || canonicalConversationIdForDraft(currentPending.conversationId);
+    if (!nextConversationId) {
+      return;
+    }
+
+    const previousConversationId = currentPending.conversationId;
+    pendingConversation.value = {
+      ...currentPending,
+      conversationId: nextConversationId,
+      preview: safeMessageBody(message) || currentPending.preview,
+      updatedAtMs: messageTimestamp(message),
+      state: message.state,
+    };
+
+    if (selectedConversationId.value === previousConversationId) {
+      selectedConversationId.value = nextConversationId;
+    }
+  }
+
+  function resolvePendingConversationFromNativeConversation(
+    conversation: ConversationRecord | null,
+  ): void {
+    const currentPending = pendingConversation.value;
+    if (!currentPending || !conversation) {
+      return;
+    }
+    if (!conversationMatchesDestination(conversation, currentPending.destinationHex, nodeStore)) {
+      return;
+    }
+    if (selectedConversationId.value === currentPending.conversationId) {
+      selectedConversationId.value = conversation.conversationId;
+    }
+    pendingConversation.value = null;
+  }
+
+  async function syncConversationStateForMessage(message: MessageRecord): Promise<void> {
+    upsertMessage(message);
+    adoptCanonicalConversationFromMessage(message);
+    await refreshConversations();
+
+    const matchedConversation = nativeConversations.value.find((conversation) =>
+      conversation.conversationId === message.conversationId,
+    ) ?? findNativeConversationByDestination(message.destinationHex)
+      ?? findNativeConversationByDestination(message.sourceHex ?? "");
+
+    resolvePendingConversationFromNativeConversation(matchedConversation);
+
+    if (matchedConversation) {
+      if (
+        !selectedConversationId.value
+        || (
+          isDraftConversationId(selectedConversationId.value)
+          && pendingConversationForDestination(matchedConversation.peerDestinationHex)
+        )
+      ) {
+        selectedConversationId.value = matchedConversation.conversationId;
+      }
+    }
+
+    if (
+      selectedConversationId.value === message.conversationId
+      || matchedConversation?.conversationId === selectedConversationId.value
+    ) {
+      await refreshMessages(message.conversationId);
     }
   }
 
@@ -131,21 +394,42 @@ export const useMessagingStore = defineStore("messaging", () => {
       return;
     }
     if (conversationsRefreshPromise) {
+      conversationsRefreshQueued = true;
       await conversationsRefreshPromise;
       return;
     }
     const promise = (async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
-      nativeConversations.value = await client.listConversations();
-      const currentConversationId = selectedConversationId.value.trim();
-      if (!currentConversationId && nativeConversations.value.length > 0) {
-        selectedConversationId.value = nativeConversations.value[0].conversationId;
-      } else if (
-        currentConversationId
-        && !nativeConversations.value.some((conversation) => conversation.conversationId === currentConversationId)
-      ) {
-        selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
-      }
+      do {
+        conversationsRefreshQueued = false;
+        nativeConversations.value = await client.listConversations();
+        const currentPending = pendingConversation.value;
+        if (currentPending) {
+          const matchedConversation = findNativeConversationByDestination(currentPending.destinationHex);
+          resolvePendingConversationFromNativeConversation(matchedConversation);
+        }
+        const currentConversationId = selectedConversationId.value.trim();
+        const matchedDraftConversation = isDraftConversationId(currentConversationId)
+          ? matchingNativeConversationForDraft(currentConversationId)
+          : null;
+        if (matchedDraftConversation && selectedConversationId.value === currentConversationId) {
+          selectedConversationId.value = matchedDraftConversation.conversationId;
+        }
+        if (!currentConversationId && nativeConversations.value.length > 0) {
+          selectedConversationId.value = nativeConversations.value[0].conversationId;
+        } else if (
+          currentConversationId
+          && !(
+            pendingConversation.value
+            && currentConversationId === pendingConversation.value.conversationId
+          )
+          && !nativeConversations.value.some(
+            (conversation) => conversation.conversationId === currentConversationId,
+          )
+        ) {
+          selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
+        }
+      } while (conversationsRefreshQueued);
     })();
     conversationsRefreshPromise = promise;
     try {
@@ -161,18 +445,36 @@ export const useMessagingStore = defineStore("messaging", () => {
     if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
       return;
     }
+    const requestedConversationId = conversationId.trim();
     if (messagesRefreshPromise) {
+      queuedMessagesConversationId = requestedConversationId;
       await messagesRefreshPromise;
       return;
     }
     const promise = (async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
-      const items = await client.listMessages(conversationId || undefined);
-      const next: StoredMessages = {};
-      for (const message of items) {
-        next[message.messageIdHex] = cloneMessage(message);
-      }
-      byMessageId.value = next;
+      let nextConversationId = requestedConversationId;
+      do {
+        queuedMessagesConversationId = null;
+        let resolvedConversationId = nextConversationId;
+        if (!resolvedConversationId && selectedConversationId.value) {
+          resolvedConversationId = selectedConversationId.value.trim();
+        }
+        if (isDraftConversationId(resolvedConversationId)) {
+          const matchedConversation = pendingConversation.value
+            ? findNativeConversationByDestination(pendingConversation.value.destinationHex)
+            : matchingNativeConversationForDraft(resolvedConversationId);
+          if (matchedConversation) {
+            resolvedConversationId = matchedConversation.conversationId;
+            resolvePendingConversationFromNativeConversation(matchedConversation);
+          } else {
+            resolvedConversationId = canonicalConversationIdForDraft(resolvedConversationId);
+          }
+        }
+        const items = await client.listMessages(resolvedConversationId || undefined);
+        mergeFetchedMessages(resolvedConversationId, items);
+        nextConversationId = queuedMessagesConversationId ?? "";
+      } while (nextConversationId);
     })();
     messagesRefreshPromise = promise;
     try {
@@ -195,9 +497,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       return;
     }
     if (event.scope === "Messages") {
-      if (!event.key || event.key === selectedConversationId.value) {
-        void refreshMessages();
-      }
+      void refreshMessages();
       void refreshConversations();
     }
   }
@@ -219,9 +519,11 @@ export const useMessagingStore = defineStore("messaging", () => {
       void refreshAll();
     }));
     cleanups.push(client.on("messageReceived", (message) => {
+      void syncConversationStateForMessage(message);
       void notifyForInboundMessage(message);
     }));
     cleanups.push(client.on("messageUpdated", (message) => {
+      void syncConversationStateForMessage(message);
       void notifyForInboundMessage(message);
     }));
     void refreshAll();
@@ -260,17 +562,110 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
     nodeStore.assertReadyForOutbound("send LXMF messages");
-    await nodeStore.sendLxmf(destinationHex, bodyUtf8, title);
-    if (supportsNativeNodeRuntime) {
-      await refreshAll();
+    const normalizedDestination = normalizeDestinationHex(destinationHex);
+    const existingConversation = findNativeConversationByDestination(normalizedDestination);
+    const currentPending = pendingConversationForDestination(normalizedDestination);
+    const conversationId = existingConversation?.conversationId
+      ?? currentPending?.conversationId
+      ?? draftConversationId(normalizedDestination);
+
+    if (!existingConversation && !currentPending) {
+      ensureConversationForDestination(normalizedDestination);
+    } else if (selectedConversationId.value !== conversationId) {
+      selectedConversationId.value = conversationId;
+    }
+
+    const now = Date.now();
+    const optimisticMessageId = `local-${now.toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    upsertMessage({
+      messageIdHex: optimisticMessageId,
+      conversationId,
+      direction: "Outbound",
+      destinationHex: normalizedDestination,
+      sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+      title,
+      bodyUtf8,
+      method: "Direct",
+      state: "Queued",
+      detail: undefined,
+      sentAtMs: now,
+      receivedAtMs: undefined,
+      updatedAtMs: now,
+    });
+    persistWeb();
+
+    try {
+      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title);
+      const nextMessages = { ...byMessageId.value };
+      delete nextMessages[optimisticMessageId];
+      nextMessages[messageIdHex] = cloneMessage({
+        messageIdHex,
+        conversationId: canonicalConversationIdForDraft(conversationId) || conversationId,
+        direction: "Outbound",
+        destinationHex: normalizedDestination,
+        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+        title,
+        bodyUtf8,
+        method: "Direct",
+        state: "Queued",
+        detail: undefined,
+        sentAtMs: now,
+        receivedAtMs: undefined,
+        updatedAtMs: Date.now(),
+      });
+      byMessageId.value = nextMessages;
+      persistWeb();
+    } catch (error) {
+      upsertMessage({
+        messageIdHex: optimisticMessageId,
+        conversationId,
+        direction: "Outbound",
+        destinationHex: normalizedDestination,
+        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+        title,
+        bodyUtf8,
+        method: "Direct",
+        state: "Failed",
+        detail: error instanceof Error ? error.message : "Send failed",
+        sentAtMs: now,
+        receivedAtMs: undefined,
+        updatedAtMs: Date.now(),
+      });
+      persistWeb();
+      throw error;
     }
   }
 
   function selectConversation(conversationId: string): void {
     selectedConversationId.value = conversationId;
-    if (supportsNativeNodeRuntime) {
+    if (supportsNativeNodeRuntime && !isDraftConversationId(conversationId)) {
       void refreshMessages(conversationId);
     }
+  }
+
+  function ensureConversationForDestination(destinationHex: string, displayName?: string): void {
+    const normalizedDestination = normalizeDestinationHex(destinationHex);
+    if (!normalizedDestination) {
+      return;
+    }
+
+    const existingConversation = findNativeConversationByDestination(normalizedDestination);
+    if (existingConversation) {
+      pendingConversation.value = null;
+      selectConversation(existingConversation.conversationId);
+      return;
+    }
+
+    const nextPendingConversation: ConversationListItem = {
+      conversationId: draftConversationId(normalizedDestination),
+      destinationHex: normalizedDestination,
+      displayName: displayName?.trim() || displayNameForDestination(normalizedDestination, nodeStore),
+      preview: "New conversation",
+      updatedAtMs: Date.now(),
+      state: "Draft",
+    };
+    pendingConversation.value = nextPendingConversation;
+    selectedConversationId.value = nextPendingConversation.conversationId;
   }
 
   const webMessages = computed(() =>
@@ -285,19 +680,23 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   const conversations = computed(() => {
     if (supportsNativeNodeRuntime) {
-      return nativeConversations.value.map((record) => mapConversationRecord(record, nodeStore));
+      const nextConversations = nativeConversations.value.map((record) => mapConversationRecord(record, nodeStore));
+      const currentPending = pendingConversation.value;
+      if (
+        currentPending
+        && !nextConversations.some((conversation) =>
+          normalizeDestinationHex(conversation.destinationHex)
+            === normalizeDestinationHex(currentPending.destinationHex),
+        )
+      ) {
+        return [currentPending, ...nextConversations];
+      }
+      return nextConversations;
     }
 
     const byConversation = new Map<
       string,
-      {
-        conversationId: string;
-        destinationHex: string;
-        displayName: string;
-        preview: string;
-        updatedAtMs: number;
-        state: MessageRecord["state"];
-      }
+      ConversationListItem
     >();
 
     for (const message of webMessages.value.filter((candidate) => candidate.direction === "Inbound")) {
@@ -330,14 +729,34 @@ export const useMessagingStore = defineStore("messaging", () => {
     if (!conversationId) {
       return [];
     }
-    return Object.values(byMessageId.value)
-      .filter((message) => message.conversationId === conversationId)
-      .sort((left, right) => {
-        const leftTime = left.receivedAtMs ?? left.sentAtMs ?? left.updatedAtMs;
-        const rightTime = right.receivedAtMs ?? right.sentAtMs ?? right.updatedAtMs;
-        return leftTime - rightTime;
-      });
+    return messagesForConversation(conversationId);
   });
+
+  function messagesForConversation(conversationId: string): MessageRecord[] {
+    const conversationIds = resolvedConversationIds(conversationId);
+    if (conversationIds.size === 0) {
+      return [];
+    }
+    return Object.values(byMessageId.value)
+      .filter((message) => conversationIds.has(message.conversationId))
+      .sort((left, right) => {
+        return messageTimestamp(left) - messageTimestamp(right);
+      });
+  }
+
+  function messagesForDestination(destinationHex: string): MessageRecord[] {
+    const knownDestinations = knownConversationDestinations(destinationHex, nodeStore);
+    if (knownDestinations.size === 0) {
+      return [];
+    }
+    return Object.values(byMessageId.value)
+      .filter((message) => {
+        const messageDestination = normalizeDestinationHex(message.destinationHex);
+        const messageSource = normalizeDestinationHex(message.sourceHex ?? "");
+        return knownDestinations.has(messageDestination) || knownDestinations.has(messageSource);
+      })
+      .sort((left, right) => messageTimestamp(left) - messageTimestamp(right));
+  }
 
   return {
     initialized,
@@ -345,9 +764,12 @@ export const useMessagingStore = defineStore("messaging", () => {
     conversations,
     selectedConversation,
     activeMessages,
+    messagesForConversation,
+    messagesForDestination,
     init,
     dispose,
     selectConversation,
+    ensureConversationForDestination,
     sendMessage,
     upsertWebMessage,
   };

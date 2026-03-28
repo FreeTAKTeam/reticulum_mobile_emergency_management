@@ -3467,10 +3467,8 @@ public object FfiConverterTypeNodeStatus: FfiConverterRustBuffer<NodeStatus> {
 data class OperationalSummary (
     var `running`: kotlin.Boolean, 
     var `peerCountTotal`: kotlin.UInt, 
-    var `peerCountCommunicationReady`: kotlin.UInt, 
-    var `peerCountMissionReady`: kotlin.UInt, 
-    var `peerCountRelayEligible`: kotlin.UInt, 
     var `savedPeerCount`: kotlin.UInt, 
+    var `connectedPeerCount`: kotlin.UInt, 
     var `conversationCount`: kotlin.UInt, 
     var `messageCount`: kotlin.UInt, 
     var `eamCount`: kotlin.UInt, 
@@ -3498,8 +3496,6 @@ public object FfiConverterTypeOperationalSummary: FfiConverterRustBuffer<Operati
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterUInt.read(buf),
-            FfiConverterUInt.read(buf),
-            FfiConverterUInt.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
         )
@@ -3508,10 +3504,8 @@ public object FfiConverterTypeOperationalSummary: FfiConverterRustBuffer<Operati
     override fun allocationSize(value: OperationalSummary) = (
             FfiConverterBoolean.allocationSize(value.`running`) +
             FfiConverterUInt.allocationSize(value.`peerCountTotal`) +
-            FfiConverterUInt.allocationSize(value.`peerCountCommunicationReady`) +
-            FfiConverterUInt.allocationSize(value.`peerCountMissionReady`) +
-            FfiConverterUInt.allocationSize(value.`peerCountRelayEligible`) +
             FfiConverterUInt.allocationSize(value.`savedPeerCount`) +
+            FfiConverterUInt.allocationSize(value.`connectedPeerCount`) +
             FfiConverterUInt.allocationSize(value.`conversationCount`) +
             FfiConverterUInt.allocationSize(value.`messageCount`) +
             FfiConverterUInt.allocationSize(value.`eamCount`) +
@@ -3524,10 +3518,8 @@ public object FfiConverterTypeOperationalSummary: FfiConverterRustBuffer<Operati
     override fun write(value: OperationalSummary, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`running`, buf)
             FfiConverterUInt.write(value.`peerCountTotal`, buf)
-            FfiConverterUInt.write(value.`peerCountCommunicationReady`, buf)
-            FfiConverterUInt.write(value.`peerCountMissionReady`, buf)
-            FfiConverterUInt.write(value.`peerCountRelayEligible`, buf)
             FfiConverterUInt.write(value.`savedPeerCount`, buf)
+            FfiConverterUInt.write(value.`connectedPeerCount`, buf)
             FfiConverterUInt.write(value.`conversationCount`, buf)
             FfiConverterUInt.write(value.`messageCount`, buf)
             FfiConverterUInt.write(value.`eamCount`, buf)
@@ -3547,17 +3539,12 @@ data class PeerChange (
     var `displayName`: kotlin.String?, 
     var `appData`: kotlin.String?, 
     var `state`: PeerState, 
-    var `managementState`: PeerManagementState, 
-    var `availabilityState`: PeerAvailabilityState, 
-    var `communicationReady`: kotlin.Boolean, 
-    var `missionReady`: kotlin.Boolean, 
-    var `relayEligible`: kotlin.Boolean, 
+    var `saved`: kotlin.Boolean, 
     var `stale`: kotlin.Boolean, 
     var `activeLink`: kotlin.Boolean, 
     var `lastError`: kotlin.String?, 
     var `lastResolutionError`: kotlin.String?, 
     var `lastResolutionAttemptAtMs`: kotlin.ULong?, 
-    var `lastReadyAtMs`: kotlin.ULong?, 
     var `lastSeenAtMs`: kotlin.ULong, 
     var `announceLastSeenAtMs`: kotlin.ULong?, 
     var `lxmfLastSeenAtMs`: kotlin.ULong?
@@ -3578,16 +3565,11 @@ public object FfiConverterTypePeerChange: FfiConverterRustBuffer<PeerChange> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterTypePeerState.read(buf),
-            FfiConverterTypePeerManagementState.read(buf),
-            FfiConverterTypePeerAvailabilityState.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterOptionalULong.read(buf),
@@ -3602,17 +3584,12 @@ public object FfiConverterTypePeerChange: FfiConverterRustBuffer<PeerChange> {
             FfiConverterOptionalString.allocationSize(value.`displayName`) +
             FfiConverterOptionalString.allocationSize(value.`appData`) +
             FfiConverterTypePeerState.allocationSize(value.`state`) +
-            FfiConverterTypePeerManagementState.allocationSize(value.`managementState`) +
-            FfiConverterTypePeerAvailabilityState.allocationSize(value.`availabilityState`) +
-            FfiConverterBoolean.allocationSize(value.`communicationReady`) +
-            FfiConverterBoolean.allocationSize(value.`missionReady`) +
-            FfiConverterBoolean.allocationSize(value.`relayEligible`) +
+            FfiConverterBoolean.allocationSize(value.`saved`) +
             FfiConverterBoolean.allocationSize(value.`stale`) +
             FfiConverterBoolean.allocationSize(value.`activeLink`) +
             FfiConverterOptionalString.allocationSize(value.`lastError`) +
             FfiConverterOptionalString.allocationSize(value.`lastResolutionError`) +
             FfiConverterOptionalULong.allocationSize(value.`lastResolutionAttemptAtMs`) +
-            FfiConverterOptionalULong.allocationSize(value.`lastReadyAtMs`) +
             FfiConverterULong.allocationSize(value.`lastSeenAtMs`) +
             FfiConverterOptionalULong.allocationSize(value.`announceLastSeenAtMs`) +
             FfiConverterOptionalULong.allocationSize(value.`lxmfLastSeenAtMs`)
@@ -3625,17 +3602,12 @@ public object FfiConverterTypePeerChange: FfiConverterRustBuffer<PeerChange> {
             FfiConverterOptionalString.write(value.`displayName`, buf)
             FfiConverterOptionalString.write(value.`appData`, buf)
             FfiConverterTypePeerState.write(value.`state`, buf)
-            FfiConverterTypePeerManagementState.write(value.`managementState`, buf)
-            FfiConverterTypePeerAvailabilityState.write(value.`availabilityState`, buf)
-            FfiConverterBoolean.write(value.`communicationReady`, buf)
-            FfiConverterBoolean.write(value.`missionReady`, buf)
-            FfiConverterBoolean.write(value.`relayEligible`, buf)
+            FfiConverterBoolean.write(value.`saved`, buf)
             FfiConverterBoolean.write(value.`stale`, buf)
             FfiConverterBoolean.write(value.`activeLink`, buf)
             FfiConverterOptionalString.write(value.`lastError`, buf)
             FfiConverterOptionalString.write(value.`lastResolutionError`, buf)
             FfiConverterOptionalULong.write(value.`lastResolutionAttemptAtMs`, buf)
-            FfiConverterOptionalULong.write(value.`lastReadyAtMs`, buf)
             FfiConverterULong.write(value.`lastSeenAtMs`, buf)
             FfiConverterOptionalULong.write(value.`announceLastSeenAtMs`, buf)
             FfiConverterOptionalULong.write(value.`lxmfLastSeenAtMs`, buf)
@@ -3651,16 +3623,11 @@ data class PeerRecord (
     var `displayName`: kotlin.String?, 
     var `appData`: kotlin.String?, 
     var `state`: PeerState, 
-    var `managementState`: PeerManagementState, 
-    var `availabilityState`: PeerAvailabilityState, 
-    var `communicationReady`: kotlin.Boolean, 
-    var `missionReady`: kotlin.Boolean, 
-    var `relayEligible`: kotlin.Boolean, 
+    var `saved`: kotlin.Boolean, 
     var `stale`: kotlin.Boolean, 
     var `activeLink`: kotlin.Boolean, 
     var `lastResolutionError`: kotlin.String?, 
     var `lastResolutionAttemptAtMs`: kotlin.ULong?, 
-    var `lastReadyAtMs`: kotlin.ULong?, 
     var `lastSeenAtMs`: kotlin.ULong, 
     var `announceLastSeenAtMs`: kotlin.ULong?, 
     var `lxmfLastSeenAtMs`: kotlin.ULong?
@@ -3681,15 +3648,10 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterTypePeerState.read(buf),
-            FfiConverterTypePeerManagementState.read(buf),
-            FfiConverterTypePeerAvailabilityState.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
-            FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterOptionalULong.read(buf),
@@ -3704,16 +3666,11 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterOptionalString.allocationSize(value.`displayName`) +
             FfiConverterOptionalString.allocationSize(value.`appData`) +
             FfiConverterTypePeerState.allocationSize(value.`state`) +
-            FfiConverterTypePeerManagementState.allocationSize(value.`managementState`) +
-            FfiConverterTypePeerAvailabilityState.allocationSize(value.`availabilityState`) +
-            FfiConverterBoolean.allocationSize(value.`communicationReady`) +
-            FfiConverterBoolean.allocationSize(value.`missionReady`) +
-            FfiConverterBoolean.allocationSize(value.`relayEligible`) +
+            FfiConverterBoolean.allocationSize(value.`saved`) +
             FfiConverterBoolean.allocationSize(value.`stale`) +
             FfiConverterBoolean.allocationSize(value.`activeLink`) +
             FfiConverterOptionalString.allocationSize(value.`lastResolutionError`) +
             FfiConverterOptionalULong.allocationSize(value.`lastResolutionAttemptAtMs`) +
-            FfiConverterOptionalULong.allocationSize(value.`lastReadyAtMs`) +
             FfiConverterULong.allocationSize(value.`lastSeenAtMs`) +
             FfiConverterOptionalULong.allocationSize(value.`announceLastSeenAtMs`) +
             FfiConverterOptionalULong.allocationSize(value.`lxmfLastSeenAtMs`)
@@ -3726,16 +3683,11 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterOptionalString.write(value.`displayName`, buf)
             FfiConverterOptionalString.write(value.`appData`, buf)
             FfiConverterTypePeerState.write(value.`state`, buf)
-            FfiConverterTypePeerManagementState.write(value.`managementState`, buf)
-            FfiConverterTypePeerAvailabilityState.write(value.`availabilityState`, buf)
-            FfiConverterBoolean.write(value.`communicationReady`, buf)
-            FfiConverterBoolean.write(value.`missionReady`, buf)
-            FfiConverterBoolean.write(value.`relayEligible`, buf)
+            FfiConverterBoolean.write(value.`saved`, buf)
             FfiConverterBoolean.write(value.`stale`, buf)
             FfiConverterBoolean.write(value.`activeLink`, buf)
             FfiConverterOptionalString.write(value.`lastResolutionError`, buf)
             FfiConverterOptionalULong.write(value.`lastResolutionAttemptAtMs`, buf)
-            FfiConverterOptionalULong.write(value.`lastReadyAtMs`, buf)
             FfiConverterULong.write(value.`lastSeenAtMs`, buf)
             FfiConverterOptionalULong.write(value.`announceLastSeenAtMs`, buf)
             FfiConverterOptionalULong.write(value.`lxmfLastSeenAtMs`, buf)
@@ -4785,68 +4737,6 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
-    }
-}
-
-
-
-
-
-
-enum class PeerAvailabilityState {
-    
-    UNSEEN,
-    DISCOVERED,
-    RESOLVED,
-    READY;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypePeerAvailabilityState: FfiConverterRustBuffer<PeerAvailabilityState> {
-    override fun read(buf: ByteBuffer) = try {
-        PeerAvailabilityState.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: PeerAvailabilityState) = 4UL
-
-    override fun write(value: PeerAvailabilityState, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
-    }
-}
-
-
-
-
-
-
-enum class PeerManagementState {
-    
-    UNMANAGED,
-    MANAGED;
-    companion object
-}
-
-
-/**
- * @suppress
- */
-public object FfiConverterTypePeerManagementState: FfiConverterRustBuffer<PeerManagementState> {
-    override fun read(buf: ByteBuffer) = try {
-        PeerManagementState.values()[buf.getInt() - 1]
-    } catch (e: IndexOutOfBoundsException) {
-        throw RuntimeException("invalid enum value, something is very wrong!!", e)
-    }
-
-    override fun allocationSize(value: PeerManagementState) = 4UL
-
-    override fun write(value: PeerManagementState, buf: ByteBuffer) {
-        buf.putInt(value.ordinal + 1)
     }
 }
 

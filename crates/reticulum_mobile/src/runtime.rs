@@ -3,17 +3,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::announce_compat::{
+    display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
+};
+use crate::messaging_compat as sdkmsg;
+use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
 use crossbeam_channel as cb;
 use fs_err as fs;
 #[cfg(feature = "legacy-lxmf-runtime")]
 use log::error;
 use log::{debug, info};
-use serde::Deserialize;
-use crate::announce_compat::{
-    display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
-};
-use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
-use crate::messaging_compat as sdkmsg;
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
 use rand_core::OsRng;
@@ -32,6 +31,7 @@ use reticulum::transport::{
     TransportConfig,
 };
 use rmpv::Value as MsgPackValue;
+use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 
 #[path = "runtime_projection.rs"]
@@ -43,10 +43,10 @@ use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
     AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EventProjectionRecord, HubMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
-    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection,
-    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerAvailabilityState, PeerChange, PeerManagementState, PeerRecord, PeerState,
-    ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
+    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
+    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange,
+    PeerRecord, PeerState, ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    SyncStatus,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -65,6 +65,9 @@ const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
+const MISSION_SEND_TASK_RESERVED_LIMIT: usize = 2;
+const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize =
+    SEND_TASK_CONCURRENCY_LIMIT - MISSION_SEND_TASK_RESERVED_LIMIT;
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
 
 pub(crate) fn now_ms() -> u64 {
@@ -102,11 +105,20 @@ fn derive_eam_overall_status(record: &EamProjectionRecord) -> Option<String> {
         .map(str::to_string)
 }
 
-fn eam_projection_from_command(
+#[derive(Debug)]
+enum EamCommandAction {
+    Upsert(EamProjectionRecord),
+    Delete {
+        callsign: String,
+        deleted_at_ms: u64,
+    },
+}
+
+fn eam_command_action_from_command(
     envelope: MissionCommandEnvelope<EamUpsertCommandArgs>,
     projection: Option<EamProjectionRecord>,
     received_at_ms: u64,
-) -> Option<EamProjectionRecord> {
+) -> Option<EamCommandAction> {
     if envelope.command_type != "mission.registry.eam.upsert" {
         return None;
     }
@@ -127,7 +139,7 @@ fn eam_projection_from_command(
         projection.sync_error = None;
         projection.last_synced_at_ms = Some(received_at_ms);
         projection.updated_at_ms = projection.updated_at_ms.max(received_at_ms);
-        return Some(projection);
+        return Some(EamCommandAction::Upsert(projection));
     }
 
     if envelope.args.callsign.trim().is_empty()
@@ -179,10 +191,13 @@ fn eam_projection_from_command(
         last_synced_at_ms: Some(received_at_ms),
     };
     record.overall_status = derive_eam_overall_status(&record);
-    Some(record)
+    Some(EamCommandAction::Upsert(record))
 }
 
-fn eam_projection_from_fields(fields_bytes: &[u8], received_at_ms: u64) -> Option<EamProjectionRecord> {
+fn eam_command_action_from_fields(
+    fields_bytes: &[u8],
+    received_at_ms: u64,
+) -> Option<EamCommandAction> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
     let field_entries = msgpack_map_entries(&fields)?;
     let commands = msgpack_get_indexed(field_entries, 0x09)?;
@@ -192,7 +207,22 @@ fn eam_projection_from_fields(fields_bytes: &[u8], received_at_ms: u64) -> Optio
 
     for command in command_entries {
         let command_map = msgpack_map_entries(command)?;
-        let command_type = msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        let command_type =
+            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        if command_type == "mission.registry.eam.delete" {
+            let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
+            let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
+            if callsign.trim().is_empty() {
+                return None;
+            }
+            let deleted_at_ms = msgpack_get_named(args, &["deleted_at_ms"])
+                .and_then(msgpack_u64)
+                .unwrap_or(received_at_ms);
+            return Some(EamCommandAction::Delete {
+                callsign,
+                deleted_at_ms,
+            });
+        }
         if command_type != "mission.registry.eam.upsert" {
             continue;
         }
@@ -234,7 +264,8 @@ fn eam_projection_from_fields(fields_bytes: &[u8], received_at_ms: u64) -> Optio
                 rns_identity: msgpack_get_named(source_map, &["rns_identity"])
                     .and_then(msgpack_string)
                     .unwrap_or_default(),
-                display_name: msgpack_get_named(source_map, &["display_name"]).and_then(msgpack_string),
+                display_name: msgpack_get_named(source_map, &["display_name"])
+                    .and_then(msgpack_string),
             }),
             sync_state: Some("synced".to_string()),
             sync_error: None,
@@ -245,7 +276,7 @@ fn eam_projection_from_fields(fields_bytes: &[u8], received_at_ms: u64) -> Optio
             return None;
         }
         record.overall_status = derive_eam_overall_status(&record);
-        return Some(record);
+        return Some(EamCommandAction::Upsert(record));
     }
 
     None
@@ -258,13 +289,17 @@ async fn persist_received_eam_if_present(
     fields_bytes: Option<&[u8]>,
     body_utf8: &str,
 ) {
-    let parsed_from_fields = fields_bytes.and_then(|value| eam_projection_from_fields(value, now_ms()));
+    let received_at_ms = now_ms();
+    let parsed_from_fields =
+        fields_bytes.and_then(|value| eam_command_action_from_fields(value, received_at_ms));
     if metadata.is_none() && parsed_from_fields.is_none() {
         return;
     }
     if !metadata
         .and_then(|value| value.command_type.as_deref())
-        .is_some_and(|value| value == "mission.registry.eam.upsert")
+        .is_some_and(|value| {
+            value == "mission.registry.eam.upsert" || value == "mission.registry.eam.delete"
+        })
         && parsed_from_fields.is_none()
     {
         return;
@@ -272,38 +307,70 @@ async fn persist_received_eam_if_present(
 
     let parsed = serde_json::from_str::<EamWireBody>(body_utf8)
         .ok()
-        .and_then(|body| eam_projection_from_command(body.command, body.projection, now_ms()))
+        .and_then(|body| {
+            eam_command_action_from_command(body.command, body.projection, received_at_ms)
+        })
         .or_else(|| {
             serde_json::from_str::<MissionCommandEnvelope<EamUpsertCommandArgs>>(body_utf8)
                 .ok()
-                .and_then(|command| eam_projection_from_command(command, None, now_ms()))
+                .and_then(|command| eam_command_action_from_command(command, None, received_at_ms))
         })
         .or(parsed_from_fields);
 
-    let Some(record) = parsed else {
+    let Some(action) = parsed else {
         return;
     };
 
-    match state.app_state.upsert_eam(&record) {
-        Ok(invalidation) => {
-            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
-            if let Ok(summary) = state.app_state.bump_projection_revision(
-                ProjectionScope::OperationalSummary {},
-                None,
-                Some("eam-received".to_string()),
-            ) {
-                bus.emit(NodeEvent::ProjectionInvalidated { invalidation: summary });
+    match action {
+        EamCommandAction::Upsert(record) => match state.app_state.upsert_eam(&record) {
+            Ok(invalidation) => {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                if let Ok(summary) = state.app_state.bump_projection_revision(
+                    ProjectionScope::OperationalSummary {},
+                    None,
+                    Some("eam-received".to_string()),
+                ) {
+                    bus.emit(NodeEvent::ProjectionInvalidated {
+                        invalidation: summary,
+                    });
+                }
             }
-        }
-        Err(err) => {
-            bus.emit(NodeEvent::Error {
-                code: "IoError".to_string(),
-                message: format!(
-                    "failed to persist inbound eam callsign={} reason={}",
-                    record.callsign, err
-                ),
-            });
-        }
+            Err(err) => {
+                bus.emit(NodeEvent::Error {
+                    code: "IoError".to_string(),
+                    message: format!(
+                        "failed to persist inbound eam callsign={} reason={}",
+                        record.callsign, err
+                    ),
+                });
+            }
+        },
+        EamCommandAction::Delete {
+            callsign,
+            deleted_at_ms,
+        } => match state.app_state.delete_eam(&callsign, deleted_at_ms) {
+            Ok(invalidation) => {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                if let Ok(summary) = state.app_state.bump_projection_revision(
+                    ProjectionScope::OperationalSummary {},
+                    None,
+                    Some("eam-deleted".to_string()),
+                ) {
+                    bus.emit(NodeEvent::ProjectionInvalidated {
+                        invalidation: summary,
+                    });
+                }
+            }
+            Err(err) => {
+                bus.emit(NodeEvent::Error {
+                    code: "IoError".to_string(),
+                    message: format!(
+                        "failed to delete inbound eam callsign={} reason={}",
+                        callsign, err
+                    ),
+                });
+            }
+        },
     }
 }
 
@@ -320,7 +387,8 @@ fn event_projection_from_fields(
 
     for command in command_entries {
         let command_map = msgpack_map_entries(command)?;
-        let command_type = msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        let command_type =
+            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
         if command_type != "mission.registry.log_entry.upsert" {
             continue;
         }
@@ -334,7 +402,8 @@ fn event_projection_from_fields(
             .and_then(msgpack_string)
             .or_else(|| msgpack_get_named(args, &["server_time"]).and_then(msgpack_string))
             .or_else(|| msgpack_get_named(args, &["client_time"]).and_then(msgpack_string))?;
-        let command_id = msgpack_get_named(command_map, &["command_id"]).and_then(msgpack_string)?;
+        let command_id =
+            msgpack_get_named(command_map, &["command_id"]).and_then(msgpack_string)?;
         let source_identity = msgpack_get_named(args, &["source_identity"])
             .and_then(msgpack_string)
             .or_else(|| {
@@ -397,7 +466,8 @@ async fn persist_received_event_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
 ) {
-    let parsed_from_fields = fields_bytes.and_then(|value| event_projection_from_fields(value, now_ms()));
+    let parsed_from_fields =
+        fields_bytes.and_then(|value| event_projection_from_fields(value, now_ms()));
     if metadata.is_none() && parsed_from_fields.is_none() {
         return;
     }
@@ -421,7 +491,9 @@ async fn persist_received_event_if_present(
                 None,
                 Some("event-received".to_string()),
             ) {
-                bus.emit(NodeEvent::ProjectionInvalidated { invalidation: summary });
+                bus.emit(NodeEvent::ProjectionInvalidated {
+                    invalidation: summary,
+                });
             }
         }
         Err(err) => {
@@ -493,7 +565,9 @@ fn msgpack_get_indexed<'a>(
     let key_string = key.to_string();
     for (entry_key, entry_value) in entries {
         match entry_key {
-            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => return Some(entry_value),
+            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => {
+                return Some(entry_value)
+            }
             MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
                 return Some(entry_value)
             }
@@ -544,9 +618,11 @@ fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
 
 fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {
     match value {
-        MsgPackValue::Integer(value) => value
-            .as_u64()
-            .or_else(|| value.as_i64().and_then(|entry| (entry >= 0).then_some(entry as u64))),
+        MsgPackValue::Integer(value) => value.as_u64().or_else(|| {
+            value
+                .as_i64()
+                .and_then(|entry| (entry >= 0).then_some(entry as u64))
+        }),
         _ => None,
     }
 }
@@ -586,14 +662,22 @@ async fn announce_destinations(
     reason: &str,
 ) {
     let caps = announce_capabilities.lock().await.clone();
-    let app_hex = app_destination.lock().await.desc.address_hash.to_hex_string();
-    let lxmf_hex = lxmf_destination.lock().await.desc.address_hash.to_hex_string();
+    let app_hex = app_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
+    let lxmf_hex = lxmf_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
     let delivery_app_data = delivery_display_name_app_data(caps.as_str());
     info!(
         "[announce] sending reason={} app={} lxmf={}",
-        reason,
-        app_hex,
-        lxmf_hex,
+        reason, app_hex, lxmf_hex,
     );
     transport
         .send_announce(app_destination, Some(caps.as_bytes()))
@@ -679,24 +763,6 @@ fn from_sdk_peer_state(state: sdkmsg::PeerState) -> PeerState {
         sdkmsg::PeerState::Connecting => PeerState::Connecting {},
         sdkmsg::PeerState::Connected => PeerState::Connected {},
         sdkmsg::PeerState::Disconnected => PeerState::Disconnected {},
-    }
-}
-
-fn from_sdk_peer_management_state(state: sdkmsg::PeerManagementState) -> PeerManagementState {
-    match state {
-        sdkmsg::PeerManagementState::Unmanaged => PeerManagementState::Unmanaged {},
-        sdkmsg::PeerManagementState::Managed => PeerManagementState::Managed {},
-    }
-}
-
-fn from_sdk_peer_availability_state(
-    state: sdkmsg::PeerAvailabilityState,
-) -> PeerAvailabilityState {
-    match state {
-        sdkmsg::PeerAvailabilityState::Unseen => PeerAvailabilityState::Unseen {},
-        sdkmsg::PeerAvailabilityState::Discovered => PeerAvailabilityState::Discovered {},
-        sdkmsg::PeerAvailabilityState::Resolved => PeerAvailabilityState::Resolved {},
-        sdkmsg::PeerAvailabilityState::Ready => PeerAvailabilityState::Ready {},
     }
 }
 
@@ -854,16 +920,11 @@ fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
         display_name: record.display_name,
         app_data: record.app_data,
         state: from_sdk_peer_state(record.state),
-        management_state: from_sdk_peer_management_state(record.management_state),
-        availability_state: from_sdk_peer_availability_state(record.availability_state),
-        communication_ready: record.communication_ready,
-        mission_ready: record.mission_ready,
-        relay_eligible: record.relay_eligible,
+        saved: record.saved,
         stale: record.stale,
         active_link: record.active_link,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_ready_at_ms: record.last_ready_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
         announce_last_seen_at_ms: record.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
@@ -878,17 +939,12 @@ fn from_sdk_peer_change(change: sdkmsg::PeerChange) -> PeerChange {
         display_name: change.display_name,
         app_data: change.app_data,
         state: from_sdk_peer_state(change.state),
-        management_state: from_sdk_peer_management_state(change.management_state),
-        availability_state: from_sdk_peer_availability_state(change.availability_state),
-        communication_ready: change.communication_ready,
-        mission_ready: change.mission_ready,
-        relay_eligible: change.relay_eligible,
+        saved: change.saved,
         stale: change.stale,
         active_link: change.active_link,
         last_error: change.last_error,
         last_resolution_error: change.last_resolution_error,
         last_resolution_attempt_at_ms: change.last_resolution_attempt_at_ms,
-        last_ready_at_ms: change.last_ready_at_ms,
         last_seen_at_ms: change.last_seen_at_ms,
         announce_last_seen_at_ms: change.announce_last_seen_at_ms,
         lxmf_last_seen_at_ms: change.lxmf_last_seen_at_ms,
@@ -991,6 +1047,76 @@ struct RuntimeReceiptBridge {
 struct ReceiptMessageTracking {
     message_id_hex: String,
     recorded_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendTaskClass {
+    Mission,
+    General,
+}
+
+impl SendTaskClass {
+    fn from_metadata(metadata: Option<&MissionSyncMetadata>) -> Self {
+        if metadata.is_some_and(MissionSyncMetadata::is_mission_related) {
+            Self::Mission
+        } else {
+            Self::General
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mission => "mission",
+            Self::General => "general",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SendTaskPermits {
+    general: Arc<Semaphore>,
+    mission: Arc<Semaphore>,
+}
+
+impl SendTaskPermits {
+    fn new() -> Self {
+        Self {
+            general: Arc::new(Semaphore::new(GENERAL_SEND_TASK_CONCURRENCY_LIMIT)),
+            mission: Arc::new(Semaphore::new(MISSION_SEND_TASK_RESERVED_LIMIT)),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limits(general: usize, mission: usize) -> Self {
+        Self {
+            general: Arc::new(Semaphore::new(general)),
+            mission: Arc::new(Semaphore::new(mission)),
+        }
+    }
+
+    async fn acquire(&self, class: SendTaskClass) -> Result<OwnedSemaphorePermit, NodeError> {
+        match class {
+            SendTaskClass::Mission => self
+                .mission
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+            SendTaskClass::General => self
+                .general
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+        }
+    }
+}
+
+fn log_send_task(class: SendTaskClass, message: String) {
+    match class {
+        SendTaskClass::Mission => info!("{message}"),
+        SendTaskClass::General => debug!("{message}"),
+    }
 }
 
 impl ReceiptHandler for RuntimeReceiptBridge {
@@ -1116,7 +1242,8 @@ fn conversation_id_for(destination_hex: &str) -> String {
 }
 
 async fn connected_destination_hexes(state: &NodeRuntimeState) -> Vec<String> {
-    state.connected_peers
+    state
+        .connected_peers
         .lock()
         .await
         .iter()
@@ -1164,7 +1291,11 @@ fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
 }
 
 fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord) {
-    let Some(identity_hex) = peer.identity_hex.as_deref().map(str::trim).filter(|value| !value.is_empty())
+    let Some(identity_hex) = peer
+        .identity_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     else {
         return;
     };
@@ -1172,9 +1303,7 @@ fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord
     let app_received_at_ms = peer
         .announce_last_seen_at_ms
         .unwrap_or(peer.last_seen_at_ms);
-    let lxmf_received_at_ms = peer
-        .lxmf_last_seen_at_ms
-        .unwrap_or(app_received_at_ms);
+    let lxmf_received_at_ms = peer.lxmf_last_seen_at_ms.unwrap_or(app_received_at_ms);
     let display_name = peer.display_name.clone();
     let app_data = peer.app_data.clone().unwrap_or_default();
 
@@ -1202,10 +1331,7 @@ fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord
         });
     }
 
-    messaging.mark_peer_managed(
-        peer.destination_hex.as_str(),
-        matches!(peer.management_state, PeerManagementState::Managed {}),
-    );
+    messaging.mark_peer_saved(peer.destination_hex.as_str(), peer.saved);
     messaging.set_peer_active_link(
         peer.destination_hex.as_str(),
         peer.active_link,
@@ -1213,7 +1339,8 @@ fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord
     );
     messaging.record_resolution_attempt(
         peer.destination_hex.as_str(),
-        peer.last_resolution_attempt_at_ms.unwrap_or(peer.last_seen_at_ms),
+        peer.last_resolution_attempt_at_ms
+            .unwrap_or(peer.last_seen_at_ms),
     );
     messaging.record_resolution_error(
         peer.destination_hex.as_str(),
@@ -1221,24 +1348,83 @@ fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord
     );
 }
 
+fn restore_saved_peer_management(
+    messaging: &mut sdkmsg::MessagingStore,
+    saved_peers: &[crate::types::SavedPeerRecord],
+) -> Vec<String> {
+    let mut restored_destinations = Vec::new();
+    let mut seen_destinations = HashSet::new();
+    for peer in saved_peers {
+        let Some(destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+            continue;
+        };
+        if !seen_destinations.insert(destination_hex.clone()) {
+            continue;
+        }
+        messaging.mark_peer_saved(destination_hex.as_str(), true);
+        restored_destinations.push(destination_hex);
+    }
+    restored_destinations
+}
+
 async fn seed_runtime_projection_snapshot(
     state: &NodeRuntimeState,
     snapshot: &runtime_projection::RuntimeProjectionSnapshot,
 ) {
     let sync_status = snapshot.sync_status();
-    *state.active_propagation_node_hex.lock().await = sync_status.active_propagation_node_hex.clone();
+    *state.active_propagation_node_hex.lock().await =
+        sync_status.active_propagation_node_hex.clone();
     let mut messaging = state.messaging.lock().await;
     messaging.update_sync_status(|current| {
         if let Some(sdk_sync_status) = to_sdk_sync_status(sync_status.clone()) {
             *current = sdk_sync_status;
         }
     });
-    for peer in snapshot.peers() {
+    // Only saved peers survive restart. Unsaved discovered peers must be rebuilt
+    // from fresh announces after startup instead of being revived from cache.
+    for peer in snapshot.restored_peers() {
         seed_peer_announces(&mut messaging, &peer);
     }
     for message in snapshot.messages() {
         messaging.upsert_message(to_sdk_message_record(message));
     }
+}
+
+fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
+    peer.active_link || matches!(peer.state, sdkmsg::PeerState::Connected)
+}
+
+async fn saved_peer_prefers_propagation(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    has_active_relay: bool,
+) -> bool {
+    if !has_active_relay {
+        return false;
+    }
+
+    let normalized_destination = requested_destination_hex.to_ascii_lowercase();
+    let canonical_destination =
+        canonical_app_destination_hex(state, normalized_destination.as_str()).await;
+    let saved_peers = match state.app_state.get_saved_peers() {
+        Ok(saved_peers) => saved_peers,
+        Err(_) => return false,
+    };
+    let is_saved = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .any(|destination_hex| {
+            destination_hex == canonical_destination || destination_hex == normalized_destination
+        });
+    if !is_saved {
+        return false;
+    }
+
+    let Some(peer) = peer_for_any_destination_hex(state, canonical_destination.as_str()).await
+    else {
+        return true;
+    };
+    !sdk_peer_is_directly_reachable(&peer)
 }
 
 async fn emit_peer_resolved_for_destination(
@@ -1313,10 +1499,7 @@ async fn peer_for_any_destination_hex(
         })
 }
 
-async fn resolve_lxmf_destination_hex(
-    state: &NodeRuntimeState,
-    destination_hex: &str,
-) -> String {
+async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
         return normalized_destination;
@@ -1328,14 +1511,10 @@ async fn resolve_lxmf_destination_hex(
     {
         return normalized_destination;
     }
-    peer.lxmf_destination_hex
-        .unwrap_or(peer.destination_hex)
+    peer.lxmf_destination_hex.unwrap_or(peer.destination_hex)
 }
 
-async fn canonical_app_destination_hex(
-    state: &NodeRuntimeState,
-    destination_hex: &str,
-) -> String {
+async fn canonical_app_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
         return normalized_destination;
@@ -1368,15 +1547,12 @@ async fn peer_destinations_equivalent(
         return false;
     };
 
-    if left_peer.identity_hex.is_some()
-        && left_peer.identity_hex == right_peer.identity_hex
-    {
+    if left_peer.identity_hex.is_some() && left_peer.identity_hex == right_peer.identity_hex {
         return true;
     }
 
-    let matches = equivalent_peer_destinations(&left_peer).any(|candidate| {
-        equivalent_peer_destinations(&right_peer).any(|other| candidate == other)
-    });
+    let matches = equivalent_peer_destinations(&left_peer)
+        .any(|candidate| equivalent_peer_destinations(&right_peer).any(|other| candidate == other));
     matches
 }
 
@@ -1393,11 +1569,9 @@ fn propagation_candidate_sort_key(
     announce: &sdkmsg::AnnounceRecord,
     preferred_destination_hex: Option<&str>,
 ) -> (u8, u8, u64, String) {
-    let preferred_rank = if preferred_destination_hex
-        .is_some_and(|preferred| {
-            preferred == announce.destination_hex || preferred == announce.identity_hex
-        })
-    {
+    let preferred_rank = if preferred_destination_hex.is_some_and(|preferred| {
+        preferred == announce.destination_hex || preferred == announce.identity_hex
+    }) {
         0
     } else {
         1
@@ -1419,10 +1593,7 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
         .iter()
         .filter(|record| record.destination_kind == "lxmf_propagation")
         .min_by_key(|record| {
-            propagation_candidate_sort_key(
-                record,
-                state.preferred_propagation_node_hex.as_deref(),
-            )
+            propagation_candidate_sort_key(record, state.preferred_propagation_node_hex.as_deref())
         })
         .map(|record| record.destination_hex.clone());
 
@@ -1490,11 +1661,7 @@ async fn resolve_peer_route(
     Ok(())
 }
 
-fn spawn_managed_peer_resolution(
-    state: NodeRuntimeState,
-    bus: EventBus,
-    destination_hex: String,
-) {
+fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
     tokio::spawn(async move {
         let retry_delays_secs = [0_u64, 3, 8, 15, 30];
         for delay_secs in retry_delays_secs {
@@ -1504,15 +1671,12 @@ fn spawn_managed_peer_resolution(
 
             let should_retry = {
                 let messaging = state.messaging.lock().await;
-                if !messaging.is_peer_managed(destination_hex.as_str()) {
+                if !messaging.is_peer_saved(destination_hex.as_str()) {
                     false
                 } else {
-                    !matches!(
-                        messaging
-                            .peer_by_destination(destination_hex.as_str())
-                            .map(|peer| peer.availability_state),
-                        Some(sdkmsg::PeerAvailabilityState::Ready)
-                    )
+                    messaging
+                        .peer_by_destination(destination_hex.as_str())
+                        .is_none_or(|peer| !sdk_peer_is_directly_reachable(&peer))
                 }
             };
 
@@ -1534,23 +1698,19 @@ fn spawn_managed_peer_resolution(
     });
 }
 
-fn spawn_passive_peer_resolution(
-    state: NodeRuntimeState,
-    bus: EventBus,
-    destination_hex: String,
-) {
+fn spawn_passive_peer_resolution(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
     tokio::spawn(async move {
         let should_resolve = {
             let messaging = state.messaging.lock().await;
             match messaging.peer_by_destination(destination_hex.as_str()) {
                 Some(peer) => {
-                    !matches!(
-                        peer.availability_state,
-                        sdkmsg::PeerAvailabilityState::Ready | sdkmsg::PeerAvailabilityState::Resolved
-                    ) && peer.last_resolution_attempt_at_ms.is_none_or(|attempted_at_ms| {
-                        now_ms().saturating_sub(attempted_at_ms)
-                            >= PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS
-                    })
+                    (peer.identity_hex.is_none() || peer.lxmf_destination_hex.is_none())
+                        && peer
+                            .last_resolution_attempt_at_ms
+                            .is_none_or(|attempted_at_ms| {
+                                now_ms().saturating_sub(attempted_at_ms)
+                                    >= PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS
+                            })
                 }
                 None => false,
             }
@@ -1584,7 +1744,11 @@ async fn upsert_message_record(
     let changed = state
         .projection_journal
         .record_message(message.clone(), Some("message-upsert"));
-    state.messaging.lock().await.upsert_message(to_sdk_message_record(message.clone()));
+    state
+        .messaging
+        .lock()
+        .await
+        .upsert_message(to_sdk_message_record(message.clone()));
 
     if changed {
         if emit_received {
@@ -1709,8 +1873,7 @@ struct NodeRuntimeState {
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
-    pending_lxmf_acknowledgements:
-        Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
+    pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
@@ -1718,7 +1881,7 @@ struct NodeRuntimeState {
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
     preferred_propagation_node_hex: Option<String>,
-    send_task_semaphore: Arc<Semaphore>,
+    send_task_permits: SendTaskPermits,
 }
 
 fn prune_expired_buffered_acknowledgements(
@@ -1745,14 +1908,10 @@ fn prune_expired_receipt_tracking(
 }
 
 async fn acquire_send_task_permit(
-    state: &NodeRuntimeState,
+    permits: &SendTaskPermits,
+    class: SendTaskClass,
 ) -> Result<OwnedSemaphorePermit, NodeError> {
-    state
-        .send_task_semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| NodeError::InternalError {})
+    permits.acquire(class).await
 }
 
 async fn ensure_destination_desc(
@@ -1803,8 +1962,7 @@ async fn resolve_lxmf_destination_desc(
     Ok(lxmf_destination.desc)
 }
 
-#[cfg(feature = "legacy-lxmf-runtime")]
-async fn ensure_lxmf_output_link(
+async fn ensure_output_link(
     state: &NodeRuntimeState,
     desc: DestinationDesc,
 ) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
@@ -1849,6 +2007,14 @@ async fn ensure_lxmf_output_link(
     }
 
     Err(NodeError::Timeout {})
+}
+
+#[cfg(feature = "legacy-lxmf-runtime")]
+async fn ensure_lxmf_output_link(
+    state: &NodeRuntimeState,
+    desc: DestinationDesc,
+) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
+    ensure_output_link(state, desc).await
 }
 
 #[cfg(feature = "legacy-lxmf-runtime")]
@@ -1999,7 +2165,10 @@ async fn register_pending_lxmf_delivery(
 }
 
 fn lxmf_send_succeeded(outcome: RnsSendOutcome) -> bool {
-    matches!(outcome, RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast)
+    matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    )
 }
 
 fn lxmf_delivery_status_for(report: &LxmfSendReport) -> LxmfDeliveryStatus {
@@ -2046,15 +2215,41 @@ async fn send_lxmf_with_delivery_policy(
     fields_bytes: Option<Vec<u8>>,
     metadata: Option<MissionSyncMetadata>,
     send_mode: SendMode,
+    send_task_class: SendTaskClass,
 ) -> Result<LxmfSendReport, NodeError> {
     const DIRECT_ATTEMPTS: usize = 5;
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     let has_active_relay = has_active_propagation_relay(state).await;
+    let prefer_propagation = matches!(send_mode, SendMode::Auto {})
+        && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
 
-    if matches!(send_mode, SendMode::PropagationOnly {}) {
+    if matches!(send_mode, SendMode::PropagationOnly {}) || prefer_propagation {
+        if prefer_propagation {
+            info!(
+                "[lxmf][mission] saved peer {} is not directly reachable; using propagation relay",
+                requested_destination_hex,
+            );
+        }
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
+                send_task_class.label(),
+                requested_destination_hex,
+            ),
+        );
+        let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
+                send_task_class.label(),
+                requested_destination_hex,
+            ),
+        );
         return state
             .sdk
             .send_lxmf(
@@ -2074,18 +2269,40 @@ async fn send_lxmf_with_delivery_policy(
         let resolved_destination_hex =
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
-        match state
-            .sdk
-            .send_lxmf(
-                destination,
-                body,
-                title.clone(),
-                fields_bytes.clone(),
-                metadata.clone(),
+        log_send_task(
+            send_task_class,
+            format!(
+                "[lxmf][queue] waiting for {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                send_task_class.label(),
+                requested_destination_hex,
                 send_mode,
-            )
-            .await
-        {
+            ),
+        );
+        let send_result = {
+            let _permit =
+                acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+            log_send_task(
+                send_task_class,
+                format!(
+                    "[lxmf][queue] acquired {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                    send_task_class.label(),
+                    requested_destination_hex,
+                    send_mode,
+                ),
+            );
+            state
+                .sdk
+                .send_lxmf(
+                    destination,
+                    body,
+                    title.clone(),
+                    fields_bytes.clone(),
+                    metadata.clone(),
+                    send_mode,
+                )
+                .await
+        };
+        match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
                 return Ok(report);
             }
@@ -2114,11 +2331,22 @@ async fn send_lxmf_with_delivery_policy(
         }
 
         if attempt < DIRECT_ATTEMPTS {
+            log_send_task(
+                send_task_class,
+                format!(
+                    "[lxmf][queue] sleeping before retry destination={} mode={:?} next_attempt={}/{} delay_ms={}",
+                    requested_destination_hex,
+                    send_mode,
+                    attempt + 1,
+                    DIRECT_ATTEMPTS,
+                    RETRY_DELAY.as_millis(),
+                ),
+            );
             tokio::time::sleep(RETRY_DELAY).await;
         }
     }
 
-    if !matches!(send_mode, SendMode::Auto {}) || !has_active_relay {
+    if !matches!(send_mode, SendMode::Auto {}) || !has_active_propagation_relay(state).await {
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }
 
@@ -2129,6 +2357,23 @@ async fn send_lxmf_with_delivery_policy(
     let resolved_destination_hex =
         resolve_lxmf_destination_hex(state, requested_destination_hex).await;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+    log_send_task(
+        send_task_class,
+        format!(
+            "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=fallback",
+            send_task_class.label(),
+            requested_destination_hex,
+        ),
+    );
+    let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+    log_send_task(
+        send_task_class,
+        format!(
+            "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=fallback",
+            send_task_class.label(),
+            requested_destination_hex,
+        ),
+    );
     let mut report = state
         .sdk
         .send_lxmf(
@@ -2195,7 +2440,9 @@ async fn emit_received_payload(
             .as_ref()
             .is_some_and(MissionSyncMetadata::is_mission_related)
         {
-            let peer_hex = source_hex.clone().unwrap_or_else(|| destination_hex.clone());
+            let peer_hex = source_hex
+                .clone()
+                .unwrap_or_else(|| destination_hex.clone());
             let message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
                 .map(|wire| hex::encode(wire.message_id()))
                 .unwrap_or_else(|_| hex::encode(destination_hex.as_bytes()));
@@ -2276,18 +2523,14 @@ async fn ack_pending_lxmf_delivery(
 
     let Some(pending) = matched else {
         if let Some(tracking_key) = metadata.tracking_key().map(ToOwned::to_owned) {
-            state
-                .pending_lxmf_acknowledgements
-                .lock()
-                .await
-                .insert(
-                    tracking_key.clone(),
-                    PendingLxmfAcknowledgement {
-                        source_hex: source_hex.to_string(),
-                        detail: detail.clone(),
-                        buffered_at_ms: now_ms(),
-                    },
-                );
+            state.pending_lxmf_acknowledgements.lock().await.insert(
+                tracking_key.clone(),
+                PendingLxmfAcknowledgement {
+                    source_hex: source_hex.to_string(),
+                    detail: detail.clone(),
+                    buffered_at_ms: now_ms(),
+                },
+            );
             info!(
                 "[lxmf][mission] buffered acknowledgement source={} command={} correlation={} detail={}",
                 source_hex,
@@ -2608,7 +2851,7 @@ pub async fn run_node(
     )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
-    let send_task_semaphore = Arc::new(Semaphore::new(SEND_TASK_CONCURRENCY_LIMIT));
+    let send_task_permits = SendTaskPermits::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
         projection_journal_path(config.storage_dir.as_deref()),
         bus.clone(),
@@ -2647,19 +2890,26 @@ pub async fn run_node(
             .hub_identity_hash
             .as_ref()
             .and_then(|value| normalize_hex_32(value)),
-        send_task_semaphore: send_task_semaphore.clone(),
+        send_task_permits: send_task_permits.clone(),
     };
 
     if let Some(snapshot) = projection_journal.load_snapshot() {
-        projection_journal.seed_snapshot(snapshot.clone());
+        let restored_snapshot = snapshot.pruned_for_restore();
+        projection_journal.seed_snapshot(restored_snapshot.clone());
         if let Ok(mut guard) = peers_snapshot.lock() {
-            *guard = snapshot.peers();
+            *guard = restored_snapshot.peers();
         }
         if let Ok(mut guard) = sync_status_snapshot.lock() {
-            *guard = snapshot.sync_status();
+            *guard = restored_snapshot.sync_status();
         }
-        seed_runtime_projection_snapshot(&state, &snapshot).await;
+        seed_runtime_projection_snapshot(&state, &restored_snapshot).await;
     }
+
+    let restored_saved_destinations = {
+        let saved_peers = state.app_state.get_saved_peers().unwrap_or_default();
+        let mut messaging = state.messaging.lock().await;
+        restore_saved_peer_management(&mut messaging, saved_peers.as_slice())
+    };
 
     if let Err(err) = sdk.start().await {
         bus.emit(NodeEvent::Error {
@@ -2670,6 +2920,14 @@ pub async fn run_node(
 
     refresh_peer_snapshot(&state).await;
     sync_auto_propagation_node(&state, &bus).await;
+    for destination_hex in restored_saved_destinations {
+        if let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) {
+            if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
+                transport.request_path(&destination, None, None).await;
+                spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
+            }
+        }
+    }
     let initial_sync_status = from_sdk_sync_status(state.messaging.lock().await.sync_status());
     refresh_sync_status_snapshot(&state, &initial_sync_status);
 
@@ -2811,8 +3069,11 @@ pub async fn run_node(
                         };
                         let interface_hex = hex::encode(event.interface);
                         let received_at_ms = now_ms();
-                        state.messaging.lock().await.record_announce(to_sdk_announce_record(
-                            AnnounceRecord {
+                        state
+                            .messaging
+                            .lock()
+                            .await
+                            .record_announce(to_sdk_announce_record(AnnounceRecord {
                                 destination_hex: destination_hex.clone(),
                                 identity_hex: identity_hex.clone(),
                                 destination_kind: destination_kind.clone(),
@@ -2821,8 +3082,7 @@ pub async fn run_node(
                                 hops: event.hops,
                                 interface_hex: interface_hex.clone(),
                                 received_at_ms,
-                            },
-                        ));
+                            }));
                         sdk.record_announce_received(
                             &destination_hex,
                             &identity_hex,
@@ -3057,8 +3317,7 @@ pub async fn run_node(
                 if pruned_acks > 0 || pruned_receipts > 0 {
                     debug!(
                         "[runtime] pruned stale state buffered_acks={} receipt_tracking={}",
-                        pruned_acks,
-                        pruned_receipts,
+                        pruned_acks, pruned_receipts,
                     );
                 }
             }
@@ -3083,11 +3342,11 @@ pub async fn run_node(
                         match event.event {
                             LinkEvent::Activated => {
                                 connected_peers.lock().await.insert(event.address_hash);
-                                state
-                                    .messaging
-                                    .lock()
-                                    .await
-                                    .set_peer_active_link(&destination_hex, true, now_ms());
+                                state.messaging.lock().await.set_peer_active_link(
+                                    &destination_hex,
+                                    true,
+                                    now_ms(),
+                                );
                                 let state_name = state
                                     .messaging
                                     .lock()
@@ -3106,11 +3365,11 @@ pub async fn run_node(
                             }
                             LinkEvent::Closed => {
                                 connected_peers.lock().await.remove(&event.address_hash);
-                                state
-                                    .messaging
-                                    .lock()
-                                    .await
-                                    .set_peer_active_link(&destination_hex, false, now_ms());
+                                state.messaging.lock().await.set_peer_active_link(
+                                    &destination_hex,
+                                    false,
+                                    now_ms(),
+                                );
                                 let state_name = state
                                     .messaging
                                     .lock()
@@ -3198,14 +3457,10 @@ pub async fn run_node(
                 tokio::spawn(async move {
                     let result = resolve_peer_route(&state, &bus, destination_hex.as_str()).await;
                     if let Err(err) = &result {
-                        state
-                            .messaging
-                            .lock()
-                            .await
-                            .record_resolution_error(
-                                destination_hex.as_str(),
-                                Some(err.to_string()),
-                            );
+                        state.messaging.lock().await.record_resolution_error(
+                            destination_hex.as_str(),
+                            Some(err.to_string()),
+                        );
                         emit_peer_changed(&state, &bus, destination_hex.as_str()).await;
                     }
                     let _ = resp.send(result);
@@ -3229,23 +3484,27 @@ pub async fn run_node(
                 let destination_hex_copy = destination_hex.clone();
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    state.messaging.lock().await.mark_peer_managed(&destination_hex, true);
+                    state
+                        .messaging
+                        .lock()
+                        .await
+                        .mark_peer_saved(&destination_hex, true);
                     emit_peer_changed(&state, &bus, &destination_hex).await;
                     state
                         .sdk
                         .record_peer_changed(&destination_hex, PeerState::Connecting {}, None);
-                    transport.request_path(&dest, None, None).await;
-                    spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex.clone());
+                    resolve_peer_route(&state, &bus, &destination_hex).await?;
+                    let desc = ensure_destination_desc(&state, dest, None).await?;
+                    let _link = ensure_output_link(&state, desc).await?;
                     sync_auto_propagation_node(&state, &bus).await;
                     Ok::<(), NodeError>(())
                 }
                 .await;
                 if let Err(err) = &result {
-                    state
-                        .messaging
-                        .lock()
-                        .await
-                        .record_resolution_error(destination_hex_copy.as_str(), Some(err.to_string()));
+                    state.messaging.lock().await.record_resolution_error(
+                        destination_hex_copy.as_str(),
+                        Some(err.to_string()),
+                    );
                     emit_peer_changed(&state, &bus, &destination_hex_copy).await;
                     state.sdk.record_peer_changed(
                         &destination_hex_copy,
@@ -3261,7 +3520,11 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    state.messaging.lock().await.mark_peer_managed(&destination_hex, false);
+                    state
+                        .messaging
+                        .lock()
+                        .await
+                        .mark_peer_saved(&destination_hex, false);
                     connected_peers.lock().await.remove(&dest);
                     // Clean up any stale link from older builds if present.
                     if let Some(link) = out_links.lock().await.remove(&dest) {
@@ -3289,319 +3552,348 @@ pub async fn run_node(
                 let state = state.clone();
                 let bus = bus.clone();
                 let transport = transport.clone();
-                tokio::spawn(async move {
-                let _send_task_permit = match acquire_send_task_permit(&state).await {
-                    Ok(permit) => permit,
-                    Err(err) => {
-                        let _ = resp.send(Err(err));
-                        return;
-                    }
+                let metadata = fields_bytes
+                    .as_deref()
+                    .and_then(parse_mission_sync_metadata);
+                let send_task_class = if fields_bytes.is_some() {
+                    SendTaskClass::from_metadata(metadata.as_ref())
+                } else {
+                    SendTaskClass::General
                 };
-                let result = async {
-                    let metadata = fields_bytes
-                        .as_deref()
-                        .and_then(parse_mission_sync_metadata);
-                    let lxmf_report = if fields_bytes.is_some() {
-                        Some(
-                            send_lxmf_with_delivery_policy(
-                                &state,
-                                &destination_hex,
-                                &bytes,
-                                None,
-                                fields_bytes.clone(),
-                                metadata.clone(),
-                                send_mode,
-                            )
-                            .await?,
-                        )
-                    } else {
-                        None
-                    };
-                    let outcome = if let Some(report) = lxmf_report.as_ref() {
-                        report.outcome
-                    } else {
-                        let dest = parse_address_hash(&destination_hex)?;
-                        send_transport_packet_with_path_retry(&transport, dest, &bytes).await
-                    };
-                    let mapped = send_outcome_to_udl(outcome);
-                    bus.emit(NodeEvent::PacketSent {
-                        destination_hex: destination_hex.clone(),
-                        bytes: bytes.clone(),
-                        outcome: mapped,
-                    });
-
-                    if let Some(report) = lxmf_report.as_ref() {
-                        if let Some(metadata) = report.metadata.as_ref() {
-                            if metadata.is_mission_related() {
-                                info!(
-                                    "[lxmf][mission] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
-                                    metadata.primary_kind(),
-                                    metadata.primary_name().unwrap_or("-"),
-                                    report.resolved_destination_hex.as_str(),
-                                    report.message_id_hex,
-                                    metadata.event_uid.as_deref().unwrap_or("-"),
-                                    metadata.mission_uid.as_deref().unwrap_or("-"),
-                                    metadata.correlation_id.as_deref().unwrap_or("-"),
-                                );
-                            }
-                        }
-
-                        if let Some(registered) = register_pending_lxmf_delivery(
-                            &state,
-                            report,
-                        )
-                        .await
-                        {
-                            let pending = &registered.pending;
-                            if matches!(
-                                report.outcome,
-                                RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                            ) {
-                                state.sdk.record_delivery_sent(
-                                    &pending.message_id_hex,
-                                    &pending.destination_hex,
-                                    pending.correlation_id.as_deref(),
-                                    pending.command_id.as_deref(),
-                                    pending.command_type.as_deref(),
-                                    pending.event_uid.as_deref(),
-                                    pending.mission_uid.as_deref(),
-                                );
-                                emit_lxmf_delivery(
-                                    &bus,
-                                    &pending,
-                                    lxmf_delivery_status_for(report),
+                log_send_task(
+                    send_task_class,
+                    format!(
+                        "[lxmf][queue] enqueued {} send destination={} mode={:?} has_fields={}",
+                        send_task_class.label(),
+                        destination_hex,
+                        send_mode,
+                        fields_bytes.is_some(),
+                    ),
+                );
+                tokio::spawn(async move {
+                    let result = async {
+                        let lxmf_report = if fields_bytes.is_some() {
+                            Some(
+                                send_lxmf_with_delivery_policy(
+                                    &state,
+                                    &destination_hex,
+                                    &bytes,
                                     None,
-                                );
-                                info!(
-                                    "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
-                                    pending.message_id_hex,
-                                    pending.destination_hex,
-                                    pending.command_type.as_deref().unwrap_or("-"),
-                                    pending.correlation_id.as_deref().unwrap_or("-"),
-                                );
-                                if let Some(buffered_ack) = registered.buffered_ack {
-                                    let tracking_key = pending
-                                        .correlation_id
-                                        .as_deref()
-                                        .or(pending.command_id.as_deref())
-                                        .map(ToOwned::to_owned);
-                                    if peer_destinations_equivalent(
-                                        &state,
-                                        pending.destination_hex.as_str(),
-                                        buffered_ack.source_hex.as_str(),
-                                    )
-                                    .await
+                                    fields_bytes.clone(),
+                                    metadata.clone(),
+                                    send_mode,
+                                    send_task_class,
+                                )
+                                .await?,
+                            )
+                        } else {
+                            None
+                        };
+                        let outcome = if let Some(report) = lxmf_report.as_ref() {
+                            report.outcome
+                        } else {
+                            log_send_task(
+                                SendTaskClass::General,
+                                format!(
+                                    "[lxmf][queue] waiting for general send slot destination={} mode=transport-bytes",
+                                    destination_hex,
+                                ),
+                            );
+                            let _permit = acquire_send_task_permit(
+                                &state.send_task_permits,
+                                SendTaskClass::General,
+                            )
+                            .await?;
+                            log_send_task(
+                                SendTaskClass::General,
+                                format!(
+                                    "[lxmf][queue] acquired general send slot destination={} mode=transport-bytes",
+                                    destination_hex,
+                                ),
+                            );
+                            let dest = parse_address_hash(&destination_hex)?;
+                            send_transport_packet_with_path_retry(&transport, dest, &bytes).await
+                        };
+                        let mapped = send_outcome_to_udl(outcome);
+                        bus.emit(NodeEvent::PacketSent {
+                            destination_hex: destination_hex.clone(),
+                            bytes: bytes.clone(),
+                            outcome: mapped,
+                        });
+
+                        if let Some(report) = lxmf_report.as_ref() {
+                            if let Some(metadata) = report.metadata.as_ref() {
+                                if metadata.is_mission_related() {
+                                    info!(
+                                        "[lxmf][mission] outbound kind={} name={} destination={} message_id={} event_uid={} mission_uid={} correlation={}",
+                                        metadata.primary_kind(),
+                                        metadata.primary_name().unwrap_or("-"),
+                                        report.resolved_destination_hex.as_str(),
+                                        report.message_id_hex,
+                                        metadata.event_uid.as_deref().unwrap_or("-"),
+                                        metadata.mission_uid.as_deref().unwrap_or("-"),
+                                        metadata.correlation_id.as_deref().unwrap_or("-"),
+                                    );
+                                }
+                            }
+
+                            if let Some(registered) = register_pending_lxmf_delivery(&state, report).await {
+                                let pending = &registered.pending;
+                                if matches!(
+                                    report.outcome,
+                                    RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                                ) {
+                                    state.sdk.record_delivery_sent(
+                                        &pending.message_id_hex,
+                                        &pending.destination_hex,
+                                        pending.correlation_id.as_deref(),
+                                        pending.command_id.as_deref(),
+                                        pending.command_type.as_deref(),
+                                        pending.event_uid.as_deref(),
+                                        pending.mission_uid.as_deref(),
+                                    );
+                                    emit_lxmf_delivery(
+                                        &bus,
+                                        &pending,
+                                        lxmf_delivery_status_for(report),
+                                        None,
+                                    );
+                                    info!(
+                                        "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
+                                        pending.message_id_hex,
+                                        pending.destination_hex,
+                                        pending.command_type.as_deref().unwrap_or("-"),
+                                        pending.correlation_id.as_deref().unwrap_or("-"),
+                                    );
+                                    if let Some(buffered_ack) = registered.buffered_ack {
+                                        let tracking_key = pending
+                                            .correlation_id
+                                            .as_deref()
+                                            .or(pending.command_id.as_deref())
+                                            .map(ToOwned::to_owned);
+                                        if peer_destinations_equivalent(
+                                            &state,
+                                            pending.destination_hex.as_str(),
+                                            buffered_ack.source_hex.as_str(),
+                                        )
+                                        .await
+                                        {
+                                            if let Some(tracking_key) = tracking_key.as_deref() {
+                                                state
+                                                    .pending_lxmf_deliveries
+                                                    .lock()
+                                                    .await
+                                                    .remove(tracking_key);
+                                            }
+                                            state.sdk.record_delivery_acknowledged(
+                                                &pending.message_id_hex,
+                                                &pending.destination_hex,
+                                                Some(buffered_ack.source_hex.as_str()),
+                                                pending.correlation_id.as_deref(),
+                                                pending.command_id.as_deref(),
+                                                pending.command_type.as_deref(),
+                                                pending.event_uid.as_deref(),
+                                                pending.mission_uid.as_deref(),
+                                                buffered_ack.detail.as_deref(),
+                                            );
+                                            emit_lxmf_delivery_with_source(
+                                                &bus,
+                                                pending,
+                                                Some(buffered_ack.source_hex.clone()),
+                                                LxmfDeliveryStatus::Acknowledged {},
+                                                buffered_ack.detail.clone(),
+                                            );
+                                            info!(
+                                                "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
+                                                pending.message_id_hex,
+                                                pending.destination_hex,
+                                                pending.command_type.as_deref().unwrap_or("-"),
+                                                pending.correlation_id.as_deref().unwrap_or("-"),
+                                                buffered_ack.detail.as_deref().unwrap_or("-"),
+                                            );
+                                        } else {
+                                            if let Some(tracking_key) = tracking_key {
+                                                state
+                                                    .pending_lxmf_acknowledgements
+                                                    .lock()
+                                                    .await
+                                                    .insert(tracking_key, buffered_ack.clone());
+                                            }
+                                            info!(
+                                                "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
+                                                pending.message_id_hex,
+                                                pending.destination_hex,
+                                                buffered_ack.source_hex,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    let failure_detail = format!("{mapped:?}");
                                     {
-                                        if let Some(tracking_key) = tracking_key.as_deref() {
-                                            state
-                                                .pending_lxmf_deliveries
-                                                .lock()
-                                                .await
-                                                .remove(tracking_key);
-                                        }
-                                        state.sdk.record_delivery_acknowledged(
-                                            &pending.message_id_hex,
-                                            &pending.destination_hex,
-                                            Some(buffered_ack.source_hex.as_str()),
-                                            pending.correlation_id.as_deref(),
-                                            pending.command_id.as_deref(),
-                                            pending.command_type.as_deref(),
-                                            pending.event_uid.as_deref(),
-                                            pending.mission_uid.as_deref(),
-                                            buffered_ack.detail.as_deref(),
-                                        );
-                                        emit_lxmf_delivery_with_source(
-                                            &bus,
-                                            pending,
-                                            Some(buffered_ack.source_hex.clone()),
-                                            LxmfDeliveryStatus::Acknowledged {},
-                                            buffered_ack.detail.clone(),
-                                        );
-                                        info!(
-                                            "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
-                                            pending.message_id_hex,
-                                            pending.destination_hex,
-                                            pending.command_type.as_deref().unwrap_or("-"),
-                                            pending.correlation_id.as_deref().unwrap_or("-"),
-                                            buffered_ack.detail.as_deref().unwrap_or("-"),
-                                        );
-                                    } else {
+                                        let tracking_key = pending
+                                            .correlation_id
+                                            .as_deref()
+                                            .or(pending.command_id.as_deref())
+                                            .map(ToOwned::to_owned);
                                         if let Some(tracking_key) = tracking_key {
-                                            state
-                                                .pending_lxmf_acknowledgements
-                                                .lock()
-                                                .await
-                                                .insert(tracking_key, buffered_ack.clone());
+                                            state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
                                         }
-                                        info!(
-                                            "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
-                                            pending.message_id_hex,
-                                            pending.destination_hex,
-                                            buffered_ack.source_hex,
-                                        );
                                     }
+                                    state.sdk.record_delivery_failed(
+                                        &pending.message_id_hex,
+                                        &pending.destination_hex,
+                                        pending.correlation_id.as_deref(),
+                                        pending.command_id.as_deref(),
+                                        pending.command_type.as_deref(),
+                                        pending.event_uid.as_deref(),
+                                        pending.mission_uid.as_deref(),
+                                        Some(failure_detail.as_str()),
+                                    );
+                                    emit_lxmf_delivery(
+                                        &bus,
+                                        &pending,
+                                        LxmfDeliveryStatus::Failed {},
+                                        Some(failure_detail.clone()),
+                                    );
+                                    info!(
+                                        "[lxmf][mission] failed message_id={} destination={} command={} correlation={} outcome={:?}",
+                                        pending.message_id_hex,
+                                        pending.destination_hex,
+                                        pending.command_type.as_deref().unwrap_or("-"),
+                                        pending.correlation_id.as_deref().unwrap_or("-"),
+                                        mapped,
+                                    );
                                 }
-                            } else {
-                                let failure_detail = format!("{mapped:?}");
-                                {
-                                    let tracking_key = pending
-                                        .correlation_id
-                                        .as_deref()
-                                        .or(pending.command_id.as_deref())
-                                        .map(ToOwned::to_owned);
-                                    if let Some(tracking_key) = tracking_key {
-                                        state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
-                                    }
-                                }
-                                state.sdk.record_delivery_failed(
-                                    &pending.message_id_hex,
-                                    &pending.destination_hex,
-                                    pending.correlation_id.as_deref(),
-                                    pending.command_id.as_deref(),
-                                    pending.command_type.as_deref(),
-                                    pending.event_uid.as_deref(),
-                                    pending.mission_uid.as_deref(),
-                                    Some(failure_detail.as_str()),
-                                );
-                                emit_lxmf_delivery(
-                                    &bus,
-                                    &pending,
-                                    LxmfDeliveryStatus::Failed {},
-                                    Some(failure_detail.clone()),
-                                );
-                                info!(
-                                    "[lxmf][mission] failed message_id={} destination={} command={} correlation={} outcome={:?}",
-                                    pending.message_id_hex,
-                                    pending.destination_hex,
-                                    pending.command_type.as_deref().unwrap_or("-"),
-                                    pending.correlation_id.as_deref().unwrap_or("-"),
-                                    mapped,
-                                );
                             }
                         }
-                    }
 
-                    if matches!(
-                        outcome,
-                        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                    ) {
-                        Ok(())
-                    } else {
-                        Err(NodeError::NetworkError {})
+                        if matches!(
+                            outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        ) {
+                            Ok(())
+                        } else {
+                            Err(NodeError::NetworkError {})
+                        }
                     }
-                }
-                .await;
-                if let Err(err) = &result {
-                    bus.emit(NodeEvent::Error {
-                        code: node_error_code(err).to_string(),
-                        message: format!(
-                            "send_bytes failed destination={} reason={}",
-                            destination_hex,
-                            err
-                        ),
-                    });
-                }
-                let _ = resp.send(result);
+                    .await;
+                    if let Err(err) = &result {
+                        bus.emit(NodeEvent::Error {
+                            code: node_error_code(err).to_string(),
+                            message: format!(
+                                "send_bytes failed destination={} reason={}",
+                                destination_hex, err
+                            ),
+                        });
+                    }
+                    let _ = resp.send(result);
                 });
             }
             Command::SendLxmf { request, resp } => {
                 let state = state.clone();
                 let bus = bus.clone();
                 let receipt_message_ids = receipt_message_ids.clone();
-                tokio::spawn(async move {
-                let _send_task_permit = match acquire_send_task_permit(&state).await {
-                    Ok(permit) => permit,
-                    Err(err) => {
-                        let _ = resp.send(Err(err));
-                        return;
-                    }
-                };
-                let result = async {
-                    let body_bytes = request.body_utf8.as_bytes().to_vec();
-                    let report = send_lxmf_with_delivery_policy(
-                        &state,
-                        request.destination_hex.as_str(),
-                        body_bytes.as_slice(),
-                        request.title.clone(),
-                        None,
-                        None,
+                log_send_task(
+                    SendTaskClass::General,
+                    format!(
+                        "[lxmf][queue] enqueued general send destination={} mode={:?} has_fields=false",
+                        request.destination_hex,
                         request.send_mode,
-                    )
-                    .await?;
-                    let method = match (report.method, report.representation) {
-                        (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
-                        (LxmfDeliveryMethod::Opportunistic {}, _) => MessageMethod::Opportunistic {},
-                        (_, LxmfDeliveryRepresentation::Resource {}) => MessageMethod::Resource {},
-                        _ => MessageMethod::Direct {},
-                    };
-                    let state_value = if report.used_propagation_node
-                        && matches!(
+                    ),
+                );
+                tokio::spawn(async move {
+                    let result = async {
+                        let body_bytes = request.body_utf8.as_bytes().to_vec();
+                        let report = send_lxmf_with_delivery_policy(
+                            &state,
+                            request.destination_hex.as_str(),
+                            body_bytes.as_slice(),
+                            request.title.clone(),
+                            None,
+                            None,
+                            request.send_mode,
+                            SendTaskClass::General,
+                        )
+                        .await?;
+                        let method = match (report.method, report.representation) {
+                            (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
+                            (LxmfDeliveryMethod::Opportunistic {}, _) => {
+                                MessageMethod::Opportunistic {}
+                            }
+                            (_, LxmfDeliveryRepresentation::Resource {}) => {
+                                MessageMethod::Resource {}
+                            }
+                            _ => MessageMethod::Direct {},
+                        };
+                        let state_value = if report.used_propagation_node
+                            && matches!(
+                                report.outcome,
+                                RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                            ) {
+                            MessageState::SentToPropagation {}
+                        } else if matches!(
                             report.outcome,
                             RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                        )
-                    {
-                        MessageState::SentToPropagation {}
-                    } else if matches!(
-                        report.outcome,
-                        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                    ) {
-                        MessageState::SentDirect {}
-                    } else {
-                        MessageState::Failed {}
-                    };
-                    let detail = if matches!(state_value, MessageState::Failed {}) {
-                        Some(format!("{:?}", send_outcome_to_udl(report.outcome)))
-                    } else {
-                        None
-                    };
-                    let conversation_id = conversation_id_for(report.resolved_destination_hex.as_str());
-                    let record = MessageRecord {
-                        message_id_hex: report.message_id_hex.clone(),
-                        conversation_id,
-                        direction: MessageDirection::Outbound {},
-                        destination_hex: report.resolved_destination_hex.clone(),
-                        source_hex: Some(address_hash_to_hex(
-                            &state.lxmf_destination.lock().await.desc.address_hash,
-                        )),
-                        title: request.title.clone(),
-                        body_utf8: request.body_utf8.clone(),
-                        method,
-                        state: state_value,
-                        detail: detail.clone(),
-                        sent_at_ms: Some(now_ms()),
-                        received_at_ms: None,
-                        updated_at_ms: now_ms(),
-                    };
-                    upsert_message_record(&state, &bus, record, false).await;
-                    state.messaging.lock().await.store_outbound(sdkmsg::StoredOutboundMessage {
-                        request: to_sdk_send_request(&request),
-                        message_id_hex: report.message_id_hex.clone(),
-                    });
-                    if let Some(receipt_hash_hex) = report.receipt_hash_hex.as_ref() {
-                        if let Ok(mut guard) = receipt_message_ids.lock() {
-                            guard.insert(
-                                receipt_hash_hex.clone(),
-                                ReceiptMessageTracking {
-                                    message_id_hex: report.message_id_hex.clone(),
-                                    recorded_at_ms: now_ms(),
-                                },
-                            );
+                        ) {
+                            MessageState::SentDirect {}
+                        } else {
+                            MessageState::Failed {}
+                        };
+                        let detail = if matches!(state_value, MessageState::Failed {}) {
+                            Some(format!("{:?}", send_outcome_to_udl(report.outcome)))
+                        } else {
+                            None
+                        };
+                        let conversation_id =
+                            conversation_id_for(report.resolved_destination_hex.as_str());
+                        let record = MessageRecord {
+                            message_id_hex: report.message_id_hex.clone(),
+                            conversation_id,
+                            direction: MessageDirection::Outbound {},
+                            destination_hex: report.resolved_destination_hex.clone(),
+                            source_hex: Some(address_hash_to_hex(
+                                &state.lxmf_destination.lock().await.desc.address_hash,
+                            )),
+                            title: request.title.clone(),
+                            body_utf8: request.body_utf8.clone(),
+                            method,
+                            state: state_value,
+                            detail: detail.clone(),
+                            sent_at_ms: Some(now_ms()),
+                            received_at_ms: None,
+                            updated_at_ms: now_ms(),
+                        };
+                        upsert_message_record(&state, &bus, record, false).await;
+                        state.messaging.lock().await.store_outbound(
+                            sdkmsg::StoredOutboundMessage {
+                                request: to_sdk_send_request(&request),
+                                message_id_hex: report.message_id_hex.clone(),
+                            },
+                        );
+                        if let Some(receipt_hash_hex) = report.receipt_hash_hex.as_ref() {
+                            if let Ok(mut guard) = receipt_message_ids.lock() {
+                                guard.insert(
+                                    receipt_hash_hex.clone(),
+                                    ReceiptMessageTracking {
+                                        message_id_hex: report.message_id_hex.clone(),
+                                        recorded_at_ms: now_ms(),
+                                    },
+                                );
+                            }
                         }
+                        Ok::<String, NodeError>(report.message_id_hex)
                     }
-                    Ok::<String, NodeError>(report.message_id_hex)
-                }
-                .await;
-                if let Err(err) = &result {
-                    bus.emit(NodeEvent::Error {
-                        code: node_error_code(err).to_string(),
-                        message: format!(
-                            "send_lxmf failed destination={} reason={}",
-                            request.destination_hex,
-                            err
-                        ),
-                    });
-                }
-                let _ = resp.send(result);
+                    .await;
+                    if let Err(err) = &result {
+                        bus.emit(NodeEvent::Error {
+                            code: node_error_code(err).to_string(),
+                            message: format!(
+                                "send_lxmf failed destination={} reason={}",
+                                request.destination_hex, err
+                            ),
+                        });
+                    }
+                    let _ = resp.send(result);
                 });
             }
             Command::RetryLxmf {
@@ -3610,14 +3902,14 @@ pub async fn run_node(
             } => {
                 let state = state.clone();
                 let bus = bus.clone();
+                log_send_task(
+                    SendTaskClass::General,
+                    format!(
+                        "[lxmf][queue] enqueued general retry message_id={}",
+                        message_id_hex,
+                    ),
+                );
                 tokio::spawn(async move {
-                    let _send_task_permit = match acquire_send_task_permit(&state).await {
-                        Ok(permit) => permit,
-                        Err(err) => {
-                            let _ = resp.send(Err(err));
-                            return;
-                        }
-                    };
                     let result = async {
                         let outbound = state
                             .messaging
@@ -3637,14 +3929,14 @@ pub async fn run_node(
                                 sdkmsg::SendMode::DirectOnly => SendMode::DirectOnly {},
                                 sdkmsg::SendMode::PropagationOnly => SendMode::PropagationOnly {},
                             },
+                            SendTaskClass::General,
                         )
                         .await?;
                         let retried_state = if report.used_propagation_node
                             && matches!(
                                 report.outcome,
                                 RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                            )
-                        {
+                            ) {
                             MessageState::SentToPropagation {}
                         } else {
                             MessageState::SentDirect {}
@@ -3662,9 +3954,15 @@ pub async fn run_node(
                             title: outbound.request.title.clone(),
                             body_utf8: outbound.request.body_utf8.clone(),
                             method: match (report.method, report.representation) {
-                                (LxmfDeliveryMethod::Propagated {}, _) => MessageMethod::Propagated {},
-                                (LxmfDeliveryMethod::Opportunistic {}, _) => MessageMethod::Opportunistic {},
-                                (_, LxmfDeliveryRepresentation::Resource {}) => MessageMethod::Resource {},
+                                (LxmfDeliveryMethod::Propagated {}, _) => {
+                                    MessageMethod::Propagated {}
+                                }
+                                (LxmfDeliveryMethod::Opportunistic {}, _) => {
+                                    MessageMethod::Opportunistic {}
+                                }
+                                (_, LxmfDeliveryRepresentation::Resource {}) => {
+                                    MessageMethod::Resource {}
+                                }
                                 _ => MessageMethod::Direct {},
                             },
                             state: retried_state,
@@ -3674,10 +3972,12 @@ pub async fn run_node(
                             updated_at_ms: now_ms(),
                         };
                         upsert_message_record(&state, &bus, retried, false).await;
-                        state.messaging.lock().await.store_outbound(sdkmsg::StoredOutboundMessage {
-                            request: outbound.request,
-                            message_id_hex: report.message_id_hex.clone(),
-                        });
+                        state.messaging.lock().await.store_outbound(
+                            sdkmsg::StoredOutboundMessage {
+                                request: outbound.request,
+                                message_id_hex: report.message_id_hex.clone(),
+                            },
+                        );
                         Ok::<(), NodeError>(())
                     }
                     .await;
@@ -3781,9 +4081,11 @@ pub async fn run_node(
                 conversation_id,
                 resp,
             } => {
-                let _ = resp.send(Ok(
-                    message_records_snapshot(&state, conversation_id.as_deref()).await,
-                ));
+                let _ = resp.send(Ok(message_records_snapshot(
+                    &state,
+                    conversation_id.as_deref(),
+                )
+                .await));
             }
             Command::GetLxmfSyncStatus { resp } => {
                 let _ = resp.send(Ok(from_sdk_sync_status(
@@ -3897,6 +4199,7 @@ pub fn load_or_create_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
 
     #[test]
     fn parse_mission_sync_metadata_extracts_command_fields() {
@@ -4138,5 +4441,110 @@ mod tests {
         assert_eq!(pruned, 1);
         assert!(tracking.contains_key("fresh"));
         assert!(!tracking.contains_key("stale"));
+    }
+
+    #[tokio::test]
+    async fn retry_backoff_releases_general_send_permit_before_sleep() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let permits_for_retry = permits.clone();
+        let (sleeping_tx, sleeping_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            {
+                let _permit = acquire_send_task_permit(&permits_for_retry, SendTaskClass::General)
+                    .await
+                    .expect("first attempt permit");
+            }
+            let _ = sleeping_tx.send(());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        sleeping_rx.await.expect("retry task entered backoff");
+        let permit = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::General),
+        )
+        .await
+        .expect("general permit should be available during retry sleep")
+        .expect("general permit acquisition should succeed");
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn mission_sends_keep_reserved_capacity_when_general_pool_is_full() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let _general = acquire_send_task_permit(&permits, SendTaskClass::General)
+            .await
+            .expect("saturate general pool");
+
+        let mission = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::Mission),
+        )
+        .await
+        .expect("mission permit should not wait on general pool saturation")
+        .expect("mission permit acquisition should succeed");
+        drop(mission);
+
+        let blocked_general = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::General),
+        )
+        .await;
+        assert!(
+            blocked_general.is_err(),
+            "general pool should remain saturated while the original permit is held"
+        );
+    }
+
+    #[test]
+    fn restore_saved_peer_management_marks_saved_peers_managed() {
+        let mut messaging = sdkmsg::MessagingStore::new(30);
+        let now = now_ms();
+        messaging.record_announce(sdkmsg::AnnounceRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            destination_kind: "app".to_string(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            display_name: Some("Pixel".to_string()),
+            hops: 0,
+            interface_hex: String::new(),
+            received_at_ms: now,
+        });
+        messaging.record_announce(sdkmsg::AnnounceRecord {
+            destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            identity_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+            destination_kind: "app".to_string(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            display_name: Some("Other".to_string()),
+            hops: 0,
+            interface_hex: String::new(),
+            received_at_ms: now,
+        });
+
+        let restored = restore_saved_peer_management(
+            &mut messaging,
+            &[
+                crate::types::SavedPeerRecord {
+                    destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    label: Some("Pixel".to_string()),
+                    saved_at_ms: now,
+                },
+                crate::types::SavedPeerRecord {
+                    destination_hex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+                    label: Some("Pixel duplicate".to_string()),
+                    saved_at_ms: now,
+                },
+            ],
+        );
+
+        assert_eq!(
+            restored,
+            vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+        );
+        let mut peers = messaging.list_peers();
+        peers.sort_by(|left, right| left.destination_hex.cmp(&right.destination_hex));
+        assert!(peers[0].saved);
+        assert!(!peers[1].saved);
     }
 }

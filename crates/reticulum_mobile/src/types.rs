@@ -25,20 +25,6 @@ pub enum PeerState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum PeerManagementState {
-    Unmanaged {},
-    Managed {},
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum PeerAvailabilityState {
-    Unseen {},
-    Discovered {},
-    Resolved {},
-    Ready {},
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SendOutcome {
     SentDirect {},
     SentBroadcast {},
@@ -185,17 +171,12 @@ pub struct PeerChange {
     pub display_name: Option<String>,
     pub app_data: Option<String>,
     pub state: PeerState,
-    pub management_state: PeerManagementState,
-    pub availability_state: PeerAvailabilityState,
-    pub communication_ready: bool,
-    pub mission_ready: bool,
-    pub relay_eligible: bool,
+    pub saved: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_error: Option<String>,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
-    pub last_ready_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
     pub announce_last_seen_at_ms: Option<u64>,
     pub lxmf_last_seen_at_ms: Option<u64>,
@@ -241,16 +222,11 @@ pub struct PeerRecord {
     pub display_name: Option<String>,
     pub app_data: Option<String>,
     pub state: PeerState,
-    pub management_state: PeerManagementState,
-    pub availability_state: PeerAvailabilityState,
-    pub communication_ready: bool,
-    pub mission_ready: bool,
-    pub relay_eligible: bool,
+    pub saved: bool,
     pub stale: bool,
     pub active_link: bool,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
-    pub last_ready_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
     pub announce_last_seen_at_ms: Option<u64>,
     pub lxmf_last_seen_at_ms: Option<u64>,
@@ -457,10 +433,8 @@ pub struct ProjectionInvalidation {
 pub struct OperationalSummary {
     pub running: bool,
     pub peer_count_total: u32,
-    pub peer_count_communication_ready: u32,
-    pub peer_count_mission_ready: u32,
-    pub peer_count_relay_eligible: u32,
     pub saved_peer_count: u32,
+    pub connected_peer_count: u32,
     pub conversation_count: u32,
     pub message_count: u32,
     pub eam_count: u32,
