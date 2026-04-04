@@ -7,6 +7,7 @@ Current mobile behavior differs from the older store-centric sketch below in two
 - When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local app destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
 - The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
 - Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends target saved or explicitly managed peers that are mission-ready and currently direct-reachable (`active_link`, `communication_ready`, or native `Connected` state). If a saved peer is not directly reachable and a propagation relay is active, Rust sends that target via propagation instead of stalling on direct delivery first. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
+- RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` refreshes a transient hub directory by sending `rem.registry.peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH and then uses those returned peers for direct sends. `Connected` sends outbound traffic only to the selected RCH, and an `effective_connected_mode=true` hub response temporarily upgrades `SemiAutonomous` to connected routing.
 
 ```mermaid
 sequenceDiagram
@@ -75,7 +76,7 @@ sequenceDiagram
     end
 ```
 
-This diagram shows the end-to-end mobile telemetry replication flow. Unlike events, telemetry uses peers that advertise the `Telemetry` capability on the app destination, sends compact telemetry fields directly, and does not wait for LXMF delivery acknowledgement.
+This diagram shows the end-to-end mobile telemetry replication flow. Telemetry routing is mode-aware: in `Autonomous` it uses peers that advertise the `Telemetry` capability on the app destination, in `SemiAutonomous` it can target the latest hub-directory peers returned by RCH, and in `Connected` it sends only to the selected RCH.
 
 ```mermaid
 sequenceDiagram
@@ -129,8 +130,8 @@ sequenceDiagram
 
 ## Flow Differences
 
-- Telemetry routes to the peer's app destination from `telemetryDestinations`; events route to the peer's separately announced `lxmf/delivery` destination from `connectedEventPeerRoutes`.
-- Telemetry peer selection depends on the `Telemetry` capability in the app announce; event delivery depends on correlating two announces from the same identity: `r3akt/emergency` and `lxmf/delivery`.
+- Telemetry routes from `telemetryDestinations`; in `Autonomous` that list is announce-driven, in `SemiAutonomous` it can be seeded from the latest RCH directory snapshot, and in `Connected` it collapses to the selected hub destination.
+- Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
 - Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
 - Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over app destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.

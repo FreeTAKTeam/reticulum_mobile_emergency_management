@@ -48,6 +48,7 @@ import {
 } from "../utils/legacyState";
 import type {
   DiscoveredPeer,
+  HubDirectorySnapshot,
   NodeUiSettings,
   PeerConnectionState,
   PeerListV1,
@@ -59,13 +60,11 @@ import {
   extractAnnounceCapabilityText,
   extractAnnouncedName,
   formatAnnounceAppData,
-  hasCapability,
   isValidDestinationHex,
   normalizeDisplayName,
   normalizeDestinationHex,
   parseCapabilityTokens,
   parsePeerListV1,
-  TELEMETRY_CAPABILITY,
 } from "../utils/peers";
 import { runtimeProfile } from "../utils/runtimeProfile";
 import {
@@ -133,7 +132,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     expireAfterMinutes: 180,
   },
   hub: {
-    mode: "Disabled",
+    mode: "Autonomous",
     identityHash: "",
     apiBaseUrl: "",
     apiKey: "",
@@ -167,7 +166,7 @@ function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
     return true;
   }
 
-  if (!peer.sources.includes("announce")) {
+  if (!peer.sources.includes("announce") && !peer.sources.includes("hub")) {
     return false;
   }
 
@@ -319,6 +318,25 @@ function normalizeTelemetrySettings(
   };
 }
 
+function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
+  switch (String(value ?? "").trim()) {
+    case "Connected":
+      return "Connected";
+    case "SemiAutonomous":
+    case "RchLxmf":
+    case "RchHttp":
+      return "SemiAutonomous";
+    case "Autonomous":
+    case "Disabled":
+    default:
+      return "Autonomous";
+  }
+}
+
+function hubModeUsesRch(mode: NodeUiSettings["hub"]["mode"]): boolean {
+  return mode !== "Autonomous";
+}
+
 function cloneDefaultSettings(): NodeUiSettings {
   return {
     ...DEFAULT_SETTINGS,
@@ -379,6 +397,7 @@ function normalizeAppSettingsRecord(
     hub: {
       ...DEFAULT_SETTINGS.hub,
       ...runtimeSettings.hub,
+      mode: normalizeHubMode(runtimeSettings.hub?.mode),
     },
   };
 }
@@ -442,8 +461,10 @@ export const useNodeStore = defineStore("node", () => {
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
+  const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
+  const telemetryDestinations = ref<string[]>([]);
   const hubRegistration = reactive<HubRegistrationSnapshot>({
-    status: settings.hub.mode === "Disabled" ? "disabled" : "pending",
+    status: hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled",
     linkage: loadHubRegistryLinkage() ?? undefined,
     lastReadyAt: loadHubRegistryLinkage()?.updatedAt,
   });
@@ -671,6 +692,11 @@ export const useNodeStore = defineStore("node", () => {
     });
   }
 
+  function clearHubDirectoryState(): void {
+    hubDirectorySnapshot.value = null;
+    lastHubRefreshAt.value = 0;
+  }
+
   function upsertResolvedPeer(peer: PeerRecord): void {
     const destination = normalizeDestinationHex(peer.destinationHex);
     if (!isValidDestinationHex(destination) || isLocalDestinationIdentityPair(destination, peer.identityHex)) {
@@ -708,7 +734,7 @@ export const useNodeStore = defineStore("node", () => {
         lastResolutionError: peer.lastResolutionError,
         lastResolutionAttemptAt: peer.lastResolutionAttemptAtMs,
       },
-      "announce",
+      peer.hubDerived ? "hub" : "announce",
     );
   }
 
@@ -742,7 +768,7 @@ export const useNodeStore = defineStore("node", () => {
         announceLastSeenAt: change.announceLastSeenAtMs,
         lxmfLastSeenAt: change.lxmfLastSeenAtMs,
       },
-      "announce",
+      change.hubDerived ? "hub" : "announce",
     );
   }
 
@@ -758,7 +784,7 @@ export const useNodeStore = defineStore("node", () => {
         continue;
       }
 
-      const retainedSources = peer.saved ? peer.sources.filter((source) => source === "import") : [];
+      const retainedSources = peer.sources.filter((source) => source === "import");
       if (retainedSources.length === 0) {
         delete discoveredByDestination[destination];
         continue;
@@ -1392,6 +1418,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function currentHubBootstrapProfile(): HubRegistryBootstrapProfile | null {
+    if (!hubModeUsesRch(settings.hub.mode)) {
+      return null;
+    }
     return buildHubRegistryBootstrapProfile({
       callsign: settings.displayName,
       localIdentityHex: status.value.identityHex,
@@ -1400,7 +1429,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function setHubRegistrationPending(lastErrorValue?: string): void {
-    hubRegistration.status = settings.hub.mode === "Disabled" ? "disabled" : "pending";
+    hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled";
     if (lastErrorValue !== undefined) {
       hubRegistration.lastError = asTrimmedString(lastErrorValue);
     } else {
@@ -1417,7 +1446,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function setHubRegistrationError(error: unknown): void {
-    hubRegistration.status = settings.hub.mode === "Disabled" ? "disabled" : "error";
+    hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "error" : "disabled";
     hubRegistration.lastError = errorMessage(error);
     hubRegistration.lastAttemptAt = nowMs();
   }
@@ -1430,7 +1459,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function reconcileHubRegistrationState(): void {
-    if (settings.hub.mode === "Disabled") {
+    if (!hubModeUsesRch(settings.hub.mode)) {
       hubRegistration.status = "disabled";
       hubRegistration.lastError = "";
       return;
@@ -1472,7 +1501,7 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   async function bootstrapHubRegistration(force = false): Promise<void> {
-    if (settings.hub.mode === "Disabled") {
+    if (!hubModeUsesRch(settings.hub.mode)) {
       reconcileHubRegistrationState();
       return;
     }
@@ -1528,7 +1557,7 @@ export const useNodeStore = defineStore("node", () => {
 
   async function refreshHubRegistrationState(attemptBootstrap = false): Promise<void> {
     reconcileHubRegistrationState();
-    if (!attemptBootstrap || settings.hub.mode === "Disabled") {
+    if (!attemptBootstrap || !hubModeUsesRch(settings.hub.mode)) {
       return;
     }
 
@@ -1570,7 +1599,7 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
-        void refreshHubRegistrationState(event.status.running && settings.hub.mode !== "Disabled");
+        void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         presenceNow.value = event.receivedAtMs;
@@ -1601,19 +1630,16 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
         presenceNow.value = event.receivedAtMs;
-        for (const destination of event.destinations) {
-          const existing = discoveredByDestination[destination];
-          const saved = savedByDestination[destination];
-          upsertDiscovered(
-            destination,
-            {
-              label: existing?.label ?? saved?.label,
-              announcedName: existing?.announcedName,
-            },
-            "hub",
-          );
-        }
+        hubDirectorySnapshot.value = {
+          effectiveConnectedMode: event.effectiveConnectedMode,
+          receivedAtMs: event.receivedAtMs,
+          items: event.items.map((item) => ({
+            ...item,
+            announceCapabilities: [...item.announceCapabilities],
+          })),
+        };
         lastHubRefreshAt.value = event.receivedAtMs;
+        void refreshMessagingState();
       }),
       nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
         switch (event.scope) {
@@ -1683,6 +1709,7 @@ export const useNodeStore = defineStore("node", () => {
   async function refreshMessagingState(): Promise<void> {
     if (!client.value || !status.value.running) {
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      telemetryDestinations.value = [];
       return;
     }
 
@@ -1691,15 +1718,17 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     refreshMessagingStatePromise = (async () => {
-      const [peers, nextSyncStatus] = await Promise.all([
+      const [peers, nextSyncStatus, nextTelemetryDestinations] = await Promise.all([
         client.value!.listPeers(),
         client.value!.getLxmfSyncStatus(),
+        client.value!.listTelemetryDestinations(),
       ]);
       reconcileNativePeerSnapshot(peers);
       for (const peer of peers) {
         upsertResolvedPeer(peer);
       }
       syncStatus.value = { ...nextSyncStatus };
+      telemetryDestinations.value = [...nextTelemetryDestinations];
     })()
       .catch((error: unknown) => {
         appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
@@ -1760,7 +1789,7 @@ export const useNodeStore = defineStore("node", () => {
       await refreshHubRegistrationState(true);
       appendLog("Info", "Node started.");
 
-      if (settings.hub.mode !== "Disabled") {
+      if (hubModeUsesRch(settings.hub.mode)) {
         await refreshHubDirectory().catch((error: unknown) => {
           appendLog("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
         });
@@ -1806,7 +1835,7 @@ export const useNodeStore = defineStore("node", () => {
       await refreshHubRegistrationState(true);
       appendLog("Info", "Node restarted with updated settings.");
 
-      if (settings.hub.mode !== "Disabled") {
+      if (hubModeUsesRch(settings.hub.mode)) {
         await refreshHubDirectory().catch((error: unknown) => {
           appendLog("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
         });
@@ -1916,6 +1945,10 @@ export const useNodeStore = defineStore("node", () => {
 
   async function refreshHubDirectory(): Promise<void> {
     try {
+      if (!hubModeUsesRch(settings.hub.mode)) {
+        clearHubDirectoryState();
+        return;
+      }
       if (!client.value || !status.value.running) {
         return;
       }
@@ -2027,10 +2060,20 @@ export const useNodeStore = defineStore("node", () => {
       settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
     }
     if (next.hub) {
+      const previousHubMode = settings.hub.mode;
+      const previousHubIdentityHash = settings.hub.identityHash;
       settings.hub = {
         ...settings.hub,
         ...next.hub,
+        mode: normalizeHubMode(next.hub.mode ?? settings.hub.mode),
       };
+      if (
+        !hubModeUsesRch(settings.hub.mode)
+        || settings.hub.mode !== previousHubMode
+        || settings.hub.identityHash !== previousHubIdentityHash
+      ) {
+        clearHubDirectoryState();
+      }
     }
     const nextSettings = normalizeAppSettingsRecord(
       toAppSettingsRecord(settings),
@@ -2045,7 +2088,7 @@ export const useNodeStore = defineStore("node", () => {
       .catch((error: unknown) => {
         appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
       });
-    void refreshHubRegistrationState(settings.hub.mode !== "Disabled");
+    void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
   }
 
   function getSavedPeerList(): PeerListV1 {
@@ -2246,12 +2289,8 @@ export const useNodeStore = defineStore("node", () => {
       : [],
   );
   const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
-
-  const telemetryDestinations = computed(() =>
-    connectedPeers.value
-      .filter((peer) => hasCapability(peer.appData ?? "", TELEMETRY_CAPABILITY))
-      .map((peer) => peer.destination),
-  );
+  const hubDirectoryPeers = computed(() => hubDirectorySnapshot.value?.items ?? []);
+  const effectiveConnectedMode = computed(() => Boolean(hubDirectorySnapshot.value?.effectiveConnectedMode));
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
   const ready = computed(() => status.value.running);
@@ -2539,6 +2578,9 @@ export const useNodeStore = defineStore("node", () => {
     status,
     syncStatus,
     operationalSummary,
+    hubDirectorySnapshot,
+    hubDirectoryPeers,
+    effectiveConnectedMode,
     hubRegistration,
     hubBootstrapProfile,
     hubRegistrationReady,

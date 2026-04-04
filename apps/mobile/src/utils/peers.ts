@@ -1,4 +1,4 @@
-import { unpack } from "msgpackr";
+﻿import { unpack } from "msgpackr";
 import type { PeerListV1, PeerListV1Peer, SavedPeer } from "../types/domain";
 
 const DEST_HEX_REGEX = /^[0-9a-f]{32}$/i;
@@ -10,6 +10,13 @@ export const REQUIRED_ANNOUNCE_CAPABILITIES = [
   "R3AKT",
   "EMergencyMessages",
   TELEMETRY_CAPABILITY,
+] as const;
+export const RCH_SERVER_FEATURE_CAPABILITIES = [
+  "topic_broker",
+  "group_chat",
+  "attachments",
+  "telemetry_relay",
+  "tak_bridge",
 ] as const;
 
 export function normalizeDestinationHex(value: unknown): string {
@@ -186,6 +193,14 @@ export function hasCapability(appData: string, capability: string): boolean {
 export function matchesEmergencyCapabilities(appData: string): boolean {
   const tokens = parseCapabilityTokens(appData);
   return tokens.includes("r3akt") && tokens.includes("emergencymessages");
+}
+
+export function matchesRchHubCapabilities(appData: string): boolean {
+  const tokens = parseCapabilityTokens(appData);
+  if (!tokens.includes("r3akt")) {
+    return false;
+  }
+  return RCH_SERVER_FEATURE_CAPABILITIES.some((capability) => tokens.includes(capability));
 }
 
 export function createPeerListV1(peers: SavedPeer[]): PeerListV1 {

@@ -42,11 +42,11 @@ use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
     AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EventProjectionRecord, HubMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
-    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
-    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange,
-    PeerRecord, PeerState, ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
-    SyncStatus,
+    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
+    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
+    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
+    NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope,
+    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -75,6 +75,35 @@ pub(crate) fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn current_timestamp_rfc3339() -> String {
+    let seconds_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
+    let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
 }
 
 fn eam_status_rank(value: &str) -> u8 {
@@ -607,6 +636,13 @@ fn msgpack_string_vec(value: &MsgPackValue) -> Option<Vec<String>> {
     Some(entries.iter().filter_map(msgpack_string).collect())
 }
 
+fn msgpack_bool(value: &MsgPackValue) -> Option<bool> {
+    match value {
+        MsgPackValue::Boolean(value) => Some(*value),
+        _ => None,
+    }
+}
+
 fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
     match value {
         MsgPackValue::F32(value) => Some(f64::from(*value)),
@@ -923,6 +959,7 @@ fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {
         saved: record.saved,
         stale: record.stale,
         active_link: record.active_link,
+        hub_derived: false,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
         last_seen_at_ms: record.last_seen_at_ms,
@@ -1251,15 +1288,95 @@ async fn connected_destination_hexes(state: &NodeRuntimeState) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+fn app_data_from_hub_directory_capabilities(capabilities: &[String]) -> Option<String> {
+    (!capabilities.is_empty()).then(|| capabilities.join(","))
+}
+
+fn merge_hub_directory_peer_records(
+    peers: &mut Vec<PeerRecord>,
+    snapshot: Option<&HubDirectorySnapshot>,
+    local_app_destination_hex: &str,
+) {
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+
+    let local_app_destination_hex = normalize_hex_32(local_app_destination_hex);
+    let mut existing_by_destination = peers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, peer)| {
+            normalize_hex_32(peer.destination_hex.as_str()).map(|destination| (destination, index))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for item in &snapshot.items {
+        let Some(destination_hex) = normalize_hex_32(item.destination_hash.as_str()) else {
+            continue;
+        };
+        if local_app_destination_hex.as_deref() == Some(destination_hex.as_str()) {
+            continue;
+        }
+
+        let item_identity_hex = normalize_hex_32(item.identity.as_str());
+        let item_app_data = app_data_from_hub_directory_capabilities(&item.announce_capabilities);
+
+        if let Some(index) = existing_by_destination.get(destination_hex.as_str()).copied() {
+            let peer = &mut peers[index];
+            peer.hub_derived = true;
+            if peer.identity_hex.is_none() {
+                peer.identity_hex = item_identity_hex.clone();
+            }
+            if peer.display_name.is_none() {
+                peer.display_name = item.display_name.clone();
+            }
+            if peer.app_data.as_deref().is_none_or(str::is_empty) {
+                peer.app_data = item_app_data.clone();
+            }
+            continue;
+        }
+
+        peers.push(PeerRecord {
+            destination_hex: destination_hex.clone(),
+            identity_hex: item_identity_hex,
+            lxmf_destination_hex: None,
+            display_name: item.display_name.clone(),
+            app_data: item_app_data,
+            state: PeerState::Disconnected {},
+            saved: false,
+            stale: false,
+            active_link: false,
+            hub_derived: true,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: None,
+            last_seen_at_ms: snapshot.received_at_ms,
+            announce_last_seen_at_ms: None,
+            lxmf_last_seen_at_ms: None,
+        });
+        existing_by_destination.insert(destination_hex, peers.len().saturating_sub(1));
+    }
+}
+
 async fn snapshot_peer_records(state: &NodeRuntimeState) -> Vec<PeerRecord> {
-    state
+    let mut peers = state
         .messaging
         .lock()
         .await
         .list_peers()
         .into_iter()
         .map(from_sdk_peer_record)
-        .collect()
+        .collect::<Vec<_>>();
+    let hub_directory_snapshot = state
+        .hub_directory_snapshot
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+    merge_hub_directory_peer_records(
+        &mut peers,
+        hub_directory_snapshot.as_ref(),
+        state.app_destination_hex.as_str(),
+    );
+    peers
 }
 
 async fn refresh_peer_snapshot(state: &NodeRuntimeState) -> bool {
@@ -1865,6 +1982,7 @@ pub enum Command {
 struct NodeRuntimeState {
     app_state: AppStateStore,
     identity: PrivateIdentity,
+    app_destination_hex: String,
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
@@ -1877,6 +1995,7 @@ struct NodeRuntimeState {
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
+    hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     projection_journal: Arc<RuntimeProjectionJournal>,
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
@@ -2620,45 +2739,95 @@ async fn wait_for_link_active(
     }
 }
 
-async fn refresh_hub_directory_http(config: &NodeConfig) -> Result<Vec<String>, NodeError> {
-    let base = config
-        .hub_api_base_url
-        .as_deref()
-        .ok_or(NodeError::InvalidConfig {})?;
-    let url = join_url(base, "/Client")?;
+fn parse_hub_directory_peer_record(value: &MsgPackValue) -> Option<HubDirectoryPeerRecord> {
+    let entries = msgpack_map_entries(value)?;
+    Some(HubDirectoryPeerRecord {
+        identity: msgpack_get_named(entries, &["identity"]).and_then(msgpack_string)?,
+        destination_hash: msgpack_get_named(entries, &["destination_hash"])
+            .and_then(msgpack_string)?,
+        display_name: msgpack_get_named(entries, &["display_name"]).and_then(msgpack_string),
+        announce_capabilities: msgpack_get_named(entries, &["announce_capabilities"])
+            .and_then(msgpack_string_vec)
+            .unwrap_or_default(),
+        client_type: msgpack_get_named(entries, &["client_type"]).and_then(msgpack_string),
+        registered_mode: msgpack_get_named(entries, &["registered_mode"]).and_then(msgpack_string),
+        last_seen: msgpack_get_named(entries, &["last_seen"]).and_then(msgpack_string),
+        status: msgpack_get_named(entries, &["status"]).and_then(msgpack_string),
+    })
+}
 
-    let mut req = reqwest::Client::new().get(url);
-    if let Some(key) = config
-        .hub_api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        req = req
-            .header("X-API-Key", key)
-            .header("Authorization", format!("Bearer {}", key));
+fn parse_hub_directory_snapshot_value(
+    value: &MsgPackValue,
+    received_at_ms: u64,
+) -> Option<HubDirectorySnapshot> {
+    let entries = msgpack_map_entries(value)?;
+    let effective_connected_mode = msgpack_get_named(entries, &["effective_connected_mode"])
+        .and_then(msgpack_bool)
+        .unwrap_or(false);
+    let items = match msgpack_get_named(entries, &["items"]) {
+        Some(MsgPackValue::Array(items)) => items
+            .iter()
+            .filter_map(parse_hub_directory_peer_record)
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(HubDirectorySnapshot {
+        effective_connected_mode,
+        items,
+        received_at_ms,
+    })
+}
+
+enum HubDirectoryResultState {
+    Accepted,
+    Snapshot(HubDirectorySnapshot),
+}
+
+fn parse_hub_directory_result_state(
+    value: &MsgPackValue,
+    expected_command_id: &str,
+    received_at_ms: u64,
+) -> Option<HubDirectoryResultState> {
+    let entries = msgpack_map_entries(value)?;
+    let command_id = msgpack_get_named(entries, &["command_id"]).and_then(msgpack_string);
+    if command_id.as_deref().is_some_and(|value| value != expected_command_id) {
+        return None;
     }
 
-    let body = req
-        .send()
-        .await
-        .map_err(|_| NodeError::NetworkError {})?
-        .text()
-        .await
-        .map_err(|_| NodeError::NetworkError {})?;
+    let status = msgpack_get_named(entries, &["status"])
+        .and_then(msgpack_string)
+        .map(|value| value.to_ascii_lowercase());
+    if status.as_deref() == Some("accepted") {
+        return Some(HubDirectoryResultState::Accepted);
+    }
 
-    Ok(extract_hex_destinations(&body))
+    let payload = msgpack_get_named(entries, &["payload", "result", "data"]).unwrap_or(value);
+    parse_hub_directory_snapshot_value(payload, received_at_ms).map(HubDirectoryResultState::Snapshot)
+}
+
+async fn publish_hub_directory_snapshot(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    snapshot: HubDirectorySnapshot,
+) {
+    if let Ok(mut guard) = state.hub_directory_snapshot.lock() {
+        *guard = Some(snapshot.clone());
+    }
+    let _ = refresh_peer_snapshot(state).await;
+    state.sdk.record_hub_directory_updated(&snapshot);
+    bus.emit(NodeEvent::HubDirectoryUpdated { snapshot });
 }
 
 async fn refresh_hub_directory_lxmf(
     config: &NodeConfig,
     state: &NodeRuntimeState,
-) -> Result<Vec<String>, NodeError> {
+) -> Result<HubDirectorySnapshot, NodeError> {
     let hub_hex = config
         .hub_identity_hash
         .as_deref()
         .ok_or(NodeError::InvalidConfig {})?;
-    let hub = parse_address_hash(hub_hex)?;
+    let hub_hex = normalize_hex_32(hub_hex).ok_or(NodeError::InvalidConfig {})?;
+    let hub = parse_address_hash(&hub_hex)?;
 
     let hub_name = DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1);
     let hub_desc = ensure_destination_desc(state, hub, Some(hub_name)).await?;
@@ -2689,13 +2858,38 @@ async fn refresh_hub_directory_lxmf(
     let mut destination = [0u8; 16];
     destination.copy_from_slice(hub.as_slice());
 
-    let content = r#"\\\{"Command":"ListClients"}"#;
+    let command_id = format!("hub-directory-{}", now_ms());
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(LXMF_FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("command_id"),
+                MsgPackValue::from(command_id.as_str()),
+            ),
+            (
+                MsgPackValue::from("command_type"),
+                MsgPackValue::from("rem.registry.peers.list"),
+            ),
+            (
+                MsgPackValue::from("timestamp"),
+                MsgPackValue::from(current_timestamp_rfc3339()),
+            ),
+            (
+                MsgPackValue::from("source"),
+                MsgPackValue::Map(vec![(
+                    MsgPackValue::from("rns_identity"),
+                    MsgPackValue::from(state.identity.address_hash().to_hex_string()),
+                )]),
+            ),
+            (MsgPackValue::from("args"), MsgPackValue::Map(vec![])),
+        ])]),
+    )]);
 
     let mut message = LxmfMessage::new();
     message.source_hash = Some(source);
     message.destination_hash = Some(destination);
-    message.set_title_from_string("ListClients");
-    message.set_content_from_string(content);
+    message.set_title_from_string("rem.registry.peers.list");
+    message.fields = Some(fields);
 
     let signer = lxmf_private_identity(&state.identity)?;
     let wire = message
@@ -2752,9 +2946,12 @@ async fn refresh_hub_directory_lxmf(
             text.push_str(&format!("{fields:?}"));
         }
 
-        let destinations = extract_hex_destinations(&text);
-        if !destinations.is_empty() {
-            return Ok(destinations);
+        if let Some(fields) = reply.fields.as_ref() {
+            match parse_hub_directory_result_state(fields, &command_id, now_ms()) {
+                Some(HubDirectoryResultState::Accepted) => continue,
+                Some(HubDirectoryResultState::Snapshot(snapshot)) => return Ok(snapshot),
+                None => {}
+            }
         }
     }
 }
@@ -2766,6 +2963,7 @@ pub async fn run_node(
     status: Arc<Mutex<NodeStatus>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
+    hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     bus: EventBus,
     mut cmd_rx: mpsc::Receiver<Command>,
 ) {
@@ -2830,6 +3028,7 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
+    let app_destination_hex = app_destination.lock().await.desc.address_hash.to_hex_string();
 
     let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
@@ -2872,6 +3071,7 @@ pub async fn run_node(
     let state = NodeRuntimeState {
         app_state,
         identity: identity.clone(),
+        app_destination_hex,
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
         connected_peers: connected_peers.clone(),
@@ -2883,6 +3083,7 @@ pub async fn run_node(
         messaging: messaging.clone(),
         peers_snapshot: peers_snapshot.clone(),
         sync_status_snapshot: sync_status_snapshot.clone(),
+        hub_directory_snapshot: hub_directory_snapshot.clone(),
         projection_journal: projection_journal.clone(),
         sdk: sdk.clone(),
         active_propagation_node_hex: active_propagation_node_hex.clone(),
@@ -3397,27 +3598,21 @@ pub async fn run_node(
     }
 
     // Optional periodic hub refresh.
-    if !matches!(config.hub_mode, HubMode::Disabled {}) && config.hub_refresh_interval_seconds > 0 {
+    if matches!(
+        config.hub_mode,
+        HubMode::SemiAutonomous {} | HubMode::Connected {}
+    ) && config.hub_refresh_interval_seconds > 0
+    {
         let bus = bus.clone();
         let config = config.clone();
         let state = state.clone();
-        let sdk = sdk.clone();
         let interval_secs = config.hub_refresh_interval_seconds;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
             loop {
                 interval.tick().await;
-                let destinations = match config.hub_mode {
-                    HubMode::RchHttp {} => refresh_hub_directory_http(&config).await.ok(),
-                    HubMode::RchLxmf {} => refresh_hub_directory_lxmf(&config, &state).await.ok(),
-                    HubMode::Disabled {} => None,
-                };
-                if let Some(destinations) = destinations {
-                    sdk.record_hub_directory_updated(destinations.as_slice());
-                    bus.emit(NodeEvent::HubDirectoryUpdated {
-                        destinations,
-                        received_at_ms: now_ms(),
-                    });
+                if let Ok(snapshot) = refresh_hub_directory_lxmf(&config, &state).await {
+                    publish_hub_directory_snapshot(&state, &bus, snapshot).await;
                 }
             }
         });
@@ -4138,20 +4333,21 @@ pub async fn run_node(
                 let config = config.clone();
                 tokio::spawn(async move {
                     let result = match config.hub_mode {
-                        HubMode::Disabled {} => Err(NodeError::InvalidConfig {}),
-                        HubMode::RchHttp {} => refresh_hub_directory_http(&config).await,
-                        HubMode::RchLxmf {} => refresh_hub_directory_lxmf(&config, &state).await,
+                        HubMode::Autonomous {} => Err(NodeError::InvalidConfig {}),
+                        HubMode::SemiAutonomous {} | HubMode::Connected {} => {
+                            refresh_hub_directory_lxmf(&config, &state).await
+                        }
                     }
-                    .map(|destinations| {
-                        state
-                            .sdk
-                            .record_hub_directory_updated(destinations.as_slice());
-                        bus.emit(NodeEvent::HubDirectoryUpdated {
-                            destinations,
-                            received_at_ms: now_ms(),
-                        });
+                    .map(|snapshot| async {
+                        publish_hub_directory_snapshot(&state, &bus, snapshot).await;
                     });
-                    let _ = resp.send(result.map(|_| ()));
+                    let _ = resp.send(match result {
+                        Ok(publish) => {
+                            publish.await;
+                            Ok(())
+                        }
+                        Err(error) => Err(error),
+                    });
                 });
             }
         }
@@ -4302,6 +4498,97 @@ mod tests {
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
         assert!(metadata.is_mission_related());
+    }
+
+    #[test]
+    fn parse_hub_directory_result_state_ignores_accepted_lifecycle() {
+        let result = MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("command_id"),
+                MsgPackValue::from("cmd-123"),
+            ),
+            (MsgPackValue::from("status"), MsgPackValue::from("accepted")),
+        ]);
+
+        let parsed =
+            parse_hub_directory_result_state(&result, "cmd-123", 123).expect("accepted lifecycle");
+
+        assert!(matches!(parsed, HubDirectoryResultState::Accepted));
+    }
+
+    #[test]
+    fn parse_hub_directory_result_state_extracts_terminal_snapshot() {
+        let result = MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("command_id"),
+                MsgPackValue::from("cmd-123"),
+            ),
+            (MsgPackValue::from("status"), MsgPackValue::from("completed")),
+            (
+                MsgPackValue::from("result"),
+                MsgPackValue::Map(vec![
+                    (
+                        MsgPackValue::from("effective_connected_mode"),
+                        MsgPackValue::from(true),
+                    ),
+                    (
+                        MsgPackValue::from("items"),
+                        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                            (
+                                MsgPackValue::from("identity"),
+                                MsgPackValue::from("11111111111111111111111111111111"),
+                            ),
+                            (
+                                MsgPackValue::from("destination_hash"),
+                                MsgPackValue::from("22222222222222222222222222222222"),
+                            ),
+                            (
+                                MsgPackValue::from("display_name"),
+                                MsgPackValue::from("Pixel"),
+                            ),
+                            (
+                                MsgPackValue::from("announce_capabilities"),
+                                MsgPackValue::Array(vec![
+                                    MsgPackValue::from("r3akt"),
+                                    MsgPackValue::from("telemetry"),
+                                ]),
+                            ),
+                            (
+                                MsgPackValue::from("client_type"),
+                                MsgPackValue::from("rem"),
+                            ),
+                            (
+                                MsgPackValue::from("registered_mode"),
+                                MsgPackValue::from("connected"),
+                            ),
+                            (
+                                MsgPackValue::from("last_seen"),
+                                MsgPackValue::from("2026-04-02T12:43:28Z"),
+                            ),
+                            (
+                                MsgPackValue::from("status"),
+                                MsgPackValue::from("active"),
+                            ),
+                        ])]),
+                    ),
+                ]),
+            ),
+        ]);
+
+        let parsed =
+            parse_hub_directory_result_state(&result, "cmd-123", 456).expect("terminal result");
+
+        let HubDirectoryResultState::Snapshot(snapshot) = parsed else {
+            panic!("expected snapshot");
+        };
+        assert!(snapshot.effective_connected_mode);
+        assert_eq!(snapshot.received_at_ms, 456);
+        assert_eq!(snapshot.items.len(), 1);
+        assert_eq!(snapshot.items[0].destination_hash, "22222222222222222222222222222222");
+        assert_eq!(
+            snapshot.items[0].announce_capabilities,
+            vec!["r3akt".to_string(), "telemetry".to_string()]
+        );
     }
 
     #[test]

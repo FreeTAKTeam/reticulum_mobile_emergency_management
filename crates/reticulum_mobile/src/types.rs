@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -10,11 +10,46 @@ pub enum LogLevel {
     Error {},
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubMode {
-    Disabled {},
-    RchLxmf {},
-    RchHttp {},
+    Autonomous {},
+    SemiAutonomous {},
+    Connected {},
+}
+
+impl HubMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Autonomous {} => "Autonomous",
+            Self::SemiAutonomous {} => "SemiAutonomous",
+            Self::Connected {} => "Connected",
+        }
+    }
+}
+
+impl Serialize for HubMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str((*self).as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for HubMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.trim().to_ascii_lowercase().as_str() {
+            "autonomous" | "disabled" => Ok(Self::Autonomous {}),
+            "semiautonomous" | "semi_autonomous" | "semi-autonomous" | "rchlxmf"
+            | "rch_lxmf" | "rchhttp" | "rch_http" => Ok(Self::SemiAutonomous {}),
+            "connected" => Ok(Self::Connected {}),
+            other => Err(D::Error::custom(format!("unknown hub mode: {other}"))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -225,6 +260,7 @@ pub struct PeerRecord {
     pub saved: bool,
     pub stale: bool,
     pub active_link: bool,
+    pub hub_derived: bool,
     pub last_resolution_error: Option<String>,
     pub last_resolution_attempt_at_ms: Option<u64>,
     pub last_seen_at_ms: u64,
@@ -268,6 +304,25 @@ pub struct SyncStatus {
     pub completed_at_ms: Option<u64>,
     pub messages_received: u32,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubDirectoryPeerRecord {
+    pub identity: String,
+    pub destination_hash: String,
+    pub display_name: Option<String>,
+    pub announce_capabilities: Vec<String>,
+    pub client_type: Option<String>,
+    pub registered_mode: Option<String>,
+    pub last_seen: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubDirectorySnapshot {
+    pub effective_connected_mode: bool,
+    pub items: Vec<HubDirectoryPeerRecord>,
+    pub received_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -488,8 +543,7 @@ pub enum NodeEvent {
         status: SyncStatus,
     },
     HubDirectoryUpdated {
-        destinations: Vec<String>,
-        received_at_ms: u64,
+        snapshot: HubDirectorySnapshot,
     },
     ProjectionInvalidated {
         invalidation: ProjectionInvalidation,
@@ -502,4 +556,29 @@ pub enum NodeEvent {
         code: String,
         message: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HubMode;
+
+    #[test]
+    fn hub_mode_deserialize_migrates_legacy_values() {
+        assert!(matches!(
+            serde_json::from_str::<HubMode>("\"Disabled\"").expect("disabled mode"),
+            HubMode::Autonomous {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<HubMode>("\"RchLxmf\"").expect("rch lxmf mode"),
+            HubMode::SemiAutonomous {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<HubMode>("\"RchHttp\"").expect("rch http mode"),
+            HubMode::SemiAutonomous {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<HubMode>("\"Connected\"").expect("connected mode"),
+            HubMode::Connected {}
+        ));
+    }
 }

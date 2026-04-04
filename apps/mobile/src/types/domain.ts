@@ -1,4 +1,4 @@
-export type EamStatus = "Red" | "Yellow" | "Green" | "Unknown";
+﻿export type EamStatus = "Red" | "Yellow" | "Green" | "Unknown";
 export type EamWireStatus = Exclude<EamStatus, "Unknown">;
 
 export const EAM_COMMAND_TYPES = [
@@ -244,6 +244,25 @@ export interface SavedPeer {
   savedAt: number;
 }
 
+export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
+
+export interface HubDirectoryPeerRecord {
+  identity: string;
+  destinationHash: string;
+  displayName?: string;
+  announceCapabilities: string[];
+  clientType?: string;
+  registeredMode?: string;
+  lastSeen?: string;
+  status?: string;
+}
+
+export interface HubDirectorySnapshot {
+  effectiveConnectedMode: boolean;
+  items: HubDirectoryPeerRecord[];
+  receivedAtMs: number;
+}
+
 export interface PeerListV1Peer {
   destination: string;
   label?: string;
@@ -257,7 +276,7 @@ export interface PeerListV1 {
 }
 
 export interface HubSettings {
-  mode: "Disabled" | "RchLxmf" | "RchHttp";
+  mode: HubMode;
   identityHash: string;
   apiBaseUrl: string;
   apiKey: string;
