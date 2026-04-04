@@ -286,6 +286,10 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
     }
 
+    public synchronized String listTelemetryDestinationsJson() {
+        return nonEmptyJson(ReticulumBridge.listTelemetryDestinationsJson(), "{\"items\":[]}");
+    }
+
     public synchronized String legacyImportCompletedJson() {
         return nonEmptyJson(ReticulumBridge.legacyImportCompletedJson(), "{\"completed\":false}");
     }

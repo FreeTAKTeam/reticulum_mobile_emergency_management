@@ -7,7 +7,7 @@ namespace reticulum_mobile {
 
 enum LogLevel { "Trace", "Debug", "Info", "Warn", "Error" };
 
-enum HubMode { "Disabled", "RchLxmf", "RchHttp" };
+enum HubMode { "Autonomous", "SemiAutonomous", "Connected" };
 
 enum PeerState { "Connecting", "Connected", "Disconnected" };
 
@@ -190,6 +190,7 @@ dictionary PeerRecord {
   boolean saved;
   boolean stale;
   boolean active_link;
+  boolean hub_derived;
   string? last_resolution_error;
   u64? last_resolution_attempt_at_ms;
   u64 last_seen_at_ms;
@@ -230,6 +231,23 @@ dictionary SyncStatus {
   u64? completed_at_ms;
   u32 messages_received;
   string? detail;
+};
+
+dictionary HubDirectoryPeerRecord {
+  string identity;
+  string destination_hash;
+  string? display_name;
+  sequence<string> announce_capabilities;
+  string? client_type;
+  string? registered_mode;
+  string? last_seen;
+  string? status;
+};
+
+dictionary HubDirectorySnapshot {
+  boolean effective_connected_mode;
+  sequence<HubDirectoryPeerRecord> items;
+  u64 received_at_ms;
 };
 
 dictionary SendLxmfRequest {
@@ -399,7 +417,7 @@ interface NodeEvent {
   MessageReceived(MessageRecord message);
   MessageUpdated(MessageRecord message);
   SyncUpdated(SyncStatus status);
-  HubDirectoryUpdated(sequence<string> destinations, u64 received_at_ms);
+  HubDirectoryUpdated(HubDirectorySnapshot snapshot);
   ProjectionInvalidated(ProjectionInvalidation invalidation);
   Log(LogLevel level, string message);
   Error(string code, string message);
@@ -461,6 +479,8 @@ interface Node {
   sequence<MessageRecord> list_messages(string? conversation_id);
   [Throws=NodeError]
   SyncStatus get_lxmf_sync_status();
+  [Throws=NodeError]
+  sequence<string> list_telemetry_destinations();
 
   [Throws=NodeError]
   boolean legacy_import_completed();

@@ -1,7 +1,7 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
-export type HubMode = "Disabled" | "RchLxmf" | "RchHttp";
+export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type SendOutcome =
@@ -77,6 +77,7 @@ export interface PeerChange {
   saved: boolean;
   stale: boolean;
   activeLink: boolean;
+  hubDerived: boolean;
   lastError?: string;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
@@ -179,6 +180,7 @@ export interface PeerRecord {
   saved: boolean;
   stale: boolean;
   activeLink: boolean;
+  hubDerived: boolean;
   lastResolutionError?: string;
   lastResolutionAttemptAtMs?: number;
   lastSeenAtMs: number;
@@ -227,6 +229,17 @@ export interface HubSettingsRecord {
   apiBaseUrl: string;
   apiKey: string;
   refreshIntervalSeconds: number;
+}
+
+export interface HubDirectoryPeerRecord {
+  identity: string;
+  destinationHash: string;
+  displayName?: string;
+  announceCapabilities: string[];
+  clientType?: string;
+  registeredMode?: string;
+  lastSeen?: string;
+  status?: string;
 }
 
 export interface TelemetrySettingsRecord {
@@ -367,7 +380,8 @@ export interface OperationalSummary {
 }
 
 export interface HubDirectoryUpdatedEvent {
-  destinations: string[];
+  effectiveConnectedMode: boolean;
+  items: HubDirectoryPeerRecord[];
   receivedAtMs: number;
 }
 
@@ -419,6 +433,7 @@ export interface ReticulumNodeClient {
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
   getLxmfSyncStatus(): Promise<SyncStatus>;
+  listTelemetryDestinations(): Promise<string[]>;
   legacyImportCompleted(): Promise<boolean>;
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
@@ -458,7 +473,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   announceIntervalSeconds: 1800,
   staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
-  hubMode: "Disabled",
+  hubMode: "Autonomous",
   hubRefreshIntervalSeconds: 3600,
 };
 
@@ -538,6 +553,7 @@ interface ReticulumNodePlugin {
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
   getLxmfSyncStatus(): Promise<Record<string, unknown>>;
+  listTelemetryDestinations(): Promise<{ items: string[] }>;
   legacyImportCompleted(): Promise<{ completed: boolean }>;
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
@@ -774,6 +790,9 @@ function toPeerChangedEvent(raw: Record<string, unknown>): PeerChangedEvent {
       saved: toSavedFlag(changeRaw.saved, changeRaw.managementState ?? changeRaw.management_state),
       stale: Boolean(changeRaw.stale),
       activeLink: Boolean(activeLinkRaw),
+      hubDerived: Boolean(
+        hasValue(changeRaw.hubDerived) ? changeRaw.hubDerived : changeRaw.hub_derived,
+      ),
       lastError: (changeRaw.lastError ?? changeRaw.last_error) as
         | string
         | undefined,
@@ -830,6 +849,7 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
     saved: toSavedFlag(raw.saved, raw.managementState ?? raw.management_state),
     stale: Boolean(raw.stale),
     activeLink: Boolean(raw.activeLink ?? raw.active_link),
+    hubDerived: Boolean(hasValue(raw.hubDerived) ? raw.hubDerived : raw.hub_derived),
     lastResolutionError:
       typeof raw.lastResolutionError === "string"
         ? raw.lastResolutionError
@@ -1136,12 +1156,50 @@ function toSyncStatus(raw: Record<string, unknown>): SyncStatus {
 function toHubDirectoryUpdatedEvent(
   raw: Record<string, unknown>,
 ): HubDirectoryUpdatedEvent {
-  const destinations = Array.isArray(raw.destinations)
-    ? raw.destinations.map((item) => normalizeHex(String(item)))
+  const snapshot = raw.snapshot && typeof raw.snapshot === "object" && !Array.isArray(raw.snapshot)
+    ? raw.snapshot as Record<string, unknown>
+    : raw;
+  const items = Array.isArray(snapshot.items)
+    ? snapshot.items
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({
+        identity: normalizeHex(item.identity ?? ""),
+        destinationHash: normalizeHex(item.destinationHash ?? item.destination_hash ?? ""),
+        displayName: typeof item.displayName === "string"
+          ? item.displayName
+          : typeof item.display_name === "string"
+            ? item.display_name
+            : undefined,
+        announceCapabilities: Array.isArray(item.announceCapabilities)
+          ? item.announceCapabilities.map((value) => String(value))
+          : Array.isArray(item.announce_capabilities)
+            ? item.announce_capabilities.map((value) => String(value))
+            : [],
+        clientType: typeof item.clientType === "string"
+          ? item.clientType
+          : typeof item.client_type === "string"
+            ? item.client_type
+            : undefined,
+        registeredMode: typeof item.registeredMode === "string"
+          ? item.registeredMode
+          : typeof item.registered_mode === "string"
+            ? item.registered_mode
+            : undefined,
+        lastSeen: typeof item.lastSeen === "string"
+          ? item.lastSeen
+          : typeof item.last_seen === "string"
+            ? item.last_seen
+            : undefined,
+        status: typeof item.status === "string" ? item.status : undefined,
+      }))
+      .filter((item) => item.destinationHash.length > 0)
     : [];
   return {
-    destinations,
-    receivedAtMs: Number(raw.receivedAtMs ?? raw.received_at_ms ?? Date.now()),
+    effectiveConnectedMode: Boolean(
+      snapshot.effectiveConnectedMode ?? snapshot.effective_connected_mode,
+    ),
+    items,
+    receivedAtMs: Number(snapshot.receivedAtMs ?? snapshot.received_at_ms ?? Date.now()),
   };
 }
 
@@ -1167,6 +1225,21 @@ function toProjectionInvalidationEvent(raw: Record<string, unknown>): Projection
     updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
     reason: typeof raw.reason === "string" ? raw.reason : undefined,
   };
+}
+
+function normalizeHubMode(value: unknown): HubMode {
+  switch (String(value ?? "").trim()) {
+    case "Connected":
+      return "Connected";
+    case "SemiAutonomous":
+    case "RchLxmf":
+    case "RchHttp":
+      return "SemiAutonomous";
+    case "Autonomous":
+    case "Disabled":
+    default:
+      return "Autonomous";
+  }
 }
 
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
@@ -1197,7 +1270,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
       expireAfterMinutes: Number(telemetry.expireAfterMinutes ?? 180),
     },
     hub: {
-      mode: String(hub.mode ?? "Disabled") as HubMode,
+      mode: normalizeHubMode(hub.mode),
       identityHash: String(hub.identityHash ?? ""),
       apiBaseUrl: String(hub.apiBaseUrl ?? ""),
       apiKey: String(hub.apiKey ?? ""),
@@ -1709,6 +1782,12 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toSyncStatus(await this.plugin.getLxmfSyncStatus());
   }
 
+  async listTelemetryDestinations(): Promise<string[]> {
+    await this.ready();
+    const result = await this.plugin.listTelemetryDestinations();
+    return Array.isArray(result.items) ? result.items.map((item) => normalizeHex(item)) : [];
+  }
+
   async legacyImportCompleted(): Promise<boolean> {
     await this.ready();
     const result = await this.plugin.legacyImportCompleted();
@@ -1862,6 +1941,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       saved: this.savedPeers.has(destinationHex),
       stale: false,
       activeLink: this.connected.has(destinationHex),
+      hubDerived: false,
       lastSeenAtMs: now,
     }));
   }
@@ -1888,6 +1968,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
           saved: false,
           stale: false,
           activeLink: false,
+          hubDerived: false,
           lastSeenAtMs: Date.now(),
         },
       });
@@ -1917,6 +1998,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         saved: true,
         stale: false,
         activeLink: false,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -1928,6 +2010,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         saved: true,
         stale: false,
         activeLink: true,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -1943,6 +2026,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         saved: false,
         stale: false,
         activeLink: false,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -2036,6 +2120,12 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     };
   }
 
+  async listTelemetryDestinations(): Promise<string[]> {
+    return this.currentPeerRecords()
+      .filter((peer) => peer.activeLink)
+      .map((peer) => peer.destinationHex);
+  }
+
   async legacyImportCompleted(): Promise<boolean> { return false; }
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
@@ -2089,7 +2179,8 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
 
   async refreshHubDirectory(): Promise<void> {
     this.emitter.emit("hubDirectoryUpdated", {
-      destinations: [],
+      effectiveConnectedMode: false,
+      items: [],
       receivedAtMs: Date.now(),
     });
   }
@@ -2115,10 +2206,37 @@ const MOCK_ANNOUNCED_PEERS = [
 ];
 const MOCK_ANNOUNCED_IDENTITIES = MOCK_ANNOUNCED_PEERS.map(() => randomHex32());
 
-const MOCK_HUB_PEERS = [
-  "7eb6e03ed67cd89bb3c5a7ac8713a109",
-  "c31298a1c68e30f7f3578fc03230591f",
-  "b07fd4a357fdb6b3500f5226346f56fd",
+const MOCK_HUB_PEERS: HubDirectoryPeerRecord[] = [
+  {
+    identity: randomHex32(),
+    destinationHash: "7eb6e03ed67cd89bb3c5a7ac8713a109",
+    displayName: "Pixel",
+    announceCapabilities: ["r3akt", "emergencymessages", "telemetry"],
+    clientType: "rem",
+    registeredMode: "connected",
+    lastSeen: "2026-04-02T12:43:28Z",
+    status: "active",
+  },
+  {
+    identity: randomHex32(),
+    destinationHash: "c31298a1c68e30f7f3578fc03230591f",
+    displayName: "Relay",
+    announceCapabilities: ["r3akt", "emergencymessages", "telemetry_relay"],
+    clientType: "rem",
+    registeredMode: "connected",
+    lastSeen: "2026-04-02T12:43:28Z",
+    status: "active",
+  },
+  {
+    identity: randomHex32(),
+    destinationHash: "b07fd4a357fdb6b3500f5226346f56fd",
+    displayName: "Console",
+    announceCapabilities: ["r3akt", "group_chat"],
+    clientType: "rem",
+    registeredMode: "semi_autonomous",
+    lastSeen: "2026-04-02T12:43:28Z",
+    status: "active",
+  },
 ];
 
 function randomHex32(): string {
@@ -2156,6 +2274,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       saved: this.savedPeers.has(destinationHex),
       stale: false,
       activeLink: this.connected.has(destinationHex),
+      hubDerived: false,
       lastSeenAtMs: now,
     }));
   }
@@ -2250,6 +2369,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         saved: true,
         stale: false,
         activeLink: false,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -2262,6 +2382,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         saved: true,
         stale: false,
         activeLink: true,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -2277,6 +2398,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         saved: false,
         stale: false,
         activeLink: false,
+        hubDerived: false,
         lastSeenAtMs: Date.now(),
       },
     });
@@ -2388,6 +2510,12 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     };
   }
 
+  async listTelemetryDestinations(): Promise<string[]> {
+    return this.currentPeerRecords()
+      .filter((peer) => peer.activeLink)
+      .map((peer) => peer.destinationHex);
+  }
+
   async legacyImportCompleted(): Promise<boolean> { return false; }
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
@@ -2441,7 +2569,8 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async refreshHubDirectory(): Promise<void> {
     this.emitter.emit("hubDirectoryUpdated", {
-      destinations: MOCK_HUB_PEERS,
+      effectiveConnectedMode: false,
+      items: MOCK_HUB_PEERS,
       receivedAtMs: Date.now(),
     });
   }

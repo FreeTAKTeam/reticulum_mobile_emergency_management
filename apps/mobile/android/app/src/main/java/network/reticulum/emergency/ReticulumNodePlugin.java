@@ -455,6 +455,16 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void listTelemetryDestinations(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list telemetry destinations.",
+            "Native telemetry destinations JSON parse failed.",
+            ReticulumNodeService::listTelemetryDestinationsJson
+        );
+    }
+
+    @PluginMethod
     public void legacyImportCompleted(PluginCall call) {
         runStringServiceCall(
             call,

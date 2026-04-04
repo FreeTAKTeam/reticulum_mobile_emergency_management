@@ -35,8 +35,8 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::mission_sync::MissionSyncMetadata;
 use crate::runtime::{lxmf_private_identity, LxmfSendReport};
 use crate::types::{
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfFallbackStage, NodeError, PeerState,
-    SendMode,
+    HubDirectorySnapshot, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfFallbackStage,
+    NodeError, PeerState, SendMode,
 };
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
@@ -496,9 +496,20 @@ impl CompatBackend {
         }
     }
 
-    fn record_hub_directory_updated(&self, destinations: &[String]) {
+    fn record_hub_directory_updated(&self, snapshot: &HubDirectorySnapshot) {
         let payload = json!({
-            "destinations": destinations,
+            "effective_connected_mode": snapshot.effective_connected_mode,
+            "items": snapshot.items.iter().map(|item| json!({
+                "identity": item.identity,
+                "destination_hash": item.destination_hash,
+                "display_name": item.display_name,
+                "announce_capabilities": item.announce_capabilities,
+                "client_type": item.client_type,
+                "registered_mode": item.registered_mode,
+                "last_seen": item.last_seen,
+                "status": item.status,
+            })).collect::<Vec<_>>(),
+            "received_at_ms": snapshot.received_at_ms,
         });
         if let Ok(mut state) = self.state.lock() {
             state.push_event(EVENT_HUB_DIRECTORY_UPDATED, Severity::Info, payload);
@@ -869,10 +880,8 @@ impl RuntimeLxmfSdk {
             .record_peer_changed(destination_hex, state_name, last_error);
     }
 
-    pub(crate) fn record_hub_directory_updated(&self, destinations: &[String]) {
-        self.client
-            .backend()
-            .record_hub_directory_updated(destinations);
+    pub(crate) fn record_hub_directory_updated(&self, snapshot: &HubDirectorySnapshot) {
+        self.client.backend().record_hub_directory_updated(snapshot);
     }
 
     pub(crate) fn record_delivery_sent(

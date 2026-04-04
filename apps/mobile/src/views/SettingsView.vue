@@ -1,10 +1,10 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, reactive, ref, useTemplateRef } from "vue";
 
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import { ensureRequiredAnnounceCapabilities, parseCapabilityTokens } from "../utils/peers";
+import { ensureRequiredAnnounceCapabilities, matchesRchHubCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
 interface KnownTcpServerOption {
@@ -49,7 +49,6 @@ const customTcpEndpoint = ref("");
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
-const showLegacyHubHttpFields = computed(() => form.hubMode === "RchHttp");
 
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
   TCP_COMMUNITY_SERVERS.map((server) => ({
@@ -80,15 +79,10 @@ const runtimeSummary = computed(() => {
   return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
 });
 
-function peerExposesHubCapability(appData: string): boolean {
-  const tokens = parseCapabilityTokens(appData);
-  return tokens.some((token) => token === "hub" || token.endsWith("hub"));
-}
-
 const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() =>
   Object.values(nodeStore.discoveredByDestination)
     .filter((peer) => peer.sources.includes("announce"))
-    .filter((peer) => peerExposesHubCapability(peer.appData ?? ""))
+    .filter((peer) => matchesRchHubCapabilities(peer.appData ?? ""))
     .map((peer) => ({
       destination: peer.destination,
       label: peer.announcedName || peer.label || peer.destination,
@@ -103,10 +97,16 @@ const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() =>
 );
 
 const hubSummary = computed(() => {
+  const cachedPeerCount = nodeStore.hubDirectoryPeers.length;
+  const connectedOverride =
+    form.hubMode === "SemiAutonomous" && nodeStore.effectiveConnectedMode
+      ? " | server forcing connected routing"
+      : "";
   if (!form.hubIdentityHash) {
-    return `${form.hubMode} | No hub selected`;
+    return `${form.hubMode} | No hub selected${connectedOverride}`;
   }
-  return `${form.hubMode} | ${form.hubIdentityHash.slice(0, 10)}...`;
+  const peerSummary = cachedPeerCount > 0 ? ` | ${cachedPeerCount} cached peers` : "";
+  return `${form.hubMode} | ${form.hubIdentityHash.slice(0, 10)}...${peerSummary}${connectedOverride}`;
 });
 const hubRegistrationSummary = computed(() => nodeStore.hubRegistrationSummary);
 const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved peers`);
@@ -532,21 +532,22 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </summary>
       <div class="panel-body">
         <p class="section-note">
-          Uses Reticulum LXMF and the RCH <code>ListClients</code> command to fetch the active
-          client list.
+          Autonomous keeps REM peer discovery local. Semi-autonomous seeds peer routing from the
+          selected RCH via <code>rem.registry.peers.list</code> and still sends directly to those
+          peers. Connected sends only to the selected RCH so the hub redistributes traffic.
         </p>
 
         <div class="grid">
           <label>
             Mode
             <select v-model="form.hubMode">
-              <option value="Disabled">Disabled</option>
-              <option value="RchLxmf">RCH via Reticulum (LXMF)</option>
-              <option value="RchHttp">Legacy HTTP (deprecated)</option>
+              <option value="Autonomous">Autonomous</option>
+              <option value="SemiAutonomous">Semi-autonomous</option>
+              <option value="Connected">Connected</option>
             </select>
           </label>
           <label>
-            Hub from announces (Hub capability)
+            Hub from announces (RCH servers)
             <select :value="form.hubIdentityHash" @change="onHubCandidateSelected">
               <option value="">Manual / none</option>
               <option
@@ -562,14 +563,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             Hub identity hash
             <input v-model="form.hubIdentityHash" type="text" />
           </label>
-          <label v-if="showLegacyHubHttpFields">
-            Legacy hub API base URL
-            <input v-model="form.hubApiBaseUrl" type="url" />
-          </label>
-          <label v-if="showLegacyHubHttpFields">
-            Legacy hub API key
-            <input v-model="form.hubApiKey" type="text" />
-          </label>
           <label>
             Refresh interval seconds
             <input v-model.number="form.hubRefreshIntervalSeconds" type="number" min="30" />
@@ -577,7 +570,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
 
         <p v-if="hubAnnounceCandidates.length === 0" class="section-note">
-          No announce entries exposing Hub capability have been seen yet.
+          No announce entries advertising the RCH server capability set have been seen yet.
         </p>
         <p class="section-note">
           Hub registration: {{ hubRegistrationSummary }}

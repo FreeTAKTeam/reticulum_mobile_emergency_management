@@ -13,13 +13,13 @@ mod types;
 pub use node::{EventSubscription, Node};
 pub use types::{
     AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubMode, HubSettingsRecord, LegacyImportPayload,
-    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
-    LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerChange,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus, TelemetryPositionRecord,
-    TelemetrySettingsRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, OperationalSummary, PeerChange, PeerRecord, PeerState, ProjectionInvalidation,
+    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
+    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

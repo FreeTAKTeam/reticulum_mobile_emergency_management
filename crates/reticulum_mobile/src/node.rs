@@ -15,10 +15,10 @@ use crate::logger::NodeLogger;
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::types::{
     AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LogLevel, MessageRecord,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SyncStatus, TelemetryPositionRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode, LegacyImportPayload,
+    LogLevel, MessageRecord, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary,
+    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SyncStatus, TelemetryPositionRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -45,6 +45,7 @@ struct NodeInner {
     status: Arc<Mutex<NodeStatus>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
+    hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     active_config: Option<NodeConfigFingerprint>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
@@ -129,6 +130,155 @@ const TEAM_UID_BROWN: &str = "4efe72ac30f5b85142fdcab6d96c7631";
 struct MissionReplicationTarget {
     app_destination_hex: String,
     send_mode: SendMode,
+}
+
+fn effective_hub_mode(
+    configured_mode: HubMode,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> HubMode {
+    match configured_mode {
+        HubMode::Autonomous {} => HubMode::Autonomous {},
+        HubMode::Connected {} => HubMode::Connected {},
+        HubMode::SemiAutonomous {} => {
+            if hub_directory_snapshot
+                .is_some_and(|snapshot| snapshot.effective_connected_mode)
+            {
+                HubMode::Connected {}
+            } else {
+                HubMode::SemiAutonomous {}
+            }
+        }
+    }
+}
+
+fn has_capability_token(app_data: Option<&str>, capability: &str) -> bool {
+    let requested = capability.trim();
+    if requested.is_empty() {
+        return false;
+    }
+
+    app_data.is_some_and(|value| {
+        value
+            .split([';', ','])
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
+            .any(|token| token.eq_ignore_ascii_case(requested))
+    })
+}
+
+fn telemetry_destinations_from_peers(
+    peers: &[PeerRecord],
+    self_destination_hex: Option<&str>,
+) -> Vec<String> {
+    let mut destinations = Vec::new();
+    let mut seen = HashSet::<String>::new();
+    for peer in peers {
+        let Some(destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+            continue;
+        };
+        if self_destination_hex == Some(destination_hex.as_str()) {
+            continue;
+        }
+        if !peer.active_link || !has_capability_token(peer.app_data.as_deref(), "telemetry") {
+            continue;
+        }
+        if seen.insert(destination_hex.clone()) {
+            destinations.push(destination_hex);
+        }
+    }
+    destinations
+}
+
+fn telemetry_destinations_from_hub_snapshot(
+    snapshot: &HubDirectorySnapshot,
+    self_destination_hex: Option<&str>,
+) -> Vec<String> {
+    let mut destinations = Vec::new();
+    let mut seen = HashSet::<String>::new();
+    for item in &snapshot.items {
+        let Some(destination_hex) = normalize_hex_32(item.destination_hash.as_str()) else {
+            continue;
+        };
+        if self_destination_hex == Some(destination_hex.as_str()) {
+            continue;
+        }
+        if !item
+            .announce_capabilities
+            .iter()
+            .any(|capability| capability.eq_ignore_ascii_case("telemetry"))
+        {
+            continue;
+        }
+        if seen.insert(destination_hex.clone()) {
+            destinations.push(destination_hex);
+        }
+    }
+    destinations
+}
+
+fn build_runtime_telemetry_destinations(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> Result<Vec<String>, NodeError> {
+    let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
+    let Some(config) = active_config else {
+        return Ok(telemetry_destinations_from_peers(
+            peers,
+            self_destination_hex.as_deref(),
+        ));
+    };
+
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Autonomous {} => Ok(telemetry_destinations_from_peers(
+            peers,
+            self_destination_hex.as_deref(),
+        )),
+        HubMode::Connected {} => Ok(vec![configured_hub_destination(config)?]),
+        HubMode::SemiAutonomous {} => {
+            if config
+                .hub_identity_hash
+                .as_deref()
+                .and_then(normalize_hex_32)
+                .is_some()
+            {
+                if let Some(snapshot) = hub_directory_snapshot {
+                    return Ok(telemetry_destinations_from_hub_snapshot(
+                        snapshot,
+                        self_destination_hex.as_deref(),
+                    ));
+                }
+            }
+            Ok(telemetry_destinations_from_peers(
+                peers,
+                self_destination_hex.as_deref(),
+            ))
+        }
+    }
+}
+
+fn configured_hub_destination(config: &NodeConfigFingerprint) -> Result<String, NodeError> {
+    config
+        .hub_identity_hash
+        .as_deref()
+        .and_then(normalize_hex_32)
+        .ok_or(NodeError::InvalidConfig {})
+}
+
+fn routed_destination_hex(
+    requested_destination_hex: String,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> Result<String, NodeError> {
+    let Some(config) = active_config else {
+        return Ok(requested_destination_hex);
+    };
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Connected {} => configured_hub_destination(config),
+        HubMode::Autonomous {} | HubMode::SemiAutonomous {} => Ok(requested_destination_hex),
+    }
 }
 
 fn normalize_hex_32(value: &str) -> Option<String> {
@@ -355,6 +505,168 @@ fn build_event_replication_targets(
 
     direct_targets.extend(relay_targets);
     direct_targets
+}
+
+fn build_transient_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    directory_destinations: &[String],
+    active_propagation_node_hex: Option<&str>,
+) -> Vec<MissionReplicationTarget> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::<String>::new();
+    let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+
+    for destination_hash in directory_destinations {
+        let Some(app_destination_hex) = normalize_hex_32(destination_hash.as_str()) else {
+            continue;
+        };
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
+            continue;
+        }
+        if !seen.insert(app_destination_hex.clone()) {
+            continue;
+        }
+
+        let matched_peer = peers.iter().find(|peer| {
+            normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+                == Some(app_destination_hex.as_str())
+        });
+        let send_mode = if matched_peer.is_some_and(peer_is_directly_reachable) || !has_active_relay {
+            SendMode::Auto {}
+        } else {
+            SendMode::PropagationOnly {}
+        };
+        targets.push(MissionReplicationTarget {
+            app_destination_hex,
+            send_mode,
+        });
+    }
+
+    targets
+}
+
+fn build_runtime_mission_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let Some(config) = active_config else {
+        return Ok(build_mission_replication_targets(
+            status,
+            peers,
+            saved_peers,
+            active_propagation_node_hex,
+        ));
+    };
+
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Autonomous {} => Ok(build_mission_replication_targets(
+            status,
+            peers,
+            saved_peers,
+            active_propagation_node_hex,
+        )),
+        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
+            app_destination_hex: configured_hub_destination(config)?,
+            send_mode: SendMode::Auto {},
+        }]),
+        HubMode::SemiAutonomous {} => {
+            let Some(_hub_identity_hash) = config.hub_identity_hash.as_deref().and_then(normalize_hex_32)
+            else {
+                return Ok(build_mission_replication_targets(
+                    status,
+                    peers,
+                    saved_peers,
+                    active_propagation_node_hex,
+                ));
+            };
+            let Some(snapshot) = hub_directory_snapshot else {
+                return Ok(build_mission_replication_targets(
+                    status,
+                    peers,
+                    saved_peers,
+                    active_propagation_node_hex,
+                ));
+            };
+            Ok(build_transient_replication_targets(
+                status,
+                peers,
+                &snapshot
+                    .items
+                    .iter()
+                    .map(|item| item.destination_hash.clone())
+                    .collect::<Vec<_>>(),
+                active_propagation_node_hex,
+            ))
+        }
+    }
+}
+
+fn build_runtime_event_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let Some(config) = active_config else {
+        return Ok(build_event_replication_targets(
+            status,
+            peers,
+            saved_peers,
+            active_propagation_node_hex,
+        ));
+    };
+
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Autonomous {} => Ok(build_event_replication_targets(
+            status,
+            peers,
+            saved_peers,
+            active_propagation_node_hex,
+        )),
+        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
+            app_destination_hex: configured_hub_destination(config)?,
+            send_mode: SendMode::Auto {},
+        }]),
+        HubMode::SemiAutonomous {} => {
+            let Some(_hub_identity_hash) = config.hub_identity_hash.as_deref().and_then(normalize_hex_32)
+            else {
+                return Ok(build_event_replication_targets(
+                    status,
+                    peers,
+                    saved_peers,
+                    active_propagation_node_hex,
+                ));
+            };
+            let Some(snapshot) = hub_directory_snapshot else {
+                return Ok(build_event_replication_targets(
+                    status,
+                    peers,
+                    saved_peers,
+                    active_propagation_node_hex,
+                ));
+            };
+            Ok(build_transient_replication_targets(
+                status,
+                peers,
+                &snapshot
+                    .items
+                    .iter()
+                    .map(|item| item.destination_hash.clone())
+                    .collect::<Vec<_>>(),
+                active_propagation_node_hex,
+            ))
+        }
+    }
 }
 
 fn eam_status_rank(value: &str) -> u8 {
@@ -751,6 +1063,7 @@ impl Node {
                     messages_received: 0,
                     detail: None,
                 })),
+                hub_directory_snapshot: Arc::new(Mutex::new(None)),
                 active_config: None,
                 runtime: None,
                 cmd_tx: None,
@@ -856,6 +1169,7 @@ impl Node {
             inner.status.clone(),
             inner.peers_snapshot.clone(),
             inner.sync_status_snapshot.clone(),
+            inner.hub_directory_snapshot.clone(),
             inner.bus.clone(),
             cmd_rx,
         ));
@@ -888,7 +1202,7 @@ impl Node {
     }
 
     pub fn stop(&self) -> Result<(), NodeError> {
-        let (runtime, cmd_tx, bus, status, peers_snapshot, sync_status_snapshot) = {
+        let (runtime, cmd_tx, bus, status, peers_snapshot, sync_status_snapshot, hub_directory_snapshot) = {
             let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             inner.active_config = None;
             (
@@ -898,6 +1212,7 @@ impl Node {
                 inner.status.clone(),
                 inner.peers_snapshot.clone(),
                 inner.sync_status_snapshot.clone(),
+                inner.hub_directory_snapshot.clone(),
             )
         };
 
@@ -932,6 +1247,9 @@ impl Node {
                 messages_received: 0,
                 detail: None,
             };
+        }
+        if let Ok(mut guard) = hub_directory_snapshot.lock() {
+            *guard = None;
         }
 
         Ok(())
@@ -1012,10 +1330,24 @@ impl Node {
         fields_bytes: Option<Vec<u8>>,
         send_mode: SendMode,
     ) -> Result<(), NodeError> {
-        let tx = {
+        let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
+            )
         };
+        let destination_hex = routed_destination_hex(
+            destination_hex,
+            active_config.as_ref(),
+            hub_directory_snapshot.as_ref(),
+        )?;
 
         let (resp_tx, _resp_rx) = cb::bounded(1);
         dispatch_command(
@@ -1037,10 +1369,24 @@ impl Node {
         fields_bytes: Option<Vec<u8>>,
         send_mode: SendMode,
     ) -> Result<(), NodeError> {
-        let tx = {
+        let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
+            )
         };
+        let destination_hex = routed_destination_hex(
+            destination_hex,
+            active_config.as_ref(),
+            hub_directory_snapshot.as_ref(),
+        )?;
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
@@ -1059,10 +1405,52 @@ impl Node {
     }
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {
-        let tx = {
+        let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
+            )
         };
+        if let Some(config) = active_config.as_ref() {
+            match effective_hub_mode(config.hub_mode, hub_directory_snapshot.as_ref()) {
+                HubMode::Connected {} => {
+                    return self.send_bytes(
+                        configured_hub_destination(config)?,
+                        bytes,
+                        None,
+                        SendMode::Auto {},
+                    );
+                }
+                HubMode::SemiAutonomous {} => {
+                    if config
+                        .hub_identity_hash
+                        .as_deref()
+                        .and_then(normalize_hex_32)
+                        .is_some()
+                    {
+                        if let Some(snapshot) = hub_directory_snapshot.as_ref() {
+                            for item in &snapshot.items {
+                                self.send_bytes(
+                                    item.destination_hash.clone(),
+                                    bytes.clone(),
+                                    None,
+                                    SendMode::Auto {},
+                                )?;
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+                HubMode::Autonomous {} => {}
+            }
+        }
 
         let (resp_tx, _resp_rx) = cb::bounded(1);
         dispatch_command(
@@ -1103,9 +1491,26 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let tx = {
+        let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
+            )
+        };
+        let request = SendLxmfRequest {
+            destination_hex: routed_destination_hex(
+                request.destination_hex,
+                active_config.as_ref(),
+                hub_directory_snapshot.as_ref(),
+            )?,
+            ..request
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
@@ -1241,6 +1646,31 @@ impl Node {
             .map_err(|_| NodeError::InternalError {})
     }
 
+    pub fn list_telemetry_destinations(&self) -> Result<Vec<String>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let status = inner
+            .status
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        let peers = inner
+            .peers_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        let hub_directory_snapshot = inner
+            .hub_directory_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            inner.active_config.as_ref(),
+            hub_directory_snapshot.as_ref(),
+        )
+    }
+
     pub fn set_announce_capabilities(&self, capability_string: String) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
@@ -1349,18 +1779,25 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_mission_replication_targets(
+                let replication_targets = build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
-                );
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
                 for target in replication_targets {
                     match build_eam_replication_payload(&status, &normalized_record, &target) {
                         Ok((body, fields)) => {
@@ -1428,18 +1865,25 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_mission_replication_targets(
+                let replication_targets = build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
-                );
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
                 for target in replication_targets {
                     match build_eam_delete_replication_payload(&callsign, deleted_at_ms, &target) {
                         Ok((body, fields)) => {
@@ -1520,18 +1964,25 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_event_replication_targets(
+                let replication_targets = build_runtime_event_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
-                );
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
                 for target in replication_targets {
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
@@ -1899,7 +2350,7 @@ mod tests {
             announce_interval_seconds: 1,
             stale_after_minutes: 30,
             announce_capabilities: "R3AKT,EMergencyMessages,Telemetry".to_string(),
-            hub_mode: HubMode::Disabled {},
+            hub_mode: HubMode::Autonomous {},
             hub_identity_hash: None,
             hub_api_base_url: None,
             hub_api_key: None,
@@ -2067,7 +2518,7 @@ mod tests {
                 expire_after_minutes: 180,
             },
             hub: HubSettingsRecord {
-                mode: HubMode::Disabled {},
+                mode: HubMode::Autonomous {},
                 identity_hash: String::new(),
                 api_base_url: String::new(),
                 api_key: String::new(),
@@ -2081,6 +2532,36 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("POCO".to_string()),
             saved_at_ms: 1_700_000_000_000,
+        }
+    }
+
+    fn build_status_for_tests() -> NodeStatus {
+        NodeStatus {
+            running: true,
+            name: "Atlas-1".to_string(),
+            identity_hex: "99999999999999999999999999999999".to_string(),
+            app_destination_hex: "12121212121212121212121212121212".to_string(),
+            lxmf_destination_hex: "34343434343434343434343434343434".to_string(),
+        }
+    }
+
+    fn build_config_fingerprint_for_tests(
+        hub_mode: HubMode,
+        hub_identity_hash: Option<&str>,
+    ) -> NodeConfigFingerprint {
+        NodeConfigFingerprint {
+            name: "Atlas-1".to_string(),
+            storage_dir: None,
+            tcp_clients: Vec::new(),
+            broadcast: true,
+            announce_interval_seconds: 1800,
+            stale_after_minutes: 30,
+            announce_capabilities: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            hub_mode,
+            hub_identity_hash: hub_identity_hash.map(str::to_string),
+            hub_api_base_url: None,
+            hub_api_key: None,
+            hub_refresh_interval_seconds: 3600,
         }
     }
 
@@ -2105,12 +2586,134 @@ mod tests {
             saved,
             stale: false,
             active_link,
+            hub_derived: false,
             last_resolution_error: None,
             last_resolution_attempt_at_ms: Some(now_ms()),
             last_seen_at_ms: now_ms(),
             announce_last_seen_at_ms: Some(now_ms()),
             lxmf_last_seen_at_ms: Some(now_ms()),
         }
+    }
+
+    #[test]
+    fn effective_hub_mode_uses_server_connected_override() {
+        let snapshot = HubDirectorySnapshot {
+            effective_connected_mode: true,
+            items: Vec::new(),
+            received_at_ms: 123,
+        };
+
+        assert!(matches!(
+            effective_hub_mode(HubMode::SemiAutonomous {}, Some(&snapshot)),
+            HubMode::Connected {}
+        ));
+        assert!(matches!(
+            effective_hub_mode(HubMode::SemiAutonomous {}, None),
+            HubMode::SemiAutonomous {}
+        ));
+    }
+
+    #[test]
+    fn semi_autonomous_replication_targets_use_hub_directory_peers() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::SemiAutonomous {},
+            Some("56565656565656565656565656565656"),
+        );
+        let snapshot = HubDirectorySnapshot {
+            effective_connected_mode: false,
+            items: vec![crate::types::HubDirectoryPeerRecord {
+                identity: "78787878787878787878787878787878".to_string(),
+                destination_hash: "abababababababababababababababab".to_string(),
+                display_name: Some("Pixel".to_string()),
+                announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+                client_type: Some("rem".to_string()),
+                registered_mode: Some("semi_autonomous".to_string()),
+                last_seen: Some("2026-04-02T12:43:28Z".to_string()),
+                status: Some("active".to_string()),
+            }],
+            received_at_ms: 456,
+        };
+
+        let targets = build_runtime_mission_replication_targets(
+            &status,
+            &[],
+            &[],
+            None,
+            Some(&config),
+            Some(&snapshot),
+        )
+        .expect("semi-autonomous targets");
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].app_destination_hex, "abababababababababababababababab");
+        assert!(matches!(targets[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn connected_telemetry_destinations_route_only_to_hub() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::Connected {},
+            Some("56565656565656565656565656565656"),
+        );
+
+        let destinations = build_runtime_telemetry_destinations(&status, &[], Some(&config), None)
+            .expect("connected telemetry destinations");
+
+        assert_eq!(destinations, vec!["56565656565656565656565656565656".to_string()]);
+    }
+
+    #[test]
+    fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::SemiAutonomous {},
+            Some("56565656565656565656565656565656"),
+        );
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        )];
+        let snapshot = HubDirectorySnapshot {
+            effective_connected_mode: false,
+            items: vec![
+                crate::types::HubDirectoryPeerRecord {
+                    identity: "78787878787878787878787878787878".to_string(),
+                    destination_hash: "abababababababababababababababab".to_string(),
+                    display_name: Some("Pixel".to_string()),
+                    announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+                    client_type: Some("rem".to_string()),
+                    registered_mode: Some("semi_autonomous".to_string()),
+                    last_seen: Some("2026-04-02T12:43:28Z".to_string()),
+                    status: Some("active".to_string()),
+                },
+                crate::types::HubDirectoryPeerRecord {
+                    identity: "89898989898989898989898989898989".to_string(),
+                    destination_hash: "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd".to_string(),
+                    display_name: Some("NoTelemetry".to_string()),
+                    announce_capabilities: vec!["r3akt".to_string()],
+                    client_type: Some("rem".to_string()),
+                    registered_mode: Some("semi_autonomous".to_string()),
+                    last_seen: Some("2026-04-02T12:43:28Z".to_string()),
+                    status: Some("active".to_string()),
+                },
+            ],
+            received_at_ms: 123,
+        };
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            Some(&config),
+            Some(&snapshot),
+        )
+        .expect("semi-autonomous telemetry destinations");
+
+        assert_eq!(destinations, vec!["abababababababababababababababab".to_string()]);
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -2281,7 +2884,7 @@ mod tests {
                 expire_after_minutes: 30,
             },
             hub: HubSettingsRecord {
-                mode: HubMode::Disabled {},
+            mode: HubMode::Autonomous {},
                 identity_hash: String::new(),
                 api_base_url: String::new(),
                 api_key: String::new(),
@@ -4041,6 +4644,7 @@ mod tests {
             saved: true,
             stale: false,
             active_link: true,
+            hub_derived: false,
             last_resolution_error: None,
             last_resolution_attempt_at_ms: Some(now_ms()),
             last_seen_at_ms: now_ms(),

@@ -12,11 +12,12 @@ use serde_json::json;
 use crate::node::{EventSubscription, Node};
 use crate::types::{
     AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode, HubSettingsRecord,
-    LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
-    LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState,
-    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord,
+    HubDirectoryPeerRecord, HubDirectorySnapshot, LegacyImportPayload, LogLevel,
+    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
+    NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, TelemetryPositionRecord,
+    TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -339,14 +340,15 @@ fn make_jstring_or_null(env: &mut JNIEnv, value: String) -> jstring {
 
 fn parse_hub_mode(value: Option<&str>) -> HubMode {
     match value
-        .unwrap_or("Disabled")
+        .unwrap_or("Autonomous")
         .trim()
         .to_ascii_lowercase()
         .as_str()
     {
-        "rchlxmf" | "rch_lxmf" => HubMode::RchLxmf {},
-        "rchhttp" | "rch_http" => HubMode::RchHttp {},
-        _ => HubMode::Disabled {},
+        "connected" => HubMode::Connected {},
+        "semiautonomous" | "semi_autonomous" | "semi-autonomous" | "rchlxmf" | "rch_lxmf"
+        | "rchhttp" | "rch_http" => HubMode::SemiAutonomous {},
+        _ => HubMode::Autonomous {},
     }
 }
 
@@ -671,6 +673,7 @@ fn peer_record_json(peer: &PeerRecord) -> serde_json::Value {
         "saved": peer.saved,
         "stale": peer.stale,
         "activeLink": peer.active_link,
+        "hubDerived": peer.hub_derived,
         "lastResolutionError": peer.last_resolution_error,
         "lastResolutionAttemptAtMs": peer.last_resolution_attempt_at_ms,
         "lastSeenAtMs": peer.last_seen_at_ms,
@@ -679,13 +682,34 @@ fn peer_record_json(peer: &PeerRecord) -> serde_json::Value {
     })
 }
 
+fn hub_directory_peer_json(peer: &HubDirectoryPeerRecord) -> serde_json::Value {
+    json!({
+        "identity": peer.identity,
+        "destinationHash": peer.destination_hash,
+        "displayName": peer.display_name,
+        "announceCapabilities": peer.announce_capabilities,
+        "clientType": peer.client_type,
+        "registeredMode": peer.registered_mode,
+        "lastSeen": peer.last_seen,
+        "status": peer.status
+    })
+}
+
+fn hub_directory_snapshot_json(snapshot: &HubDirectorySnapshot) -> serde_json::Value {
+    json!({
+        "effectiveConnectedMode": snapshot.effective_connected_mode,
+        "items": snapshot
+            .items
+            .iter()
+            .map(hub_directory_peer_json)
+            .collect::<Vec<_>>(),
+        "receivedAtMs": snapshot.received_at_ms
+    })
+}
+
 fn hub_settings_json(settings: &HubSettingsRecord) -> serde_json::Value {
     json!({
-        "mode": match settings.mode {
-            HubMode::Disabled {} => "Disabled",
-            HubMode::RchLxmf {} => "RchLxmf",
-            HubMode::RchHttp {} => "RchHttp",
-        },
+        "mode": settings.mode.as_str(),
         "identityHash": settings.identity_hash,
         "apiBaseUrl": settings.api_base_url,
         "apiKey": settings.api_key,
@@ -1093,15 +1117,9 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "detail": status.detail
             }),
         ),
-        NodeEvent::HubDirectoryUpdated {
-            destinations,
-            received_at_ms,
-        } => (
+        NodeEvent::HubDirectoryUpdated { snapshot } => (
             "hubDirectoryUpdated",
-            json!({
-                "destinations": destinations,
-                "receivedAtMs": received_at_ms
-            }),
+            hub_directory_snapshot_json(&snapshot),
         ),
         NodeEvent::ProjectionInvalidated { invalidation } => (
             "projectionInvalidated",
@@ -1875,6 +1893,39 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfS
     };
     match node.get_lxmf_sync_status() {
         Ok(status) => ok_json_result(&mut env, &status),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listTelemetryDestinationsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.list_telemetry_destinations() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({
+                "items": items
+            }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
