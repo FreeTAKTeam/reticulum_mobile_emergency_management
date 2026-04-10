@@ -105,7 +105,7 @@ export interface SettingsSeed {
     expireAfterMinutes: number;
   };
   hub: {
-    mode: "Disabled" | "RchLxmf" | "RchHttp";
+    mode: "Autonomous" | "SemiAutonomous" | "Connected";
     identityHash: string;
     apiBaseUrl: string;
     apiKey: string;
@@ -131,7 +131,7 @@ export const defaultSettings: SettingsSeed = {
   displayName: "emergency-ops-mobile",
   clientMode: "auto",
   autoConnectSaved: true,
-  announceCapabilities: "R3AKT,EMergencyMessages",
+  announceCapabilities: "R3AKT,EMergencyMessages,Telemetry",
   tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
   broadcast: true,
   announceIntervalSeconds: 1800,
@@ -142,7 +142,7 @@ export const defaultSettings: SettingsSeed = {
     expireAfterMinutes: 180,
   },
   hub: {
-    mode: "Disabled",
+    mode: "Autonomous",
     identityHash: "",
     apiBaseUrl: "",
     apiKey: "",

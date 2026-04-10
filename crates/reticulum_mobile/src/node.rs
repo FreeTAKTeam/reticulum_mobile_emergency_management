@@ -2665,6 +2665,17 @@ mod tests {
     }
 
     #[test]
+    fn connected_telemetry_destinations_require_selected_hub() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
+
+        let err = build_runtime_telemetry_destinations(&status, &[], Some(&config), None)
+            .expect_err("connected telemetry should require a hub");
+
+        assert!(matches!(err, NodeError::InvalidConfig {}));
+    }
+
+    #[test]
     fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(
@@ -2714,6 +2725,38 @@ mod tests {
         .expect("semi-autonomous telemetry destinations");
 
         assert_eq!(destinations, vec!["abababababababababababababababab".to_string()]);
+    }
+
+    #[test]
+    fn semi_autonomous_telemetry_destinations_fall_back_without_selected_hub() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::SemiAutonomous {}, None);
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                "efefefefefefefefefefefefefefefef",
+                true,
+                true,
+                false,
+            ),
+        ];
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            Some(&config),
+            None,
+        )
+        .expect("semi-autonomous fallback telemetry destinations");
+
+        assert_eq!(destinations, vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]);
     }
 
     fn build_eam() -> EamProjectionRecord {

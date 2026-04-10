@@ -3,6 +3,62 @@ import { expect, test } from "@playwright/test";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINT } from "../apps/mobile/src/utils/tcpCommunityServers";
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
+async function seedAnnouncedPeers(
+  page: import("@playwright/test").Page,
+  peers: Array<{
+    destination: string;
+    appData: string;
+    label?: string;
+    announcedName?: string;
+  }>,
+): Promise<void> {
+  await page.evaluate(async (entries) => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    const store = mod.useNodeStore();
+    const now = Date.now();
+    for (const entry of entries) {
+      store.discoveredByDestination[entry.destination] = {
+        destination: entry.destination,
+        label: entry.label,
+        announcedName: entry.announcedName,
+        appData: entry.appData,
+        lastSeenAt: now,
+        announceLastSeenAt: now,
+        lxmfLastSeenAt: now,
+        sources: ["announce"],
+        state: "disconnected",
+        saved: false,
+        stale: false,
+        activeLink: false,
+      };
+    }
+  }, peers);
+}
+
+async function seedHubDirectorySnapshot(
+  page: import("@playwright/test").Page,
+  snapshot: {
+    effectiveConnectedMode: boolean;
+    receivedAtMs: number;
+    items: Array<{
+      identity: string;
+      destinationHash: string;
+      displayName?: string;
+      announceCapabilities: string[];
+      clientType?: string;
+      registeredMode?: string;
+      lastSeen?: string;
+      status?: string;
+    }>;
+  },
+): Promise<void> {
+  await page.evaluate(async (nextSnapshot) => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    const store = mod.useNodeStore();
+    store.hubDirectorySnapshot = nextSnapshot;
+  }, snapshot);
+}
+
 test("fresh installs default to the first TCP community server", async ({ page }) => {
   await seedAppStorage(page, {});
 
@@ -90,4 +146,105 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
 
   expect(storedSettings.displayName).toBe("Atlas-7");
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+});
+
+test("hub selector only lists RCH-capable announce peers and persists the selected hub", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      hub: {
+        ...defaultSettings.hub,
+        mode: "SemiAutonomous",
+      },
+    },
+  });
+
+  await gotoApp(page, "/settings");
+  await seedAnnouncedPeers(page, [
+    {
+      destination: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      appData: "R3AKT,topic_broker,name=Relay%20Hub",
+      announcedName: "Relay Hub",
+    },
+    {
+      destination: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      appData: "R3AKT,Telemetry,name=Telemetry%20Peer",
+      announcedName: "Telemetry Peer",
+    },
+  ]);
+
+  const hubPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  });
+  await hubPanel.locator("summary").click();
+
+  const hubSelect = hubPanel.getByLabel("Hub from announces (RCH servers)");
+  await expect(hubSelect.locator("option")).toHaveCount(2);
+  await expect(hubSelect).toContainText("Relay Hub");
+  await expect(hubSelect).not.toContainText("Telemetry Peer");
+
+  await hubSelect.selectOption("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  await hubPanel.getByRole("button", { name: "Save Hub Settings" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
+  expect(storedSettings.hub.identityHash).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  expect(storedSettings.hub.mode).toBe("SemiAutonomous");
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(hubPanel).toContainText("aaaaaaaaaa...");
+});
+
+test("hub summary shows cached peer count, connected override, and missing connected hub state", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      hub: {
+        ...defaultSettings.hub,
+        mode: "SemiAutonomous",
+        identityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    },
+  });
+
+  await gotoApp(page, "/settings");
+  await seedHubDirectorySnapshot(page, {
+    effectiveConnectedMode: true,
+    receivedAtMs: Date.now(),
+    items: [
+      {
+        identity: "11111111111111111111111111111111",
+        destinationHash: "22222222222222222222222222222222",
+        displayName: "Pixel",
+        announceCapabilities: ["r3akt", "telemetry"],
+        clientType: "rem",
+        registeredMode: "connected",
+        lastSeen: "2026-04-02T12:43:28Z",
+        status: "active",
+      },
+    ],
+  });
+
+  const hubPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  });
+  await expect(hubPanel).toContainText("1 cached peers");
+  await expect(hubPanel).toContainText("server forcing connected routing");
+
+  await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    const store = mod.useNodeStore();
+    store.updateSettings({
+      hub: {
+        ...store.settings.hub,
+        mode: "Connected",
+        identityHash: "",
+      },
+    });
+  });
+
+  await expect(hubPanel).toContainText("No hub selected | outbound blocked");
 });

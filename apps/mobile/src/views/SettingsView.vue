@@ -103,6 +103,12 @@ const hubSummary = computed(() => {
       ? " | server forcing connected routing"
       : "";
   if (!form.hubIdentityHash) {
+    if (form.hubMode === "Connected") {
+      return `${form.hubMode} | No hub selected | outbound blocked`;
+    }
+    if (form.hubMode === "SemiAutonomous") {
+      return `${form.hubMode} | No hub selected | using local discovery until a hub is chosen${connectedOverride}`;
+    }
     return `${form.hubMode} | No hub selected${connectedOverride}`;
   }
   const peerSummary = cachedPeerCount > 0 ? ` | ${cachedPeerCount} cached peers` : "";
@@ -230,6 +236,8 @@ function onHubCandidateSelected(event: Event): void {
 
 function applySettings(): void {
   const previousDisplayName = nodeStore.settings.displayName;
+  const previousHubMode = nodeStore.settings.hub.mode;
+  const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
   nodeStore.updateSettings({
     displayName: form.displayName,
     clientMode: form.clientMode,
@@ -269,6 +277,12 @@ function applySettings(): void {
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
+      : nodeStore.status.running
+          && (
+            nodeStore.settings.hub.mode !== previousHubMode
+            || nodeStore.settings.hub.identityHash !== previousHubIdentityHash
+          )
+        ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
 }
 

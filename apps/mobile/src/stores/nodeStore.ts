@@ -60,6 +60,7 @@ import {
   extractAnnounceCapabilityText,
   extractAnnouncedName,
   formatAnnounceAppData,
+  hasCapability,
   isValidDestinationHex,
   normalizeDisplayName,
   normalizeDestinationHex,
@@ -335,6 +336,10 @@ function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
 
 function hubModeUsesRch(mode: NodeUiSettings["hub"]["mode"]): boolean {
   return mode !== "Autonomous";
+}
+
+function hasSelectedHubIdentity(hubIdentityHash = ""): boolean {
+  return isValidDestinationHex(normalizeDestinationHex(hubIdentityHash));
 }
 
 function cloneDefaultSettings(): NodeUiSettings {
@@ -1421,6 +1426,9 @@ export const useNodeStore = defineStore("node", () => {
     if (!hubModeUsesRch(settings.hub.mode)) {
       return null;
     }
+    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+      return null;
+    }
     return buildHubRegistryBootstrapProfile({
       callsign: settings.displayName,
       localIdentityHex: status.value.identityHex,
@@ -1462,6 +1470,15 @@ export const useNodeStore = defineStore("node", () => {
     if (!hubModeUsesRch(settings.hub.mode)) {
       hubRegistration.status = "disabled";
       hubRegistration.lastError = "";
+      return;
+    }
+
+    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+      setHubRegistrationPending(
+        settings.hub.mode === "Connected"
+          ? "Connected mode requires selecting an RCH hub before outbound traffic can be routed."
+          : "Select an RCH hub to seed peer routing from the hub directory.",
+      );
       return;
     }
 
@@ -1949,6 +1966,13 @@ export const useNodeStore = defineStore("node", () => {
         clearHubDirectoryState();
         return;
       }
+      if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+        clearHubDirectoryState();
+        if (settings.hub.mode === "Connected") {
+          throw new Error("Connected mode requires selecting an RCH hub before refreshing.");
+        }
+        return;
+      }
       if (!client.value || !status.value.running) {
         return;
       }
@@ -2034,6 +2058,7 @@ export const useNodeStore = defineStore("node", () => {
 
   function updateSettings(next: Partial<NodeUiSettings>): void {
     let uiSettingsChanged = false;
+    let hubRoutingChanged = false;
     if (next.displayName !== undefined) {
       settings.displayName = normalizeStoredDisplayName(next.displayName);
     }
@@ -2067,6 +2092,9 @@ export const useNodeStore = defineStore("node", () => {
         ...next.hub,
         mode: normalizeHubMode(next.hub.mode ?? settings.hub.mode),
       };
+      hubRoutingChanged =
+        settings.hub.mode !== previousHubMode
+        || settings.hub.identityHash !== previousHubIdentityHash;
       if (
         !hubModeUsesRch(settings.hub.mode)
         || settings.hub.mode !== previousHubMode
@@ -2085,6 +2113,24 @@ export const useNodeStore = defineStore("node", () => {
     }
     void init()
       .then(() => persistSettingsProjection(nextSettings))
+      .then(() => {
+        if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
+          return;
+        }
+        if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+          if (settings.hub.mode === "Connected") {
+            const message =
+              "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
+            lastError.value = message;
+            appendLog("Warn", message);
+          }
+          return;
+        }
+        appendLog(
+          "Info",
+          "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
+        );
+      })
       .catch((error: unknown) => {
         appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
       });
@@ -2344,6 +2390,20 @@ export const useNodeStore = defineStore("node", () => {
     throw new Error(message);
   }
 
+  function assertHubRoutingReadyForOutbound(action: string): void {
+    if (settings.hub.mode !== "Connected") {
+      return;
+    }
+    if (hasSelectedHubIdentity(settings.hub.identityHash)) {
+      return;
+    }
+
+    const message = `Cannot ${action} until a connected-mode RCH hub is selected.`;
+    lastError.value = message;
+    logUi("Warn", message);
+    throw new Error(message);
+  }
+
   function destinationHasCapability(destinationRaw: string, capability: string): boolean {
     const destination = normalizeDestinationHex(destinationRaw);
     const peer = discoveredByDestination[destination];
@@ -2381,6 +2441,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertHubRoutingReadyForOutbound("send traffic");
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
       const sendMode = options?.sendMode ?? "Auto";
       logUi(
@@ -2413,6 +2474,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertHubRoutingReadyForOutbound("send traffic");
       logUi(
         "Debug",
         `Direct send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
@@ -2443,6 +2505,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertHubRoutingReadyForOutbound("send traffic");
       logUi(
         "Debug",
         `Propagation send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
@@ -2476,6 +2539,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertHubRoutingReadyForOutbound("send LXMF");
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
       const sendMode = options?.sendMode ?? "Auto";
       logUi(
@@ -2650,5 +2714,6 @@ export const useNodeStore = defineStore("node", () => {
     reinitializeClient,
     setLastError,
     assertReadyForOutbound,
+    assertHubRoutingReadyForOutbound,
   };
 });
