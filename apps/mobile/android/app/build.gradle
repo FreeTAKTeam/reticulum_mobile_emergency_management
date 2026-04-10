@@ -1,0 +1,125 @@
+import java.io.FileInputStream
+import java.util.Properties
+import java.util.TimeZone
+
+apply plugin: 'com.android.application'
+
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+def utcTimeZone = TimeZone.getTimeZone("UTC")
+def versionCodeStamp = new Date().format("yyDDDHHmm", utcTimeZone)
+def versionNameStamp = new Date().format("yyyyMMddHHmmss", utcTimeZone)
+def computedVersionCode = versionCodeStamp.toInteger()
+def overrideVersionName = project.findProperty("appVersionName")?.toString()?.trim()
+def computedVersionName = overrideVersionName ? overrideVersionName : "1.0.${versionNameStamp}"
+def stringsXml = new XmlParser().parse(file('src/main/res/values/strings.xml'))
+def appDisplayName = stringsXml.string.find { it.@name == 'app_name' }?.text() ?: "app"
+def appFileNamePrefix = appDisplayName
+    .toLowerCase()
+    .replaceAll('[^a-z0-9]+', '-')
+    .replaceAll('(^-|-$)', '')
+
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace "network.reticulum.emergency"
+    compileSdk rootProject.ext.compileSdkVersion
+    ndkVersion rootProject.ext.ndkVersion
+    defaultConfig {
+        applicationId "network.reticulum.emergency"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode computedVersionCode
+        versionName computedVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.lifecycle("Release keystore not configured (missing keystore.properties). Release outputs will be unsigned.")
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+android.applicationVariants.configureEach { variant ->
+    if (variant.buildType.name == "release") {
+        variant.outputs.configureEach {
+            outputFileName = "${appFileNamePrefix}-v${computedVersionName}-release.apk"
+        }
+    }
+}
+
+tasks.register("renameReleaseBundleWithAppName") {
+    doLast {
+        def bundleDir = file("$buildDir/outputs/bundle/release")
+        def sourceBundle = file("$bundleDir/app-release.aab")
+        if (!sourceBundle.exists()) {
+            logger.lifecycle("Release bundle not found at ${sourceBundle}; skipping bundle rename.")
+            return
+        }
+
+        def renamedBundle = file("$bundleDir/${appFileNamePrefix}-v${computedVersionName}-release.aab")
+        copy {
+            from sourceBundle
+            into bundleDir
+            rename { renamedBundle.name }
+        }
+        logger.lifecycle("Created ${renamedBundle.name}")
+    }
+}
+
+afterEvaluate {
+    tasks.findByName("bundleRelease")?.finalizedBy("renameReleaseBundleWithAppName")
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

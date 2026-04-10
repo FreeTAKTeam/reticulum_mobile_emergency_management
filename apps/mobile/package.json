@@ -1,0 +1,41 @@
+{
+  "name": "@reticulum/mobile",
+  "private": true,
+  "version": "0.8.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode web",
+    "dev:web": "vite --mode web",
+    "dev:mobile": "vite --mode mobile",
+    "build": "vite build --mode mobile",
+    "build:web": "vite build --mode web",
+    "build:mobile": "vite build --mode mobile",
+    "typecheck": "vue-tsc --noEmit",
+    "sync": "npx cap sync",
+    "android": "npx cap open android",
+    "ios": "npx cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/clipboard": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/geolocation": "^7.1.8",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/local-notifications": "^7.0.5",
+    "@capacitor/preferences": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "@reticulum/node-client": "file:../../packages/node-client",
+    "maplibre-gl": "^4.7.1",
+    "msgpackr": "^1.11.8",
+    "pinia": "^2.2.4",
+    "vue": "^3.5.0",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vue-tsc": "^2.1.10"
+  }
+}
