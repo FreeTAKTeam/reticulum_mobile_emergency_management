@@ -394,6 +394,9 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String triggerSosJson(String payloadJson) {
+        if (sosPlatformCoordinator != null) {
+            sosPlatformCoordinator.submitTelemetrySnapshot();
+        }
         return nonEmptyJson(ReticulumBridge.triggerSosJson(payloadJson), "{}");
     }
 

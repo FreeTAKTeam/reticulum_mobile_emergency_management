@@ -391,4 +391,35 @@ mod tests {
         assert!(looks_like_sos_text("Emergency at 45.1,-63.2"));
         assert!(!looks_like_sos_text("normal chat"));
     }
+
+    #[test]
+    fn sos_fields_keep_battery_when_location_is_missing() {
+        let command = SosCommand {
+            state: SosMessageKind::Active {},
+            incident_id: "incident-battery".to_string(),
+            trigger_source: SosTriggerSource::Manual {},
+            sent_at_ms: 100,
+            audio_id: None,
+        };
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: None,
+            lon: None,
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: None,
+            battery_percent: Some(52.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        let encoded = build_sos_fields(&command, Some(&telemetry)).expect("encoded fields");
+        let parsed = parse_sos_fields(&encoded).expect("parsed fields");
+        let parsed_telemetry = parsed.telemetry.expect("battery-only telemetry");
+
+        assert_eq!(parsed_telemetry.lat, None);
+        assert_eq!(parsed_telemetry.lon, None);
+        assert_eq!(parsed_telemetry.battery_percent, Some(52.0));
+        assert_eq!(parsed_telemetry.battery_charging, Some(false));
+    }
 }

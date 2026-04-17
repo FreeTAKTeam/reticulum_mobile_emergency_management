@@ -2,6 +2,12 @@
 import { computed, nextTick, ref, watch } from "vue";
 import type { MessageRecord } from "@reticulum/node-client";
 
+interface SosMessageMapTarget {
+  incidentId: string;
+  sourceHex: string;
+  messageIdHex?: string;
+}
+
 const props = defineProps<{
   destinationHex?: string;
   displayName?: string;
@@ -11,12 +17,14 @@ const props = defineProps<{
   targetLatitude?: string;
   targetLongitude?: string;
   targetMessageId?: string;
+  sosMapTargets?: Record<string, SosMessageMapTarget>;
   messages: MessageRecord[];
 }>();
 
 const emit = defineEmits<{
   back: [];
   send: [bodyUtf8: string];
+  viewSosOnMap: [target: SosMessageMapTarget];
 }>();
 
 const draft = ref("");
@@ -54,6 +62,18 @@ function isSosMessage(message: MessageRecord): boolean {
   return detail.startsWith("sos") || body.startsWith("sos") || body.startsWith("urgence") || body.startsWith("emergency");
 }
 
+function visibleMessageBody(message: MessageRecord): string {
+  const body = message.bodyUtf8;
+  if (!isSosMessage(message)) {
+    return body;
+  }
+  return body
+    .split(/\r?\n/)
+    .filter((line) => !safeTrim(line).toLowerCase().startsWith("gps:"))
+    .join("\n")
+    .trim();
+}
+
 function messageStateLabel(state: string): string {
   if (state === "SentDirect" || state === "Delivered") {
     return "Delivered";
@@ -71,6 +91,17 @@ function messageStateLabel(state: string): string {
     return "Timed out";
   }
   return state;
+}
+
+function sosMapTarget(message: MessageRecord): SosMessageMapTarget | undefined {
+  return props.sosMapTargets?.[message.messageIdHex.toLowerCase()];
+}
+
+function openSosOnMap(message: MessageRecord): void {
+  const target = sosMapTarget(message);
+  if (target) {
+    emit("viewSosOnMap", target);
+  }
 }
 
 function cssEscape(value: string): string {
@@ -170,8 +201,15 @@ watch(
         >
           <span v-if="isSosMessage(message)" class="sos-badge">SOS EMERGENCY</span>
           <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
-          <p class="bubble-content">{{ message.bodyUtf8 }}</p>
-          <a v-if="isSosMessage(message)" class="sos-map-link" href="#/telemetry">View on Map</a>
+          <p class="bubble-content">{{ visibleMessageBody(message) }}</p>
+          <button
+            v-if="isSosMessage(message) && sosMapTarget(message)"
+            type="button"
+            class="sos-map-link"
+            @click="openSosOnMap(message)"
+          >
+            Open position on telemetry map
+          </button>
           <div class="bubble-meta">
             <span>{{ messageStateLabel(message.state) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
@@ -402,9 +440,16 @@ watch(
 }
 
 .sos-map-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
   color: #fecaca;
+  cursor: pointer;
   font-family: var(--font-ui);
   font-size: 0.78rem;
+  justify-self: start;
+  padding: 0;
+  text-decoration: underline;
 }
 
 .thread-body {

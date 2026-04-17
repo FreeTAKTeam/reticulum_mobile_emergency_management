@@ -23,6 +23,10 @@ import org.json.JSONObject;
 
 final class SosPlatformCoordinator implements SensorEventListener {
     private static final String TAG = "SosPlatformCoordinator";
+    static final long RECENT_LOCATION_MAX_AGE_MS = 5L * 60L * 1000L;
+    static final int LOCATION_SOURCE_NONE = 0;
+    static final int LOCATION_SOURCE_GPS = 1;
+    static final int LOCATION_SOURCE_NETWORK = 2;
 
     private final ReticulumNodeService service;
     private final SensorManager sensorManager;
@@ -38,6 +42,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
             if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_SCREEN_OFF.equals(action)) {
                 final JSONObject payload = new JSONObject();
                 try {
+                    submitTelemetrySnapshotIfStale(1000L);
                     payload.put("atMs", System.currentTimeMillis());
                     service.submitSosScreenEventJson(payload.toString());
                 } catch (JSONException ex) {
@@ -49,6 +54,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
 
     private boolean accelerometerRegistered = false;
     private boolean screenRegistered = false;
+    private long lastTelemetrySnapshotAtMs = 0L;
 
     SosPlatformCoordinator(ReticulumNodeService service) {
         this.service = service;
@@ -66,6 +72,9 @@ final class SosPlatformCoordinator implements SensorEventListener {
             final boolean powerNeeded = enabled && settings.optBoolean("triggerPowerButton", false);
             setAccelerometerEnabled(accelerometerNeeded);
             setScreenReceiverEnabled(powerNeeded);
+            if (enabled) {
+                submitTelemetrySnapshot();
+            }
         } catch (JSONException ex) {
             Log.w(TAG, "Failed to apply SOS settings", ex);
             setAccelerometerEnabled(false);
@@ -74,11 +83,24 @@ final class SosPlatformCoordinator implements SensorEventListener {
     }
 
     void submitTelemetrySnapshot() {
+        submitTelemetrySnapshot(System.currentTimeMillis());
+    }
+
+    void submitTelemetrySnapshotIfStale(long maxAgeMs) {
+        final long nowMs = System.currentTimeMillis();
+        if (lastTelemetrySnapshotAtMs > 0 && nowMs - lastTelemetrySnapshotAtMs < maxAgeMs) {
+            return;
+        }
+        submitTelemetrySnapshot(nowMs);
+    }
+
+    private void submitTelemetrySnapshot(long nowMs) {
         final JSONObject payload = new JSONObject();
         try {
-            payload.put("updatedAtMs", System.currentTimeMillis());
+            lastTelemetrySnapshotAtMs = nowMs;
+            payload.put("updatedAtMs", nowMs);
             appendBattery(payload);
-            appendLocation(payload);
+            appendLocation(payload, nowMs);
             service.submitSosTelemetryJson(payload.toString());
         } catch (JSONException ex) {
             Log.w(TAG, "Failed to forward SOS telemetry snapshot", ex);
@@ -97,6 +119,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
         }
         final JSONObject payload = new JSONObject();
         try {
+            submitTelemetrySnapshotIfStale(10_000L);
             payload.put("x", event.values[0]);
             payload.put("y", event.values[1]);
             payload.put("z", event.values[2]);
@@ -162,7 +185,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
         final int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         final int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
         if (level >= 0 && scale > 0) {
-            payload.put("batteryPercent", (double) level / (double) scale);
+            payload.put("batteryPercent", ((double) level / (double) scale) * 100.0);
         }
         final int status = battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
         payload.put(
@@ -171,7 +194,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
         );
     }
 
-    private void appendLocation(JSONObject payload) throws JSONException {
+    private void appendLocation(JSONObject payload, long nowMs) throws JSONException {
         if (locationManager == null) {
             return;
         }
@@ -185,7 +208,7 @@ final class SosPlatformCoordinator implements SensorEventListener {
         try {
             final Location gps = fine ? locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) : null;
             final Location network = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-            final Location location = newer(gps, network);
+            final Location location = selectRecentLocation(gps, network, nowMs);
             if (location == null) {
                 return;
             }
@@ -208,13 +231,46 @@ final class SosPlatformCoordinator implements SensorEventListener {
         }
     }
 
-    private Location newer(Location left, Location right) {
-        if (left == null) {
-            return right;
+    private Location selectRecentLocation(Location gps, Location network, long nowMs) {
+        final int source = selectRecentLocationSource(
+            gps != null,
+            gps == null ? 0L : gps.getTime(),
+            network != null,
+            network == null ? 0L : network.getTime(),
+            nowMs
+        );
+        if (source == LOCATION_SOURCE_GPS) {
+            return gps;
         }
-        if (right == null) {
-            return left;
+        if (source == LOCATION_SOURCE_NETWORK) {
+            return network;
         }
-        return left.getTime() >= right.getTime() ? left : right;
+        return null;
+    }
+
+    private static boolean isRecentLocation(Location location, long nowMs) {
+        return location != null && isRecentLocationTime(location.getTime(), nowMs);
+    }
+
+    static boolean isRecentLocationTime(long locationTimeMs, long nowMs) {
+        return locationTimeMs > 0
+            && locationTimeMs <= nowMs
+            && nowMs - locationTimeMs <= RECENT_LOCATION_MAX_AGE_MS;
+    }
+
+    static int selectRecentLocationSource(
+        boolean hasGps,
+        long gpsTimeMs,
+        boolean hasNetwork,
+        long networkTimeMs,
+        long nowMs
+    ) {
+        if (hasGps && isRecentLocationTime(gpsTimeMs, nowMs)) {
+            return LOCATION_SOURCE_GPS;
+        }
+        if (hasNetwork && isRecentLocationTime(networkTimeMs, nowMs)) {
+            return LOCATION_SOURCE_NETWORK;
+        }
+        return LOCATION_SOURCE_NONE;
     }
 }

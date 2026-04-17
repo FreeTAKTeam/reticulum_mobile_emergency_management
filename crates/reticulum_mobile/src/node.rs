@@ -2292,7 +2292,6 @@ impl Node {
             .sos_device_telemetry
             .lock()
             .map_err(|_| NodeError::InternalError {})? = Some(telemetry);
-        inner.bus.emit(NodeEvent::SosTelemetryRequested {});
         Ok(())
     }
 

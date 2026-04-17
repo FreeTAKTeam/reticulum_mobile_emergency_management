@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
@@ -19,12 +19,19 @@ const nodeStore = useNodeStore();
 const sosStore = useSosStore();
 const telemetryStore = useTelemetryStore();
 const route = useRoute();
+const router = useRouter();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 
 interface ConnectedPeerOption {
   value: string;
   displayName: string;
+}
+
+interface SosMessageMapTarget {
+  incidentId: string;
+  sourceHex: string;
+  messageIdHex?: string;
 }
 
 function safeTrim(value: unknown): string {
@@ -153,6 +160,21 @@ const activeThreadMessages = computed(() => {
   }
   return messagingStore.messagesForDestination(destinationHex);
 });
+const sosMapTargetsByMessageId = computed<Record<string, SosMessageMapTarget>>(() => {
+  const targets: Record<string, SosMessageMapTarget> = {};
+  for (const alert of sosStore.alerts) {
+    const messageIdHex = safeLower(alert.messageIdHex);
+    if (!messageIdHex || alert.lat === undefined || alert.lon === undefined) {
+      continue;
+    }
+    targets[messageIdHex] = {
+      incidentId: alert.incidentId,
+      sourceHex: alert.sourceHex,
+      messageIdHex,
+    };
+  }
+  return targets;
+});
 
 const targetLookupNames = computed(() =>
   [...new Set([
@@ -260,6 +282,17 @@ async function send(bodyUtf8: string): Promise<void> {
   }
 }
 
+async function handleViewSosOnMap(target: SosMessageMapTarget): Promise<void> {
+  await router.push({
+    path: "/telemetry",
+    query: {
+      incident: target.incidentId,
+      source: target.sourceHex,
+      ...(target.messageIdHex ? { message: target.messageIdHex } : {}),
+    },
+  });
+}
+
 watch(
   () => [
     route.query.conversation,
@@ -341,9 +374,11 @@ watch(
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
           :target-message-id="messagingStore.selectedTargetMessageId"
+          :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
           @back="showConversationList"
           @send="send"
+          @view-sos-on-map="handleViewSosOnMap"
         />
       </section>
     </section>

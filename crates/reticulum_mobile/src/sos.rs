@@ -178,13 +178,17 @@ pub(crate) fn compose_sos_body(
         body = DEFAULT_TEMPLATE.to_string();
     }
     if settings.include_location {
+        let mut has_coordinates = false;
         if let Some(telemetry) = telemetry {
-            if let (Some(lat), Some(lon)) = (telemetry.lat, telemetry.lon) {
-                body.push_str(format!("\nGPS: {lat:.6}, {lon:.6}").as_str());
+            if telemetry.lat.is_some() && telemetry.lon.is_some() {
+                has_coordinates = true;
             }
             if let Some(battery) = telemetry.battery_percent {
                 body.push_str(format!("\nBattery: {battery:.0}%").as_str());
             }
+        }
+        if !has_coordinates {
+            body.push_str("\nno GPS");
         }
     }
     body
@@ -273,6 +277,60 @@ mod tests {
         settings.cancel_message_template = "SOS ended. I am safe at base.".to_string();
         let body = compose_sos_body(&settings, SosMessageKind::Cancelled {}, None);
         assert_eq!(body, "SOS ended. I am safe at base.");
+    }
+
+    #[test]
+    fn active_body_omits_gps_text_when_coordinates_are_available() {
+        let settings = default_sos_settings();
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: Some(44.6488),
+            lon: Some(-63.5752),
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: None,
+            battery_percent: Some(83.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        let body = compose_sos_body(&settings, SosMessageKind::Active {}, Some(&telemetry));
+
+        assert!(!body.contains("GPS:"));
+        assert!(!body.contains("44.648800"));
+        assert!(!body.contains("-63.575200"));
+        assert!(body.contains("Battery: 83%"));
+        assert!(!body.contains("no GPS"));
+    }
+
+    #[test]
+    fn active_body_appends_no_gps_when_coordinates_are_missing() {
+        let settings = default_sos_settings();
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: None,
+            lon: None,
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: None,
+            battery_percent: Some(41.0),
+            battery_charging: Some(true),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        let body = compose_sos_body(&settings, SosMessageKind::Update {}, Some(&telemetry));
+
+        assert!(body.contains("Battery: 41%"));
+        assert!(body.ends_with("\nno GPS"));
+    }
+
+    #[test]
+    fn cancel_body_does_not_append_location_fallback() {
+        let settings = default_sos_settings();
+        let body = compose_sos_body(&settings, SosMessageKind::Cancelled {}, None);
+
+        assert!(!body.contains("GPS:"));
+        assert!(!body.contains("no GPS"));
     }
 
     #[test]

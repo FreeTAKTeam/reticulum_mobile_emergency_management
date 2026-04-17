@@ -3,6 +3,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import maplibregl, { Marker, type LngLatLike, type Map as MapLibreMap } from "maplibre-gl";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import type { TelemetryPosition } from "../types/domain";
 import { useNodeStore } from "../stores/nodeStore";
@@ -10,6 +11,7 @@ import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 
 const nodeStore = useNodeStore();
+const route = useRoute();
 const sosStore = useSosStore();
 const telemetryStore = useTelemetryStore();
 
@@ -21,10 +23,73 @@ let didFitBounds = false;
 const markersByCallsign = new Map<string, Marker>();
 const markerElementsByCallsign = new Map<string, HTMLDivElement>();
 const sosMarkersByKey = new Map<string, Marker>();
+const sosMarkerElementsByKey = new Map<string, HTMLDivElement>();
+let lastFocusedSosTargetKey = "";
+
+interface SosRouteTarget {
+  incidentId: string;
+  sourceHex: string;
+  messageIdHex?: string;
+}
 
 function safeTrim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
+
+function safeLower(value: unknown): string {
+  return safeTrim(value).toLowerCase();
+}
+
+function routeQueryString(value: unknown): string {
+  return Array.isArray(value) ? safeTrim(value[0]) : safeTrim(value);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function lineBreakHtml(value: string): string {
+  return escapeHtml(value).replace(/\r?\n/g, "<br>");
+}
+
+function visibleSosBodyText(body: string): string {
+  return body
+    .split(/\r?\n/)
+    .filter((line) => !safeTrim(line).toLowerCase().startsWith("gps:"))
+    .join("\n")
+    .trim();
+}
+
+function sosIdentityKey(incidentId: string, sourceHex: string): string {
+  return `${safeLower(incidentId)}:${safeLower(sourceHex)}`;
+}
+
+const selectedSosTarget = computed<SosRouteTarget | null>(() => {
+  const incidentId = routeQueryString(route.query.incident);
+  const sourceHex = routeQueryString(route.query.source);
+  if (!incidentId || !sourceHex) {
+    return null;
+  }
+  const messageIdHex = routeQueryString(route.query.message);
+  return {
+    incidentId,
+    sourceHex,
+    ...(messageIdHex ? { messageIdHex } : {}),
+  };
+});
+
+const selectedSosTargetKey = computed(() => {
+  const target = selectedSosTarget.value;
+  if (!target) {
+    return "";
+  }
+  return `${sosIdentityKey(target.incidentId, target.sourceHex)}:${safeLower(target.messageIdHex)}`;
+});
 
 function markerStatusClass(position: TelemetryPosition): string {
   return Date.now() - position.updatedAt > telemetryStore.staleThresholdMs ? "is-stale" : "is-live";
@@ -109,14 +174,57 @@ function syncMarkers(positions: TelemetryPosition[]): void {
   }
 }
 
+function sosPopupHtml(point: (typeof sosStore.locations)[number]): string {
+  const alert = sosStore.alerts.find((candidate) =>
+    sosIdentityKey(candidate.incidentId, candidate.sourceHex)
+      === sosIdentityKey(point.incidentId, point.sourceHex),
+  );
+  const body = visibleSosBodyText(safeTrim(alert?.bodyUtf8)) || "SOS emergency";
+  const battery =
+    point.batteryPercent !== undefined
+      ? `<div class="popup-secondary">Battery ${point.batteryPercent.toFixed(0)}%</div>`
+      : "";
+  return `
+    <div class="popup-title popup-title-sos">SOS EMERGENCY</div>
+    <div class="popup-body">${lineBreakHtml(body)}</div>
+    <div class="popup-secondary">Source ${escapeHtml(point.sourceHex)}</div>
+    <div class="popup-secondary">${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}</div>
+    ${battery}
+    <div class="popup-secondary">Updated ${new Date(point.recordedAtMs).toLocaleString()}</div>
+  `;
+}
+
+function isTargetedSosPoint(point: (typeof sosStore.locations)[number], latestRecordedAtMs: number): boolean {
+  const target = selectedSosTarget.value;
+  if (!target || point.recordedAtMs !== latestRecordedAtMs) {
+    return false;
+  }
+  const sameSource = sosIdentityKey(point.incidentId, point.sourceHex)
+    === sosIdentityKey(target.incidentId, target.sourceHex);
+  if (!sameSource) {
+    return false;
+  }
+  if (!target.messageIdHex) {
+    return true;
+  }
+  const alert = sosStore.alerts.find((candidate) =>
+    sosIdentityKey(candidate.incidentId, candidate.sourceHex)
+      === sosIdentityKey(point.incidentId, point.sourceHex),
+  );
+  return safeLower(alert?.messageIdHex) === safeLower(target.messageIdHex);
+}
+
 function syncSosTrails(): void {
   if (!map) {
     return;
   }
   const active = new Set<string>();
-  const features = [];
+  const features: Array<Record<string, unknown>> = [];
+  let targetMarker: Marker | null = null;
+  let targetCoordinates: [number, number] | null = null;
   for (const [incidentId, points] of sosStore.locationsByIncident.entries()) {
     const coordinates = points.map((point) => [point.lon, point.lat]);
+    const latestRecordedAtMs = points[points.length - 1]?.recordedAtMs ?? 0;
     if (coordinates.length > 1) {
       features.push({
         type: "Feature",
@@ -127,16 +235,29 @@ function syncSosTrails(): void {
     for (const point of points) {
       const key = `${incidentId}:${point.sourceHex}:${point.recordedAtMs}`;
       active.add(key);
-      if (sosMarkersByKey.has(key)) {
-        continue;
+      let marker = sosMarkersByKey.get(key);
+      let element = sosMarkerElementsByKey.get(key);
+      if (!marker || !element) {
+        element = document.createElement("div");
+        marker = new maplibregl.Marker({ element })
+          .setLngLat([point.lon, point.lat] as LngLatLike)
+          .addTo(map);
+        sosMarkersByKey.set(key, marker);
+        sosMarkerElementsByKey.set(key, element);
+      } else {
+        marker.setLngLat([point.lon, point.lat] as LngLatLike);
       }
-      const element = document.createElement("div");
+      const targeted = isTargetedSosPoint(point, latestRecordedAtMs);
       element.className = "sos-trail-marker";
+      element.classList.toggle("is-blinking", point.recordedAtMs === latestRecordedAtMs || targeted);
+      element.classList.toggle("is-targeted", targeted);
       element.title = "SOS location";
-      const marker = new maplibregl.Marker({ element })
-        .setLngLat([point.lon, point.lat] as LngLatLike)
-        .addTo(map);
-      sosMarkersByKey.set(key, marker);
+      marker.setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(sosPopupHtml(point)));
+
+      if (targeted) {
+        targetMarker = marker;
+        targetCoordinates = [point.lon, point.lat];
+      }
     }
   }
 
@@ -169,6 +290,14 @@ function syncSosTrails(): void {
     }
     marker.remove();
     sosMarkersByKey.delete(key);
+    sosMarkerElementsByKey.delete(key);
+  }
+
+  const focusKey = selectedSosTargetKey.value;
+  if (targetMarker && targetCoordinates && focusKey && focusKey !== lastFocusedSosTargetKey) {
+    map.flyTo({ center: targetCoordinates, zoom: Math.max(map.getZoom(), 14), duration: 650 });
+    targetMarker.togglePopup();
+    lastFocusedSosTargetKey = focusKey;
   }
 }
 
@@ -224,7 +353,13 @@ onMounted(() => {
     { immediate: true, deep: true },
   );
   stopSosWatch = watch(
-    () => sosStore.locations,
+    () => [
+      sosStore.locations,
+      sosStore.alerts,
+      route.query.incident,
+      route.query.source,
+      route.query.message,
+    ],
     () => syncSosTrails(),
     { immediate: true, deep: true },
   );
@@ -244,6 +379,7 @@ onBeforeUnmount(() => {
   markersByCallsign.clear();
   markerElementsByCallsign.clear();
   sosMarkersByKey.clear();
+  sosMarkerElementsByKey.clear();
   map?.remove();
   map = null;
 });
@@ -346,15 +482,50 @@ onBeforeUnmount(() => {
   width: 12px;
 }
 
+:deep(.sos-trail-marker.is-blinking) {
+  animation: sos-marker-pulse 1s ease-in-out infinite;
+}
+
+:deep(.sos-trail-marker.is-targeted) {
+  border-color: #fecaca;
+  height: 16px;
+  width: 16px;
+}
+
 :deep(.popup-title) {
   color: #0a244a;
   font-size: 0.9rem;
   font-weight: 700;
 }
 
+:deep(.popup-title-sos) {
+  color: #b91c1c;
+}
+
+:deep(.popup-body) {
+  color: #0a244a;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 0.25rem 0;
+  max-width: 14rem;
+}
+
 :deep(.popup-secondary) {
   color: #2c476f;
   font-size: 0.75rem;
+}
+
+@keyframes sos-marker-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(239 68 68 / 66%), 0 0 14px rgb(239 68 68 / 76%);
+    transform: scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 9px rgb(239 68 68 / 0%), 0 0 22px rgb(239 68 68 / 92%);
+    transform: scale(1.18);
+  }
 }
 
 @media (max-width: 780px) {
