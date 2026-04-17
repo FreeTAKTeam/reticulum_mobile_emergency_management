@@ -17,6 +17,26 @@ interface KnownTcpServerOption {
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 
+const aboutItems = [
+  {
+    label: "Application name",
+    value: "R.E.M. (Reticulum Emergency Messages)",
+  },
+  {
+    label: "Description",
+    value: "Emergency coordination, messages, events, and telemetry over Reticulum mesh networks.",
+  },
+  {
+    label: "Version",
+    value: "0.8.1",
+  },
+  {
+    label: "License",
+    value: "Eclipse Public License (EPL)",
+  },
+] as const;
+const repositoryUrl = "https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management";
+
 const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
@@ -699,6 +719,43 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
       </div>
     </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="8" />
+              <path d="M12 10.8v5.4" />
+              <path d="M12 7.8h.01" />
+            </svg>
+          </span>
+          <h2>About</h2>
+          <p>Application information</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <dl class="about-list">
+          <div
+            v-for="item in aboutItems"
+            :key="item.label"
+            class="about-row"
+          >
+            <dt>{{ item.label }}</dt>
+            <dd>{{ item.value }}</dd>
+          </div>
+          <div class="about-row">
+            <dt>GitHub repository URL</dt>
+            <dd>
+              <a :href="repositoryUrl" target="_blank" rel="noreferrer">
+                {{ repositoryUrl }}
+              </a>
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </details>
   </section>
 </template>
 
@@ -1064,6 +1121,46 @@ button:disabled {
   font-family: var(--font-body);
   margin: 0.28rem 0 0;
   overflow-wrap: anywhere;
+}
+
+.about-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.about-row {
+  background: rgb(7 20 44 / 72%);
+  border: 1px solid rgb(67 106 165 / 30%);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.62rem 0.72rem;
+}
+
+.about-row dt,
+.about-row dd {
+  margin: 0;
+}
+
+.about-row dt {
+  color: #60d8ff;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.about-row dd,
+.about-row a {
+  color: #d5eaff;
+  font-family: var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.about-row a {
+  text-decoration-color: rgb(96 216 255 / 55%);
+  text-underline-offset: 0.16rem;
 }
 
 @media (max-width: 760px) {

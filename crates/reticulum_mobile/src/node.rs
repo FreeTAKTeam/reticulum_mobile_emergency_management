@@ -49,6 +49,15 @@ fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), 
         .map_err(|_| NodeError::NotRunning {})
 }
 
+fn latest_sos_telemetry(
+    telemetry_store: &Arc<Mutex<Option<SosDeviceTelemetryRecord>>>,
+) -> Option<SosDeviceTelemetryRecord> {
+    telemetry_store
+        .lock()
+        .ok()
+        .and_then(|telemetry| telemetry.clone())
+}
+
 struct NodeInner {
     app_state: AppStateStore,
     bus: EventBus,
@@ -2345,7 +2354,7 @@ impl Node {
     }
 
     pub fn trigger_sos(&self, source: SosTriggerSource) -> Result<SosStatusRecord, NodeError> {
-        let (app_state, bus, tx, status, settings, saved_peers, telemetry) = {
+        let (app_state, bus, tx, status, settings, saved_peers, telemetry_store) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
                 .app_state
@@ -2367,11 +2376,6 @@ impl Node {
                 .lock()
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
-            let telemetry = inner
-                .sos_device_telemetry
-                .lock()
-                .map_err(|_| NodeError::InternalError {})?
-                .clone();
             let values = (
                 inner.app_state.clone(),
                 inner.bus.clone(),
@@ -2379,7 +2383,7 @@ impl Node {
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
-                telemetry,
+                inner.sos_device_telemetry.clone(),
             );
             values
         };
@@ -2392,6 +2396,7 @@ impl Node {
             emit_sos_status(&app_state, &bus, &countdown_record, "sos-countdown")?;
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(u64::from(countdown)));
+                let telemetry = latest_sos_telemetry(&telemetry_store);
                 run_sos_fanout(
                     app_state,
                     bus,
@@ -2408,6 +2413,7 @@ impl Node {
             return Ok(countdown_record);
         }
 
+        let telemetry = latest_sos_telemetry(&telemetry_store);
         let active = run_sos_fanout(
             app_state,
             bus,
@@ -3326,6 +3332,43 @@ mod tests {
             accuracy: Some(5.0),
             updated_at_ms: 1_700_000_000_400,
         }
+    }
+
+    #[test]
+    fn latest_sos_telemetry_reads_updated_snapshot() {
+        let store = Arc::new(Mutex::new(Some(SosDeviceTelemetryRecord {
+            lat: None,
+            lon: None,
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: None,
+            battery_percent: Some(52.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        })));
+
+        assert_eq!(
+            latest_sos_telemetry(&store).and_then(|value| value.lat),
+            None
+        );
+
+        *store.lock().expect("telemetry lock") = Some(SosDeviceTelemetryRecord {
+            lat: Some(44.6488),
+            lon: Some(-63.5752),
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: Some(8.0),
+            battery_percent: Some(53.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_003_000,
+        });
+
+        let telemetry = latest_sos_telemetry(&store).expect("latest telemetry");
+        assert_eq!(telemetry.lat, Some(44.6488));
+        assert_eq!(telemetry.lon, Some(-63.5752));
+        assert_eq!(telemetry.battery_percent, Some(53.0));
     }
 
     fn sample_app_settings() -> AppSettingsRecord {

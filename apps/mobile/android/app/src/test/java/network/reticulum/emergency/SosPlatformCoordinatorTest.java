@@ -79,4 +79,11 @@ public class SosPlatformCoordinatorTest {
             )
         );
     }
+
+    @Test
+    public void newerLocationTimeChoosesNewestPositiveTimestamp() {
+        assertEquals(200L, SosPlatformCoordinator.newerLocationTime(100L, 200L));
+        assertEquals(200L, SosPlatformCoordinator.newerLocationTime(200L, 0L));
+        assertEquals(100L, SosPlatformCoordinator.newerLocationTime(0L, 100L));
+    }
 }
