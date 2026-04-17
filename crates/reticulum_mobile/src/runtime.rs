@@ -49,7 +49,7 @@ use crate::types::{
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
     NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState,
     ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord,
-    SosMessageKind, SyncPhase, SyncStatus,
+    SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -99,6 +99,35 @@ fn current_timestamp_rfc3339() -> String {
     let minute = (seconds_of_day % 3_600) / 60;
     let second = seconds_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn telemetry_position_from_sos(
+    callsign: &str,
+    telemetry: Option<&SosDeviceTelemetryRecord>,
+    fallback_updated_at_ms: u64,
+) -> Option<TelemetryPositionRecord> {
+    let telemetry = telemetry?;
+    let lat = telemetry.lat?;
+    let lon = telemetry.lon?;
+    let callsign = callsign.trim();
+    if callsign.is_empty() {
+        return None;
+    }
+
+    Some(TelemetryPositionRecord {
+        callsign: callsign.to_ascii_lowercase(),
+        lat,
+        lon,
+        alt: telemetry.alt,
+        course: telemetry.course,
+        speed: telemetry.speed,
+        accuracy: telemetry.accuracy,
+        updated_at_ms: if telemetry.updated_at_ms > 0 {
+            telemetry.updated_at_ms
+        } else {
+            fallback_updated_at_ms
+        },
+    })
 }
 
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
@@ -2858,6 +2887,15 @@ async fn emit_received_payload(
                     bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
                 }
             }
+            if let Some(position) = telemetry_position_from_sos(
+                peer_hex.as_str(),
+                sos_telemetry.as_ref(),
+                received_at_ms,
+            ) {
+                if let Ok(invalidation) = state.app_state.record_local_telemetry_fix(&position) {
+                    bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                }
+            }
             bus.emit(NodeEvent::SosAlertChanged { alert });
         } else if !metadata
             .as_ref()
@@ -4724,6 +4762,54 @@ pub fn load_or_create_identity(
 mod tests {
     use super::*;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn sos_field_telemetry_promotes_to_regular_telemetry_position() {
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: Some(43.967_349),
+            lon: Some(-66.126_159),
+            alt: Some(12.0),
+            speed: Some(1.4),
+            course: Some(270.0),
+            accuracy: Some(5.5),
+            battery_percent: Some(100.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        let position = telemetry_position_from_sos(
+            "66C38067874B18B4AF15909FD86D6394",
+            Some(&telemetry),
+            1_700_000_050_000,
+        )
+        .expect("sos telemetry should become a map telemetry fix");
+
+        assert_eq!(position.callsign, "66c38067874b18b4af15909fd86d6394");
+        assert_eq!(position.lat, 43.967_349);
+        assert_eq!(position.lon, -66.126_159);
+        assert_eq!(position.alt, Some(12.0));
+        assert_eq!(position.speed, Some(1.4));
+        assert_eq!(position.course, Some(270.0));
+        assert_eq!(position.accuracy, Some(5.5));
+        assert_eq!(position.updated_at_ms, 1_700_000_000_000);
+    }
+
+    #[test]
+    fn sos_telemetry_without_coordinates_does_not_create_map_position() {
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: None,
+            lon: None,
+            alt: None,
+            speed: None,
+            course: None,
+            accuracy: None,
+            battery_percent: Some(87.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        assert!(telemetry_position_from_sos("peer", Some(&telemetry), 42).is_none());
+    }
 
     #[test]
     fn parse_mission_sync_metadata_extracts_command_fields() {

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fs_err as fs;
@@ -18,6 +19,81 @@ const DB_FILE_NAME: &str = "app_state.db";
 #[derive(Debug, Clone)]
 pub struct AppStateStore {
     db_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConversationPeerResolver {
+    by_alias: HashMap<String, ConversationPeerRecord>,
+    by_canonical: HashMap<String, ConversationPeerRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConversationPeerRecord {
+    pub canonical_id: String,
+    pub peer_destination_hex: String,
+    pub display_name: Option<String>,
+}
+
+impl ConversationPeerResolver {
+    pub(crate) fn insert(
+        &mut self,
+        aliases: impl IntoIterator<Item = String>,
+        canonical_id: String,
+        peer_destination_hex: String,
+        display_name: Option<String>,
+    ) {
+        let canonical_id = normalize_message_peer_key(canonical_id.as_str());
+        let peer_destination_hex = normalize_message_peer_key(peer_destination_hex.as_str());
+        if canonical_id.is_empty() || peer_destination_hex.is_empty() {
+            return;
+        }
+        let record = ConversationPeerRecord {
+            canonical_id: canonical_id.clone(),
+            peer_destination_hex,
+            display_name,
+        };
+        self.by_canonical
+            .insert(canonical_id.clone(), record.clone());
+        self.by_alias.insert(canonical_id, record.clone());
+        for alias in aliases {
+            let alias = normalize_message_peer_key(alias.as_str());
+            if !alias.is_empty() {
+                self.by_alias.insert(alias, record.clone());
+            }
+        }
+    }
+
+    fn resolve(&self, value: &str) -> Option<&ConversationPeerRecord> {
+        self.by_alias.get(&normalize_message_peer_key(value))
+    }
+
+    fn canonical_for(&self, value: &str) -> String {
+        let normalized = normalize_message_peer_key(value);
+        self.by_alias
+            .get(&normalized)
+            .map(|record| record.canonical_id.clone())
+            .unwrap_or(normalized)
+    }
+
+    fn peer_for_canonical(&self, canonical_id: &str) -> Option<&ConversationPeerRecord> {
+        self.by_canonical
+            .get(&normalize_message_peer_key(canonical_id))
+    }
+
+    fn aliases_for_canonical(&self, canonical_id: &str) -> Vec<String> {
+        let canonical_id = self.canonical_for(canonical_id);
+        let mut aliases = self
+            .by_alias
+            .iter()
+            .filter_map(|(alias, record)| {
+                (record.canonical_id == canonical_id).then_some(alias.clone())
+            })
+            .collect::<Vec<_>>();
+        aliases.push(canonical_id);
+        aliases.sort();
+        aliases.dedup();
+        aliases
+    }
 }
 
 impl AppStateStore {
@@ -132,7 +208,7 @@ impl AppStateStore {
                 ",
             )
             .map_err(|_| NodeError::IoError {})?;
-        self.repair_message_conversations(&connection)?;
+        self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
         Ok(())
     }
 
@@ -481,9 +557,19 @@ impl AppStateStore {
         &self,
         conversation_id: Option<&str>,
     ) -> Result<Vec<MessageRecord>, NodeError> {
+        self.list_messages_resolved(conversation_id, &ConversationPeerResolver::default())
+    }
+
+    pub(crate) fn list_messages_resolved(
+        &self,
+        conversation_id: Option<&str>,
+        resolver: &ConversationPeerResolver,
+    ) -> Result<Vec<MessageRecord>, NodeError> {
         let connection = self.connect()?;
+        self.repair_message_conversations(&connection, resolver)?;
         let mut records = Vec::new();
         if let Some(conversation_id) = conversation_id {
+            let conversation_id = resolver.canonical_for(conversation_id);
             let mut statement = connection
                 .prepare(
                     "SELECT json FROM messages WHERE conversation_id = ?1
@@ -513,7 +599,14 @@ impl AppStateStore {
     }
 
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
-        let messages = self.list_messages(None)?;
+        self.list_conversations_resolved(&ConversationPeerResolver::default())
+    }
+
+    pub(crate) fn list_conversations_resolved(
+        &self,
+        resolver: &ConversationPeerResolver,
+    ) -> Result<Vec<ConversationRecord>, NodeError> {
+        let messages = self.list_messages_resolved(None, resolver)?;
         let labels = self
             .get_saved_peers()?
             .into_iter()
@@ -531,9 +624,14 @@ impl AppStateStore {
                 .received_at_ms
                 .or(message.sent_at_ms)
                 .unwrap_or(message.updated_at_ms);
-            let peer_destination_hex = message.conversation_id.clone();
+            let resolved_peer = resolver.peer_for_canonical(message.conversation_id.as_str());
+            let peer_destination_hex = resolved_peer
+                .map(|peer| peer.peer_destination_hex.clone())
+                .unwrap_or_else(|| message.conversation_id.clone());
             let preview = truncate_preview(message.body_utf8.as_str());
-            let peer_display_name = labels.get(&peer_destination_hex).cloned().flatten();
+            let peer_display_name = resolved_peer
+                .and_then(|peer| peer.display_name.clone())
+                .or_else(|| labels.get(&peer_destination_hex).cloned().flatten());
             let next = ConversationRecord {
                 conversation_id: message.conversation_id.clone(),
                 peer_destination_hex,
@@ -583,6 +681,49 @@ impl AppStateStore {
             ProjectionScope::Conversations {},
             None,
             Some("message-upserted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(vec![messages, conversations])
+    }
+
+    pub(crate) fn delete_conversation_resolved(
+        &self,
+        conversation_id: &str,
+        resolver: &ConversationPeerResolver,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let canonical_id = resolver.canonical_for(conversation_id);
+        if canonical_id.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let mut ids = resolver.aliases_for_canonical(canonical_id.as_str());
+        ids.push(canonical_id.clone());
+        ids.sort();
+        ids.dedup();
+
+        let mut connection = self.connect()?;
+        self.repair_message_conversations(&connection, resolver)?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        for id in &ids {
+            transaction
+                .execute(
+                    "DELETE FROM messages WHERE conversation_id = ?1",
+                    params![id],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+        let messages = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Messages {},
+            Some(canonical_id),
+            Some("conversation-deleted".to_string()),
+        )?;
+        let conversations = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Conversations {},
+            None,
+            Some("conversation-deleted".to_string()),
         )?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(vec![messages, conversations])
@@ -950,7 +1091,11 @@ impl AppStateStore {
         Ok(())
     }
 
-    fn repair_message_conversations(&self, connection: &Connection) -> Result<(), NodeError> {
+    fn repair_message_conversations(
+        &self,
+        connection: &Connection,
+        resolver: &ConversationPeerResolver,
+    ) -> Result<(), NodeError> {
         let mut statement = connection
             .prepare("SELECT message_id_hex, json FROM messages")
             .map_err(|_| NodeError::IoError {})?;
@@ -963,7 +1108,7 @@ impl AppStateStore {
         for row in rows {
             let (message_id_hex, raw) = row.map_err(|_| NodeError::IoError {})?;
             let message: MessageRecord = deserialize_json(&raw)?;
-            let canonical_message = canonicalize_chat_message(&message);
+            let canonical_message = canonicalize_chat_message_with_resolver(&message, resolver);
             if canonical_message.conversation_id != message.conversation_id {
                 repairs.push((message_id_hex, canonical_message));
             }
@@ -1087,9 +1232,22 @@ fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, No
 }
 
 pub(crate) fn canonicalize_chat_message(message: &MessageRecord) -> MessageRecord {
+    canonicalize_chat_message_with_resolver(message, &ConversationPeerResolver::default())
+}
+
+fn canonicalize_chat_message_with_resolver(
+    message: &MessageRecord,
+    resolver: &ConversationPeerResolver,
+) -> MessageRecord {
     let peer_key = canonical_message_peer_key(message);
+    let conversation_key = normalize_message_peer_key(message.conversation_id.as_str());
+    let canonical_id = resolver
+        .resolve(peer_key.as_str())
+        .or_else(|| resolver.resolve(conversation_key.as_str()))
+        .map(|record| record.canonical_id.clone())
+        .unwrap_or(peer_key);
     MessageRecord {
-        conversation_id: peer_key,
+        conversation_id: canonical_id,
         ..message.clone()
     }
 }
@@ -1269,5 +1427,120 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id_hex, "persisted-1");
         assert_eq!(messages[0].conversation_id, "peer-1");
+    }
+
+    #[test]
+    fn peer_identity_aliases_fold_existing_split_threads() {
+        let storage_dir = test_storage_dir("identity-alias-thread");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let outbound = message(
+            "outbound-alias",
+            "app-thread",
+            MessageDirection::Outbound {},
+            "APPDEST",
+            Some("LOCAL"),
+            10,
+        );
+        let inbound = message(
+            "inbound-alias",
+            "lxmf-thread",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("LXMFDest"),
+            20,
+        );
+
+        store.upsert_message(&outbound).expect("persist outbound");
+        store.upsert_message(&inbound).expect("persist inbound");
+        assert_eq!(
+            store
+                .list_conversations()
+                .expect("list before aliases")
+                .len(),
+            2
+        );
+
+        let mut resolver = ConversationPeerResolver::default();
+        resolver.insert(
+            vec!["APPDEST".to_string(), "LXMFDest".to_string()],
+            "IDENTITY".to_string(),
+            "LXMFDest".to_string(),
+            Some("Poco".to_string()),
+        );
+
+        let conversations = store
+            .list_conversations_resolved(&resolver)
+            .expect("list after aliases");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].conversation_id, "identity");
+        assert_eq!(conversations[0].peer_destination_hex, "lxmfdest");
+        assert_eq!(conversations[0].peer_display_name.as_deref(), Some("Poco"));
+
+        let messages = store
+            .list_messages_resolved(Some("APPDEST"), &resolver)
+            .expect("list canonical messages");
+        assert_eq!(messages.len(), 2);
+        assert!(messages
+            .iter()
+            .all(|message| message.conversation_id == "identity"));
+    }
+
+    #[test]
+    fn delete_conversation_removes_canonical_peer_alias_thread() {
+        let storage_dir = test_storage_dir("delete-alias-thread");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let outbound = message(
+            "delete-outbound",
+            "app-thread",
+            MessageDirection::Outbound {},
+            "APPDEST",
+            Some("LOCAL"),
+            10,
+        );
+        let inbound = message(
+            "delete-inbound",
+            "lxmf-thread",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("LXMFDest"),
+            20,
+        );
+        let unrelated = message(
+            "delete-unrelated",
+            "other-thread",
+            MessageDirection::Outbound {},
+            "OTHER",
+            Some("LOCAL"),
+            30,
+        );
+
+        store.upsert_message(&outbound).expect("persist outbound");
+        store.upsert_message(&inbound).expect("persist inbound");
+        store.upsert_message(&unrelated).expect("persist unrelated");
+
+        let mut resolver = ConversationPeerResolver::default();
+        resolver.insert(
+            vec!["APPDEST".to_string(), "LXMFDest".to_string()],
+            "IDENTITY".to_string(),
+            "LXMFDest".to_string(),
+            Some("Poco".to_string()),
+        );
+
+        store
+            .delete_conversation_resolved("APPDEST", &resolver)
+            .expect("delete alias conversation");
+
+        let conversations = store
+            .list_conversations_resolved(&resolver)
+            .expect("list after delete");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].conversation_id, "other");
+        let messages = store
+            .list_messages_resolved(None, &resolver)
+            .expect("list remaining messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_id_hex, "delete-unrelated");
     }
 }

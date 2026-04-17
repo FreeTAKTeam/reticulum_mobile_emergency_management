@@ -90,7 +90,9 @@ function displayNameForDestination(
     return direct.label ?? direct.announcedName ?? destinationHex;
   }
   const peer = Object.values(nodeStore.discoveredByDestination).find(
-    (candidate) => candidate.lxmfDestinationHex?.trim().toLowerCase() === normalized,
+    (candidate) =>
+      candidate.lxmfDestinationHex?.trim().toLowerCase() === normalized
+      || candidate.identityHex?.trim().toLowerCase() === normalized,
   );
   return peer?.label ?? peer?.announcedName ?? destinationHex;
 }
@@ -110,7 +112,8 @@ function peerForDestination(
   return nodeStore.discoveredByDestination[normalized]
     ?? Object.values(nodeStore.discoveredByDestination).find((candidate) =>
       normalizeDestinationHex(candidate.destination) === normalized
-      || normalizeDestinationHex(candidate.lxmfDestinationHex ?? "") === normalized,
+      || normalizeDestinationHex(candidate.lxmfDestinationHex ?? "") === normalized
+      || normalizeDestinationHex(candidate.identityHex ?? "") === normalized,
     )
     ?? null;
 }
@@ -135,7 +138,37 @@ function knownConversationDestinations(
   if (peer.lxmfDestinationHex) {
     known.add(normalizeDestinationHex(peer.lxmfDestinationHex));
   }
+  if (peer.identityHex) {
+    known.add(normalizeDestinationHex(peer.identityHex));
+  }
   return known;
+}
+
+function conversationAliasKey(
+  conversation: ConversationListItem,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): string {
+  const aliases = knownConversationDestinations(conversation.destinationHex, nodeStore);
+  const normalizedConversationId = normalizeDestinationHex(conversation.conversationId);
+  if (normalizedConversationId) {
+    aliases.add(normalizedConversationId);
+  }
+  return [...aliases].sort()[0] ?? normalizedConversationId;
+}
+
+function collapseConversationItems(
+  conversations: ConversationListItem[],
+  nodeStore: ReturnType<typeof useNodeStore>,
+): ConversationListItem[] {
+  const byPeer = new Map<string, ConversationListItem>();
+  for (const conversation of conversations) {
+    const key = conversationAliasKey(conversation, nodeStore);
+    const existing = byPeer.get(key);
+    if (!existing || existing.updatedAtMs <= conversation.updatedAtMs) {
+      byPeer.set(key, conversation);
+    }
+  }
+  return [...byPeer.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
 }
 
 function conversationMatchesDestination(
@@ -270,6 +303,16 @@ export const useMessagingStore = defineStore("messaging", () => {
     const canonicalConversationId = canonicalConversationIdForDraft(normalizedConversationId);
     if (canonicalConversationId) {
       ids.add(canonicalConversationId);
+    }
+    const matchedListConversation = conversations.value.find((conversation) =>
+      normalizeDestinationHex(conversation.conversationId) === normalizeDestinationHex(normalizedConversationId)
+      || normalizeDestinationHex(conversation.destinationHex) === normalizeDestinationHex(normalizedConversationId),
+    );
+    if (matchedListConversation) {
+      ids.add(matchedListConversation.conversationId);
+      for (const alias of knownConversationDestinations(matchedListConversation.destinationHex, nodeStore)) {
+        ids.add(alias);
+      }
     }
     if (!isDraftConversationId(normalizedConversationId)) {
       return ids;
@@ -681,6 +724,65 @@ export const useMessagingStore = defineStore("messaging", () => {
     }
   }
 
+  async function deleteConversation(conversationId: string): Promise<void> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) {
+      return;
+    }
+
+    const conversation = conversations.value.find(
+      (candidate) => candidate.conversationId === normalizedConversationId,
+    );
+    const conversationIds = resolvedConversationIds(normalizedConversationId);
+    const knownDestinations = conversation
+      ? knownConversationDestinations(conversation.destinationHex, nodeStore)
+      : new Set<string>();
+
+    if (supportsNativeNodeRuntime) {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      await client.deleteConversation(normalizedConversationId);
+    }
+
+    const nextMessages: StoredMessages = {};
+    for (const message of Object.values(byMessageId.value)) {
+      const messageConversationId = normalizeDestinationHex(message.conversationId);
+      const messageDestination = normalizeDestinationHex(message.destinationHex);
+      const messageSource = normalizeDestinationHex(message.sourceHex ?? "");
+      const belongsToConversation = conversationIds.has(message.conversationId)
+        || conversationIds.has(messageConversationId)
+        || knownDestinations.has(messageDestination)
+        || knownDestinations.has(messageSource);
+      if (!belongsToConversation) {
+        nextMessages[message.messageIdHex] = cloneMessage(message);
+      }
+    }
+    byMessageId.value = nextMessages;
+
+    if (pendingConversation.value?.conversationId === normalizedConversationId) {
+      pendingConversation.value = null;
+    }
+    if (selectedConversationId.value === normalizedConversationId) {
+      selectedConversationId.value = "";
+      selectedTargetMessageId.value = "";
+    }
+
+    if (supportsNativeNodeRuntime) {
+      await refreshConversations();
+      if (!selectedConversationId.value) {
+        selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
+      }
+      if (selectedConversationId.value) {
+        await refreshMessages(selectedConversationId.value);
+      }
+      return;
+    }
+
+    persistWeb();
+    if (!selectedConversationId.value) {
+      selectedConversationId.value = conversations.value[0]?.conversationId ?? "";
+    }
+  }
+
   function selectConversation(conversationId: string): void {
     selectedConversationId.value = conversationId;
     selectedTargetMessageId.value = "";
@@ -744,7 +846,10 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   const conversations = computed(() => {
     if (supportsNativeNodeRuntime) {
-      const nextConversations = nativeConversations.value.map((record) => mapConversationRecord(record, nodeStore));
+      const nextConversations = collapseConversationItems(
+        nativeConversations.value.map((record) => mapConversationRecord(record, nodeStore)),
+        nodeStore,
+      );
       const currentPending = pendingConversation.value;
       if (
         currentPending
@@ -839,6 +944,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     hydrateStartupHistory,
     ensureConversationForDestination,
     sendMessage,
+    deleteConversation,
     upsertWebMessage,
   };
 });

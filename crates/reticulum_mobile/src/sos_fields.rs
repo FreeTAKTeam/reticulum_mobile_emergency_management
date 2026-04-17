@@ -385,6 +385,45 @@ mod tests {
     }
 
     #[test]
+    fn sos_fields_encode_regular_lxmf_telemetry_part() {
+        let command = SosCommand {
+            state: SosMessageKind::Active {},
+            incident_id: "incident-map".to_string(),
+            trigger_source: SosTriggerSource::FloatingButton {},
+            sent_at_ms: 42,
+            audio_id: None,
+        };
+        let telemetry = SosDeviceTelemetryRecord {
+            lat: Some(43.967_349),
+            lon: Some(-66.126_159),
+            alt: Some(25.0),
+            speed: Some(0.5),
+            course: Some(90.0),
+            accuracy: Some(4.5),
+            battery_percent: Some(76.0),
+            battery_charging: Some(false),
+            updated_at_ms: 1_700_000_000_000,
+        };
+
+        let encoded = build_sos_fields(&command, Some(&telemetry)).expect("encoded fields");
+        let fields = rmp_serde::from_slice::<MsgPackValue>(&encoded).expect("field map");
+        let entries = msgpack_map_entries(&fields).expect("map entries");
+        let field = msgpack_get_indexed(entries, LXMF_FIELD_TELEMETRY)
+            .expect("regular FIELD_TELEMETRY entry");
+        let payload = match field {
+            MsgPackValue::Binary(bytes) => {
+                rmp_serde::from_slice::<MsgPackValue>(bytes).expect("telemeter payload")
+            }
+            other => panic!("FIELD_TELEMETRY must be raw binary MessagePack, got {other:?}"),
+        };
+        let telemetry_entries = msgpack_map_entries(&payload).expect("telemeter map");
+
+        assert!(msgpack_get_indexed(telemetry_entries, SID_TIME).is_some());
+        assert!(msgpack_get_indexed(telemetry_entries, SID_LOCATION).is_some());
+        assert!(msgpack_get_indexed(telemetry_entries, SID_BATTERY).is_some());
+    }
+
+    #[test]
     fn text_detection_accepts_legacy_prefixes() {
         assert!(looks_like_sos_text("SOS! I need help"));
         assert!(looks_like_sos_text("urgence besoin aide"));

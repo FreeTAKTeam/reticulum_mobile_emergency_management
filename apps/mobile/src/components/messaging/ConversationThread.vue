@@ -97,6 +97,21 @@ function sosMapTarget(message: MessageRecord): SosMessageMapTarget | undefined {
   return props.sosMapTargets?.[message.messageIdHex.toLowerCase()];
 }
 
+function sosMapHref(message: MessageRecord): string {
+  const target = sosMapTarget(message);
+  if (!target) {
+    return "/telemetry";
+  }
+  const params = new URLSearchParams({
+    incident: target.incidentId,
+    source: target.sourceHex,
+  });
+  if (target.messageIdHex) {
+    params.set("message", target.messageIdHex);
+  }
+  return `/telemetry?${params.toString()}`;
+}
+
 function openSosOnMap(message: MessageRecord): void {
   const target = sosMapTarget(message);
   if (target) {
@@ -202,14 +217,14 @@ watch(
           <span v-if="isSosMessage(message)" class="sos-badge">SOS EMERGENCY</span>
           <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
           <p class="bubble-content">{{ visibleMessageBody(message) }}</p>
-          <button
+          <a
             v-if="isSosMessage(message) && sosMapTarget(message)"
-            type="button"
+            :href="sosMapHref(message)"
             class="sos-map-link"
-            @click="openSosOnMap(message)"
+            @click.prevent="openSosOnMap(message)"
           >
             Open position on telemetry map
-          </button>
+          </a>
           <div class="bubble-meta">
             <span>{{ messageStateLabel(message.state) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
@@ -440,11 +455,11 @@ watch(
 }
 
 .sos-map-link {
-  appearance: none;
   background: transparent;
   border: 0;
   color: #fecaca;
   cursor: pointer;
+  display: inline-flex;
   font-family: var(--font-ui);
   font-size: 0.78rem;
   justify-self: start;

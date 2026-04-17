@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { shallowRef } from "vue";
+
 interface ConversationListItem {
   conversationId: string;
   destinationHex: string;
@@ -16,7 +18,41 @@ defineProps<{
 
 const emit = defineEmits<{
   select: [conversationId: string];
+  delete: [conversationId: string];
 }>();
+
+let longPressTimer: number | undefined;
+const consumedLongPressConversationId = shallowRef("");
+
+function clearLongPressTimer(): void {
+  if (longPressTimer !== undefined) {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = undefined;
+  }
+}
+
+function startLongPress(conversationId: string): void {
+  clearLongPressTimer();
+  consumedLongPressConversationId.value = "";
+  longPressTimer = window.setTimeout(() => {
+    consumedLongPressConversationId.value = conversationId;
+    emit("delete", conversationId);
+  }, 650);
+}
+
+function handleConversationClick(conversationId: string): void {
+  if (consumedLongPressConversationId.value === conversationId) {
+    consumedLongPressConversationId.value = "";
+    return;
+  }
+  emit("select", conversationId);
+}
+
+function handleContextMenu(event: MouseEvent, conversationId: string): void {
+  event.preventDefault();
+  clearLongPressTimer();
+  emit("delete", conversationId);
+}
 
 function hasReadablePeerName(displayName: string, destinationHex: string): boolean {
   const normalizedName = String(displayName ?? "").trim();
@@ -58,7 +94,12 @@ function conversationStateLabel(state: string): string {
         active: item.conversationId === selectedConversationId,
         sos: activeSosConversationIds?.has(item.conversationId),
       }"
-      @click="emit('select', item.conversationId)"
+      @click="handleConversationClick(item.conversationId)"
+      @contextmenu="handleContextMenu($event, item.conversationId)"
+      @pointercancel="clearLongPressTimer"
+      @pointerdown="startLongPress(item.conversationId)"
+      @pointerleave="clearLongPressTimer"
+      @pointerup="clearLongPressTimer"
     >
       <div class="conversation-topline">
         <p class="conversation-name">{{ item.displayName }}</p>

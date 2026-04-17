@@ -252,6 +252,23 @@ function handleSelectConversation(conversationId: string): void {
   mobilePane.value = "detail";
 }
 
+async function handleDeleteConversation(conversationId: string): Promise<void> {
+  const conversation = messagingStore.conversations.find(
+    (candidate) => candidate.conversationId === conversationId,
+  );
+  const displayName = conversation?.displayName ?? "this conversation";
+  if (!window.confirm(`Delete ${displayName} from this device?`)) {
+    return;
+  }
+  const wasActive = activeConversationId.value === conversationId;
+  await messagingStore.deleteConversation(conversationId);
+  selectedThreadDestinationHex.value = "";
+  if (mobilePane.value === "detail" && !wasActive) {
+    return;
+  }
+  mobilePane.value = "list";
+}
+
 function showConversationList(): void {
   mobilePane.value = "list";
 }
@@ -360,6 +377,7 @@ watch(
           :items="messagingStore.conversations"
           :selected-conversation-id="activeConversationId"
           :active-sos-conversation-ids="sosStore.activeConversationIds"
+          @delete="handleDeleteConversation"
           @select="handleSelectConversation"
         />
       </section>

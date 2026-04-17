@@ -445,6 +445,22 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void deleteConversation(PluginCall call) {
+        final String conversationId = call.getString("conversationId");
+        if (conversationId == null || conversationId.trim().isEmpty()) {
+            call.reject("conversationId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("conversationId", conversationId);
+        runIntServiceCall(
+            call,
+            "Failed to delete conversation.",
+            service -> service.deleteConversationJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void getLxmfSyncStatus(PluginCall call) {
         runStringServiceCall(
             call,

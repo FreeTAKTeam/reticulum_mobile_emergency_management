@@ -297,6 +297,10 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.listMessagesJson(payloadJson), "{\"items\":[]}");
     }
 
+    public synchronized int deleteConversationJson(String payloadJson) {
+        return ReticulumBridge.deleteConversationJson(payloadJson);
+    }
+
     public synchronized String getLxmfSyncStatusJson() {
         return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
     }

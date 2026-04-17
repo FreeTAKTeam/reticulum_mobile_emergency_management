@@ -543,6 +543,7 @@ export interface ReticulumNodeClient {
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
+  deleteConversation(conversationId: string): Promise<void>;
   getLxmfSyncStatus(): Promise<SyncStatus>;
   listTelemetryDestinations(): Promise<string[]>;
   legacyImportCompleted(): Promise<boolean>;
@@ -700,6 +701,7 @@ interface ReticulumNodePlugin {
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
+  deleteConversation(options: { conversationId: string }): Promise<void>;
   getLxmfSyncStatus(): Promise<Record<string, unknown>>;
   listTelemetryDestinations(): Promise<{ items: string[] }>;
   legacyImportCompleted(): Promise<{ completed: boolean }>;
@@ -2152,6 +2154,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return Array.isArray(result.items) ? result.items.map(toMessageRecord) : [];
   }
 
+  async deleteConversation(conversationId: string): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteConversation({ conversationId });
+  }
+
   async getLxmfSyncStatus(): Promise<SyncStatus> {
     await this.ready();
     return toSyncStatus(await this.plugin.getLxmfSyncStatus());
@@ -2544,6 +2551,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
 
   async listMessages(_conversationId?: string): Promise<MessageRecord[]> {
     return [];
+  }
+
+  async deleteConversation(_conversationId: string): Promise<void> {
+    return undefined;
   }
 
   async getLxmfSyncStatus(): Promise<SyncStatus> {
@@ -2976,6 +2987,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async listMessages(_conversationId?: string): Promise<MessageRecord[]> {
     return [];
+  }
+
+  async deleteConversation(_conversationId: string): Promise<void> {
+    return undefined;
   }
 
   async getLxmfSyncStatus(): Promise<SyncStatus> {

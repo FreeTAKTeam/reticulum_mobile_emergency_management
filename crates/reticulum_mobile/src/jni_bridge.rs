@@ -106,6 +106,12 @@ struct MessageListInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ConversationDeleteInput {
+    conversation_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LegacyImportInput {
     settings: Option<AppSettingsInput>,
     saved_peers: Option<Vec<SavedPeerInput>>,
@@ -2143,6 +2149,47 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteConversationJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return 1;
+        }
+    };
+    let payload: ConversationDeleteInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid conversation delete payload: {e}"),
+            );
+            return 1;
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return 1;
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_conversation(payload.conversation_id) {
+        Ok(()) => 0,
+        Err(err) => {
+            set_last_node_error(err);
+            1
         }
     }
 }

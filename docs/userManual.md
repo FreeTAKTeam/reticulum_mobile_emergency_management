@@ -64,6 +64,20 @@ This is the live or recent location information published by devices. The app tr
 - stale when it is older than the configured freshness window
 - expired when it is old enough to be removed from the visible map
 
+### SOS Emergency
+
+SOS Emergency is the Android emergency distress workflow. It sends an urgent LXMF message to saved peers and attaches native telemetry when a recent GPS fix is available.
+
+An SOS message can include:
+
+- the configured emergency text
+- battery level
+- GPS telemetry in the LXMF telemetry field
+- an SOS command marker used by REM to detect the emergency reliably
+- optional ambient audio when audio recording is enabled
+
+If GPS is enabled but no recent fix is available, the message ends with `no GPS` so receivers know that no position was attached.
+
 ### Hub directory
 
 The Reticulum Community Hub directory configuration in `Settings` controls optional RCH-assisted routing and registration behavior. REM now supports three hub modes:
@@ -113,6 +127,7 @@ Purpose:
 
 - Provides the encrypted one to one conversation view.
 - Lets the operator review message threads and send replies to a selected peer.
+- Shows SOS emergency messages with emergency styling and a map link when a position was received.
 
 How it works:
 
@@ -126,11 +141,16 @@ What the operator sees:
 
 - Each conversation row shows the display name, last message preview, timestamp, and last known state.
 - The thread view shows inbound and outbound message bubbles with their delivery state and time.
+- Inbound SOS messages appear as emergency messages, with an `SOS EMERGENCY` badge.
+- If the SOS contains a GPS position, the message includes an `Open position on telemetry map` link. Tapping it opens the `Telemetry` map centered on the peer in danger.
+- If no GPS fix was available to the sender, the message text shows `no GPS` and no map link is shown.
 - If no conversations exist yet, the page explicitly says so and instructs the operator to discover a peer or receive an LXMF message first.
 
 Operational note:
 
 - Inbox usefulness depends on actual  traffic or an existing conversation being created for a connected peer.
+- A single peer should appear as one conversation even when messages arrive through different known identities for the same peer.
+- Long-press a conversation in the list to delete that conversation from local history.
 
 ## Telemetry
 ![alt text](image-1.png)
@@ -138,6 +158,7 @@ Purpose:
 
 - Shows live and stale peers position on a map.
 - Helps the operator monitor peer locations.
+- Shows SOS emergency positions and trails when emergency telemetry is received.
 
 How it works:
 
@@ -145,11 +166,15 @@ How it works:
 - The legend distinguishes `Live` positions from `Stale` ones using the configured stale threshold.
 - Each visible marker represents one non-expired telemetry position.
 - tapping a marker opens a popup with the peer label, update time, and optional speed/course data.
+- SOS positions are also processed as normal telemetry positions, so the peer in danger appears on the map like other telemetry-enabled peers.
+- SOS trails are drawn in red. The latest emergency point blinks red.
+- Tapping an SOS point opens a popup with the emergency text, source, time, coordinates, and battery level when available.
 
 What to expect:
 
 - Positions older than the configured expiry window are filtered out and do not appear on the map.
 - If no telemetry has been received, the map remains empty and the header reports that no telemetry has been received yet.
+- Opening the map from an SOS chat link centers the map on the emergency point and opens the SOS popup.
 
 ## Emergency Action Messages
 
@@ -461,7 +486,7 @@ Important behavior:
 
 Purpose:
 
-- Central place for node runtime configuration, telemetry settings, hub settings, peer-list import/export, and node control.
+- Central place for node runtime configuration, telemetry settings, SOS emergency settings, hub settings, peer-list import/export, and node control.
 
 How it works:
 
@@ -529,6 +554,49 @@ Use this section to exchange saved-peer lists:
 - paste PeerListV1 JSON directly
 - choose `Merge` or `Replace` on import
 
+### SOS Emergency
+
+Use this section to configure the Android SOS distress workflow.
+
+Main controls:
+
+- `Enable SOS`: turns SOS monitoring and controls on or off.
+- `Message template`: the text used for active and update SOS messages.
+- `Emergency end template`: the text sent when the emergency is cancelled.
+- `Countdown seconds`: delay before the emergency is sent. Set it to `0` for immediate send.
+- `Include GPS and battery`: attaches the latest recent location fix and battery level when available.
+
+Trigger controls:
+
+- `Trigger SOS`: starts a manual SOS from Settings.
+- `Floating SOS button`: shows a draggable SOS button over the app.
+- `Shake trigger`: starts SOS from sustained shaking when enabled.
+- `Tap pattern trigger`: starts SOS from the configured tap pattern when enabled.
+- `Power button trigger`: starts SOS from three rapid screen on/off button events when enabled.
+
+During an active emergency:
+
+- REM sends the SOS to saved peers by default.
+- The SOS message is sent as a normal LXMF chat message with SOS metadata.
+- The GPS position is attached as standard telemetry when a recent fix exists.
+- Periodic updates send new location and battery information while the emergency remains active, if enabled.
+- The `SOS ACTIVE` pill appears over the app while SOS is active.
+
+Ending an emergency:
+
+- Tap the floating SOS button or the `SOS ACTIVE` pill while SOS is active to deactivate it.
+- If a deactivation PIN is configured, enter the PIN when prompted.
+- On deactivation, REM sends the configured emergency-end message, for example `SOS Cancelled - I am safe.`
+
+Optional controls:
+
+- `Periodic updates`: keeps sending location and battery updates while active.
+- `Update interval seconds`: controls how often periodic updates are sent.
+- `Record ambient audio`: records an audio clip during SOS when supported by the Android device and permissions.
+- `Audio seconds`: controls the audio recording duration.
+- `Silent auto-answer`: attempts best-effort call auto-answer during SOS when Android permissions and device support allow it.
+- `Set PIN` / `Clear PIN`: adds or removes the deactivation PIN. The PIN is stored as a hash, not as plaintext.
+
 ### Node Control
 
 Use this section to control the runtime:
@@ -539,13 +607,31 @@ Use this section to control the runtime:
 
 ## Typical operator workflow
 
-1. Open `Settings` and confirm the call sign, TCP endpoints, telemetry preferences, and hub mode.
+1. Open `Settings` and confirm the call sign, TCP endpoints, SOS settings, telemetry preferences, and hub mode.
 2. Open `Peers` to save the peers you trust and connect to the one you want active connection with.
 3. Use `Inbox` for encrypted LXMF traffic once peers and conversations exist.
 4. Use `Action Messages` to publish current status snapshots.
 5. Use `Dashboard` to monitor the rolled-up readiness picture from those messages.
 6. Use `Events` to publish short timeline updates.
 7. Use `Telemetry` to monitor current positions when telemetry sharing is enabled and data is being received.
+
+## Typical SOS workflow
+
+1. Open `Peers` and save the peers that should receive emergency messages.
+2. Open `Settings`, expand `SOS Emergency`, enable SOS, and choose the trigger modes you want.
+3. Keep `Include GPS and battery` enabled if you want the emergency to include location telemetry.
+4. Optionally enable the floating SOS button and drag it to a reachable position.
+5. Trigger SOS from the floating button, Settings, shake, tap pattern, or power button trigger.
+6. Wait for the countdown to finish, unless the countdown is set to `0`.
+7. Confirm that the `SOS ACTIVE` pill is visible.
+8. When safe, tap the floating button or `SOS ACTIVE` pill and enter the PIN if one is required.
+
+Receiver workflow:
+
+1. Open the SOS conversation in `Inbox`.
+2. If the message has an `Open position on telemetry map` link, tap it to open the peer position.
+3. On the `Telemetry` map, tap the blinking red SOS marker to read the emergency message details.
+4. Watch for follow-up SOS updates or the emergency-end message.
 
 ## Notes on empty pages
 

@@ -9,7 +9,7 @@ use rmpv::Value as MsgPackValue;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::app_state::{canonicalize_chat_message, AppStateStore};
+use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::messaging_compat as sdkmsg;
@@ -130,6 +130,46 @@ fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
 
 fn emit_projection_invalidation(bus: &EventBus, invalidation: ProjectionInvalidation) {
     bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+}
+
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn conversation_peer_resolver(peers: &[PeerRecord]) -> ConversationPeerResolver {
+    let mut resolver = ConversationPeerResolver::default();
+    for peer in peers {
+        let destination_hex = match trimmed_non_empty(Some(peer.destination_hex.as_str())) {
+            Some(value) => value,
+            None => continue,
+        };
+        let lxmf_destination_hex = trimmed_non_empty(peer.lxmf_destination_hex.as_deref());
+        let identity_hex = trimmed_non_empty(peer.identity_hex.as_deref());
+        let canonical_id = identity_hex
+            .clone()
+            .or_else(|| lxmf_destination_hex.clone())
+            .unwrap_or_else(|| destination_hex.clone());
+        let peer_destination_hex = lxmf_destination_hex
+            .clone()
+            .unwrap_or_else(|| destination_hex.clone());
+        let mut aliases = vec![destination_hex];
+        if let Some(lxmf_destination_hex) = lxmf_destination_hex {
+            aliases.push(lxmf_destination_hex);
+        }
+        if let Some(identity_hex) = identity_hex {
+            aliases.push(identity_hex);
+        }
+        resolver.insert(
+            aliases,
+            canonical_id,
+            peer_destination_hex,
+            peer.display_name.clone(),
+        );
+    }
+    resolver
 }
 
 const DEFAULT_R3AKT_TEAM_COLOR: &str = "YELLOW";
@@ -1799,7 +1839,13 @@ impl Node {
 
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        inner.app_state.list_conversations()
+        let peers = inner
+            .peers_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        let resolver = conversation_peer_resolver(&peers);
+        inner.app_state.list_conversations_resolved(&resolver)
     }
 
     pub fn list_messages(
@@ -1807,7 +1853,32 @@ impl Node {
         conversation_id: Option<String>,
     ) -> Result<Vec<MessageRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        inner.app_state.list_messages(conversation_id.as_deref())
+        let peers = inner
+            .peers_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        let resolver = conversation_peer_resolver(&peers);
+        inner
+            .app_state
+            .list_messages_resolved(conversation_id.as_deref(), &resolver)
+    }
+
+    pub fn delete_conversation(&self, conversation_id: String) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let peers = inner
+            .peers_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        let resolver = conversation_peer_resolver(&peers);
+        for invalidation in inner
+            .app_state
+            .delete_conversation_resolved(conversation_id.as_str(), &resolver)?
+        {
+            emit_projection_invalidation(&inner.bus, invalidation);
+        }
+        Ok(())
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
