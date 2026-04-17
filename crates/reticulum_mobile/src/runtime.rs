@@ -8,6 +8,8 @@ use crate::announce_compat::{
 };
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
+use crate::sos::{location_from_alert, received_alert_from_sos};
+use crate::sos_fields::{extract_text_coordinates, looks_like_sos_text, parse_sos_fields};
 use crossbeam_channel as cb;
 use fs_err as fs;
 #[cfg(feature = "legacy-lxmf-runtime")]
@@ -37,16 +39,17 @@ use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 #[path = "runtime_projection.rs"]
 mod runtime_projection;
 
-use crate::app_state::AppStateStore;
+use crate::app_state::{canonicalize_chat_message, AppStateStore};
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
+    AnnounceClass, AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, LogLevel,
     LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope,
-    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, SyncStatus,
+    NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState,
+    ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord,
+    SosMessageKind, SyncPhase, SyncStatus,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -58,6 +61,13 @@ const LXMF_FIELD_COMMANDS: i64 = 0x09;
 const LXMF_FIELD_RESULTS: i64 = 0x0A;
 const LXMF_FIELD_EVENT: i64 = 0x0D;
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
+const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
+    "topic_broker",
+    "group_chat",
+    "attachments",
+    "telemetry_relay",
+    "tak_bridge",
+];
 
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
@@ -751,6 +761,211 @@ fn announce_destination_kind_from_name_hash(name_hash: &[u8]) -> &'static str {
     "other"
 }
 
+fn parse_capability_tokens(app_data: &str) -> Vec<String> {
+    app_data
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn decode_percent_component(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+                let byte = u8::from_str_radix(hex, 16).ok()?;
+                decoded.push(byte);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            value => {
+                decoded.push(value);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn normalize_display_name(value: &str) -> Option<String> {
+    let sanitized = value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>();
+    let collapsed = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(64).collect())
+    }
+}
+
+fn announce_display_name_from_msgpack_value(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::String(value) => value.as_str().and_then(normalize_display_name),
+        MsgPackValue::Binary(value) => String::from_utf8(value.clone())
+            .ok()
+            .as_deref()
+            .and_then(normalize_display_name),
+        _ => None,
+    }
+}
+
+fn parse_announce_payload_msgpack(bytes: &[u8]) -> Option<MsgPackValue> {
+    rmp_serde::from_slice::<MsgPackValue>(bytes).ok()
+}
+
+fn extract_msgpack_announce_display_name(value: &MsgPackValue) -> Option<String> {
+    let MsgPackValue::Array(entries) = value else {
+        return None;
+    };
+    entries
+        .first()
+        .and_then(announce_display_name_from_msgpack_value)
+}
+
+fn extract_msgpack_capability_tokens(value: &MsgPackValue) -> Vec<String> {
+    match value {
+        MsgPackValue::Map(entries) => entries
+            .iter()
+            .find_map(|(key, value)| {
+                if matches!(key, MsgPackValue::String(actual) if actual.as_str() == Some("caps") || actual.as_str() == Some("announce_capabilities")) {
+                    Some(match value {
+                        MsgPackValue::Array(items) => items
+                            .iter()
+                            .filter_map(msgpack_string)
+                            .map(|token| token.to_ascii_lowercase())
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default(),
+        MsgPackValue::Array(entries) => entries
+            .iter()
+            .find_map(|entry| match entry {
+                MsgPackValue::Map(_) => Some(extract_msgpack_capability_tokens(entry)),
+                MsgPackValue::Binary(bytes) => {
+                    parse_announce_payload_msgpack(bytes).map(|nested| extract_msgpack_capability_tokens(&nested))
+                }
+                _ => None,
+            })
+            .unwrap_or_default(),
+        MsgPackValue::Binary(bytes) => parse_announce_payload_msgpack(bytes)
+            .map(|nested| extract_msgpack_capability_tokens(&nested))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+fn announce_metadata_from_app_data(app_data: &str) -> (Option<String>, Vec<String>) {
+    let display_name = app_data
+        .split(|ch: char| ch == ',' || ch == ';')
+        .map(str::trim)
+        .find_map(|token| token.strip_prefix("name="))
+        .and_then(decode_percent_component)
+        .as_deref()
+        .and_then(normalize_display_name);
+    let text_tokens = parse_capability_tokens(app_data);
+    if display_name.is_some() || !text_tokens.is_empty() {
+        return (display_name, text_tokens);
+    }
+
+    let Some(bytes) = hex::decode(app_data).ok() else {
+        return (None, Vec::new());
+    };
+    let Some(payload) = parse_announce_payload_msgpack(bytes.as_slice()) else {
+        return (None, Vec::new());
+    };
+    (
+        extract_msgpack_announce_display_name(&payload),
+        extract_msgpack_capability_tokens(&payload),
+    )
+}
+
+fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
+    let (_, tokens) = announce_metadata_from_app_data(app_data);
+    if tokens.iter().any(|token| token == "r3akt")
+        && RCH_SERVER_FEATURE_CAPABILITIES
+            .iter()
+            .any(|capability| tokens.iter().any(|token| token == capability))
+    {
+        return AnnounceClass::RchHubServer {};
+    }
+
+    match destination_kind {
+        "lxmf_propagation" => AnnounceClass::PropagationNode {},
+        "lxmf_delivery" => AnnounceClass::LxmfDelivery {},
+        _ => {
+            if tokens.iter().any(|token| token == "r3akt")
+                && tokens.iter().any(|token| token == "emergencymessages")
+            {
+                return AnnounceClass::PeerApp {};
+            }
+            AnnounceClass::Other {}
+        }
+    }
+}
+
+fn announce_class_is_operator_relevant(class: AnnounceClass) -> bool {
+    matches!(
+        class,
+        AnnounceClass::PeerApp {} | AnnounceClass::RchHubServer {}
+    )
+}
+
+fn operator_label(display_name: Option<&str>, fallback_hex: &str) -> String {
+    display_name
+        .and_then(normalize_display_name)
+        .unwrap_or_else(|| fallback_hex.to_ascii_lowercase())
+}
+
+fn operator_announce_message(
+    announce_class: AnnounceClass,
+    display_name: Option<&str>,
+    destination_hex: &str,
+    identity_hex: &str,
+    hops: u8,
+) -> Option<String> {
+    if !announce_class_is_operator_relevant(announce_class) {
+        return None;
+    }
+
+    let subject = operator_label(display_name, destination_hex);
+    let prefix = match announce_class {
+        AnnounceClass::RchHubServer {} => "RCH hub",
+        AnnounceClass::PeerApp {} => "REM peer",
+        _ => return None,
+    };
+    Some(format!(
+        "[announce] {prefix} {subject} destination={} identity={} hops={hops}.",
+        destination_hex.to_ascii_lowercase(),
+        identity_hex.to_ascii_lowercase(),
+    ))
+}
+
+fn emit_operational_notice(bus: &EventBus, level: LogLevel, message: impl Into<String>) {
+    bus.emit(NodeEvent::OperationalNotice {
+        notice: OperationalNotice {
+            level,
+            message: message.into(),
+            at_ms: now_ms(),
+        },
+    });
+}
+
 fn join_url(base: &str, path: &str) -> Result<String, NodeError> {
     let base = base.trim();
     if base.is_empty() {
@@ -900,12 +1115,15 @@ fn to_sdk_announce_record(record: AnnounceRecord) -> sdkmsg::AnnounceRecord {
 }
 
 fn from_sdk_announce_record(record: sdkmsg::AnnounceRecord) -> AnnounceRecord {
+    let (parsed_display_name, _) = announce_metadata_from_app_data(&record.app_data);
+    let announce_class = classify_announce(&record.destination_kind, &record.app_data);
     AnnounceRecord {
         destination_hex: record.destination_hex,
         identity_hex: record.identity_hex,
         destination_kind: record.destination_kind,
+        announce_class,
         app_data: record.app_data,
-        display_name: record.display_name,
+        display_name: record.display_name.or(parsed_display_name),
         hops: record.hops,
         interface_hex: record.interface_hex,
         received_at_ms: record.received_at_ms,
@@ -1321,7 +1539,10 @@ fn merge_hub_directory_peer_records(
         let item_identity_hex = normalize_hex_32(item.identity.as_str());
         let item_app_data = app_data_from_hub_directory_capabilities(&item.announce_capabilities);
 
-        if let Some(index) = existing_by_destination.get(destination_hex.as_str()).copied() {
+        if let Some(index) = existing_by_destination
+            .get(destination_hex.as_str())
+            .copied()
+        {
             let peer = &mut peers[index];
             peer.hub_derived = true;
             if peer.identity_hex.is_none() {
@@ -1858,6 +2079,12 @@ async fn upsert_message_record(
     message: MessageRecord,
     emit_received: bool,
 ) {
+    let message = canonicalize_chat_message(&message);
+    if let Ok(invalidations) = state.app_state.upsert_message(&message) {
+        for invalidation in invalidations {
+            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+        }
+    }
     let changed = state
         .projection_journal
         .record_message(message.clone(), Some("message-upsert"));
@@ -2527,10 +2754,33 @@ async fn emit_received_payload(
         let fields_bytes = message
             .fields
             .and_then(|value| rmp_serde::to_vec(&value).ok());
+        let sos_fields = fields_bytes.as_deref().and_then(parse_sos_fields);
+        let mut sos_telemetry = sos_fields
+            .as_ref()
+            .and_then(|fields| fields.telemetry.clone());
+        if sos_telemetry.is_none() {
+            if let Some((lat, lon)) = extract_text_coordinates(body_utf8.as_str()) {
+                sos_telemetry = Some(SosDeviceTelemetryRecord {
+                    lat: Some(lat),
+                    lon: Some(lon),
+                    alt: None,
+                    speed: None,
+                    course: None,
+                    accuracy: None,
+                    battery_percent: None,
+                    battery_charging: None,
+                    updated_at_ms: now_ms(),
+                });
+            }
+        }
+        let sos_command = sos_fields
+            .as_ref()
+            .and_then(|fields| fields.command.clone());
+        let is_sos_message = sos_command.is_some() || looks_like_sos_text(body_utf8.as_str());
         let metadata = fields_bytes
             .as_deref()
             .and_then(parse_mission_sync_metadata);
-        if let Some(metadata) = metadata.as_ref() {
+        if let Some(metadata) = metadata.as_ref().filter(|_| !is_sos_message) {
             if metadata.is_mission_related() {
                 info!(
                     "[lxmf][mission] received kind={} name={} source={} destination={} event_uid={} mission_uid={} correlation={}",
@@ -2555,7 +2805,61 @@ async fn emit_received_payload(
             persist_received_event_if_present(state, bus, Some(metadata), fields_bytes.as_deref())
                 .await;
         }
-        if !metadata
+        if is_sos_message {
+            let peer_hex = source_hex
+                .clone()
+                .unwrap_or_else(|| destination_hex.clone());
+            let message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
+                .map(|wire| hex::encode(wire.message_id()))
+                .unwrap_or_else(|_| format!("sos-{}-{}", peer_hex, now_ms()));
+            let state_kind = sos_command
+                .as_ref()
+                .map(|command| command.state)
+                .unwrap_or(SosMessageKind::Active {});
+            let incident_id = sos_command
+                .as_ref()
+                .map(|command| command.incident_id.clone())
+                .unwrap_or_else(|| format!("legacy-sos-{}-{}", peer_hex, now_ms()));
+            let received_at_ms = now_ms();
+            let record = MessageRecord {
+                message_id_hex: message_id_hex.clone(),
+                conversation_id: conversation_id_for(peer_hex.as_str()),
+                direction: MessageDirection::Inbound {},
+                destination_hex: peer_hex.clone(),
+                source_hex: source_hex.clone(),
+                title: title.clone(),
+                body_utf8: body_utf8.clone(),
+                method: MessageMethod::Direct {},
+                state: MessageState::Received {},
+                detail: Some("sos".to_string()),
+                sent_at_ms: None,
+                received_at_ms: Some(received_at_ms),
+                updated_at_ms: received_at_ms,
+            };
+            upsert_message_record(state, bus, record, true).await;
+            let alert = received_alert_from_sos(
+                incident_id,
+                peer_hex.clone(),
+                conversation_id_for(peer_hex.as_str()),
+                state_kind,
+                body_utf8.clone(),
+                sos_telemetry.as_ref(),
+                sos_command
+                    .as_ref()
+                    .and_then(|command| command.audio_id.clone()),
+                Some(message_id_hex),
+                received_at_ms,
+            );
+            if let Ok(invalidation) = state.app_state.upsert_sos_alert(&alert) {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            }
+            if let Some(location) = location_from_alert(&alert) {
+                if let Ok(invalidation) = state.app_state.upsert_sos_location(&location) {
+                    bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+                }
+            }
+            bus.emit(NodeEvent::SosAlertChanged { alert });
+        } else if !metadata
             .as_ref()
             .is_some_and(MissionSyncMetadata::is_mission_related)
         {
@@ -2790,7 +3094,10 @@ fn parse_hub_directory_result_state(
 ) -> Option<HubDirectoryResultState> {
     let entries = msgpack_map_entries(value)?;
     let command_id = msgpack_get_named(entries, &["command_id"]).and_then(msgpack_string);
-    if command_id.as_deref().is_some_and(|value| value != expected_command_id) {
+    if command_id
+        .as_deref()
+        .is_some_and(|value| value != expected_command_id)
+    {
         return None;
     }
 
@@ -2802,7 +3109,8 @@ fn parse_hub_directory_result_state(
     }
 
     let payload = msgpack_get_named(entries, &["payload", "result", "data"]).unwrap_or(value);
-    parse_hub_directory_snapshot_value(payload, received_at_ms).map(HubDirectoryResultState::Snapshot)
+    parse_hub_directory_snapshot_value(payload, received_at_ms)
+        .map(HubDirectoryResultState::Snapshot)
 }
 
 async fn publish_hub_directory_snapshot(
@@ -3028,7 +3336,12 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
-    let app_destination_hex = app_destination.lock().await.desc.address_hash.to_hex_string();
+    let app_destination_hex = app_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
 
     let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
@@ -3263,11 +3576,14 @@ pub async fn run_node(
                         let app_data_bytes = event.app_data.as_slice().to_vec();
                         let app_data = String::from_utf8(app_data_bytes.clone())
                             .unwrap_or_else(|_| hex::encode(app_data_bytes.as_slice()));
+                        let (parsed_display_name, _) = announce_metadata_from_app_data(&app_data);
                         let display_name = if destination_kind == "lxmf_delivery" {
                             display_name_from_delivery_app_data(app_data_bytes.as_slice())
+                                .or(parsed_display_name)
                         } else {
-                            None
+                            parsed_display_name
                         };
+                        let announce_class = classify_announce(&destination_kind, &app_data);
                         let interface_hex = hex::encode(event.interface);
                         let received_at_ms = now_ms();
                         state
@@ -3278,6 +3594,7 @@ pub async fn run_node(
                                 destination_hex: destination_hex.clone(),
                                 identity_hex: identity_hex.clone(),
                                 destination_kind: destination_kind.clone(),
+                                announce_class,
                                 app_data: app_data.clone(),
                                 display_name: display_name.clone(),
                                 hops: event.hops,
@@ -3296,11 +3613,22 @@ pub async fn run_node(
                             destination_hex: destination_hex.clone(),
                             identity_hex: identity_hex.clone(),
                             destination_kind: destination_kind.clone(),
+                            announce_class,
                             app_data,
+                            display_name: display_name.clone(),
                             hops: event.hops,
                             interface_hex,
                             received_at_ms,
                         });
+                        if let Some(message) = operator_announce_message(
+                            announce_class,
+                            display_name.as_deref(),
+                            destination_hex.as_str(),
+                            identity_hex.as_str(),
+                            event.hops,
+                        ) {
+                            emit_operational_notice(&bus, LogLevel::Info {}, message);
+                        }
                         if destination_kind == "app" {
                             let lxmf_destination_hex = SingleOutputDestination::new(
                                 desc.identity.clone(),
@@ -4523,7 +4851,10 @@ mod tests {
                 MsgPackValue::from("command_id"),
                 MsgPackValue::from("cmd-123"),
             ),
-            (MsgPackValue::from("status"), MsgPackValue::from("completed")),
+            (
+                MsgPackValue::from("status"),
+                MsgPackValue::from("completed"),
+            ),
             (
                 MsgPackValue::from("result"),
                 MsgPackValue::Map(vec![
@@ -4553,10 +4884,7 @@ mod tests {
                                     MsgPackValue::from("telemetry"),
                                 ]),
                             ),
-                            (
-                                MsgPackValue::from("client_type"),
-                                MsgPackValue::from("rem"),
-                            ),
+                            (MsgPackValue::from("client_type"), MsgPackValue::from("rem")),
                             (
                                 MsgPackValue::from("registered_mode"),
                                 MsgPackValue::from("connected"),
@@ -4565,10 +4893,7 @@ mod tests {
                                 MsgPackValue::from("last_seen"),
                                 MsgPackValue::from("2026-04-02T12:43:28Z"),
                             ),
-                            (
-                                MsgPackValue::from("status"),
-                                MsgPackValue::from("active"),
-                            ),
+                            (MsgPackValue::from("status"), MsgPackValue::from("active")),
                         ])]),
                     ),
                 ]),
@@ -4584,7 +4909,10 @@ mod tests {
         assert!(snapshot.effective_connected_mode);
         assert_eq!(snapshot.received_at_ms, 456);
         assert_eq!(snapshot.items.len(), 1);
-        assert_eq!(snapshot.items[0].destination_hash, "22222222222222222222222222222222");
+        assert_eq!(
+            snapshot.items[0].destination_hash,
+            "22222222222222222222222222222222"
+        );
         assert_eq!(
             snapshot.items[0].announce_capabilities,
             vec!["r3akt".to_string(), "telemetry".to_string()]
@@ -4833,5 +5161,49 @@ mod tests {
         peers.sort_by(|left, right| left.destination_hex.cmp(&right.destination_hex));
         assert!(peers[0].saved);
         assert!(!peers[1].saved);
+    }
+
+    #[test]
+    fn operator_announce_message_accepts_rch_hub_announces() {
+        let message = operator_announce_message(
+            AnnounceClass::RchHubServer {},
+            Some("North Hub"),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            2,
+        )
+        .expect("hub announce should be relevant");
+
+        assert!(message.contains("RCH hub North Hub"));
+        assert!(message.contains("destination=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(message.contains("identity=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+    }
+
+    #[test]
+    fn operator_announce_message_accepts_rem_peer_announces() {
+        let message = operator_announce_message(
+            AnnounceClass::PeerApp {},
+            Some("Pixel"),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            1,
+        )
+        .expect("peer announce should be relevant");
+
+        assert!(message.contains("REM peer Pixel"));
+        assert!(message.contains("hops=1"));
+    }
+
+    #[test]
+    fn operator_announce_message_ignores_regular_lxmf_announces() {
+        let message = operator_announce_message(
+            AnnounceClass::LxmfDelivery {},
+            Some("LXMF Chat"),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            1,
+        );
+
+        assert!(message.is_none());
     }
 }

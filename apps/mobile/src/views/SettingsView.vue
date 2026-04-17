@@ -1,21 +1,17 @@
 ﻿<script setup lang="ts">
 import { computed, reactive, ref, useTemplateRef } from "vue";
 
+import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import { ensureRequiredAnnounceCapabilities, matchesRchHubCapabilities } from "../utils/peers";
+import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
 interface KnownTcpServerOption {
   name: string;
   endpoint: string;
   isBootstrap: boolean;
-}
-
-interface HubAnnounceCandidate {
-  destination: string;
-  label: string;
 }
 
 const nodeStore = useNodeStore();
@@ -79,22 +75,7 @@ const runtimeSummary = computed(() => {
   return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
 });
 
-const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() =>
-  Object.values(nodeStore.discoveredByDestination)
-    .filter((peer) => peer.sources.includes("announce"))
-    .filter((peer) => matchesRchHubCapabilities(peer.appData ?? ""))
-    .map((peer) => ({
-      destination: peer.destination,
-      label: peer.announcedName || peer.label || peer.destination,
-    }))
-    .sort((a, b) => {
-      const byLabel = a.label.localeCompare(b.label);
-      if (byLabel !== 0) {
-        return byLabel;
-      }
-      return a.destination.localeCompare(b.destination);
-    }),
-);
+const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 
 const hubSummary = computed(() => {
   const cachedPeerCount = nodeStore.hubDirectoryPeers.length;
@@ -669,6 +650,8 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </details>
 
+    <SosEmergencyCard />
+
     <details class="panel fold-panel">
       <summary class="panel-summary">
         <div class="summary-copy">
@@ -710,7 +693,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <p v-if="runtimeFeedback" class="feedback">{{ runtimeFeedback }}</p>
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
         <div class="log-list">
-          <p v-for="entry in nodeStore.logs" :key="entry.at" class="log">
+          <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
             {{ entry.level }} | {{ entry.message }}
           </p>
         </div>
@@ -994,13 +977,9 @@ textarea {
 }
 
 .inline-remove {
-  background: rgb(8 27 58 / 86%);
-  border: 1px solid rgb(74 133 207 / 45%);
-  border-radius: 8px;
-  color: #8fdbff;
   font-size: 0.7rem;
   min-height: 26px;
-  padding: 0 0.55rem;
+  padding: 0 0.62rem;
 }
 
 .actions {
@@ -1011,21 +990,25 @@ textarea {
 }
 
 button {
-  background: linear-gradient(118deg, #0b9fff, #20ecff);
-  border: 0;
-  border-radius: 10px;
-  box-shadow: 0 10px 22px rgb(3 32 75 / 22%);
-  color: #03284b;
+  background:
+    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  border: 1px solid rgb(74 133 207 / 45%);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgb(209 244 255 / 10%),
+    0 8px 18px rgb(2 14 32 / 18%);
+  color: #8fdbff;
   cursor: pointer;
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.08em;
-  min-height: 34px;
-  padding: 0 0.76rem;
+  min-height: 32px;
+  padding: 0 0.82rem;
   touch-action: manipulation;
   transition:
     background 120ms ease,
+    border-color 120ms ease,
     box-shadow 120ms ease,
     color 120ms ease,
     transform 120ms ease;
@@ -1033,7 +1016,9 @@ button {
 }
 
 button:active {
-  background: linear-gradient(118deg, #046aa8, #0ea9cb);
+  background:
+    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
+  border-color: rgb(112 197 255 / 56%);
   box-shadow:
     inset 0 1px 0 rgb(220 248 255 / 16%),
     0 4px 10px rgb(3 21 47 / 24%);
@@ -1042,8 +1027,15 @@ button:active {
 }
 
 .inline-remove:active {
-  background: rgb(15 73 115 / 92%);
-  border-color: rgb(112 197 255 / 56%);
+  box-shadow:
+    inset 0 1px 0 rgb(220 248 255 / 12%),
+    0 3px 8px rgb(3 21 47 / 22%);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
 }
 
 .feedback {

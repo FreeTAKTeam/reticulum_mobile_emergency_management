@@ -4,6 +4,7 @@ export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
+export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
 export type SendOutcome =
   | "SentDirect"
   | "SentBroadcast"
@@ -42,7 +43,19 @@ export type ProjectionScope =
   | "Events"
   | "Conversations"
   | "Messages"
-  | "Telemetry";
+  | "Telemetry"
+  | "Sos";
+
+export type SosState = "Idle" | "Countdown" | "Sending" | "Active";
+export type SosTriggerSource =
+  | "Manual"
+  | "FloatingButton"
+  | "Shake"
+  | "TapPattern"
+  | "PowerButton"
+  | "Restore"
+  | "Remote";
+export type SosMessageKind = "Active" | "Update" | "Cancelled";
 
 export interface NodeConfig {
   name: string;
@@ -94,7 +107,9 @@ export interface AnnounceReceivedEvent {
   destinationHex: string;
   identityHex: string;
   destinationKind: AnnounceDestinationKind;
+  announceClass: AnnounceClass;
   appData: string;
+  displayName?: string;
   hops: number;
   interfaceHex: string;
   receivedAtMs: number;
@@ -104,6 +119,7 @@ export interface AnnounceRecord {
   destinationHex: string;
   identityHex: string;
   destinationKind: AnnounceDestinationKind;
+  announceClass: AnnounceClass;
   appData: string;
   displayName?: string;
   hops: number;
@@ -348,6 +364,90 @@ export interface TelemetryPositionRecord {
   updatedAt: number;
 }
 
+export interface SosSettingsRecord {
+  enabled: boolean;
+  messageTemplate: string;
+  cancelMessageTemplate: string;
+  countdownSeconds: number;
+  includeLocation: boolean;
+  triggerShake: boolean;
+  triggerTapPattern: boolean;
+  triggerPowerButton: boolean;
+  shakeSensitivity: number;
+  audioRecording: boolean;
+  audioDurationSeconds: number;
+  periodicUpdates: boolean;
+  updateIntervalSeconds: number;
+  floatingButton: boolean;
+  silentAutoAnswer: boolean;
+  deactivationPinHash?: string;
+  deactivationPinSalt?: string;
+  floatingButtonX: number;
+  floatingButtonY: number;
+  activePillX: number;
+  activePillY: number;
+}
+
+export interface SosDeviceTelemetryRecord {
+  lat?: number;
+  lon?: number;
+  alt?: number;
+  speed?: number;
+  course?: number;
+  accuracy?: number;
+  batteryPercent?: number;
+  batteryCharging?: boolean;
+  updatedAtMs: number;
+}
+
+export interface SosStatusRecord {
+  state: SosState;
+  incidentId?: string;
+  triggerSource?: SosTriggerSource;
+  countdownDeadlineMs?: number;
+  activatedAtMs?: number;
+  lastSentAtMs?: number;
+  lastUpdateAtMs?: number;
+  updatedAtMs: number;
+}
+
+export interface SosAlertRecord {
+  incidentId: string;
+  sourceHex: string;
+  conversationId: string;
+  state: SosMessageKind;
+  active: boolean;
+  bodyUtf8: string;
+  lat?: number;
+  lon?: number;
+  batteryPercent?: number;
+  audioId?: string;
+  messageIdHex?: string;
+  receivedAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface SosLocationRecord {
+  incidentId: string;
+  sourceHex: string;
+  lat: number;
+  lon: number;
+  alt?: number;
+  accuracy?: number;
+  batteryPercent?: number;
+  recordedAtMs: number;
+}
+
+export interface SosAudioRecord {
+  audioId: string;
+  incidentId: string;
+  sourceHex: string;
+  path: string;
+  mimeType: string;
+  durationSeconds: number;
+  createdAtMs: number;
+}
+
 export interface LegacyImportPayload {
   settings?: AppSettingsRecord;
   savedPeers: SavedPeerRecord[];
@@ -390,6 +490,12 @@ export interface NodeLogEvent {
   message: string;
 }
 
+export interface NodeOperationalNoticeEvent {
+  level: LogLevel;
+  message: string;
+  atMs: number;
+}
+
 export interface NodeErrorEvent {
   code: string;
   message: string;
@@ -407,7 +513,12 @@ export interface NodeClientEvents {
   messageUpdated: MessageRecord;
   syncUpdated: SyncStatus;
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
+  operationalNotice: NodeOperationalNoticeEvent;
   projectionInvalidated: ProjectionInvalidationEvent;
+  sosStatusChanged: { status: SosStatusRecord };
+  sosAlertChanged: { alert: SosAlertRecord };
+  sosTelemetryRequested: Record<string, never>;
+  sosAudioRecordingRequested: { incidentId: string; durationSeconds: number };
   log: NodeLogEvent;
   error: NodeErrorEvent;
 }
@@ -451,6 +562,16 @@ export interface ReticulumNodeClient {
   getTelemetryPositions(): Promise<TelemetryPositionRecord[]>;
   recordLocalTelemetryFix(position: TelemetryPositionRecord): Promise<void>;
   deleteLocalTelemetry(callsign: string): Promise<void>;
+  getSosSettings(): Promise<SosSettingsRecord>;
+  setSosSettings(settings: SosSettingsRecord): Promise<void>;
+  setSosPin(pin?: string): Promise<void>;
+  getSosStatus(): Promise<SosStatusRecord>;
+  triggerSos(source?: SosTriggerSource): Promise<SosStatusRecord>;
+  deactivateSos(pin?: string): Promise<SosStatusRecord>;
+  submitSosTelemetry(telemetry: SosDeviceTelemetryRecord): Promise<void>;
+  listSosAlerts(): Promise<SosAlertRecord[]>;
+  listSosLocations(): Promise<SosLocationRecord[]>;
+  listSosAudio(): Promise<SosAudioRecord[]>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -475,6 +596,33 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Autonomous",
   hubRefreshIntervalSeconds: 3600,
+};
+
+export const DEFAULT_SOS_SETTINGS: SosSettingsRecord = {
+  enabled: false,
+  messageTemplate: "SOS! I need help...",
+  cancelMessageTemplate: "SOS Cancelled - I am safe.",
+  countdownSeconds: 5,
+  includeLocation: true,
+  triggerShake: false,
+  triggerTapPattern: false,
+  triggerPowerButton: false,
+  shakeSensitivity: 2.5,
+  audioRecording: false,
+  audioDurationSeconds: 30,
+  periodicUpdates: false,
+  updateIntervalSeconds: 120,
+  floatingButton: false,
+  silentAutoAnswer: false,
+  floatingButtonX: 24,
+  floatingButtonY: 440,
+  activePillX: 24,
+  activePillY: 24,
+};
+
+export const DEFAULT_SOS_STATUS: SosStatusRecord = {
+  state: "Idle",
+  updatedAtMs: 0,
 };
 
 type ListenerFn<T> = (payload: T) => void;
@@ -571,6 +719,16 @@ interface ReticulumNodePlugin {
   getTelemetryPositions(): Promise<{ items: Record<string, unknown>[] }>;
   recordLocalTelemetryFix(options: { position: Record<string, unknown> }): Promise<void>;
   deleteLocalTelemetry(options: { callsign: string }): Promise<void>;
+  getSosSettings(): Promise<Record<string, unknown>>;
+  setSosSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  setSosPin(options: { pin?: string }): Promise<void>;
+  getSosStatus(): Promise<Record<string, unknown>>;
+  triggerSos(options: { source?: SosTriggerSource }): Promise<Record<string, unknown>>;
+  deactivateSos(options: { pin?: string }): Promise<Record<string, unknown>>;
+  submitSosTelemetry(options: { telemetry: Record<string, unknown> }): Promise<void>;
+  listSosAlerts(): Promise<{ items: Record<string, unknown>[] }>;
+  listSosLocations(): Promise<{ items: Record<string, unknown>[] }>;
+  listSosAudio(): Promise<{ items: Record<string, unknown>[] }>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -725,6 +883,16 @@ function toAnnounceReceivedEvent(
       || destinationKindRaw === "lxmf_propagation"
       ? destinationKindRaw
       : "other";
+  const announceClassRaw = String(
+    raw.announceClass ?? raw.announce_class ?? "Other",
+  );
+  const announceClass: AnnounceClass =
+    announceClassRaw === "PeerApp"
+      || announceClassRaw === "RchHubServer"
+      || announceClassRaw === "PropagationNode"
+      || announceClassRaw === "LxmfDelivery"
+      ? announceClassRaw
+      : "Other";
   return {
     destinationHex: normalizeHex(
       String(raw.destinationHex ?? raw.destination_hex ?? ""),
@@ -733,7 +901,14 @@ function toAnnounceReceivedEvent(
       String(raw.identityHex ?? raw.identity_hex ?? ""),
     ),
     destinationKind,
+    announceClass,
     appData: String(raw.appData ?? raw.app_data ?? ""),
+    displayName:
+      typeof raw.displayName === "string"
+        ? raw.displayName
+        : typeof raw.display_name === "string"
+          ? raw.display_name
+          : undefined,
     hops: Number(raw.hops ?? 0),
     interfaceHex: String(raw.interfaceHex ?? raw.interface_hex ?? ""),
     receivedAtMs: Number(raw.receivedAtMs ?? raw.received_at_ms ?? Date.now()),
@@ -1022,38 +1197,75 @@ function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
 }
 
 function toMessageMethod(raw: unknown): MessageMethod {
-  const value = String(raw ?? "");
-  const valid: MessageMethod[] = ["Direct", "Opportunistic", "Propagated", "Resource"];
-  return valid.includes(value as MessageMethod) ? (value as MessageMethod) : "Direct";
+  switch (String(raw ?? "").trim().toLowerCase()) {
+    case "direct":
+      return "Direct";
+    case "opportunistic":
+      return "Opportunistic";
+    case "propagated":
+      return "Propagated";
+    case "resource":
+      return "Resource";
+    default:
+      return "Direct";
+  }
 }
 
 function toMessageState(raw: unknown): MessageState {
-  const value = String(raw ?? "");
-  const valid: MessageState[] = [
-    "Queued",
-    "PathRequested",
-    "LinkEstablishing",
-    "Sending",
-    "SentDirect",
-    "SentToPropagation",
-    "Delivered",
-    "Failed",
-    "TimedOut",
-    "Cancelled",
-    "Received",
-  ];
-  return valid.includes(value as MessageState) ? (value as MessageState) : "Failed";
+  const value = String(raw ?? "").trim().toLowerCase();
+  switch (value) {
+    case "queued":
+      return "Queued";
+    case "pathrequested":
+    case "path-requested":
+      return "PathRequested";
+    case "linkestablishing":
+    case "link-establishing":
+      return "LinkEstablishing";
+    case "sending":
+      return "Sending";
+    case "sentdirect":
+    case "sent-direct":
+      return "SentDirect";
+    case "senttopropagation":
+    case "sent-to-propagation":
+      return "SentToPropagation";
+    case "delivered":
+      return "Delivered";
+    case "failed":
+      return "Failed";
+    case "timedout":
+    case "timed-out":
+      return "TimedOut";
+    case "cancelled":
+    case "canceled":
+      return "Cancelled";
+    case "received":
+      return "Received";
+    default:
+      return "Queued";
+  }
 }
 
-function toMessageDirection(raw: unknown): MessageDirection {
-  return String(raw ?? "") === "Inbound" ? "Inbound" : "Outbound";
+function toMessageDirection(raw: unknown, record?: Record<string, unknown>): MessageDirection {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "inbound") {
+    return "Inbound";
+  }
+  if (value === "outbound") {
+    return "Outbound";
+  }
+  const state = String(record?.state ?? "").trim().toLowerCase();
+  const hasReceivedAt = record?.receivedAtMs !== undefined || record?.received_at_ms !== undefined;
+  const hasSentAt = record?.sentAtMs !== undefined || record?.sent_at_ms !== undefined;
+  return state === "received" || (hasReceivedAt && !hasSentAt) ? "Inbound" : "Outbound";
 }
 
 function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
   return {
     messageIdHex: normalizeHex(String(raw.messageIdHex ?? raw.message_id_hex ?? "")),
     conversationId: String(raw.conversationId ?? raw.conversation_id ?? ""),
-    direction: toMessageDirection(raw.direction),
+    direction: toMessageDirection(raw.direction, raw),
     destinationHex: normalizeHex(String(raw.destinationHex ?? raw.destination_hex ?? "")),
     sourceHex:
       raw.sourceHex !== undefined || raw.source_hex !== undefined
@@ -1207,6 +1419,16 @@ function toLogEvent(raw: Record<string, unknown>): NodeLogEvent {
   return {
     level: (String(raw.level ?? "Info") as LogLevel) ?? "Info",
     message: String(raw.message ?? ""),
+  };
+}
+
+function toOperationalNoticeEvent(
+  raw: Record<string, unknown>,
+): NodeOperationalNoticeEvent {
+  return {
+    level: (String(raw.level ?? "Info") as LogLevel) ?? "Info",
+    message: String(raw.message ?? ""),
+    atMs: Number(raw.atMs ?? raw.at_ms ?? Date.now()),
   };
 }
 
@@ -1559,6 +1781,151 @@ function toTelemetryPositionRecord(raw: Record<string, unknown>): TelemetryPosit
   };
 }
 
+function toSosState(value: unknown): SosState {
+  const normalized = String(value ?? "Idle");
+  return normalized === "Countdown" || normalized === "Sending" || normalized === "Active"
+    ? normalized
+    : "Idle";
+}
+
+function toSosTriggerSource(value: unknown): SosTriggerSource | undefined {
+  const normalized = String(value ?? "");
+  if (
+    normalized === "Manual"
+    || normalized === "FloatingButton"
+    || normalized === "Shake"
+    || normalized === "TapPattern"
+    || normalized === "PowerButton"
+    || normalized === "Restore"
+    || normalized === "Remote"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function toSosMessageKind(value: unknown): SosMessageKind {
+  const normalized = String(value ?? "Active");
+  return normalized === "Update" || normalized === "Cancelled" ? normalized : "Active";
+}
+
+function toSosSettingsRecord(raw: Record<string, unknown>): SosSettingsRecord {
+  return {
+    ...DEFAULT_SOS_SETTINGS,
+    enabled: Boolean(raw.enabled),
+    messageTemplate: String(raw.messageTemplate ?? raw.message_template ?? DEFAULT_SOS_SETTINGS.messageTemplate),
+    cancelMessageTemplate: String(raw.cancelMessageTemplate ?? raw.cancel_message_template ?? DEFAULT_SOS_SETTINGS.cancelMessageTemplate),
+    countdownSeconds: Number(raw.countdownSeconds ?? raw.countdown_seconds ?? DEFAULT_SOS_SETTINGS.countdownSeconds),
+    includeLocation: Boolean(raw.includeLocation ?? raw.include_location ?? DEFAULT_SOS_SETTINGS.includeLocation),
+    triggerShake: Boolean(raw.triggerShake ?? raw.trigger_shake),
+    triggerTapPattern: Boolean(raw.triggerTapPattern ?? raw.trigger_tap_pattern),
+    triggerPowerButton: Boolean(raw.triggerPowerButton ?? raw.trigger_power_button),
+    shakeSensitivity: Number(raw.shakeSensitivity ?? raw.shake_sensitivity ?? DEFAULT_SOS_SETTINGS.shakeSensitivity),
+    audioRecording: Boolean(raw.audioRecording ?? raw.audio_recording),
+    audioDurationSeconds: Number(raw.audioDurationSeconds ?? raw.audio_duration_seconds ?? DEFAULT_SOS_SETTINGS.audioDurationSeconds),
+    periodicUpdates: Boolean(raw.periodicUpdates ?? raw.periodic_updates),
+    updateIntervalSeconds: Number(raw.updateIntervalSeconds ?? raw.update_interval_seconds ?? DEFAULT_SOS_SETTINGS.updateIntervalSeconds),
+    floatingButton: Boolean(raw.floatingButton ?? raw.floating_button),
+    silentAutoAnswer: Boolean(raw.silentAutoAnswer ?? raw.silent_auto_answer),
+    deactivationPinHash: typeof raw.deactivationPinHash === "string" ? raw.deactivationPinHash : typeof raw.deactivation_pin_hash === "string" ? raw.deactivation_pin_hash : undefined,
+    deactivationPinSalt: typeof raw.deactivationPinSalt === "string" ? raw.deactivationPinSalt : typeof raw.deactivation_pin_salt === "string" ? raw.deactivation_pin_salt : undefined,
+    floatingButtonX: Number(raw.floatingButtonX ?? raw.floating_button_x ?? DEFAULT_SOS_SETTINGS.floatingButtonX),
+    floatingButtonY: Number(raw.floatingButtonY ?? raw.floating_button_y ?? DEFAULT_SOS_SETTINGS.floatingButtonY),
+    activePillX: Number(raw.activePillX ?? raw.active_pill_x ?? DEFAULT_SOS_SETTINGS.activePillX),
+    activePillY: Number(raw.activePillY ?? raw.active_pill_y ?? DEFAULT_SOS_SETTINGS.activePillY),
+  };
+}
+
+function toSosStatusRecord(raw: Record<string, unknown>): SosStatusRecord {
+  const nested = raw.status;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return toSosStatusRecord(nested as Record<string, unknown>);
+  }
+  return {
+    state: toSosState(raw.state),
+    incidentId: typeof raw.incidentId === "string" ? raw.incidentId : typeof raw.incident_id === "string" ? raw.incident_id : undefined,
+    triggerSource: toSosTriggerSource(raw.triggerSource ?? raw.trigger_source),
+    countdownDeadlineMs: toOptionalNumber(raw.countdownDeadlineMs ?? raw.countdown_deadline_ms),
+    activatedAtMs: toOptionalNumber(raw.activatedAtMs ?? raw.activated_at_ms),
+    lastSentAtMs: toOptionalNumber(raw.lastSentAtMs ?? raw.last_sent_at_ms),
+    lastUpdateAtMs: toOptionalNumber(raw.lastUpdateAtMs ?? raw.last_update_at_ms),
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
+  };
+}
+
+function toSosAlertRecord(raw: Record<string, unknown>): SosAlertRecord {
+  const nested = raw.alert;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return toSosAlertRecord(nested as Record<string, unknown>);
+  }
+  return {
+    incidentId: String(raw.incidentId ?? raw.incident_id ?? ""),
+    sourceHex: normalizeHex(raw.sourceHex ?? raw.source_hex),
+    conversationId: String(raw.conversationId ?? raw.conversation_id ?? ""),
+    state: toSosMessageKind(raw.state),
+    active: Boolean(raw.active ?? true),
+    bodyUtf8: String(raw.bodyUtf8 ?? raw.body_utf8 ?? ""),
+    lat: toOptionalNumber(raw.lat),
+    lon: toOptionalNumber(raw.lon),
+    batteryPercent: toOptionalNumber(raw.batteryPercent ?? raw.battery_percent),
+    audioId: typeof raw.audioId === "string" ? raw.audioId : typeof raw.audio_id === "string" ? raw.audio_id : undefined,
+    messageIdHex: toOptionalHex(raw.messageIdHex ?? raw.message_id_hex),
+    receivedAtMs: Number(raw.receivedAtMs ?? raw.received_at_ms ?? Date.now()),
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? Date.now()),
+  };
+}
+
+function toSosLocationRecord(raw: Record<string, unknown>): SosLocationRecord {
+  return {
+    incidentId: String(raw.incidentId ?? raw.incident_id ?? ""),
+    sourceHex: normalizeHex(raw.sourceHex ?? raw.source_hex),
+    lat: Number(raw.lat ?? 0),
+    lon: Number(raw.lon ?? 0),
+    alt: toOptionalNumber(raw.alt),
+    accuracy: toOptionalNumber(raw.accuracy),
+    batteryPercent: toOptionalNumber(raw.batteryPercent ?? raw.battery_percent),
+    recordedAtMs: Number(raw.recordedAtMs ?? raw.recorded_at_ms ?? Date.now()),
+  };
+}
+
+function toSosAudioRecord(raw: Record<string, unknown>): SosAudioRecord {
+  return {
+    audioId: String(raw.audioId ?? raw.audio_id ?? ""),
+    incidentId: String(raw.incidentId ?? raw.incident_id ?? ""),
+    sourceHex: normalizeHex(raw.sourceHex ?? raw.source_hex),
+    path: String(raw.path ?? ""),
+    mimeType: String(raw.mimeType ?? raw.mime_type ?? "audio/mp4"),
+    durationSeconds: Number(raw.durationSeconds ?? raw.duration_seconds ?? 0),
+    createdAtMs: Number(raw.createdAtMs ?? raw.created_at_ms ?? Date.now()),
+  };
+}
+
+function sosSettingsToPlugin(settings: SosSettingsRecord): Record<string, unknown> {
+  return {
+    enabled: settings.enabled,
+    messageTemplate: settings.messageTemplate,
+    cancelMessageTemplate: settings.cancelMessageTemplate,
+    countdownSeconds: settings.countdownSeconds,
+    includeLocation: settings.includeLocation,
+    triggerShake: settings.triggerShake,
+    triggerTapPattern: settings.triggerTapPattern,
+    triggerPowerButton: settings.triggerPowerButton,
+    shakeSensitivity: settings.shakeSensitivity,
+    audioRecording: settings.audioRecording,
+    audioDurationSeconds: settings.audioDurationSeconds,
+    periodicUpdates: settings.periodicUpdates,
+    updateIntervalSeconds: settings.updateIntervalSeconds,
+    floatingButton: settings.floatingButton,
+    silentAutoAnswer: settings.silentAutoAnswer,
+    deactivationPinHash: settings.deactivationPinHash,
+    deactivationPinSalt: settings.deactivationPinSalt,
+    floatingButtonX: settings.floatingButtonX,
+    floatingButtonY: settings.floatingButtonY,
+    activePillX: settings.activePillX,
+    activePillY: settings.activePillY,
+  };
+}
+
 function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary {
   return {
     running: Boolean(raw.running),
@@ -1640,7 +2007,15 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("messageUpdated", toMessageRecord);
       await register("syncUpdated", toSyncStatus);
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
+      await register("operationalNotice", toOperationalNoticeEvent);
       await register("projectionInvalidated", toProjectionInvalidationEvent);
+      await register("sosStatusChanged", (raw) => ({ status: toSosStatusRecord(raw) }));
+      await register("sosAlertChanged", (raw) => ({ alert: toSosAlertRecord(raw) }));
+      await register("sosTelemetryRequested", () => ({}));
+      await register("sosAudioRecordingRequested", (raw) => ({
+        incidentId: String(raw.incidentId ?? raw.incident_id ?? ""),
+        durationSeconds: Number(raw.durationSeconds ?? raw.duration_seconds ?? 0),
+      }));
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
     })().catch((error) => {
@@ -1878,6 +2253,59 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.deleteLocalTelemetry({ callsign });
   }
 
+  async getSosSettings(): Promise<SosSettingsRecord> {
+    await this.ready();
+    return toSosSettingsRecord(await this.plugin.getSosSettings());
+  }
+
+  async setSosSettings(settings: SosSettingsRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.setSosSettings({ settings: sosSettingsToPlugin(settings) });
+  }
+
+  async setSosPin(pin?: string): Promise<void> {
+    await this.ready();
+    await this.plugin.setSosPin({ pin });
+  }
+
+  async getSosStatus(): Promise<SosStatusRecord> {
+    await this.ready();
+    return toSosStatusRecord(await this.plugin.getSosStatus());
+  }
+
+  async triggerSos(source: SosTriggerSource = "Manual"): Promise<SosStatusRecord> {
+    await this.ready();
+    return toSosStatusRecord(await this.plugin.triggerSos({ source }));
+  }
+
+  async deactivateSos(pin?: string): Promise<SosStatusRecord> {
+    await this.ready();
+    return toSosStatusRecord(await this.plugin.deactivateSos({ pin }));
+  }
+
+  async submitSosTelemetry(telemetry: SosDeviceTelemetryRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.submitSosTelemetry({ telemetry: telemetry as unknown as Record<string, unknown> });
+  }
+
+  async listSosAlerts(): Promise<SosAlertRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listSosAlerts();
+    return Array.isArray(result.items) ? result.items.map(toSosAlertRecord) : [];
+  }
+
+  async listSosLocations(): Promise<SosLocationRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listSosLocations();
+    return Array.isArray(result.items) ? result.items.map(toSosLocationRecord) : [];
+  }
+
+  async listSosAudio(): Promise<SosAudioRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listSosAudio();
+    return Array.isArray(result.items) ? result.items.map(toSosAudioRecord) : [];
+  }
+
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
     await this.ready();
     await this.plugin.setAnnounceCapabilities({ capabilityString });
@@ -1928,6 +2356,11 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   };
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
+  private sosSettings: SosSettingsRecord = { ...DEFAULT_SOS_SETTINGS };
+  private sosStatus: SosStatusRecord = { ...DEFAULT_SOS_STATUS };
+  private readonly sosAlerts: SosAlertRecord[] = [];
+  private readonly sosLocations: SosLocationRecord[] = [];
+  private readonly sosAudio: SosAudioRecord[] = [];
 
   private currentPeerRecords(): PeerRecord[] {
     const destinations = new Set<string>([
@@ -2173,6 +2606,41 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
   async deleteLocalTelemetry(_callsign: string): Promise<void> {}
 
+  async getSosSettings(): Promise<SosSettingsRecord> { return { ...this.sosSettings }; }
+  async setSosSettings(settings: SosSettingsRecord): Promise<void> {
+    this.sosSettings = { ...settings };
+    this.emitter.emit("projectionInvalidated", {
+      scope: "Sos",
+      revision: Date.now(),
+      updatedAtMs: Date.now(),
+      reason: "webSettings",
+    });
+  }
+  async setSosPin(_pin?: string): Promise<void> {}
+  async getSosStatus(): Promise<SosStatusRecord> { return { ...this.sosStatus }; }
+  async triggerSos(source: SosTriggerSource = "Manual"): Promise<SosStatusRecord> {
+    const now = Date.now();
+    this.sosStatus = {
+      state: "Active",
+      incidentId: `web-${now}`,
+      triggerSource: source,
+      activatedAtMs: now,
+      lastSentAtMs: now,
+      updatedAtMs: now,
+    };
+    this.emitter.emit("sosStatusChanged", { status: { ...this.sosStatus } });
+    return { ...this.sosStatus };
+  }
+  async deactivateSos(_pin?: string): Promise<SosStatusRecord> {
+    this.sosStatus = { state: "Idle", updatedAtMs: Date.now() };
+    this.emitter.emit("sosStatusChanged", { status: { ...this.sosStatus } });
+    return { ...this.sosStatus };
+  }
+  async submitSosTelemetry(_telemetry: SosDeviceTelemetryRecord): Promise<void> {}
+  async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
+  async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
+  async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
   }
@@ -2261,6 +2729,11 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   private announceTimer: number | null = null;
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
+  private sosSettings: SosSettingsRecord = { ...DEFAULT_SOS_SETTINGS };
+  private sosStatus: SosStatusRecord = { ...DEFAULT_SOS_STATUS };
+  private readonly sosAlerts: SosAlertRecord[] = [];
+  private readonly sosLocations: SosLocationRecord[] = [];
+  private readonly sosAudio: SosAudioRecord[] = [];
 
   private currentPeerRecords(): PeerRecord[] {
     const destinations = new Set<string>([
@@ -2284,11 +2757,13 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     appData: string,
     identityHex = randomHex32(),
     destinationKind: AnnounceDestinationKind = "app",
+    announceClass: AnnounceClass = "PeerApp",
   ): void {
     this.emitter.emit("announceReceived", {
       destinationHex,
       identityHex,
       destinationKind,
+      announceClass,
       appData,
       hops: Math.max(1, Math.floor(Math.random() * 3)),
       interfaceHex: randomHex32(),
@@ -2562,6 +3037,41 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
   async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
   async deleteLocalTelemetry(_callsign: string): Promise<void> {}
+
+  async getSosSettings(): Promise<SosSettingsRecord> { return { ...this.sosSettings }; }
+  async setSosSettings(settings: SosSettingsRecord): Promise<void> {
+    this.sosSettings = { ...settings };
+    this.emitter.emit("projectionInvalidated", {
+      scope: "Sos",
+      revision: Date.now(),
+      updatedAtMs: Date.now(),
+      reason: "mockSettings",
+    });
+  }
+  async setSosPin(_pin?: string): Promise<void> {}
+  async getSosStatus(): Promise<SosStatusRecord> { return { ...this.sosStatus }; }
+  async triggerSos(source: SosTriggerSource = "Manual"): Promise<SosStatusRecord> {
+    const now = Date.now();
+    this.sosStatus = {
+      state: "Active",
+      incidentId: `mock-${now}`,
+      triggerSource: source,
+      activatedAtMs: now,
+      lastSentAtMs: now,
+      updatedAtMs: now,
+    };
+    this.emitter.emit("sosStatusChanged", { status: { ...this.sosStatus } });
+    return { ...this.sosStatus };
+  }
+  async deactivateSos(_pin?: string): Promise<SosStatusRecord> {
+    this.sosStatus = { state: "Idle", updatedAtMs: Date.now() };
+    this.emitter.emit("sosStatusChanged", { status: { ...this.sosStatus } });
+    return { ...this.sosStatus };
+  }
+  async submitSosTelemetry(_telemetry: SosDeviceTelemetryRecord): Promise<void> {}
+  async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
+  async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
+  async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });

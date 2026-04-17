@@ -11,6 +11,8 @@ enum HubMode { "Autonomous", "SemiAutonomous", "Connected" };
 
 enum PeerState { "Connecting", "Connected", "Disconnected" };
 
+enum AnnounceClass { "PeerApp", "RchHubServer", "PropagationNode", "LxmfDelivery", "Other" };
+
 enum SendOutcome {
   "SentDirect",
   "SentBroadcast",
@@ -48,6 +50,20 @@ enum MessageState {
 
 enum MessageDirection { "Inbound", "Outbound" };
 
+enum SosState { "Idle", "Countdown", "Sending", "Active" };
+
+enum SosTriggerSource {
+  "Manual",
+  "FloatingButton",
+  "Shake",
+  "TapPattern",
+  "PowerButton",
+  "Restore",
+  "Remote"
+};
+
+enum SosMessageKind { "Active", "Update", "Cancelled" };
+
 enum SyncPhase {
   "Idle",
   "PathRequested",
@@ -69,7 +85,8 @@ enum ProjectionScope {
   "Events",
   "Conversations",
   "Messages",
-  "Telemetry"
+  "Telemetry",
+  "Sos"
 };
 
 // Error surface.
@@ -173,6 +190,7 @@ dictionary AnnounceRecord {
   string destination_hex;
   string identity_hex;
   string destination_kind;
+  AnnounceClass announce_class;
   string app_data;
   string? display_name;
   u8 hops;
@@ -365,6 +383,90 @@ dictionary TelemetryPositionRecord {
   u64 updated_at_ms;
 };
 
+dictionary SosSettingsRecord {
+  boolean enabled;
+  string message_template;
+  string cancel_message_template;
+  u32 countdown_seconds;
+  boolean include_location;
+  boolean trigger_shake;
+  boolean trigger_tap_pattern;
+  boolean trigger_power_button;
+  f64 shake_sensitivity;
+  boolean audio_recording;
+  u32 audio_duration_seconds;
+  boolean periodic_updates;
+  u32 update_interval_seconds;
+  boolean floating_button;
+  boolean silent_auto_answer;
+  string? deactivation_pin_hash;
+  string? deactivation_pin_salt;
+  f64 floating_button_x;
+  f64 floating_button_y;
+  f64 active_pill_x;
+  f64 active_pill_y;
+};
+
+dictionary SosDeviceTelemetryRecord {
+  f64? lat;
+  f64? lon;
+  f64? alt;
+  f64? speed;
+  f64? course;
+  f64? accuracy;
+  f64? battery_percent;
+  boolean? battery_charging;
+  u64 updated_at_ms;
+};
+
+dictionary SosStatusRecord {
+  SosState state;
+  string? incident_id;
+  SosTriggerSource? trigger_source;
+  u64? countdown_deadline_ms;
+  u64? activated_at_ms;
+  u64? last_sent_at_ms;
+  u64? last_update_at_ms;
+  u64 updated_at_ms;
+};
+
+dictionary SosAlertRecord {
+  string incident_id;
+  string source_hex;
+  string conversation_id;
+  SosMessageKind state;
+  boolean active;
+  string body_utf8;
+  f64? lat;
+  f64? lon;
+  f64? battery_percent;
+  string? audio_id;
+  string? message_id_hex;
+  u64 received_at_ms;
+  u64 updated_at_ms;
+};
+
+dictionary SosLocationRecord {
+  string incident_id;
+  string source_hex;
+  f64 lat;
+  f64 lon;
+  f64? alt;
+  f64? accuracy;
+  f64? battery_percent;
+  u64 recorded_at_ms;
+};
+
+dictionary SosAudioRecord {
+  string audio_id;
+  string incident_id;
+  string source_hex;
+  string path;
+  string mime_type;
+  u32 duration_seconds;
+  u64 created_at_ms;
+};
+
 dictionary LegacyImportPayload {
   AppSettingsRecord? settings;
   sequence<SavedPeerRecord> saved_peers;
@@ -396,6 +498,12 @@ dictionary OperationalSummary {
   u64 updated_at_ms;
 };
 
+dictionary OperationalNotice {
+  LogLevel level;
+  string message;
+  u64 at_ms;
+};
+
 // Event stream from the node to the UI.
 [Enum]
 interface NodeEvent {
@@ -404,7 +512,9 @@ interface NodeEvent {
     string destination_hex,
     string identity_hex,
     string destination_kind,
+    AnnounceClass announce_class,
     string app_data,
+    string? display_name,
     u8 hops,
     string interface_hex,
     u64 received_at_ms
@@ -418,7 +528,12 @@ interface NodeEvent {
   MessageUpdated(MessageRecord message);
   SyncUpdated(SyncStatus status);
   HubDirectoryUpdated(HubDirectorySnapshot snapshot);
+  OperationalNotice(OperationalNotice notice);
   ProjectionInvalidated(ProjectionInvalidation invalidation);
+  SosStatusChanged(SosStatusRecord status);
+  SosAlertChanged(SosAlertRecord alert);
+  SosTelemetryRequested();
+  SosAudioRecordingRequested(string incident_id, u32 duration_seconds);
   Log(LogLevel level, string message);
   Error(string code, string message);
 };
@@ -516,6 +631,30 @@ interface Node {
   void record_local_telemetry_fix(TelemetryPositionRecord position);
   [Throws=NodeError]
   void delete_local_telemetry(string callsign);
+  [Throws=NodeError]
+  SosSettingsRecord get_sos_settings();
+  [Throws=NodeError]
+  void set_sos_settings(SosSettingsRecord settings);
+  [Throws=NodeError]
+  void set_sos_pin(string? pin);
+  [Throws=NodeError]
+  SosStatusRecord get_sos_status();
+  [Throws=NodeError]
+  SosStatusRecord trigger_sos(SosTriggerSource source);
+  [Throws=NodeError]
+  SosStatusRecord deactivate_sos(string? pin);
+  [Throws=NodeError]
+  void submit_sos_device_telemetry(SosDeviceTelemetryRecord telemetry);
+  [Throws=NodeError]
+  SosStatusRecord? submit_sos_accelerometer_sample(f64 x, f64 y, f64 z, u64 at_ms);
+  [Throws=NodeError]
+  SosStatusRecord? submit_sos_screen_event(u64 at_ms);
+  [Throws=NodeError]
+  sequence<SosAlertRecord> list_sos_alerts();
+  [Throws=NodeError]
+  sequence<SosLocationRecord> list_sos_locations();
+  [Throws=NodeError]
+  sequence<SosAudioRecord> list_sos_audio();
 
   [Throws=NodeError]
   void set_announce_capabilities(string capability_string);

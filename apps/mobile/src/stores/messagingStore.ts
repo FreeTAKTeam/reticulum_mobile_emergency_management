@@ -10,6 +10,7 @@ import { computed, ref } from "vue";
 
 import {
   notifyOperationalUpdateOnce,
+  primeOperationalNotificationScope,
   truncateNotificationBody,
 } from "../services/operationalNotifications";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
@@ -189,10 +190,13 @@ export const useMessagingStore = defineStore("messaging", () => {
   const byMessageId = ref<StoredMessages>({});
   const nativeConversations = ref<ConversationRecord[]>([]);
   const selectedConversationId = ref<string>("");
+  const selectedTargetMessageId = ref<string>("");
   const pendingConversation = ref<ConversationListItem | null>(null);
   const initialized = ref(false);
+  const hydrated = ref(false);
   const cleanups: Array<() => void> = [];
 
+  let initPromise: Promise<void> | null = null;
   let conversationsRefreshPromise: Promise<void> | null = null;
   let messagesRefreshPromise: Promise<void> | null = null;
   let conversationsRefreshQueued = false;
@@ -390,7 +394,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   }
 
   async function refreshConversations(): Promise<void> {
-    if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
+    if (!supportsNativeNodeRuntime) {
       return;
     }
     if (conversationsRefreshPromise) {
@@ -442,7 +446,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   }
 
   async function refreshMessages(conversationId = selectedConversationId.value): Promise<void> {
-    if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
+    if (!supportsNativeNodeRuntime) {
       return;
     }
     const requestedConversationId = conversationId.trim();
@@ -491,6 +495,32 @@ export const useMessagingStore = defineStore("messaging", () => {
     await refreshMessages();
   }
 
+  async function hydrateStartupHistory(): Promise<void> {
+    if (!supportsNativeNodeRuntime) {
+      byMessageId.value = loadWebMessages();
+      hydrated.value = true;
+      return;
+    }
+
+    const client = getProjectionClient(nodeStore.settings.clientMode);
+    await refreshConversations();
+    const items = await client.listMessages(undefined);
+    mergeFetchedMessages("", items);
+    primeOperationalNotificationScope(
+      "chat",
+      items
+        .filter((message) => message.direction === "Inbound")
+        .map((message) => chatNotificationKey(message)),
+    );
+    if (!selectedConversationId.value && nativeConversations.value.length > 0) {
+      selectedConversationId.value = nativeConversations.value[0].conversationId;
+    }
+    if (selectedConversationId.value) {
+      await refreshMessages(selectedConversationId.value);
+    }
+    hydrated.value = true;
+  }
+
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
     if (event.scope === "Conversations") {
       void refreshConversations();
@@ -502,31 +532,41 @@ export const useMessagingStore = defineStore("messaging", () => {
     }
   }
 
-  function init(): void {
+  async function init(): Promise<void> {
+    if (initPromise) {
+      return initPromise;
+    }
     if (initialized.value) {
       return;
     }
-    initialized.value = true;
 
-    if (!supportsNativeNodeRuntime) {
-      byMessageId.value = loadWebMessages();
-      return;
-    }
+    initPromise = (async () => {
+      initialized.value = true;
 
-    const client = getProjectionClient(nodeStore.settings.clientMode);
-    cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
-    cleanups.push(client.on("statusChanged", () => {
-      void refreshAll();
-    }));
-    cleanups.push(client.on("messageReceived", (message) => {
-      void syncConversationStateForMessage(message);
-      void notifyForInboundMessage(message);
-    }));
-    cleanups.push(client.on("messageUpdated", (message) => {
-      void syncConversationStateForMessage(message);
-      void notifyForInboundMessage(message);
-    }));
-    void refreshAll();
+      if (!supportsNativeNodeRuntime) {
+        await hydrateStartupHistory();
+        return;
+      }
+
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
+      cleanups.push(client.on("statusChanged", () => {
+        void refreshAll();
+      }));
+      cleanups.push(client.on("messageReceived", (message) => {
+        void syncConversationStateForMessage(message);
+        void notifyForInboundMessage(message);
+      }));
+      cleanups.push(client.on("messageUpdated", (message) => {
+        void syncConversationStateForMessage(message);
+        void notifyForInboundMessage(message);
+      }));
+      await hydrateStartupHistory();
+    })().finally(() => {
+      initPromise = null;
+    });
+
+    return initPromise;
   }
 
   function dispose(): void {
@@ -546,6 +586,11 @@ export const useMessagingStore = defineStore("messaging", () => {
       chatNotificationKey(message),
       `Message from ${displayName}`,
       truncateNotificationBody(safeMessageBody(message) || "(empty message)"),
+      {
+        route: "/inbox",
+        conversationId: message.conversationId,
+        messageIdHex: message.messageIdHex,
+      },
     );
   }
 
@@ -638,9 +683,28 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   function selectConversation(conversationId: string): void {
     selectedConversationId.value = conversationId;
+    selectedTargetMessageId.value = "";
     if (supportsNativeNodeRuntime && !isDraftConversationId(conversationId)) {
       void refreshMessages(conversationId);
     }
+  }
+
+  async function openConversationTarget(
+    conversationId: string,
+    messageIdHex?: string,
+  ): Promise<void> {
+    const normalizedConversationId = conversationId.trim();
+    if (!normalizedConversationId) {
+      return;
+    }
+    await refreshConversations();
+    const matchedConversation = nativeConversations.value.find(
+      (conversation) => conversation.conversationId === normalizedConversationId,
+    ) ?? findNativeConversationByDestination(normalizedConversationId);
+
+    selectedConversationId.value = matchedConversation?.conversationId ?? normalizedConversationId;
+    selectedTargetMessageId.value = messageIdHex?.trim() ?? "";
+    await refreshMessages(selectedConversationId.value);
   }
 
   function ensureConversationForDestination(destinationHex: string, displayName?: string): void {
@@ -760,7 +824,9 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   return {
     initialized,
+    hydrated,
     selectedConversationId,
+    selectedTargetMessageId,
     conversations,
     selectedConversation,
     activeMessages,
@@ -769,6 +835,8 @@ export const useMessagingStore = defineStore("messaging", () => {
     init,
     dispose,
     selectConversation,
+    openConversationTarget,
+    hydrateStartupHistory,
     ensureConversationForDestination,
     sendMessage,
     upsertWebMessage,

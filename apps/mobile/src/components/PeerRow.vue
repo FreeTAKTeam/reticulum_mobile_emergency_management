@@ -180,25 +180,47 @@ const resolutionLabel = computed(() => {
 }
 
 .btn {
-  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  border: 1px solid rgb(74 133 207 / 45%);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgb(209 244 255 / 10%),
+    0 8px 18px rgb(2 14 32 / 18%);
+  color: #8fdbff;
   cursor: pointer;
-  font-family: var(--font-body);
-  font-size: 0.9rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  min-height: 32px;
   min-width: 92px;
-  padding: 0.42rem 0.7rem;
+  padding: 0 0.82rem;
+  text-transform: uppercase;
+  touch-action: manipulation;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
-.save {
-  background: rgb(17 56 98 / 72%);
-  border: 1px solid rgb(78 166 255 / 72%);
-  color: #74beff;
+.btn:active {
+  background:
+    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
+  border-color: rgb(112 197 255 / 56%);
+  box-shadow:
+    inset 0 1px 0 rgb(220 248 255 / 16%),
+    0 4px 10px rgb(3 21 47 / 24%);
+  color: #e8fbff;
+  transform: translateY(1px) scale(0.985);
 }
 
-.connect {
-  background: rgb(32 57 24 / 68%);
-  border: 1px solid rgb(75 196 116 / 72%);
-  color: #90dfa8;
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
 }
 
 @media (max-width: 860px) {

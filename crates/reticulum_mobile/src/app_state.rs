@@ -7,8 +7,9 @@ use serde::Serialize;
 use crate::runtime::now_ms;
 use crate::types::{
     AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, LegacyImportPayload, MessageRecord, NodeError, ProjectionInvalidation,
-    ProjectionScope, SavedPeerRecord, TelemetryPositionRecord,
+    EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
+    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
 };
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
@@ -87,6 +88,38 @@ impl AppStateStore {
                     updated_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS sos_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sos_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sos_alerts (
+                    incident_id TEXT NOT NULL,
+                    source_hex TEXT NOT NULL,
+                    active INTEGER NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL,
+                    PRIMARY KEY (incident_id, source_hex)
+                );
+                CREATE TABLE IF NOT EXISTS sos_locations (
+                    incident_id TEXT NOT NULL,
+                    source_hex TEXT NOT NULL,
+                    recorded_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL,
+                    PRIMARY KEY (incident_id, source_hex, recorded_at_ms)
+                );
+                CREATE TABLE IF NOT EXISTS sos_audio (
+                    audio_id TEXT PRIMARY KEY,
+                    incident_id TEXT NOT NULL,
+                    source_hex TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS projection_versions (
                     scope TEXT PRIMARY KEY,
                     revision INTEGER NOT NULL,
@@ -99,6 +132,7 @@ impl AppStateStore {
                 ",
             )
             .map_err(|_| NodeError::IoError {})?;
+        self.repair_message_conversations(&connection)?;
         Ok(())
     }
 
@@ -483,7 +517,12 @@ impl AppStateStore {
         let labels = self
             .get_saved_peers()?
             .into_iter()
-            .map(|peer| (peer.destination_hex, peer.label))
+            .map(|peer| {
+                (
+                    normalize_message_peer_key(peer.destination_hex.as_str()),
+                    peer.label,
+                )
+            })
             .collect::<std::collections::HashMap<_, _>>();
         let mut conversations = std::collections::HashMap::<String, ConversationRecord>::new();
 
@@ -492,7 +531,7 @@ impl AppStateStore {
                 .received_at_ms
                 .or(message.sent_at_ms)
                 .unwrap_or(message.updated_at_ms);
-            let peer_destination_hex = message.destination_hex.clone();
+            let peer_destination_hex = message.conversation_id.clone();
             let preview = truncate_preview(message.body_utf8.as_str());
             let peer_display_name = labels.get(&peer_destination_hex).cloned().flatten();
             let next = ConversationRecord {
@@ -527,15 +566,16 @@ impl AppStateStore {
         &self,
         message: &MessageRecord,
     ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let canonical_message = canonicalize_chat_message(message);
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
             .map_err(|_| NodeError::IoError {})?;
-        self.write_message_tx(&transaction, message)?;
+        self.write_message_tx(&transaction, &canonical_message)?;
         let messages = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Messages {},
-            Some(message.conversation_id.clone()),
+            Some(canonical_message.conversation_id.clone()),
             Some("message-upserted".to_string()),
         )?;
         let conversations = self.bump_projection_revision_tx(
@@ -593,6 +633,190 @@ impl AppStateStore {
             ProjectionScope::Telemetry {},
             Some(callsign.trim().to_ascii_lowercase()),
             Some("telemetry-deleted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
+    pub fn get_sos_settings(&self) -> Result<Option<SosSettingsRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row("SELECT json FROM sos_settings WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub fn set_sos_settings(
+        &self,
+        settings: &SosSettingsRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let json = serialize_json(settings)?;
+        transaction
+            .execute(
+                "INSERT INTO sos_settings (id, json, updated_at_ms) VALUES (1, ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at_ms = excluded.updated_at_ms",
+                params![json, now_ms() as i64],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Sos {},
+            Some("settings".to_string()),
+            Some("sos-settings-updated".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
+    pub fn get_sos_status(&self) -> Result<Option<SosStatusRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row("SELECT json FROM sos_state WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub fn set_sos_status(
+        &self,
+        status: &SosStatusRecord,
+        reason: &str,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let json = serialize_json(status)?;
+        transaction
+            .execute(
+                "INSERT INTO sos_state (id, json, updated_at_ms) VALUES (1, ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at_ms = excluded.updated_at_ms",
+                params![json, status.updated_at_ms as i64],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Sos {},
+            Some("status".to_string()),
+            Some(reason.to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
+    pub fn list_sos_alerts(&self) -> Result<Vec<SosAlertRecord>, NodeError> {
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM sos_alerts ORDER BY updated_at_ms DESC, incident_id ASC",
+        )
+    }
+
+    pub fn upsert_sos_alert(
+        &self,
+        alert: &SosAlertRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_sos_alert_tx(&transaction, alert)?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Sos {},
+            Some(alert.incident_id.clone()),
+            Some("sos-alert-upserted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
+    pub fn list_sos_locations(&self) -> Result<Vec<SosLocationRecord>, NodeError> {
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM sos_locations ORDER BY recorded_at_ms ASC",
+        )
+    }
+
+    pub fn upsert_sos_location(
+        &self,
+        location: &SosLocationRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let json = serialize_json(location)?;
+        transaction
+            .execute(
+                "INSERT INTO sos_locations (incident_id, source_hex, recorded_at_ms, json)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(incident_id, source_hex, recorded_at_ms) DO UPDATE SET json = excluded.json",
+                params![
+                    location.incident_id,
+                    location.source_hex,
+                    location.recorded_at_ms as i64,
+                    json
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Sos {},
+            Some(location.incident_id.clone()),
+            Some("sos-location-upserted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
+    pub fn list_sos_audio(&self) -> Result<Vec<SosAudioRecord>, NodeError> {
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM sos_audio ORDER BY created_at_ms DESC",
+        )
+    }
+
+    pub fn upsert_sos_audio(
+        &self,
+        audio: &SosAudioRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let json = serialize_json(audio)?;
+        transaction
+            .execute(
+                "INSERT INTO sos_audio (audio_id, incident_id, source_hex, created_at_ms, json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(audio_id) DO UPDATE SET
+                    incident_id = excluded.incident_id,
+                    source_hex = excluded.source_hex,
+                    created_at_ms = excluded.created_at_ms,
+                    json = excluded.json",
+                params![
+                    audio.audio_id,
+                    audio.incident_id,
+                    audio.source_hex,
+                    audio.created_at_ms as i64,
+                    json
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Sos {},
+            Some(audio.incident_id.clone()),
+            Some("sos-audio-upserted".to_string()),
         )?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(invalidation)
@@ -705,7 +929,8 @@ impl AppStateStore {
         transaction: &Transaction<'_>,
         message: &MessageRecord,
     ) -> Result<(), NodeError> {
-        let json = serialize_json(message)?;
+        let canonical_message = canonicalize_chat_message(message);
+        let json = serialize_json(&canonical_message)?;
         transaction
             .execute(
                 "INSERT INTO messages (message_id_hex, conversation_id, updated_at_ms, json)
@@ -715,13 +940,56 @@ impl AppStateStore {
                     updated_at_ms = excluded.updated_at_ms,
                     json = excluded.json",
                 params![
-                    message.message_id_hex,
-                    message.conversation_id,
-                    message.updated_at_ms as i64,
+                    canonical_message.message_id_hex,
+                    canonical_message.conversation_id,
+                    canonical_message.updated_at_ms as i64,
                     json
                 ],
             )
             .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn repair_message_conversations(&self, connection: &Connection) -> Result<(), NodeError> {
+        let mut statement = connection
+            .prepare("SELECT message_id_hex, json FROM messages")
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|_| NodeError::IoError {})?;
+        let mut repairs = Vec::new();
+        for row in rows {
+            let (message_id_hex, raw) = row.map_err(|_| NodeError::IoError {})?;
+            let message: MessageRecord = deserialize_json(&raw)?;
+            let canonical_message = canonicalize_chat_message(&message);
+            if canonical_message.conversation_id != message.conversation_id {
+                repairs.push((message_id_hex, canonical_message));
+            }
+        }
+        drop(statement);
+
+        if repairs.is_empty() {
+            return Ok(());
+        }
+
+        for (message_id_hex, message) in repairs {
+            let json = serialize_json(&message)?;
+            connection
+                .execute(
+                    "UPDATE messages
+                     SET conversation_id = ?1, updated_at_ms = ?2, json = ?3
+                     WHERE message_id_hex = ?4",
+                    params![
+                        message.conversation_id,
+                        message.updated_at_ms as i64,
+                        json,
+                        message_id_hex,
+                    ],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
         Ok(())
     }
 
@@ -741,6 +1009,32 @@ impl AppStateStore {
                 params![
                     position.callsign.to_ascii_lowercase(),
                     position.updated_at_ms as i64,
+                    json
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn write_sos_alert_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        alert: &SosAlertRecord,
+    ) -> Result<(), NodeError> {
+        let json = serialize_json(alert)?;
+        transaction
+            .execute(
+                "INSERT INTO sos_alerts (incident_id, source_hex, active, updated_at_ms, json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(incident_id, source_hex) DO UPDATE SET
+                    active = excluded.active,
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                params![
+                    alert.incident_id,
+                    alert.source_hex,
+                    if alert.active { 1_i64 } else { 0_i64 },
+                    alert.updated_at_ms as i64,
                     json
                 ],
             )
@@ -792,6 +1086,34 @@ fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, No
     serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
 }
 
+pub(crate) fn canonicalize_chat_message(message: &MessageRecord) -> MessageRecord {
+    let peer_key = canonical_message_peer_key(message);
+    MessageRecord {
+        conversation_id: peer_key,
+        ..message.clone()
+    }
+}
+
+fn canonical_message_peer_key(message: &MessageRecord) -> String {
+    let preferred = match message.direction {
+        MessageDirection::Inbound {} => message
+            .source_hex
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(message.destination_hex.as_str()),
+        MessageDirection::Outbound {} => message.destination_hex.as_str(),
+    };
+    let normalized = normalize_message_peer_key(preferred);
+    if !normalized.is_empty() {
+        return normalized;
+    }
+    normalize_message_peer_key(message.conversation_id.as_str())
+}
+
+fn normalize_message_peer_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 fn truncate_preview(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -828,5 +1150,124 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Conversations {} => "Conversations",
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
+        ProjectionScope::Sos {} => "Sos",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+    use crate::types::{MessageDirection, MessageMethod, MessageState};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_storage_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "reticulum-mobile-app-state-{name}-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        path
+    }
+
+    fn message(
+        id: &str,
+        conversation_id: &str,
+        direction: MessageDirection,
+        destination_hex: &str,
+        source_hex: Option<&str>,
+        updated_at_ms: u64,
+    ) -> MessageRecord {
+        MessageRecord {
+            message_id_hex: id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            direction,
+            destination_hex: destination_hex.to_string(),
+            source_hex: source_hex.map(str::to_string),
+            title: Some("chat".to_string()),
+            body_utf8: format!("body {id}"),
+            method: MessageMethod::Direct {},
+            state: MessageState::Received {},
+            detail: None,
+            sent_at_ms: Some(updated_at_ms),
+            received_at_ms: None,
+            updated_at_ms,
+        }
+    }
+
+    #[test]
+    fn messages_for_same_peer_are_repaired_into_one_canonical_thread() {
+        let storage_dir = test_storage_dir("canonical-thread");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        let outbound = message(
+            "outbound-1",
+            "legacy-outbound-thread",
+            MessageDirection::Outbound {},
+            "ABCDEF",
+            Some("LOCAL"),
+            10,
+        );
+        let inbound = message(
+            "inbound-1",
+            "legacy-inbound-thread",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("ABCDEF"),
+            20,
+        );
+
+        store.upsert_message(&outbound).expect("persist outbound");
+        store.upsert_message(&inbound).expect("persist inbound");
+
+        let conversations = store.list_conversations().expect("list conversations");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].conversation_id, "abcdef");
+        assert_eq!(conversations[0].peer_destination_hex, "abcdef");
+
+        let messages = store
+            .list_messages(Some("abcdef"))
+            .expect("list canonical messages");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].message_id_hex, "outbound-1");
+        assert_eq!(messages[0].conversation_id, "abcdef");
+        assert_eq!(messages[1].message_id_hex, "inbound-1");
+        assert_eq!(messages[1].conversation_id, "abcdef");
+    }
+
+    #[test]
+    fn startup_history_lists_persisted_messages_without_runtime() {
+        let storage_dir = test_storage_dir("startup-history");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let outbound = message(
+            "persisted-1",
+            "old-thread",
+            MessageDirection::Outbound {},
+            "PEER-1",
+            Some("LOCAL"),
+            30,
+        );
+        store.upsert_message(&outbound).expect("persist message");
+
+        let restarted =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("reopen store");
+        let conversations = restarted
+            .list_conversations()
+            .expect("list conversations before runtime");
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].conversation_id, "peer-1");
+
+        let messages = restarted
+            .list_messages(Some("peer-1"))
+            .expect("list messages before runtime");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_id_hex, "persisted-1");
+        assert_eq!(messages[0].conversation_id, "peer-1");
     }
 }

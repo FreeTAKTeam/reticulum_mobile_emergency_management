@@ -34,7 +34,9 @@ const statusOptions = [
 ] as const;
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
 const appReady = computed(() => nodeStore.ready);
-const draftModeActive = computed(() => nodeStore.settings.hub.mode !== "Disabled" && !nodeStore.hubRegistrationReady);
+const draftModeActive = computed(
+  () => nodeStore.settings.hub.mode !== "Autonomous" && !nodeStore.hubRegistrationReady,
+);
 const canManageMessages = computed(() => true);
 const localSaveHint = computed(() =>
   draftModeActive.value

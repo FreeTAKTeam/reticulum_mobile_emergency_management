@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, shallowRef, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
+import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 import type { DiscoveredPeer } from "../types/domain";
 import { getMessageOverallScore, getOverallStatusBand } from "../utils/actionMessageStatus";
@@ -14,7 +16,9 @@ import { formatR3aktTeamColor } from "../utils/r3akt";
 const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
+const sosStore = useSosStore();
 const telemetryStore = useTelemetryStore();
+const route = useRoute();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 
@@ -29,6 +33,10 @@ function safeTrim(value: unknown): string {
 
 function safeLower(value: unknown): string {
   return safeTrim(value).toLowerCase();
+}
+
+function routeQueryString(value: unknown): string {
+  return Array.isArray(value) ? safeTrim(value[0]) : safeTrim(value);
 }
 
 function destinationsMatch(left: unknown, right: unknown): boolean {
@@ -251,6 +259,28 @@ async function send(bodyUtf8: string): Promise<void> {
     messagingStore.selectConversation(matchingConversation.conversationId);
   }
 }
+
+watch(
+  () => [
+    route.query.conversation,
+    route.query.message,
+    messagingStore.hydrated,
+  ],
+  ([conversationQuery, messageQuery]) => {
+    const conversationId = routeQueryString(conversationQuery);
+    if (!conversationId) {
+      return;
+    }
+    const messageIdHex = routeQueryString(messageQuery);
+    void messagingStore
+      .openConversationTarget(conversationId, messageIdHex || undefined)
+      .then(() => {
+        selectedThreadDestinationHex.value = "";
+        mobilePane.value = "detail";
+      });
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -296,6 +326,7 @@ async function send(bodyUtf8: string): Promise<void> {
         <ConversationList
           :items="messagingStore.conversations"
           :selected-conversation-id="activeConversationId"
+          :active-sos-conversation-ids="sosStore.activeConversationIds"
           @select="handleSelectConversation"
         />
       </section>
@@ -309,6 +340,7 @@ async function send(bodyUtf8: string): Promise<void> {
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
+          :target-message-id="messagingStore.selectedTargetMessageId"
           :messages="activeThreadMessages"
           @back="showConversationList"
           @send="send"

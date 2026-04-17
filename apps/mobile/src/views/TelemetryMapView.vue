@@ -6,17 +6,21 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import type { TelemetryPosition } from "../types/domain";
 import { useNodeStore } from "../stores/nodeStore";
+import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 
 const nodeStore = useNodeStore();
+const sosStore = useSosStore();
 const telemetryStore = useTelemetryStore();
 
 const mapHost = ref<HTMLElement | null>(null);
 let map: MapLibreMap | null = null;
 let stopWatch: (() => void) | null = null;
+let stopSosWatch: (() => void) | null = null;
 let didFitBounds = false;
 const markersByCallsign = new Map<string, Marker>();
 const markerElementsByCallsign = new Map<string, HTMLDivElement>();
+const sosMarkersByKey = new Map<string, Marker>();
 
 function safeTrim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -105,6 +109,69 @@ function syncMarkers(positions: TelemetryPosition[]): void {
   }
 }
 
+function syncSosTrails(): void {
+  if (!map) {
+    return;
+  }
+  const active = new Set<string>();
+  const features = [];
+  for (const [incidentId, points] of sosStore.locationsByIncident.entries()) {
+    const coordinates = points.map((point) => [point.lon, point.lat]);
+    if (coordinates.length > 1) {
+      features.push({
+        type: "Feature",
+        properties: { incidentId },
+        geometry: { type: "LineString", coordinates },
+      });
+    }
+    for (const point of points) {
+      const key = `${incidentId}:${point.sourceHex}:${point.recordedAtMs}`;
+      active.add(key);
+      if (sosMarkersByKey.has(key)) {
+        continue;
+      }
+      const element = document.createElement("div");
+      element.className = "sos-trail-marker";
+      element.title = "SOS location";
+      const marker = new maplibregl.Marker({ element })
+        .setLngLat([point.lon, point.lat] as LngLatLike)
+        .addTo(map);
+      sosMarkersByKey.set(key, marker);
+    }
+  }
+
+  const payload = {
+    type: "FeatureCollection",
+    features,
+  };
+  const source = map.getSource("sos_trail") as maplibregl.GeoJSONSource | undefined;
+  if (source) {
+    source.setData(payload as never);
+  } else if (map.isStyleLoaded()) {
+    map.addSource("sos_trail", {
+      type: "geojson",
+      data: payload as never,
+    });
+    map.addLayer({
+      id: "sos_trail_line",
+      source: "sos_trail",
+      type: "line",
+      paint: {
+        "line-color": "#ef4444",
+        "line-width": 4,
+      },
+    });
+  }
+
+  for (const [key, marker] of sosMarkersByKey.entries()) {
+    if (active.has(key)) {
+      continue;
+    }
+    marker.remove();
+    sosMarkersByKey.delete(key);
+  }
+}
+
 const lastUpdatedLabel = computed(() => {
   const latest = telemetryStore.positions[0];
   if (!latest) {
@@ -135,6 +202,7 @@ onMounted(() => {
   });
 
   map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+  map.on("load", syncSosTrails);
 
   stopWatch = watch(
     () => telemetryStore.activePositions,
@@ -155,16 +223,27 @@ onMounted(() => {
     },
     { immediate: true, deep: true },
   );
+  stopSosWatch = watch(
+    () => sosStore.locations,
+    () => syncSosTrails(),
+    { immediate: true, deep: true },
+  );
 });
 
 onBeforeUnmount(() => {
   stopWatch?.();
+  stopSosWatch?.();
   stopWatch = null;
+  stopSosWatch = null;
   for (const marker of markersByCallsign.values()) {
+    marker.remove();
+  }
+  for (const marker of sosMarkersByKey.values()) {
     marker.remove();
   }
   markersByCallsign.clear();
   markerElementsByCallsign.clear();
+  sosMarkersByKey.clear();
   map?.remove();
   map = null;
 });
@@ -180,6 +259,7 @@ onBeforeUnmount(() => {
     <div class="telemetry-legend">
       <span><i class="dot live"></i> Live (&lt; {{ staleThresholdMinutesLabel }} min)</span>
       <span><i class="dot stale"></i> Stale (&ge; {{ staleThresholdMinutesLabel }} min)</span>
+      <span><i class="dot sos"></i> SOS trail</span>
     </div>
 
     <div ref="mapHost" class="map-container"></div>
@@ -230,6 +310,10 @@ onBeforeUnmount(() => {
   background: #f9ae66;
 }
 
+.dot.sos {
+  background: #ef4444;
+}
+
 .map-container {
   border: 1px solid rgb(90 142 220 / 24%);
   border-radius: 12px;
@@ -251,6 +335,15 @@ onBeforeUnmount(() => {
 
 :deep(.telemetry-marker.is-stale) {
   background: #ffb467;
+}
+
+:deep(.sos-trail-marker) {
+  background: #ef4444;
+  border: 2px solid #7f1d1d;
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgb(239 68 68 / 70%);
+  height: 12px;
+  width: 12px;
 }
 
 :deep(.popup-title) {

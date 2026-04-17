@@ -1,4 +1,4 @@
-import { notifyOperationalUpdate } from "./notifications";
+import { notifyOperationalUpdate, type NotificationExtra } from "./notifications";
 
 export type OperationalNotificationScope = "eam" | "event" | "chat";
 
@@ -32,6 +32,7 @@ export async function notifyOperationalUpdateOnce(
   key: string,
   title: string,
   body: string,
+  extra: NotificationExtra = {},
 ): Promise<boolean> {
   const normalizedKey = key.trim();
   if (!normalizedKey) {
@@ -43,7 +44,7 @@ export async function notifyOperationalUpdateOnce(
     return false;
   }
   bucket.add(normalizedKey);
-  await notifyOperationalUpdate(title, body);
+  await notifyOperationalUpdate(title, body, extra);
   return true;
 }
 

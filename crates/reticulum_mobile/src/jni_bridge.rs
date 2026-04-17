@@ -7,17 +7,18 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jint, jstring};
 use jni::JNIEnv;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, EamProjectionRecord, EventProjectionRecord, HubMode, HubSettingsRecord,
-    HubDirectoryPeerRecord, HubDirectorySnapshot, LegacyImportPayload, LogLevel,
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError,
-    NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SyncPhase, TelemetryPositionRecord,
-    TelemetrySettingsRecord,
+    AppSettingsRecord, ConversationRecord, EamProjectionRecord, EventProjectionRecord,
+    HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload,
+    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
+    NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -276,6 +277,80 @@ struct CallsignInput {
     callsign: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosSettingsInput {
+    enabled: bool,
+    message_template: String,
+    #[serde(default)]
+    cancel_message_template: String,
+    countdown_seconds: u32,
+    include_location: bool,
+    trigger_shake: bool,
+    trigger_tap_pattern: bool,
+    trigger_power_button: bool,
+    shake_sensitivity: f64,
+    audio_recording: bool,
+    audio_duration_seconds: u32,
+    periodic_updates: bool,
+    update_interval_seconds: u32,
+    floating_button: bool,
+    silent_auto_answer: bool,
+    deactivation_pin_hash: Option<String>,
+    deactivation_pin_salt: Option<String>,
+    floating_button_x: f64,
+    floating_button_y: f64,
+    active_pill_x: f64,
+    active_pill_y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosPinInput {
+    pin: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosTriggerInput {
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosDeactivateInput {
+    pin: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosTelemetryInput {
+    lat: Option<f64>,
+    lon: Option<f64>,
+    alt: Option<f64>,
+    speed: Option<f64>,
+    course: Option<f64>,
+    accuracy: Option<f64>,
+    battery_percent: Option<f64>,
+    battery_charging: Option<bool>,
+    updated_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosAccelerometerInput {
+    x: f64,
+    y: f64,
+    z: f64,
+    at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosScreenEventInput {
+    at_ms: Option<u64>,
+}
+
 fn bridge_state() -> &'static Mutex<BridgeState> {
     static STATE: OnceLock<Mutex<BridgeState>> = OnceLock::new();
     STATE.get_or_init(|| Mutex::new(BridgeState::default()))
@@ -498,6 +573,25 @@ fn parse_message_state(value: &str) -> Result<MessageState, NodeError> {
     }
 }
 
+fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
+    match value
+        .unwrap_or("Manual")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "floatingbutton" | "floating_button" | "floating-button" => {
+            SosTriggerSource::FloatingButton {}
+        }
+        "shake" => SosTriggerSource::Shake {},
+        "tappattern" | "tap_pattern" | "tap-pattern" => SosTriggerSource::TapPattern {},
+        "powerbutton" | "power_button" | "power-button" => SosTriggerSource::PowerButton {},
+        "restore" => SosTriggerSource::Restore {},
+        "remote" => SosTriggerSource::Remote {},
+        _ => SosTriggerSource::Manual {},
+    }
+}
+
 fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
     SavedPeerRecord {
         destination_hex: input.destination.trim().to_ascii_lowercase(),
@@ -510,6 +604,46 @@ fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
             }
         }),
         saved_at_ms: input.saved_at,
+    }
+}
+
+fn to_sos_settings_record(input: SosSettingsInput) -> SosSettingsRecord {
+    SosSettingsRecord {
+        enabled: input.enabled,
+        message_template: input.message_template,
+        cancel_message_template: input.cancel_message_template,
+        countdown_seconds: input.countdown_seconds,
+        include_location: input.include_location,
+        trigger_shake: input.trigger_shake,
+        trigger_tap_pattern: input.trigger_tap_pattern,
+        trigger_power_button: input.trigger_power_button,
+        shake_sensitivity: input.shake_sensitivity,
+        audio_recording: input.audio_recording,
+        audio_duration_seconds: input.audio_duration_seconds,
+        periodic_updates: input.periodic_updates,
+        update_interval_seconds: input.update_interval_seconds,
+        floating_button: input.floating_button,
+        silent_auto_answer: input.silent_auto_answer,
+        deactivation_pin_hash: input.deactivation_pin_hash,
+        deactivation_pin_salt: input.deactivation_pin_salt,
+        floating_button_x: input.floating_button_x,
+        floating_button_y: input.floating_button_y,
+        active_pill_x: input.active_pill_x,
+        active_pill_y: input.active_pill_y,
+    }
+}
+
+fn to_sos_telemetry_record(input: SosTelemetryInput) -> SosDeviceTelemetryRecord {
+    SosDeviceTelemetryRecord {
+        lat: input.lat,
+        lon: input.lon,
+        alt: input.alt,
+        speed: input.speed,
+        course: input.course,
+        accuracy: input.accuracy,
+        battery_percent: input.battery_percent,
+        battery_charging: input.battery_charging,
+        updated_at_ms: input.updated_at_ms.unwrap_or_else(crate::runtime::now_ms),
     }
 }
 
@@ -642,6 +776,16 @@ fn peer_state_to_str(state: PeerState) -> &'static str {
     }
 }
 
+fn announce_class_to_str(class: crate::types::AnnounceClass) -> &'static str {
+    match class {
+        crate::types::AnnounceClass::PeerApp {} => "PeerApp",
+        crate::types::AnnounceClass::RchHubServer {} => "RchHubServer",
+        crate::types::AnnounceClass::PropagationNode {} => "PropagationNode",
+        crate::types::AnnounceClass::LxmfDelivery {} => "LxmfDelivery",
+        crate::types::AnnounceClass::Other {} => "Other",
+    }
+}
+
 fn peer_change_json(change: &PeerChange) -> serde_json::Value {
     json!({
         "destinationHex": change.destination_hex,
@@ -707,6 +851,14 @@ fn hub_directory_snapshot_json(snapshot: &HubDirectorySnapshot) -> serde_json::V
     })
 }
 
+fn operational_notice_json(notice: &crate::types::OperationalNotice) -> serde_json::Value {
+    json!({
+        "level": log_level_to_str(notice.level),
+        "message": notice.message,
+        "atMs": notice.at_ms
+    })
+}
+
 fn hub_settings_json(settings: &HubSettingsRecord) -> serde_json::Value {
     json!({
         "mode": settings.mode.as_str(),
@@ -737,6 +889,100 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub)
+    })
+}
+
+fn sos_state_to_str(state: SosState) -> &'static str {
+    crate::sos::sos_status_label(state)
+}
+
+fn sos_trigger_to_str(source: SosTriggerSource) -> &'static str {
+    crate::sos::sos_trigger_label(source)
+}
+
+fn sos_kind_to_str(kind: SosMessageKind) -> &'static str {
+    crate::sos::sos_kind_label(kind)
+}
+
+fn sos_settings_json(settings: &SosSettingsRecord) -> serde_json::Value {
+    json!({
+        "enabled": settings.enabled,
+        "messageTemplate": settings.message_template,
+        "cancelMessageTemplate": settings.cancel_message_template,
+        "countdownSeconds": settings.countdown_seconds,
+        "includeLocation": settings.include_location,
+        "triggerShake": settings.trigger_shake,
+        "triggerTapPattern": settings.trigger_tap_pattern,
+        "triggerPowerButton": settings.trigger_power_button,
+        "shakeSensitivity": settings.shake_sensitivity,
+        "audioRecording": settings.audio_recording,
+        "audioDurationSeconds": settings.audio_duration_seconds,
+        "periodicUpdates": settings.periodic_updates,
+        "updateIntervalSeconds": settings.update_interval_seconds,
+        "floatingButton": settings.floating_button,
+        "silentAutoAnswer": settings.silent_auto_answer,
+        "deactivationPinHash": settings.deactivation_pin_hash,
+        "deactivationPinSalt": settings.deactivation_pin_salt,
+        "floatingButtonX": settings.floating_button_x,
+        "floatingButtonY": settings.floating_button_y,
+        "activePillX": settings.active_pill_x,
+        "activePillY": settings.active_pill_y
+    })
+}
+
+fn sos_status_json(status: &SosStatusRecord) -> serde_json::Value {
+    json!({
+        "state": sos_state_to_str(status.state),
+        "incidentId": status.incident_id,
+        "triggerSource": status.trigger_source.map(sos_trigger_to_str),
+        "countdownDeadlineMs": status.countdown_deadline_ms,
+        "activatedAtMs": status.activated_at_ms,
+        "lastSentAtMs": status.last_sent_at_ms,
+        "lastUpdateAtMs": status.last_update_at_ms,
+        "updatedAtMs": status.updated_at_ms
+    })
+}
+
+fn sos_alert_json(alert: &SosAlertRecord) -> serde_json::Value {
+    json!({
+        "incidentId": alert.incident_id,
+        "sourceHex": alert.source_hex,
+        "conversationId": alert.conversation_id,
+        "state": sos_kind_to_str(alert.state),
+        "active": alert.active,
+        "bodyUtf8": alert.body_utf8,
+        "lat": alert.lat,
+        "lon": alert.lon,
+        "batteryPercent": alert.battery_percent,
+        "audioId": alert.audio_id,
+        "messageIdHex": alert.message_id_hex,
+        "receivedAtMs": alert.received_at_ms,
+        "updatedAtMs": alert.updated_at_ms
+    })
+}
+
+fn sos_location_json(location: &SosLocationRecord) -> serde_json::Value {
+    json!({
+        "incidentId": location.incident_id,
+        "sourceHex": location.source_hex,
+        "lat": location.lat,
+        "lon": location.lon,
+        "alt": location.alt,
+        "accuracy": location.accuracy,
+        "batteryPercent": location.battery_percent,
+        "recordedAtMs": location.recorded_at_ms
+    })
+}
+
+fn sos_audio_json(audio: &SosAudioRecord) -> serde_json::Value {
+    json!({
+        "audioId": audio.audio_id,
+        "incidentId": audio.incident_id,
+        "sourceHex": audio.source_hex,
+        "path": audio.path,
+        "mimeType": audio.mime_type,
+        "durationSeconds": audio.duration_seconds,
+        "createdAtMs": audio.created_at_ms
     })
 }
 
@@ -979,7 +1225,38 @@ fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Conversations {} => "Conversations",
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
+        ProjectionScope::Sos {} => "Sos",
     }
+}
+
+fn message_record_json(message: &MessageRecord) -> Value {
+    json!({
+        "messageIdHex": message.message_id_hex,
+        "conversationId": message.conversation_id,
+        "direction": message_direction_to_str(message.direction),
+        "destinationHex": message.destination_hex,
+        "sourceHex": message.source_hex,
+        "title": message.title,
+        "bodyUtf8": message.body_utf8,
+        "method": message_method_to_str(message.method),
+        "state": message_state_to_str(message.state),
+        "detail": message.detail,
+        "sentAtMs": message.sent_at_ms,
+        "receivedAtMs": message.received_at_ms,
+        "updatedAtMs": message.updated_at_ms
+    })
+}
+
+fn conversation_record_json(conversation: &ConversationRecord) -> Value {
+    json!({
+        "conversationId": conversation.conversation_id,
+        "peerDestinationHex": conversation.peer_destination_hex,
+        "peerDisplayName": conversation.peer_display_name,
+        "lastMessagePreview": conversation.last_message_preview,
+        "lastMessageAtMs": conversation.last_message_at_ms,
+        "unreadCount": conversation.unread_count,
+        "lastMessageState": conversation.last_message_state.map(message_state_to_str)
+    })
 }
 
 fn event_to_wire_json(event: NodeEvent) -> String {
@@ -1000,7 +1277,9 @@ fn event_to_wire_json(event: NodeEvent) -> String {
             destination_hex,
             identity_hex,
             destination_kind,
+            announce_class,
             app_data,
+            display_name,
             hops,
             interface_hex,
             received_at_ms,
@@ -1010,7 +1289,9 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "destinationHex": destination_hex,
                 "identityHex": identity_hex,
                 "destinationKind": destination_kind,
+                "announceClass": announce_class_to_str(announce_class),
                 "appData": app_data,
+                "displayName": display_name,
                 "hops": hops,
                 "interfaceHex": interface_hex,
                 "receivedAtMs": received_at_ms
@@ -1070,42 +1351,10 @@ fn event_to_wire_json(event: NodeEvent) -> String {
             }),
         ),
         NodeEvent::PeerResolved { peer } => ("peerResolved", peer_record_json(&peer)),
-        NodeEvent::MessageReceived { message } => (
-            "messageReceived",
-            json!({
-                "messageIdHex": message.message_id_hex,
-                "conversationId": message.conversation_id,
-                "direction": message_direction_to_str(message.direction),
-                "destinationHex": message.destination_hex,
-                "sourceHex": message.source_hex,
-                "title": message.title,
-                "bodyUtf8": message.body_utf8,
-                "method": message_method_to_str(message.method),
-                "state": message_state_to_str(message.state),
-                "detail": message.detail,
-                "sentAtMs": message.sent_at_ms,
-                "receivedAtMs": message.received_at_ms,
-                "updatedAtMs": message.updated_at_ms
-            }),
-        ),
-        NodeEvent::MessageUpdated { message } => (
-            "messageUpdated",
-            json!({
-                "messageIdHex": message.message_id_hex,
-                "conversationId": message.conversation_id,
-                "direction": message_direction_to_str(message.direction),
-                "destinationHex": message.destination_hex,
-                "sourceHex": message.source_hex,
-                "title": message.title,
-                "bodyUtf8": message.body_utf8,
-                "method": message_method_to_str(message.method),
-                "state": message_state_to_str(message.state),
-                "detail": message.detail,
-                "sentAtMs": message.sent_at_ms,
-                "receivedAtMs": message.received_at_ms,
-                "updatedAtMs": message.updated_at_ms
-            }),
-        ),
+        NodeEvent::MessageReceived { message } => {
+            ("messageReceived", message_record_json(&message))
+        }
+        NodeEvent::MessageUpdated { message } => ("messageUpdated", message_record_json(&message)),
         NodeEvent::SyncUpdated { status } => (
             "syncUpdated",
             json!({
@@ -1121,6 +1370,9 @@ fn event_to_wire_json(event: NodeEvent) -> String {
             "hubDirectoryUpdated",
             hub_directory_snapshot_json(&snapshot),
         ),
+        NodeEvent::OperationalNotice { notice } => {
+            ("operationalNotice", operational_notice_json(&notice))
+        }
         NodeEvent::ProjectionInvalidated { invalidation } => (
             "projectionInvalidated",
             json!({
@@ -1129,6 +1381,19 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "revision": invalidation.revision,
                 "updatedAtMs": invalidation.updated_at_ms,
                 "reason": invalidation.reason
+            }),
+        ),
+        NodeEvent::SosStatusChanged { status } => ("sosStatusChanged", sos_status_json(&status)),
+        NodeEvent::SosAlertChanged { alert } => ("sosAlertChanged", sos_alert_json(&alert)),
+        NodeEvent::SosTelemetryRequested {} => ("sosTelemetryRequested", json!({})),
+        NodeEvent::SosAudioRecordingRequested {
+            incident_id,
+            duration_seconds,
+        } => (
+            "sosAudioRecordingRequested",
+            json!({
+                "incidentId": incident_id,
+                "durationSeconds": duration_seconds
             }),
         ),
         NodeEvent::Log { level, message } => (
@@ -1823,7 +2088,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConv
     };
     let node = ensure_node(&mut guard);
     match node.list_conversations() {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({
+                "items": items.iter().map(conversation_record_json).collect::<Vec<_>>()
+            }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -1864,7 +2134,12 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
     };
     let node = ensure_node(&mut guard);
     match node.list_messages(payload.conversation_id) {
-        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({
+                "items": items.iter().map(message_record_json).collect::<Vec<_>>()
+            }),
+        ),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -2456,6 +2731,383 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLo
         Err(err) => {
             set_last_node_error(err);
             RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSettingsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_sos_settings() {
+        Ok(settings) => ok_json_result(&mut env, &sos_settings_json(&settings)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosSettingsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SosSettingsInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid SOS settings payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_sos_settings(to_sos_settings_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosPinJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SosPinInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid SOS PIN payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_sos_pin(payload.pin) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosStatusJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_sos_status() {
+        Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_triggerSosJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: SosTriggerInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", format!("invalid SOS trigger payload: {e}"));
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.trigger_sos(parse_sos_trigger_source(payload.source.as_deref())) {
+        Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deactivateSosJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: SosDeactivateInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid SOS deactivate payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.deactivate_sos(payload.pin) {
+        Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosTelemetryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SosTelemetryInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid SOS telemetry payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.submit_sos_device_telemetry(to_sos_telemetry_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosAccelerometerJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: SosAccelerometerInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid SOS accelerometer payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    let at_ms = payload.at_ms.unwrap_or_else(crate::runtime::now_ms);
+    match node.submit_sos_accelerometer_sample(payload.x, payload.y, payload.z, at_ms) {
+        Ok(Some(status)) => ok_json_result(
+            &mut env,
+            &json!({ "triggered": true, "status": sos_status_json(&status) }),
+        ),
+        Ok(None) => ok_json_result(&mut env, &json!({ "triggered": false })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosScreenEventJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: SosScreenEventInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", format!("invalid SOS screen payload: {e}"));
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    let at_ms = payload.at_ms.unwrap_or_else(crate::runtime::now_ms);
+    match node.submit_sos_screen_event(at_ms) {
+        Ok(Some(status)) => ok_json_result(
+            &mut env,
+            &json!({ "triggered": true, "status": sos_status_json(&status) }),
+        ),
+        Ok(None) => ok_json_result(&mut env, &json!({ "triggered": false })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosAlertsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_sos_alerts() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(sos_alert_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosLocationsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_sos_locations() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(sos_location_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosAudioJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_sos_audio() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(sos_audio_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
         }
     }
 }

@@ -649,6 +649,111 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getSosSettings(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get SOS settings.",
+            "Native SOS settings JSON parse failed.",
+            ReticulumNodeService::getSosSettingsJson
+        );
+    }
+
+    @PluginMethod
+    public void setSosSettings(PluginCall call) {
+        final JSObject payload = call.getObject("settings", new JSObject());
+        runIntServiceCall(
+            call,
+            "Failed to save SOS settings.",
+            service -> service.setSosSettingsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void setSosPin(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("pin", call.getString("pin"));
+        runIntServiceCall(
+            call,
+            "Failed to set SOS PIN.",
+            service -> service.setSosPinJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getSosStatus(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get SOS status.",
+            "Native SOS status JSON parse failed.",
+            ReticulumNodeService::getSosStatusJson
+        );
+    }
+
+    @PluginMethod
+    public void triggerSos(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("source", call.getString("source", "Manual"));
+        runStringServiceCall(
+            call,
+            "Failed to trigger SOS.",
+            "Native SOS trigger JSON parse failed.",
+            service -> service.triggerSosJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void deactivateSos(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("pin", call.getString("pin"));
+        runStringServiceCall(
+            call,
+            "Failed to deactivate SOS.",
+            "Native SOS deactivate JSON parse failed.",
+            service -> service.deactivateSosJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void submitSosTelemetry(PluginCall call) {
+        final JSObject payload = call.getObject("telemetry", new JSObject());
+        runIntServiceCall(
+            call,
+            "Failed to submit SOS telemetry.",
+            service -> service.submitSosTelemetryJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void listSosAlerts(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list SOS alerts.",
+            "Native SOS alerts JSON parse failed.",
+            ReticulumNodeService::listSosAlertsJson
+        );
+    }
+
+    @PluginMethod
+    public void listSosLocations(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list SOS locations.",
+            "Native SOS locations JSON parse failed.",
+            ReticulumNodeService::listSosLocationsJson
+        );
+    }
+
+    @PluginMethod
+    public void listSosAudio(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list SOS audio.",
+            "Native SOS audio JSON parse failed.",
+            ReticulumNodeService::listSosAudioJson
+        );
+    }
+
+    @PluginMethod
     public void removeAllListeners(PluginCall call) {
         call.resolve();
     }

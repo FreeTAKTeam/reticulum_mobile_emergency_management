@@ -275,25 +275,27 @@ header p {
 }
 
 .badge {
-  background: rgb(9 61 108 / 68%);
-  border: 1px solid rgb(73 173 255 / 62%);
+  background:
+    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  border: 1px solid rgb(74 133 207 / 45%);
   border-radius: 999px;
-  color: #64beff;
+  box-shadow:
+    inset 0 1px 0 rgb(209 244 255 / 10%),
+    0 8px 18px rgb(2 14 32 / 18%);
+  color: #8fdbff;
   display: inline-flex;
   font-family: var(--font-ui);
-  font-size: 0.92rem;
+  font-size: 0.78rem;
+  font-weight: 700;
   justify-content: center;
   letter-spacing: 0.08em;
-  padding: 0.46rem 0.8rem;
+  min-height: 32px;
+  padding: 0 0.82rem;
   text-transform: uppercase;
 }
 
 .badge-button {
-  box-shadow:
-    inset 0 1px 0 rgb(186 236 255 / 8%),
-    0 8px 18px rgb(3 24 56 / 18%);
   cursor: pointer;
-  min-height: 0;
   touch-action: manipulation;
   transition:
     background 120ms ease,
@@ -304,8 +306,9 @@ header p {
 }
 
 .badge-button:active {
-  background: linear-gradient(118deg, #0b4d7d, #106f90);
-  border-color: rgb(86 197 255 / 72%);
+  background:
+    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
+  border-color: rgb(112 197 255 / 56%);
   box-shadow:
     inset 0 1px 0 rgb(224 248 255 / 14%),
     0 4px 10px rgb(3 18 40 / 20%);
@@ -448,21 +451,25 @@ h2 {
 }
 
 button:not(.saved-toggle):not(.badge-button) {
-  background: linear-gradient(118deg, #0b9fff, #20ecff);
-  border: 0;
-  border-radius: 10px;
-  box-shadow: 0 10px 22px rgb(3 32 75 / 22%);
-  color: #03284b;
+  background:
+    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  border: 1px solid rgb(74 133 207 / 45%);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgb(209 244 255 / 10%),
+    0 8px 18px rgb(2 14 32 / 18%);
+  color: #8fdbff;
   cursor: pointer;
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.08em;
-  min-height: 34px;
-  padding: 0 0.76rem;
+  min-height: 32px;
+  padding: 0 0.82rem;
   touch-action: manipulation;
   transition:
     background 120ms ease,
+    border-color 120ms ease,
     box-shadow 120ms ease,
     color 120ms ease,
     transform 120ms ease;
@@ -470,7 +477,9 @@ button:not(.saved-toggle):not(.badge-button) {
 }
 
 button:not(.saved-toggle):not(.badge-button):active {
-  background: linear-gradient(118deg, #046aa8, #0ea9cb);
+  background:
+    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
+  border-color: rgb(112 197 255 / 56%);
   box-shadow:
     inset 0 1px 0 rgb(220 248 255 / 16%),
     0 4px 10px rgb(3 21 47 / 24%);

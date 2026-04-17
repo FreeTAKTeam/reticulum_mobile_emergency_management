@@ -11,6 +11,7 @@ interface ConversationListItem {
 defineProps<{
   items: ConversationListItem[];
   selectedConversationId: string;
+  activeSosConversationIds?: Set<string>;
 }>();
 
 const emit = defineEmits<{
@@ -21,6 +22,25 @@ function hasReadablePeerName(displayName: string, destinationHex: string): boole
   const normalizedName = String(displayName ?? "").trim();
   const normalizedDestination = String(destinationHex ?? "").trim();
   return normalizedName.length > 0 && normalizedName.toLowerCase() !== normalizedDestination.toLowerCase();
+}
+
+function conversationStateLabel(state: string): string {
+  if (state === "SentDirect" || state === "Delivered") {
+    return "Delivered";
+  }
+  if (state === "SentToPropagation") {
+    return "Sent to propagation";
+  }
+  if (state === "PathRequested") {
+    return "Path requested";
+  }
+  if (state === "LinkEstablishing") {
+    return "Link establishing";
+  }
+  if (state === "TimedOut") {
+    return "Timed out";
+  }
+  return state;
 }
 </script>
 
@@ -34,7 +54,10 @@ function hasReadablePeerName(displayName: string, destinationHex: string): boole
       :key="item.conversationId"
       type="button"
       class="conversation-item"
-      :class="{ active: item.conversationId === selectedConversationId }"
+      :class="{
+        active: item.conversationId === selectedConversationId,
+        sos: activeSosConversationIds?.has(item.conversationId),
+      }"
       @click="emit('select', item.conversationId)"
     >
       <div class="conversation-topline">
@@ -48,7 +71,9 @@ function hasReadablePeerName(displayName: string, destinationHex: string): boole
       >
         {{ item.destinationHex }}
       </p>
-      <span class="conversation-state">{{ item.state }}</span>
+      <span class="conversation-state">
+        {{ activeSosConversationIds?.has(item.conversationId) ? "SOS ACTIVE" : conversationStateLabel(item.state) }}
+      </span>
     </button>
   </aside>
 </template>
@@ -90,6 +115,15 @@ function hasReadablePeerName(displayName: string, destinationHex: string): boole
 .conversation-item.active {
   border-color: rgb(104 220 255 / 72%);
   box-shadow: 0 0 0 1px rgb(104 220 255 / 18%);
+}
+
+.conversation-item.sos {
+  border-color: rgb(239 68 68 / 86%);
+  box-shadow: 0 0 0 1px rgb(239 68 68 / 20%);
+}
+
+.conversation-item.sos .conversation-state {
+  color: #fecaca;
 }
 
 .conversation-topline {

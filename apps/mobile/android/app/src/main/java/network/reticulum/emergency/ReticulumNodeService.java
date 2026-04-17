@@ -55,10 +55,13 @@ public final class ReticulumNodeService extends Service {
     private static final String PREF_DESIRED_RUNNING = "desiredRunning";
     private static final String PREF_LAST_CONFIG = "lastConfig";
     private static final String PREF_LAST_BOOT_COUNT = "lastBootCount";
+    static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     private static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
     private static final String RUNTIME_CHANNEL_ID = "mesh-runtime";
     private static final String RUNTIME_UPDATES_CHANNEL_ID = "operational-updates";
+    private static final String SOS_CHANNEL_ID = "sos-emergency";
     private static final int FOREGROUND_NOTIFICATION_ID = 41001;
+    private static final int SOS_NOTIFICATION_ID = 41002;
     private static final int BACKGROUND_NOTIFICATION_BASE_ID = 47000;
 
     private final IBinder binder = new LocalBinder();
@@ -73,6 +76,8 @@ public final class ReticulumNodeService extends Service {
     private String lastCanonicalConfigJson = "";
     private String latestStatusJson = "";
     private String latestSyncStatusJson = "";
+    private String latestSosStatusJson = "";
+    private SosPlatformCoordinator sosPlatformCoordinator;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenMessageIds = new HashSet<>();
@@ -85,8 +90,11 @@ public final class ReticulumNodeService extends Service {
         storageDir = resolveStorageDir("").getAbsolutePath();
         initializeBridgeStorage(storageDir);
         createNotificationChannels();
+        sosPlatformCoordinator = new SosPlatformCoordinator(this);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
+        latestSosStatusJson = safeSosStatusJson();
+        applyCurrentSosPlatformSettings();
         maybeRestoreAfterProcessRecreation();
     }
 
@@ -95,6 +103,10 @@ public final class ReticulumNodeService extends Service {
         if (intent != null && ACTION_STOP_SERVICE.equals(intent.getAction())) {
             stopNode();
             return START_NOT_STICKY;
+        }
+        if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
+            maybeRestoreAfterBoot();
+            return START_STICKY;
         }
 
         if (shouldBeRunning() && !isNodeRunning()) {
@@ -116,6 +128,9 @@ public final class ReticulumNodeService extends Service {
     @Override
     public void onDestroy() {
         stopPoller();
+        if (sosPlatformCoordinator != null) {
+            sosPlatformCoordinator.close();
+        }
         pollerExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -358,6 +373,58 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.deleteLocalTelemetryJson(payloadJson);
     }
 
+    public synchronized String getSosSettingsJson() {
+        return nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}");
+    }
+
+    public synchronized int setSosSettingsJson(String payloadJson) {
+        final int result = ReticulumBridge.setSosSettingsJson(payloadJson);
+        if (result == 0) {
+            applyCurrentSosPlatformSettings();
+        }
+        return result;
+    }
+
+    public synchronized int setSosPinJson(String payloadJson) {
+        return ReticulumBridge.setSosPinJson(payloadJson);
+    }
+
+    public synchronized String getSosStatusJson() {
+        return nonEmptyJson(ReticulumBridge.getSosStatusJson(), "{}");
+    }
+
+    public synchronized String triggerSosJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.triggerSosJson(payloadJson), "{}");
+    }
+
+    public synchronized String deactivateSosJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.deactivateSosJson(payloadJson), "{}");
+    }
+
+    public synchronized int submitSosTelemetryJson(String payloadJson) {
+        return ReticulumBridge.submitSosTelemetryJson(payloadJson);
+    }
+
+    public synchronized String submitSosAccelerometerJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.submitSosAccelerometerJson(payloadJson), "{\"triggered\":false}");
+    }
+
+    public synchronized String submitSosScreenEventJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.submitSosScreenEventJson(payloadJson), "{\"triggered\":false}");
+    }
+
+    public synchronized String listSosAlertsJson() {
+        return nonEmptyJson(ReticulumBridge.listSosAlertsJson(), "{\"items\":[]}");
+    }
+
+    public synchronized String listSosLocationsJson() {
+        return nonEmptyJson(ReticulumBridge.listSosLocationsJson(), "{\"items\":[]}");
+    }
+
+    public synchronized String listSosAudioJson() {
+        return nonEmptyJson(ReticulumBridge.listSosAudioJson(), "{\"items\":[]}");
+    }
+
     public synchronized int setAnnounceCapabilities(String capabilityString) {
         return ReticulumBridge.setAnnounceCapabilities(capabilityString);
     }
@@ -484,6 +551,9 @@ public final class ReticulumNodeService extends Service {
         if (listeners.isEmpty()) {
             maybeNotifyInboundUpdate(eventName, payload);
         }
+        if ("sosTelemetryRequested".equals(eventName) && sosPlatformCoordinator != null) {
+            sosPlatformCoordinator.submitTelemetrySnapshot();
+        }
         if ("statusChanged".equals(eventName) || "syncUpdated".equals(eventName)) {
             updateForegroundNotification();
         }
@@ -501,6 +571,7 @@ public final class ReticulumNodeService extends Service {
                 || "packetSent".equals(eventName)
                 || "announceReceived".equals(eventName)
                 || "messageReceived".equals(eventName)
+                || "sosAlertChanged".equals(eventName)
         ) {
             Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
         }
@@ -518,6 +589,29 @@ public final class ReticulumNodeService extends Service {
         }
         if ("syncUpdated".equals(eventName)) {
             latestSyncStatusJson = payload.toString();
+            return;
+        }
+        if ("sosStatusChanged".equals(eventName)) {
+            try {
+                final JSObject status = payload.getJSObject("status", payload);
+                latestSosStatusJson = status.toString();
+            } catch (JSONException ignored) {
+                latestSosStatusJson = payload.toString();
+            }
+        }
+    }
+
+    private void maybeRestoreAfterBoot() {
+        if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
+            return;
+        }
+        final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
+        if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
+            return;
+        }
+        final int result = startNode(persistedConfig);
+        if (result != 0) {
+            Log.e(TAG, "Failed to restore node after boot");
         }
     }
 
@@ -544,6 +638,14 @@ public final class ReticulumNodeService extends Service {
         } catch (JSONException ignored) {
             listener.onNodeEvent("syncUpdated", new JSObject());
         }
+
+        try {
+            final JSObject statusPayload = new JSObject();
+            statusPayload.put("status", new JSObject(nonEmptyJson(latestSosStatusJson, "{}")));
+            listener.onNodeEvent("sosStatusChanged", statusPayload);
+        } catch (JSONException ignored) {
+            listener.onNodeEvent("sosStatusChanged", new JSObject());
+        }
     }
 
     private void emitCachedStateToAll() {
@@ -568,6 +670,7 @@ public final class ReticulumNodeService extends Service {
             "Conversations",
             "Messages",
             "Telemetry",
+            "Sos",
         }) {
             final JSObject payload = new JSObject();
             payload.put("scope", scope);
@@ -587,6 +690,8 @@ public final class ReticulumNodeService extends Service {
     private void refreshLatestRuntimeState() {
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
+        latestSosStatusJson = safeSosStatusJson();
+        applyCurrentSosPlatformSettings();
     }
 
     private String safeStatusJson() {
@@ -595,6 +700,16 @@ public final class ReticulumNodeService extends Service {
 
     private String safeSyncStatusJson() {
         return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
+    }
+
+    private String safeSosStatusJson() {
+        return nonEmptyJson(ReticulumBridge.getSosStatusJson(), "{}");
+    }
+
+    private void applyCurrentSosPlatformSettings() {
+        if (sosPlatformCoordinator != null) {
+            sosPlatformCoordinator.applySettingsJson(nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}"));
+        }
     }
 
     private String nonEmptyJson(String raw, String fallback) {
@@ -628,8 +743,16 @@ public final class ReticulumNodeService extends Service {
         );
         updatesChannel.setDescription("Incoming mesh events, action messages, and chat");
 
+        final NotificationChannel sosChannel = new NotificationChannel(
+            SOS_CHANNEL_ID,
+            "SOS Emergency",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        sosChannel.setDescription("Urgent SOS alerts received over the mesh");
+
         manager.createNotificationChannel(runtimeChannel);
         manager.createNotificationChannel(updatesChannel);
+        manager.createNotificationChannel(sosChannel);
     }
 
     private void promoteServiceForRuntime() {
@@ -698,6 +821,10 @@ public final class ReticulumNodeService extends Service {
     }
 
     private void maybeNotifyInboundUpdate(String eventName, JSObject payload) {
+        if ("sosAlertChanged".equals(eventName)) {
+            maybeNotifySosAlert(payload);
+            return;
+        }
         if ("messageReceived".equals(eventName) || "messageUpdated".equals(eventName)) {
             maybeNotifyInboundMessage(payload);
             return;
@@ -710,6 +837,20 @@ public final class ReticulumNodeService extends Service {
                 maybeNotifyInboundEvents();
             }
         }
+    }
+
+    private void maybeNotifySosAlert(JSObject payload) {
+        final JSONObject nestedAlert = payload.optJSONObject("alert");
+        final JSONObject alert = nestedAlert == null ? payload : nestedAlert;
+        final boolean active = alert.optBoolean("active", true);
+        if (!active) {
+            NotificationManagerCompat.from(this).cancel(SOS_NOTIFICATION_ID);
+            postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
+            return;
+        }
+        final String source = alert.optString("sourceHex", "Unknown");
+        final String body = truncate(alert.optString("bodyUtf8", "Emergency SOS alert"));
+        postSosNotification("SOS EMERGENCY from " + source, body);
     }
 
     private void maybeNotifyInboundMessage(JSObject payload) {
@@ -854,6 +995,30 @@ public final class ReticulumNodeService extends Service {
             .setContentIntent(contentIntent)
             .build();
         NotificationManagerCompat.from(this).notify(notificationId, notification);
+    }
+
+    private void postSosNotification(String title, String body) {
+        final Intent launchIntent = new Intent(this, MainActivity.class);
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        final PendingIntent contentIntent = PendingIntent.getActivity(
+            this,
+            SOS_NOTIFICATION_ID,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        final Notification notification = new NotificationCompat.Builder(this, SOS_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(contentIntent)
+            .addAction(0, "Open Chat", contentIntent)
+            .addAction(0, "View on Map", contentIntent)
+            .build();
+        NotificationManagerCompat.from(this).notify(SOS_NOTIFICATION_ID, notification);
     }
 
     private void primeOperationalNotificationState() {

@@ -13,6 +13,7 @@ import {
   type HubDirectoryUpdatedEvent,
   type LogLevel,
   type NodeConfig,
+  type NodeClientEvents,
   type NodeErrorEvent,
   type NodeLogEvent,
   type NodeStatus,
@@ -115,6 +116,11 @@ interface HubRegistrationSnapshot {
   lastAttemptAt?: number;
   lastReadyAt?: number;
   lastError?: string;
+}
+
+interface HubAnnounceCandidate {
+  destination: string;
+  label: string;
 }
 
 const DEFAULT_SETTINGS: NodeUiSettings = {
@@ -455,6 +461,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
 export const useNodeStore = defineStore("node", () => {
   const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
+  const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>({});
   const appDestinationByIdentity = reactive<Record<string, string>>({});
@@ -462,6 +469,7 @@ export const useNodeStore = defineStore("node", () => {
   const livePresenceByDestination = reactive<Record<string, number>>({});
   const liveLxmfPresenceByIdentity = reactive<Record<string, number>>({});
   const logs = ref<UiLogLine[]>([]);
+  const nodeControlEntries = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
@@ -505,6 +513,10 @@ export const useNodeStore = defineStore("node", () => {
 
   function appendLog(level: string, message: string): void {
     logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
+  }
+
+  function appendNodeControlEntry(level: string, message: string, at = nowMs()): void {
+    nodeControlEntries.value = [{ at, level, message }, ...nodeControlEntries.value].slice(0, 120);
   }
 
   function toPluginLogLevel(level: string): LogLevel {
@@ -632,6 +644,30 @@ export const useNodeStore = defineStore("node", () => {
     };
   }
 
+  function upsertNativeAnnounceRecord(
+    record: AnnounceReceivedEvent | AnnounceRecord,
+  ): void {
+    const destination = normalizeDestinationHex(record.destinationHex);
+    if (!isValidDestinationHex(destination)) {
+      return;
+    }
+    const existing = announceByDestination[destination];
+    if (existing && existing.receivedAtMs > record.receivedAtMs) {
+      return;
+    }
+    announceByDestination[destination] = {
+      destinationHex: destination,
+      identityHex: normalizeDestinationHex(record.identityHex),
+      destinationKind: record.destinationKind,
+      announceClass: record.announceClass,
+      appData: record.appData,
+      displayName: record.displayName ?? existing?.displayName,
+      hops: record.hops,
+      interfaceHex: record.interfaceHex,
+      receivedAtMs: record.receivedAtMs,
+    };
+  }
+
   function isLocalPeerDestination(destinationRaw: string): boolean {
     const destination = normalizeDestinationHex(destinationRaw);
     if (!isValidDestinationHex(destination)) {
@@ -700,6 +736,12 @@ export const useNodeStore = defineStore("node", () => {
   function clearHubDirectoryState(): void {
     hubDirectorySnapshot.value = null;
     lastHubRefreshAt.value = 0;
+  }
+
+  function clearAnnounceState(): void {
+    for (const destination of Object.keys(announceByDestination)) {
+      delete announceByDestination[destination];
+    }
   }
 
   function upsertResolvedPeer(peer: PeerRecord): void {
@@ -1335,6 +1377,7 @@ export const useNodeStore = defineStore("node", () => {
     try {
       const announces = await client.value.listAnnounces();
       for (const announce of announces) {
+        upsertNativeAnnounceRecord(announce);
         applyAnnounceUpdate(announce, "snapshot");
       }
     } catch (error: unknown) {
@@ -1620,6 +1663,7 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         presenceNow.value = event.receivedAtMs;
+        upsertNativeAnnounceRecord(event);
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
         const destination = normalizeDestinationHex(event.change.destinationHex);
@@ -1628,10 +1672,6 @@ export const useNodeStore = defineStore("node", () => {
         }
         presenceNow.value = nowMs();
         applyPeerChanged(event.change);
-        logUi(
-          "Debug",
-          `[peers] peerChanged destination=${destination} nativeState=${event.change.state} lastError=${event.change.lastError ?? "-"} ${describePeerState(destination)}.`,
-        );
       }),
       nodeClient.on("peerResolved", (peer: PeerRecord) => {
         const destination = normalizeDestinationHex(peer.destinationHex);
@@ -1640,10 +1680,6 @@ export const useNodeStore = defineStore("node", () => {
         }
         presenceNow.value = peer.lastSeenAtMs;
         upsertResolvedPeer(peer);
-        logUi(
-          "Debug",
-          `[peers] peerResolved destination=${destination} state=${peer.state} saved=${peer.saved} activeLink=${peer.activeLink} identity=${peer.identityHex ?? "-"} lxmf=${peer.lxmfDestinationHex ?? "-"} display=${peer.displayName ?? "-"} appData=${peer.appData ?? "-"}.`,
-        );
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
         presenceNow.value = event.receivedAtMs;
@@ -1657,6 +1693,9 @@ export const useNodeStore = defineStore("node", () => {
         };
         lastHubRefreshAt.value = event.receivedAtMs;
         void refreshMessagingState();
+      }),
+      nodeClient.on("operationalNotice", (event) => {
+        appendNodeControlEntry(event.level, event.message, event.atMs);
       }),
       nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
         switch (event.scope) {
@@ -1689,7 +1728,7 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
-        appendLog("Error", lastError.value);
+        appendNodeControlEntry("Error", lastError.value);
       }),
     ];
   }
@@ -1800,15 +1839,16 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery("startup");
       await refreshHubRegistrationState(true);
-      appendLog("Info", "Node started.");
+      appendNodeControlEntry("Info", "Node started.");
 
       if (hubModeUsesRch(settings.hub.mode)) {
         await refreshHubDirectory().catch((error: unknown) => {
-          appendLog("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
+          appendNodeControlEntry("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
         });
       }
     } catch (error: unknown) {
@@ -1823,8 +1863,9 @@ export const useNodeStore = defineStore("node", () => {
       }
       clearLastError();
       await client.value.stop();
-      appendLog("Info", "Node stopped.");
+      appendNodeControlEntry("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      clearAnnounceState();
       await refreshOperationalSummaryProjection();
       await refreshHubRegistrationState(false);
 
@@ -1846,15 +1887,16 @@ export const useNodeStore = defineStore("node", () => {
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
+      await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery("restart");
       await refreshHubRegistrationState(true);
-      appendLog("Info", "Node restarted with updated settings.");
+      appendNodeControlEntry("Info", "Node restarted with updated settings.");
 
       if (hubModeUsesRch(settings.hub.mode)) {
         await refreshHubDirectory().catch((error: unknown) => {
-          appendLog("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
+          appendNodeControlEntry("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
         });
       }
     } catch (error: unknown) {
@@ -2337,6 +2379,35 @@ export const useNodeStore = defineStore("node", () => {
   const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
   const hubDirectoryPeers = computed(() => hubDirectorySnapshot.value?.items ?? []);
   const effectiveConnectedMode = computed(() => Boolean(hubDirectorySnapshot.value?.effectiveConnectedMode));
+  const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() => {
+    const byIdentity = new Map<string, HubAnnounceCandidate & { receivedAtMs: number }>();
+    for (const announce of Object.values(announceByDestination)) {
+      if (announce.announceClass !== "RchHubServer") {
+        continue;
+      }
+      const identity = isValidDestinationHex(announce.identityHex)
+        ? announce.identityHex
+        : announce.destinationHex;
+      const candidate = {
+        destination: identity,
+        label: announce.displayName || identity,
+        receivedAtMs: announce.receivedAtMs,
+      };
+      const existing = byIdentity.get(identity);
+      if (!existing || existing.receivedAtMs < announce.receivedAtMs) {
+        byIdentity.set(identity, candidate);
+      }
+    }
+    return [...byIdentity.values()]
+      .map(({ destination, label }) => ({ destination, label }))
+      .sort((left, right) => {
+        const byLabel = left.label.localeCompare(right.label);
+        if (byLabel !== 0) {
+          return byLabel;
+        }
+        return left.destination.localeCompare(right.destination);
+      });
+  });
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
   const ready = computed(() => status.value.running);
@@ -2557,6 +2628,60 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  function requireClient(action: string): ReticulumNodeClient {
+    if (!client.value) {
+      throw captureActionError(action, new Error("Node client is not initialized."));
+    }
+    return client.value;
+  }
+
+  function onClientEvent<K extends keyof NodeClientEvents>(
+    event: K,
+    handler: (payload: NodeClientEvents[K]) => void,
+  ): () => void {
+    return client.value?.on(event, handler) ?? (() => undefined);
+  }
+
+  async function getSosSettings() {
+    return requireClient("Get SOS settings failed").getSosSettings();
+  }
+
+  async function setSosSettings(settingsRecord: Parameters<ReticulumNodeClient["setSosSettings"]>[0]): Promise<void> {
+    await requireClient("Set SOS settings failed").setSosSettings(settingsRecord);
+  }
+
+  async function setSosPin(pin?: string): Promise<void> {
+    await requireClient("Set SOS PIN failed").setSosPin(pin);
+  }
+
+  async function getSosStatus() {
+    return requireClient("Get SOS status failed").getSosStatus();
+  }
+
+  async function triggerSos(source?: Parameters<ReticulumNodeClient["triggerSos"]>[0]) {
+    return requireClient("Trigger SOS failed").triggerSos(source);
+  }
+
+  async function deactivateSos(pin?: string) {
+    return requireClient("Deactivate SOS failed").deactivateSos(pin);
+  }
+
+  async function submitSosTelemetry(telemetry: Parameters<ReticulumNodeClient["submitSosTelemetry"]>[0]): Promise<void> {
+    await requireClient("Submit SOS telemetry failed").submitSosTelemetry(telemetry);
+  }
+
+  async function listSosAlerts() {
+    return requireClient("List SOS alerts failed").listSosAlerts();
+  }
+
+  async function listSosLocations() {
+    return requireClient("List SOS locations failed").listSosLocations();
+  }
+
+  async function listSosAudio() {
+    return requireClient("List SOS audio failed").listSosAudio();
+  }
+
   async function announceNow(): Promise<void> {
     if (!client.value) {
       return;
@@ -2625,6 +2750,7 @@ export const useNodeStore = defineStore("node", () => {
       bindClientEvents(client.value);
       await configureClientLogging();
       status.value = { ...EMPTY_STATUS };
+      clearAnnounceState();
       await Promise.all([
         refreshSettingsProjection(),
         refreshSavedPeersProjection(),
@@ -2642,8 +2768,10 @@ export const useNodeStore = defineStore("node", () => {
     status,
     syncStatus,
     operationalSummary,
+    announceByDestination,
     hubDirectorySnapshot,
     hubDirectoryPeers,
+    hubAnnounceCandidates,
     effectiveConnectedMode,
     hubRegistration,
     hubBootstrapProfile,
@@ -2651,6 +2779,7 @@ export const useNodeStore = defineStore("node", () => {
     hubRegistrationPending,
     hubRegistrationSummary,
     logs,
+    nodeControlEntries,
     lastError,
     lastHubRefreshAt,
     discoveredByDestination,
@@ -2704,6 +2833,17 @@ export const useNodeStore = defineStore("node", () => {
     sendBytesDirect,
     sendBytesViaPropagation,
     sendLxmf,
+    onClientEvent,
+    getSosSettings,
+    setSosSettings,
+    setSosPin,
+    getSosStatus,
+    triggerSos,
+    deactivateSos,
+    submitSosTelemetry,
+    listSosAlerts,
+    listSosLocations,
+    listSosAudio,
     setActivePropagationNode,
     requestLxmfSync,
     broadcastBytes,

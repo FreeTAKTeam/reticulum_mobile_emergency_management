@@ -10,16 +10,18 @@ const props = defineProps<{
 }>();
 
 const gatewayStatus = computed(() => {
-  if (props.settings.hub.mode === "Disabled") {
-    return "Hub disabled";
+  if (props.settings.hub.mode === "Autonomous") {
+    return "Autonomous";
   }
-  if (props.settings.hub.mode === "RchHttp") {
-    return "Legacy HTTP";
+  if (props.settings.hub.mode === "Connected") {
+    return props.settings.hub.identityHash
+      ? `RCH ${props.settings.hub.identityHash.slice(0, 8)}...`
+      : "Connected";
   }
   if (props.settings.hub.identityHash) {
     return `RCH ${props.settings.hub.identityHash.slice(0, 8)}...`;
   }
-  return "RCH ListClients";
+  return "Semi-autonomous";
 });
 
 const cards = computed(() => [

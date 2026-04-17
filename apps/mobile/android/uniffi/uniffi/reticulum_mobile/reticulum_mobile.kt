@@ -806,6 +806,32 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -847,6 +873,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_connect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_deactivate_sos(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_delete_eam(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_delete_event(`ptr`: Pointer,`uid`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -869,6 +897,10 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_saved_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_get_sos_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_get_sos_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_telemetry_positions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -884,6 +916,14 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_fn_method_node_list_messages(`ptr`: Pointer,`conversationId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_list_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_alerts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_audio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_locations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_list_telemetry_destinations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_record_local_telemetry_fix(`ptr`: Pointer,`position`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -911,12 +951,24 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_set_saved_peers(`ptr`: Pointer,`peers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_set_sos_pin(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_set_sos_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_start(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_accelerometer_sample(`ptr`: Pointer,`x`: Double,`y`: Double,`z`: Double,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_device_telemetry(`ptr`: Pointer,`telemetry`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_screen_event(`ptr`: Pointer,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_subscribe_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_reticulum_mobile_fn_method_node_trigger_sos(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_upsert_eam(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_upsert_event(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1049,6 +1101,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_connect_peer(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_deactivate_sos(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_delete_eam(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_delete_event(
@@ -1071,6 +1125,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_saved_peers(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_get_sos_settings(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_get_sos_status(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_status(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_telemetry_positions(
@@ -1086,6 +1144,14 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_checksum_method_node_list_messages(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_list_peers(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_list_sos_alerts(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_list_sos_audio(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_list_sos_locations(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_list_telemetry_destinations(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_record_local_telemetry_fix(
     ): Short
@@ -1113,11 +1179,23 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_set_saved_peers(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_set_sos_pin(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_set_sos_settings(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_start(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_stop(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_submit_sos_accelerometer_sample(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_submit_sos_device_telemetry(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_submit_sos_screen_event(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_subscribe_events(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_trigger_sos(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_upsert_eam(
     ): Short
@@ -1163,6 +1241,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_connect_peer() != 14821.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_deactivate_sos() != 39617.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_delete_eam() != 25624.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1196,6 +1277,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_saved_peers() != 31984.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_get_sos_settings() != 37086.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_get_sos_status() != 8817.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_status() != 30339.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1218,6 +1305,18 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_list_peers() != 35816.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_list_sos_alerts() != 33860.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_list_sos_audio() != 42906.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_list_sos_locations() != 38499.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_list_telemetry_destinations() != 27622.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_record_local_telemetry_fix() != 5442.toShort()) {
@@ -1259,13 +1358,31 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_set_saved_peers() != 51995.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_set_sos_pin() != 61143.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_set_sos_settings() != 17643.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_start() != 42577.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_stop() != 19611.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_submit_sos_accelerometer_sample() != 37576.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_submit_sos_device_telemetry() != 51493.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_submit_sos_screen_event() != 14013.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_subscribe_events() != 14960.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_trigger_sos() != 4215.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_upsert_eam() != 23046.toShort()) {
@@ -1916,6 +2033,8 @@ public interface NodeInterface {
     
     fun `connectPeer`(`destinationHex`: kotlin.String)
     
+    fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord
+    
     fun `deleteEam`(`callsign`: kotlin.String, `deletedAtMs`: kotlin.ULong)
     
     fun `deleteEvent`(`uid`: kotlin.String, `deletedAtMs`: kotlin.ULong)
@@ -1938,6 +2057,10 @@ public interface NodeInterface {
     
     fun `getSavedPeers`(): List<SavedPeerRecord>
     
+    fun `getSosSettings`(): SosSettingsRecord
+    
+    fun `getSosStatus`(): SosStatusRecord
+    
     fun `getStatus`(): NodeStatus
     
     fun `getTelemetryPositions`(): List<TelemetryPositionRecord>
@@ -1953,6 +2076,14 @@ public interface NodeInterface {
     fun `listMessages`(`conversationId`: kotlin.String?): List<MessageRecord>
     
     fun `listPeers`(): List<PeerRecord>
+    
+    fun `listSosAlerts`(): List<SosAlertRecord>
+    
+    fun `listSosAudio`(): List<SosAudioRecord>
+    
+    fun `listSosLocations`(): List<SosLocationRecord>
+    
+    fun `listTelemetryDestinations`(): List<kotlin.String>
     
     fun `recordLocalTelemetryFix`(`position`: TelemetryPositionRecord)
     
@@ -1980,11 +2111,23 @@ public interface NodeInterface {
     
     fun `setSavedPeers`(`peers`: List<SavedPeerRecord>)
     
+    fun `setSosPin`(`pin`: kotlin.String?)
+    
+    fun `setSosSettings`(`settings`: SosSettingsRecord)
+    
     fun `start`(`config`: NodeConfig)
     
     fun `stop`()
     
+    fun `submitSosAccelerometerSample`(`x`: kotlin.Double, `y`: kotlin.Double, `z`: kotlin.Double, `atMs`: kotlin.ULong): SosStatusRecord?
+    
+    fun `submitSosDeviceTelemetry`(`telemetry`: SosDeviceTelemetryRecord)
+    
+    fun `submitSosScreenEvent`(`atMs`: kotlin.ULong): SosStatusRecord?
+    
     fun `subscribeEvents`(): EventSubscription
+    
+    fun `triggerSos`(`source`: SosTriggerSource): SosStatusRecord
     
     fun `upsertEam`(`record`: EamProjectionRecord)
     
@@ -2130,6 +2273,19 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
 
     
+    @Throws(NodeException::class)override fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord {
+            return FfiConverterTypeSosStatusRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_deactivate_sos(
+        it, FfiConverterOptionalString.lower(`pin`),_status)
+}
+    }
+    )
+    }
+    
+
+    
     @Throws(NodeException::class)override fun `deleteEam`(`callsign`: kotlin.String, `deletedAtMs`: kotlin.ULong)
         = 
     callWithPointer {
@@ -2268,6 +2424,32 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     
 
+    
+    @Throws(NodeException::class)override fun `getSosSettings`(): SosSettingsRecord {
+            return FfiConverterTypeSosSettingsRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_sos_settings(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `getSosStatus`(): SosStatusRecord {
+            return FfiConverterTypeSosStatusRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_sos_status(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
     override fun `getStatus`(): NodeStatus {
             return FfiConverterTypeNodeStatus.lift(
     callWithPointer {
@@ -2363,6 +2545,58 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_peers(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `listSosAlerts`(): List<SosAlertRecord> {
+            return FfiConverterSequenceTypeSosAlertRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_sos_alerts(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `listSosAudio`(): List<SosAudioRecord> {
+            return FfiConverterSequenceTypeSosAudioRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_sos_audio(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `listSosLocations`(): List<SosLocationRecord> {
+            return FfiConverterSequenceTypeSosLocationRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_sos_locations(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `listTelemetryDestinations`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_telemetry_destinations(
         it, _status)
 }
     }
@@ -2527,6 +2761,30 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
 
     
+    @Throws(NodeException::class)override fun `setSosPin`(`pin`: kotlin.String?)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_sos_pin(
+        it, FfiConverterOptionalString.lower(`pin`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(NodeException::class)override fun `setSosSettings`(`settings`: SosSettingsRecord)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_sos_settings(
+        it, FfiConverterTypeSosSettingsRecord.lower(`settings`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(NodeException::class)override fun `start`(`config`: NodeConfig)
         = 
     callWithPointer {
@@ -2550,12 +2808,63 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
     
 
+    
+    @Throws(NodeException::class)override fun `submitSosAccelerometerSample`(`x`: kotlin.Double, `y`: kotlin.Double, `z`: kotlin.Double, `atMs`: kotlin.ULong): SosStatusRecord? {
+            return FfiConverterOptionalTypeSosStatusRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_submit_sos_accelerometer_sample(
+        it, FfiConverterDouble.lower(`x`),FfiConverterDouble.lower(`y`),FfiConverterDouble.lower(`z`),FfiConverterULong.lower(`atMs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `submitSosDeviceTelemetry`(`telemetry`: SosDeviceTelemetryRecord)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_submit_sos_device_telemetry(
+        it, FfiConverterTypeSosDeviceTelemetryRecord.lower(`telemetry`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(NodeException::class)override fun `submitSosScreenEvent`(`atMs`: kotlin.ULong): SosStatusRecord? {
+            return FfiConverterOptionalTypeSosStatusRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_submit_sos_screen_event(
+        it, FfiConverterULong.lower(`atMs`),_status)
+}
+    }
+    )
+    }
+    
+
     override fun `subscribeEvents`(): EventSubscription {
             return FfiConverterTypeEventSubscription.lift(
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_subscribe_events(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `triggerSos`(`source`: SosTriggerSource): SosStatusRecord {
+            return FfiConverterTypeSosStatusRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_trigger_sos(
+        it, FfiConverterTypeSosTriggerSource.lower(`source`),_status)
 }
     }
     )
@@ -2628,6 +2937,7 @@ data class AnnounceRecord (
     var `destinationHex`: kotlin.String, 
     var `identityHex`: kotlin.String, 
     var `destinationKind`: kotlin.String, 
+    var `announceClass`: AnnounceClass, 
     var `appData`: kotlin.String, 
     var `displayName`: kotlin.String?, 
     var `hops`: kotlin.UByte, 
@@ -2647,6 +2957,7 @@ public object FfiConverterTypeAnnounceRecord: FfiConverterRustBuffer<AnnounceRec
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterTypeAnnounceClass.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUByte.read(buf),
@@ -2659,6 +2970,7 @@ public object FfiConverterTypeAnnounceRecord: FfiConverterRustBuffer<AnnounceRec
             FfiConverterString.allocationSize(value.`destinationHex`) +
             FfiConverterString.allocationSize(value.`identityHex`) +
             FfiConverterString.allocationSize(value.`destinationKind`) +
+            FfiConverterTypeAnnounceClass.allocationSize(value.`announceClass`) +
             FfiConverterString.allocationSize(value.`appData`) +
             FfiConverterOptionalString.allocationSize(value.`displayName`) +
             FfiConverterUByte.allocationSize(value.`hops`) +
@@ -2670,6 +2982,7 @@ public object FfiConverterTypeAnnounceRecord: FfiConverterRustBuffer<AnnounceRec
             FfiConverterString.write(value.`destinationHex`, buf)
             FfiConverterString.write(value.`identityHex`, buf)
             FfiConverterString.write(value.`destinationKind`, buf)
+            FfiConverterTypeAnnounceClass.write(value.`announceClass`, buf)
             FfiConverterString.write(value.`appData`, buf)
             FfiConverterOptionalString.write(value.`displayName`, buf)
             FfiConverterUByte.write(value.`hops`, buf)
@@ -3092,6 +3405,98 @@ public object FfiConverterTypeEventProjectionRecord: FfiConverterRustBuffer<Even
 
 
 
+data class HubDirectoryPeerRecord (
+    var `identity`: kotlin.String, 
+    var `destinationHash`: kotlin.String, 
+    var `displayName`: kotlin.String?, 
+    var `announceCapabilities`: List<kotlin.String>, 
+    var `clientType`: kotlin.String?, 
+    var `registeredMode`: kotlin.String?, 
+    var `lastSeen`: kotlin.String?, 
+    var `status`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHubDirectoryPeerRecord: FfiConverterRustBuffer<HubDirectoryPeerRecord> {
+    override fun read(buf: ByteBuffer): HubDirectoryPeerRecord {
+        return HubDirectoryPeerRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HubDirectoryPeerRecord) = (
+            FfiConverterString.allocationSize(value.`identity`) +
+            FfiConverterString.allocationSize(value.`destinationHash`) +
+            FfiConverterOptionalString.allocationSize(value.`displayName`) +
+            FfiConverterSequenceString.allocationSize(value.`announceCapabilities`) +
+            FfiConverterOptionalString.allocationSize(value.`clientType`) +
+            FfiConverterOptionalString.allocationSize(value.`registeredMode`) +
+            FfiConverterOptionalString.allocationSize(value.`lastSeen`) +
+            FfiConverterOptionalString.allocationSize(value.`status`)
+    )
+
+    override fun write(value: HubDirectoryPeerRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`identity`, buf)
+            FfiConverterString.write(value.`destinationHash`, buf)
+            FfiConverterOptionalString.write(value.`displayName`, buf)
+            FfiConverterSequenceString.write(value.`announceCapabilities`, buf)
+            FfiConverterOptionalString.write(value.`clientType`, buf)
+            FfiConverterOptionalString.write(value.`registeredMode`, buf)
+            FfiConverterOptionalString.write(value.`lastSeen`, buf)
+            FfiConverterOptionalString.write(value.`status`, buf)
+    }
+}
+
+
+
+data class HubDirectorySnapshot (
+    var `effectiveConnectedMode`: kotlin.Boolean, 
+    var `items`: List<HubDirectoryPeerRecord>, 
+    var `receivedAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHubDirectorySnapshot: FfiConverterRustBuffer<HubDirectorySnapshot> {
+    override fun read(buf: ByteBuffer): HubDirectorySnapshot {
+        return HubDirectorySnapshot(
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceTypeHubDirectoryPeerRecord.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HubDirectorySnapshot) = (
+            FfiConverterBoolean.allocationSize(value.`effectiveConnectedMode`) +
+            FfiConverterSequenceTypeHubDirectoryPeerRecord.allocationSize(value.`items`) +
+            FfiConverterULong.allocationSize(value.`receivedAtMs`)
+    )
+
+    override fun write(value: HubDirectorySnapshot, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`effectiveConnectedMode`, buf)
+            FfiConverterSequenceTypeHubDirectoryPeerRecord.write(value.`items`, buf)
+            FfiConverterULong.write(value.`receivedAtMs`, buf)
+    }
+}
+
+
+
 data class HubSettingsRecord (
     var `mode`: HubMode, 
     var `identityHash`: kotlin.String, 
@@ -3464,6 +3869,42 @@ public object FfiConverterTypeNodeStatus: FfiConverterRustBuffer<NodeStatus> {
 
 
 
+data class OperationalNotice (
+    var `level`: LogLevel, 
+    var `message`: kotlin.String, 
+    var `atMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeOperationalNotice: FfiConverterRustBuffer<OperationalNotice> {
+    override fun read(buf: ByteBuffer): OperationalNotice {
+        return OperationalNotice(
+            FfiConverterTypeLogLevel.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: OperationalNotice) = (
+            FfiConverterTypeLogLevel.allocationSize(value.`level`) +
+            FfiConverterString.allocationSize(value.`message`) +
+            FfiConverterULong.allocationSize(value.`atMs`)
+    )
+
+    override fun write(value: OperationalNotice, buf: ByteBuffer) {
+            FfiConverterTypeLogLevel.write(value.`level`, buf)
+            FfiConverterString.write(value.`message`, buf)
+            FfiConverterULong.write(value.`atMs`, buf)
+    }
+}
+
+
+
 data class OperationalSummary (
     var `running`: kotlin.Boolean, 
     var `peerCountTotal`: kotlin.UInt, 
@@ -3626,6 +4067,7 @@ data class PeerRecord (
     var `saved`: kotlin.Boolean, 
     var `stale`: kotlin.Boolean, 
     var `activeLink`: kotlin.Boolean, 
+    var `hubDerived`: kotlin.Boolean, 
     var `lastResolutionError`: kotlin.String?, 
     var `lastResolutionAttemptAtMs`: kotlin.ULong?, 
     var `lastSeenAtMs`: kotlin.ULong, 
@@ -3651,6 +4093,7 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterULong.read(buf),
@@ -3669,6 +4112,7 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterBoolean.allocationSize(value.`saved`) +
             FfiConverterBoolean.allocationSize(value.`stale`) +
             FfiConverterBoolean.allocationSize(value.`activeLink`) +
+            FfiConverterBoolean.allocationSize(value.`hubDerived`) +
             FfiConverterOptionalString.allocationSize(value.`lastResolutionError`) +
             FfiConverterOptionalULong.allocationSize(value.`lastResolutionAttemptAtMs`) +
             FfiConverterULong.allocationSize(value.`lastSeenAtMs`) +
@@ -3686,6 +4130,7 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
             FfiConverterBoolean.write(value.`saved`, buf)
             FfiConverterBoolean.write(value.`stale`, buf)
             FfiConverterBoolean.write(value.`activeLink`, buf)
+            FfiConverterBoolean.write(value.`hubDerived`, buf)
             FfiConverterOptionalString.write(value.`lastResolutionError`, buf)
             FfiConverterOptionalULong.write(value.`lastResolutionAttemptAtMs`, buf)
             FfiConverterULong.write(value.`lastSeenAtMs`, buf)
@@ -3811,6 +4256,414 @@ public object FfiConverterTypeSendLxmfRequest: FfiConverterRustBuffer<SendLxmfRe
             FfiConverterString.write(value.`bodyUtf8`, buf)
             FfiConverterOptionalString.write(value.`title`, buf)
             FfiConverterTypeSendMode.write(value.`sendMode`, buf)
+    }
+}
+
+
+
+data class SosAlertRecord (
+    var `incidentId`: kotlin.String, 
+    var `sourceHex`: kotlin.String, 
+    var `conversationId`: kotlin.String, 
+    var `state`: SosMessageKind, 
+    var `active`: kotlin.Boolean, 
+    var `bodyUtf8`: kotlin.String, 
+    var `lat`: kotlin.Double?, 
+    var `lon`: kotlin.Double?, 
+    var `batteryPercent`: kotlin.Double?, 
+    var `audioId`: kotlin.String?, 
+    var `messageIdHex`: kotlin.String?, 
+    var `receivedAtMs`: kotlin.ULong, 
+    var `updatedAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosAlertRecord: FfiConverterRustBuffer<SosAlertRecord> {
+    override fun read(buf: ByteBuffer): SosAlertRecord {
+        return SosAlertRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeSosMessageKind.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosAlertRecord) = (
+            FfiConverterString.allocationSize(value.`incidentId`) +
+            FfiConverterString.allocationSize(value.`sourceHex`) +
+            FfiConverterString.allocationSize(value.`conversationId`) +
+            FfiConverterTypeSosMessageKind.allocationSize(value.`state`) +
+            FfiConverterBoolean.allocationSize(value.`active`) +
+            FfiConverterString.allocationSize(value.`bodyUtf8`) +
+            FfiConverterOptionalDouble.allocationSize(value.`lat`) +
+            FfiConverterOptionalDouble.allocationSize(value.`lon`) +
+            FfiConverterOptionalDouble.allocationSize(value.`batteryPercent`) +
+            FfiConverterOptionalString.allocationSize(value.`audioId`) +
+            FfiConverterOptionalString.allocationSize(value.`messageIdHex`) +
+            FfiConverterULong.allocationSize(value.`receivedAtMs`) +
+            FfiConverterULong.allocationSize(value.`updatedAtMs`)
+    )
+
+    override fun write(value: SosAlertRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`incidentId`, buf)
+            FfiConverterString.write(value.`sourceHex`, buf)
+            FfiConverterString.write(value.`conversationId`, buf)
+            FfiConverterTypeSosMessageKind.write(value.`state`, buf)
+            FfiConverterBoolean.write(value.`active`, buf)
+            FfiConverterString.write(value.`bodyUtf8`, buf)
+            FfiConverterOptionalDouble.write(value.`lat`, buf)
+            FfiConverterOptionalDouble.write(value.`lon`, buf)
+            FfiConverterOptionalDouble.write(value.`batteryPercent`, buf)
+            FfiConverterOptionalString.write(value.`audioId`, buf)
+            FfiConverterOptionalString.write(value.`messageIdHex`, buf)
+            FfiConverterULong.write(value.`receivedAtMs`, buf)
+            FfiConverterULong.write(value.`updatedAtMs`, buf)
+    }
+}
+
+
+
+data class SosAudioRecord (
+    var `audioId`: kotlin.String, 
+    var `incidentId`: kotlin.String, 
+    var `sourceHex`: kotlin.String, 
+    var `path`: kotlin.String, 
+    var `mimeType`: kotlin.String, 
+    var `durationSeconds`: kotlin.UInt, 
+    var `createdAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosAudioRecord: FfiConverterRustBuffer<SosAudioRecord> {
+    override fun read(buf: ByteBuffer): SosAudioRecord {
+        return SosAudioRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosAudioRecord) = (
+            FfiConverterString.allocationSize(value.`audioId`) +
+            FfiConverterString.allocationSize(value.`incidentId`) +
+            FfiConverterString.allocationSize(value.`sourceHex`) +
+            FfiConverterString.allocationSize(value.`path`) +
+            FfiConverterString.allocationSize(value.`mimeType`) +
+            FfiConverterUInt.allocationSize(value.`durationSeconds`) +
+            FfiConverterULong.allocationSize(value.`createdAtMs`)
+    )
+
+    override fun write(value: SosAudioRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`audioId`, buf)
+            FfiConverterString.write(value.`incidentId`, buf)
+            FfiConverterString.write(value.`sourceHex`, buf)
+            FfiConverterString.write(value.`path`, buf)
+            FfiConverterString.write(value.`mimeType`, buf)
+            FfiConverterUInt.write(value.`durationSeconds`, buf)
+            FfiConverterULong.write(value.`createdAtMs`, buf)
+    }
+}
+
+
+
+data class SosDeviceTelemetryRecord (
+    var `lat`: kotlin.Double?, 
+    var `lon`: kotlin.Double?, 
+    var `alt`: kotlin.Double?, 
+    var `speed`: kotlin.Double?, 
+    var `course`: kotlin.Double?, 
+    var `accuracy`: kotlin.Double?, 
+    var `batteryPercent`: kotlin.Double?, 
+    var `batteryCharging`: kotlin.Boolean?, 
+    var `updatedAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosDeviceTelemetryRecord: FfiConverterRustBuffer<SosDeviceTelemetryRecord> {
+    override fun read(buf: ByteBuffer): SosDeviceTelemetryRecord {
+        return SosDeviceTelemetryRecord(
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosDeviceTelemetryRecord) = (
+            FfiConverterOptionalDouble.allocationSize(value.`lat`) +
+            FfiConverterOptionalDouble.allocationSize(value.`lon`) +
+            FfiConverterOptionalDouble.allocationSize(value.`alt`) +
+            FfiConverterOptionalDouble.allocationSize(value.`speed`) +
+            FfiConverterOptionalDouble.allocationSize(value.`course`) +
+            FfiConverterOptionalDouble.allocationSize(value.`accuracy`) +
+            FfiConverterOptionalDouble.allocationSize(value.`batteryPercent`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`batteryCharging`) +
+            FfiConverterULong.allocationSize(value.`updatedAtMs`)
+    )
+
+    override fun write(value: SosDeviceTelemetryRecord, buf: ByteBuffer) {
+            FfiConverterOptionalDouble.write(value.`lat`, buf)
+            FfiConverterOptionalDouble.write(value.`lon`, buf)
+            FfiConverterOptionalDouble.write(value.`alt`, buf)
+            FfiConverterOptionalDouble.write(value.`speed`, buf)
+            FfiConverterOptionalDouble.write(value.`course`, buf)
+            FfiConverterOptionalDouble.write(value.`accuracy`, buf)
+            FfiConverterOptionalDouble.write(value.`batteryPercent`, buf)
+            FfiConverterOptionalBoolean.write(value.`batteryCharging`, buf)
+            FfiConverterULong.write(value.`updatedAtMs`, buf)
+    }
+}
+
+
+
+data class SosLocationRecord (
+    var `incidentId`: kotlin.String, 
+    var `sourceHex`: kotlin.String, 
+    var `lat`: kotlin.Double, 
+    var `lon`: kotlin.Double, 
+    var `alt`: kotlin.Double?, 
+    var `accuracy`: kotlin.Double?, 
+    var `batteryPercent`: kotlin.Double?, 
+    var `recordedAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosLocationRecord: FfiConverterRustBuffer<SosLocationRecord> {
+    override fun read(buf: ByteBuffer): SosLocationRecord {
+        return SosLocationRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterOptionalDouble.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosLocationRecord) = (
+            FfiConverterString.allocationSize(value.`incidentId`) +
+            FfiConverterString.allocationSize(value.`sourceHex`) +
+            FfiConverterDouble.allocationSize(value.`lat`) +
+            FfiConverterDouble.allocationSize(value.`lon`) +
+            FfiConverterOptionalDouble.allocationSize(value.`alt`) +
+            FfiConverterOptionalDouble.allocationSize(value.`accuracy`) +
+            FfiConverterOptionalDouble.allocationSize(value.`batteryPercent`) +
+            FfiConverterULong.allocationSize(value.`recordedAtMs`)
+    )
+
+    override fun write(value: SosLocationRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`incidentId`, buf)
+            FfiConverterString.write(value.`sourceHex`, buf)
+            FfiConverterDouble.write(value.`lat`, buf)
+            FfiConverterDouble.write(value.`lon`, buf)
+            FfiConverterOptionalDouble.write(value.`alt`, buf)
+            FfiConverterOptionalDouble.write(value.`accuracy`, buf)
+            FfiConverterOptionalDouble.write(value.`batteryPercent`, buf)
+            FfiConverterULong.write(value.`recordedAtMs`, buf)
+    }
+}
+
+
+
+data class SosSettingsRecord (
+    var `enabled`: kotlin.Boolean, 
+    var `messageTemplate`: kotlin.String, 
+    var `cancelMessageTemplate`: kotlin.String, 
+    var `countdownSeconds`: kotlin.UInt, 
+    var `includeLocation`: kotlin.Boolean, 
+    var `triggerShake`: kotlin.Boolean, 
+    var `triggerTapPattern`: kotlin.Boolean, 
+    var `triggerPowerButton`: kotlin.Boolean, 
+    var `shakeSensitivity`: kotlin.Double, 
+    var `audioRecording`: kotlin.Boolean, 
+    var `audioDurationSeconds`: kotlin.UInt, 
+    var `periodicUpdates`: kotlin.Boolean, 
+    var `updateIntervalSeconds`: kotlin.UInt, 
+    var `floatingButton`: kotlin.Boolean, 
+    var `silentAutoAnswer`: kotlin.Boolean, 
+    var `deactivationPinHash`: kotlin.String?, 
+    var `deactivationPinSalt`: kotlin.String?, 
+    var `floatingButtonX`: kotlin.Double, 
+    var `floatingButtonY`: kotlin.Double, 
+    var `activePillX`: kotlin.Double, 
+    var `activePillY`: kotlin.Double
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosSettingsRecord: FfiConverterRustBuffer<SosSettingsRecord> {
+    override fun read(buf: ByteBuffer): SosSettingsRecord {
+        return SosSettingsRecord(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterDouble.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosSettingsRecord) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterString.allocationSize(value.`messageTemplate`) +
+            FfiConverterString.allocationSize(value.`cancelMessageTemplate`) +
+            FfiConverterUInt.allocationSize(value.`countdownSeconds`) +
+            FfiConverterBoolean.allocationSize(value.`includeLocation`) +
+            FfiConverterBoolean.allocationSize(value.`triggerShake`) +
+            FfiConverterBoolean.allocationSize(value.`triggerTapPattern`) +
+            FfiConverterBoolean.allocationSize(value.`triggerPowerButton`) +
+            FfiConverterDouble.allocationSize(value.`shakeSensitivity`) +
+            FfiConverterBoolean.allocationSize(value.`audioRecording`) +
+            FfiConverterUInt.allocationSize(value.`audioDurationSeconds`) +
+            FfiConverterBoolean.allocationSize(value.`periodicUpdates`) +
+            FfiConverterUInt.allocationSize(value.`updateIntervalSeconds`) +
+            FfiConverterBoolean.allocationSize(value.`floatingButton`) +
+            FfiConverterBoolean.allocationSize(value.`silentAutoAnswer`) +
+            FfiConverterOptionalString.allocationSize(value.`deactivationPinHash`) +
+            FfiConverterOptionalString.allocationSize(value.`deactivationPinSalt`) +
+            FfiConverterDouble.allocationSize(value.`floatingButtonX`) +
+            FfiConverterDouble.allocationSize(value.`floatingButtonY`) +
+            FfiConverterDouble.allocationSize(value.`activePillX`) +
+            FfiConverterDouble.allocationSize(value.`activePillY`)
+    )
+
+    override fun write(value: SosSettingsRecord, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterString.write(value.`messageTemplate`, buf)
+            FfiConverterString.write(value.`cancelMessageTemplate`, buf)
+            FfiConverterUInt.write(value.`countdownSeconds`, buf)
+            FfiConverterBoolean.write(value.`includeLocation`, buf)
+            FfiConverterBoolean.write(value.`triggerShake`, buf)
+            FfiConverterBoolean.write(value.`triggerTapPattern`, buf)
+            FfiConverterBoolean.write(value.`triggerPowerButton`, buf)
+            FfiConverterDouble.write(value.`shakeSensitivity`, buf)
+            FfiConverterBoolean.write(value.`audioRecording`, buf)
+            FfiConverterUInt.write(value.`audioDurationSeconds`, buf)
+            FfiConverterBoolean.write(value.`periodicUpdates`, buf)
+            FfiConverterUInt.write(value.`updateIntervalSeconds`, buf)
+            FfiConverterBoolean.write(value.`floatingButton`, buf)
+            FfiConverterBoolean.write(value.`silentAutoAnswer`, buf)
+            FfiConverterOptionalString.write(value.`deactivationPinHash`, buf)
+            FfiConverterOptionalString.write(value.`deactivationPinSalt`, buf)
+            FfiConverterDouble.write(value.`floatingButtonX`, buf)
+            FfiConverterDouble.write(value.`floatingButtonY`, buf)
+            FfiConverterDouble.write(value.`activePillX`, buf)
+            FfiConverterDouble.write(value.`activePillY`, buf)
+    }
+}
+
+
+
+data class SosStatusRecord (
+    var `state`: SosState, 
+    var `incidentId`: kotlin.String?, 
+    var `triggerSource`: SosTriggerSource?, 
+    var `countdownDeadlineMs`: kotlin.ULong?, 
+    var `activatedAtMs`: kotlin.ULong?, 
+    var `lastSentAtMs`: kotlin.ULong?, 
+    var `lastUpdateAtMs`: kotlin.ULong?, 
+    var `updatedAtMs`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosStatusRecord: FfiConverterRustBuffer<SosStatusRecord> {
+    override fun read(buf: ByteBuffer): SosStatusRecord {
+        return SosStatusRecord(
+            FfiConverterTypeSosState.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalTypeSosTriggerSource.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SosStatusRecord) = (
+            FfiConverterTypeSosState.allocationSize(value.`state`) +
+            FfiConverterOptionalString.allocationSize(value.`incidentId`) +
+            FfiConverterOptionalTypeSosTriggerSource.allocationSize(value.`triggerSource`) +
+            FfiConverterOptionalULong.allocationSize(value.`countdownDeadlineMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`activatedAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastSentAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastUpdateAtMs`) +
+            FfiConverterULong.allocationSize(value.`updatedAtMs`)
+    )
+
+    override fun write(value: SosStatusRecord, buf: ByteBuffer) {
+            FfiConverterTypeSosState.write(value.`state`, buf)
+            FfiConverterOptionalString.write(value.`incidentId`, buf)
+            FfiConverterOptionalTypeSosTriggerSource.write(value.`triggerSource`, buf)
+            FfiConverterOptionalULong.write(value.`countdownDeadlineMs`, buf)
+            FfiConverterOptionalULong.write(value.`activatedAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastSentAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastUpdateAtMs`, buf)
+            FfiConverterULong.write(value.`updatedAtMs`, buf)
     }
 }
 
@@ -3965,11 +4818,44 @@ public object FfiConverterTypeTelemetrySettingsRecord: FfiConverterRustBuffer<Te
 
 
 
+enum class AnnounceClass {
+    
+    PEER_APP,
+    RCH_HUB_SERVER,
+    PROPAGATION_NODE,
+    LXMF_DELIVERY,
+    OTHER;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeAnnounceClass: FfiConverterRustBuffer<AnnounceClass> {
+    override fun read(buf: ByteBuffer) = try {
+        AnnounceClass.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: AnnounceClass) = 4UL
+
+    override fun write(value: AnnounceClass, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class HubMode {
     
-    DISABLED,
-    RCH_LXMF,
-    RCH_HTTP;
+    AUTONOMOUS,
+    SEMI_AUTONOMOUS,
+    CONNECTED;
     companion object
 }
 
@@ -4389,7 +5275,9 @@ sealed class NodeEvent {
         val `destinationHex`: kotlin.String, 
         val `identityHex`: kotlin.String, 
         val `destinationKind`: kotlin.String, 
+        val `announceClass`: AnnounceClass, 
         val `appData`: kotlin.String, 
+        val `displayName`: kotlin.String?, 
         val `hops`: kotlin.UByte, 
         val `interfaceHex`: kotlin.String, 
         val `receivedAtMs`: kotlin.ULong) : NodeEvent() {
@@ -4442,13 +5330,36 @@ sealed class NodeEvent {
     }
     
     data class HubDirectoryUpdated(
-        val `destinations`: List<kotlin.String>, 
-        val `receivedAtMs`: kotlin.ULong) : NodeEvent() {
+        val `snapshot`: HubDirectorySnapshot) : NodeEvent() {
+        companion object
+    }
+    
+    data class OperationalNotice(
+        val `notice`: OperationalNotice) : NodeEvent() {
         companion object
     }
     
     data class ProjectionInvalidated(
         val `invalidation`: ProjectionInvalidation) : NodeEvent() {
+        companion object
+    }
+    
+    data class SosStatusChanged(
+        val `status`: SosStatusRecord) : NodeEvent() {
+        companion object
+    }
+    
+    data class SosAlertChanged(
+        val `alert`: SosAlertRecord) : NodeEvent() {
+        companion object
+    }
+    
+    object SosTelemetryRequested : NodeEvent()
+    
+    
+    data class SosAudioRecordingRequested(
+        val `incidentId`: kotlin.String, 
+        val `durationSeconds`: kotlin.UInt) : NodeEvent() {
         companion object
     }
     
@@ -4482,7 +5393,9 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
+                FfiConverterTypeAnnounceClass.read(buf),
                 FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
                 FfiConverterUByte.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterULong.read(buf),
@@ -4517,17 +5430,30 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
                 FfiConverterTypeSyncStatus.read(buf),
                 )
             11 -> NodeEvent.HubDirectoryUpdated(
-                FfiConverterSequenceString.read(buf),
-                FfiConverterULong.read(buf),
+                FfiConverterTypeHubDirectorySnapshot.read(buf),
                 )
-            12 -> NodeEvent.ProjectionInvalidated(
+            12 -> NodeEvent.OperationalNotice(
+                FfiConverterTypeOperationalNotice.read(buf),
+                )
+            13 -> NodeEvent.ProjectionInvalidated(
                 FfiConverterTypeProjectionInvalidation.read(buf),
                 )
-            13 -> NodeEvent.Log(
+            14 -> NodeEvent.SosStatusChanged(
+                FfiConverterTypeSosStatusRecord.read(buf),
+                )
+            15 -> NodeEvent.SosAlertChanged(
+                FfiConverterTypeSosAlertRecord.read(buf),
+                )
+            16 -> NodeEvent.SosTelemetryRequested
+            17 -> NodeEvent.SosAudioRecordingRequested(
+                FfiConverterString.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            18 -> NodeEvent.Log(
                 FfiConverterTypeLogLevel.read(buf),
                 FfiConverterString.read(buf),
                 )
-            14 -> NodeEvent.Error(
+            19 -> NodeEvent.Error(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
@@ -4550,7 +5476,9 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
                 + FfiConverterString.allocationSize(value.`destinationHex`)
                 + FfiConverterString.allocationSize(value.`identityHex`)
                 + FfiConverterString.allocationSize(value.`destinationKind`)
+                + FfiConverterTypeAnnounceClass.allocationSize(value.`announceClass`)
                 + FfiConverterString.allocationSize(value.`appData`)
+                + FfiConverterOptionalString.allocationSize(value.`displayName`)
                 + FfiConverterUByte.allocationSize(value.`hops`)
                 + FfiConverterString.allocationSize(value.`interfaceHex`)
                 + FfiConverterULong.allocationSize(value.`receivedAtMs`)
@@ -4621,8 +5549,14 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
-                + FfiConverterSequenceString.allocationSize(value.`destinations`)
-                + FfiConverterULong.allocationSize(value.`receivedAtMs`)
+                + FfiConverterTypeHubDirectorySnapshot.allocationSize(value.`snapshot`)
+            )
+        }
+        is NodeEvent.OperationalNotice -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeOperationalNotice.allocationSize(value.`notice`)
             )
         }
         is NodeEvent.ProjectionInvalidated -> {
@@ -4630,6 +5564,34 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
             (
                 4UL
                 + FfiConverterTypeProjectionInvalidation.allocationSize(value.`invalidation`)
+            )
+        }
+        is NodeEvent.SosStatusChanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeSosStatusRecord.allocationSize(value.`status`)
+            )
+        }
+        is NodeEvent.SosAlertChanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeSosAlertRecord.allocationSize(value.`alert`)
+            )
+        }
+        is NodeEvent.SosTelemetryRequested -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is NodeEvent.SosAudioRecordingRequested -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`incidentId`)
+                + FfiConverterUInt.allocationSize(value.`durationSeconds`)
             )
         }
         is NodeEvent.Log -> {
@@ -4662,7 +5624,9 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
                 FfiConverterString.write(value.`destinationHex`, buf)
                 FfiConverterString.write(value.`identityHex`, buf)
                 FfiConverterString.write(value.`destinationKind`, buf)
+                FfiConverterTypeAnnounceClass.write(value.`announceClass`, buf)
                 FfiConverterString.write(value.`appData`, buf)
+                FfiConverterOptionalString.write(value.`displayName`, buf)
                 FfiConverterUByte.write(value.`hops`, buf)
                 FfiConverterString.write(value.`interfaceHex`, buf)
                 FfiConverterULong.write(value.`receivedAtMs`, buf)
@@ -4715,23 +5679,47 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
             }
             is NodeEvent.HubDirectoryUpdated -> {
                 buf.putInt(11)
-                FfiConverterSequenceString.write(value.`destinations`, buf)
-                FfiConverterULong.write(value.`receivedAtMs`, buf)
+                FfiConverterTypeHubDirectorySnapshot.write(value.`snapshot`, buf)
+                Unit
+            }
+            is NodeEvent.OperationalNotice -> {
+                buf.putInt(12)
+                FfiConverterTypeOperationalNotice.write(value.`notice`, buf)
                 Unit
             }
             is NodeEvent.ProjectionInvalidated -> {
-                buf.putInt(12)
+                buf.putInt(13)
                 FfiConverterTypeProjectionInvalidation.write(value.`invalidation`, buf)
                 Unit
             }
+            is NodeEvent.SosStatusChanged -> {
+                buf.putInt(14)
+                FfiConverterTypeSosStatusRecord.write(value.`status`, buf)
+                Unit
+            }
+            is NodeEvent.SosAlertChanged -> {
+                buf.putInt(15)
+                FfiConverterTypeSosAlertRecord.write(value.`alert`, buf)
+                Unit
+            }
+            is NodeEvent.SosTelemetryRequested -> {
+                buf.putInt(16)
+                Unit
+            }
+            is NodeEvent.SosAudioRecordingRequested -> {
+                buf.putInt(17)
+                FfiConverterString.write(value.`incidentId`, buf)
+                FfiConverterUInt.write(value.`durationSeconds`, buf)
+                Unit
+            }
             is NodeEvent.Log -> {
-                buf.putInt(13)
+                buf.putInt(18)
                 FfiConverterTypeLogLevel.write(value.`level`, buf)
                 FfiConverterString.write(value.`message`, buf)
                 Unit
             }
             is NodeEvent.Error -> {
-                buf.putInt(14)
+                buf.putInt(19)
                 FfiConverterString.write(value.`code`, buf)
                 FfiConverterString.write(value.`message`, buf)
                 Unit
@@ -4788,7 +5776,8 @@ enum class ProjectionScope {
     EVENTS,
     CONVERSATIONS,
     MESSAGES,
-    TELEMETRY;
+    TELEMETRY,
+    SOS;
     companion object
 }
 
@@ -4871,6 +5860,104 @@ public object FfiConverterTypeSendOutcome: FfiConverterRustBuffer<SendOutcome> {
     override fun allocationSize(value: SendOutcome) = 4UL
 
     override fun write(value: SendOutcome, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SosMessageKind {
+    
+    ACTIVE,
+    UPDATE,
+    CANCELLED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosMessageKind: FfiConverterRustBuffer<SosMessageKind> {
+    override fun read(buf: ByteBuffer) = try {
+        SosMessageKind.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SosMessageKind) = 4UL
+
+    override fun write(value: SosMessageKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SosState {
+    
+    IDLE,
+    COUNTDOWN,
+    SENDING,
+    ACTIVE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosState: FfiConverterRustBuffer<SosState> {
+    override fun read(buf: ByteBuffer) = try {
+        SosState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SosState) = 4UL
+
+    override fun write(value: SosState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class SosTriggerSource {
+    
+    MANUAL,
+    FLOATING_BUTTON,
+    SHAKE,
+    TAP_PATTERN,
+    POWER_BUTTON,
+    RESTORE,
+    REMOTE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSosTriggerSource: FfiConverterRustBuffer<SosTriggerSource> {
+    override fun read(buf: ByteBuffer) = try {
+        SosTriggerSource.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: SosTriggerSource) = 4UL
+
+    override fun write(value: SosTriggerSource, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -5014,6 +6101,38 @@ public object FfiConverterOptionalDouble: FfiConverterRustBuffer<kotlin.Double?>
 /**
  * @suppress
  */
+public object FfiConverterOptionalBoolean: FfiConverterRustBuffer<kotlin.Boolean?> {
+    override fun read(buf: ByteBuffer): kotlin.Boolean? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterBoolean.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Boolean?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterBoolean.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Boolean?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterBoolean.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?> {
     override fun read(buf: ByteBuffer): kotlin.String? {
         if (buf.get().toInt() == 0) {
@@ -5142,6 +6261,38 @@ public object FfiConverterOptionalTypeEamTeamSummaryRecord: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeSosStatusRecord: FfiConverterRustBuffer<SosStatusRecord?> {
+    override fun read(buf: ByteBuffer): SosStatusRecord? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSosStatusRecord.read(buf)
+    }
+
+    override fun allocationSize(value: SosStatusRecord?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSosStatusRecord.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SosStatusRecord?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSosStatusRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeLxmfFallbackStage: FfiConverterRustBuffer<LxmfFallbackStage?> {
     override fun read(buf: ByteBuffer): LxmfFallbackStage? {
         if (buf.get().toInt() == 0) {
@@ -5228,6 +6379,38 @@ public object FfiConverterOptionalTypeNodeEvent: FfiConverterRustBuffer<NodeEven
         } else {
             buf.put(1)
             FfiConverterTypeNodeEvent.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeSosTriggerSource: FfiConverterRustBuffer<SosTriggerSource?> {
+    override fun read(buf: ByteBuffer): SosTriggerSource? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeSosTriggerSource.read(buf)
+    }
+
+    override fun allocationSize(value: SosTriggerSource?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeSosTriggerSource.allocationSize(value)
+        }
+    }
+
+    override fun write(value: SosTriggerSource?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeSosTriggerSource.write(value, buf)
         }
     }
 }
@@ -5438,6 +6621,34 @@ public object FfiConverterSequenceTypeEventProjectionRecord: FfiConverterRustBuf
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeHubDirectoryPeerRecord: FfiConverterRustBuffer<List<HubDirectoryPeerRecord>> {
+    override fun read(buf: ByteBuffer): List<HubDirectoryPeerRecord> {
+        val len = buf.getInt()
+        return List<HubDirectoryPeerRecord>(len) {
+            FfiConverterTypeHubDirectoryPeerRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<HubDirectoryPeerRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeHubDirectoryPeerRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<HubDirectoryPeerRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeHubDirectoryPeerRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeMessageRecord: FfiConverterRustBuffer<List<MessageRecord>> {
     override fun read(buf: ByteBuffer): List<MessageRecord> {
         val len = buf.getInt()
@@ -5512,6 +6723,90 @@ public object FfiConverterSequenceTypeSavedPeerRecord: FfiConverterRustBuffer<Li
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeSavedPeerRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSosAlertRecord: FfiConverterRustBuffer<List<SosAlertRecord>> {
+    override fun read(buf: ByteBuffer): List<SosAlertRecord> {
+        val len = buf.getInt()
+        return List<SosAlertRecord>(len) {
+            FfiConverterTypeSosAlertRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SosAlertRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSosAlertRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SosAlertRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSosAlertRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSosAudioRecord: FfiConverterRustBuffer<List<SosAudioRecord>> {
+    override fun read(buf: ByteBuffer): List<SosAudioRecord> {
+        val len = buf.getInt()
+        return List<SosAudioRecord>(len) {
+            FfiConverterTypeSosAudioRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SosAudioRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSosAudioRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SosAudioRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSosAudioRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSosLocationRecord: FfiConverterRustBuffer<List<SosLocationRecord>> {
+    override fun read(buf: ByteBuffer): List<SosLocationRecord> {
+        val len = buf.getInt()
+        return List<SosLocationRecord>(len) {
+            FfiConverterTypeSosLocationRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SosLocationRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSosLocationRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SosLocationRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSosLocationRecord.write(it, buf)
         }
     }
 }

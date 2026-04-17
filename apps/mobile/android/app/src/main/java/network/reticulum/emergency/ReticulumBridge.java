@@ -46,6 +46,18 @@ public final class ReticulumBridge {
     public static native String getTelemetryPositionsJson();
     public static native int recordLocalTelemetryFixJson(String payloadJson);
     public static native int deleteLocalTelemetryJson(String payloadJson);
+    public static native String getSosSettingsJson();
+    public static native int setSosSettingsJson(String payloadJson);
+    public static native int setSosPinJson(String payloadJson);
+    public static native String getSosStatusJson();
+    public static native String triggerSosJson(String payloadJson);
+    public static native String deactivateSosJson(String payloadJson);
+    public static native int submitSosTelemetryJson(String payloadJson);
+    public static native String submitSosAccelerometerJson(String payloadJson);
+    public static native String submitSosScreenEventJson(String payloadJson);
+    public static native String listSosAlertsJson();
+    public static native String listSosLocationsJson();
+    public static native String listSosAudioJson();
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();

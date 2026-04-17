@@ -10,6 +10,13 @@ pub enum LogLevel {
     Error {},
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct OperationalNotice {
+    pub level: LogLevel,
+    pub message: String,
+    pub at_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubMode {
     Autonomous {},
@@ -44,8 +51,8 @@ impl<'de> Deserialize<'de> for HubMode {
         let value = String::deserialize(deserializer)?;
         match value.trim().to_ascii_lowercase().as_str() {
             "autonomous" | "disabled" => Ok(Self::Autonomous {}),
-            "semiautonomous" | "semi_autonomous" | "semi-autonomous" | "rchlxmf"
-            | "rch_lxmf" | "rchhttp" | "rch_http" => Ok(Self::SemiAutonomous {}),
+            "semiautonomous" | "semi_autonomous" | "semi-autonomous" | "rchlxmf" | "rch_lxmf"
+            | "rchhttp" | "rch_http" => Ok(Self::SemiAutonomous {}),
             "connected" => Ok(Self::Connected {}),
             other => Err(D::Error::custom(format!("unknown hub mode: {other}"))),
         }
@@ -57,6 +64,15 @@ pub enum PeerState {
     Connecting {},
     Connected {},
     Disconnected {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum AnnounceClass {
+    PeerApp {},
+    RchHubServer {},
+    PropagationNode {},
+    LxmfDelivery {},
+    Other {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -141,6 +157,32 @@ pub enum SyncPhase {
     Receiving {},
     Complete {},
     Failed {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SosState {
+    Idle {},
+    Countdown {},
+    Sending {},
+    Active {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SosTriggerSource {
+    Manual {},
+    FloatingButton {},
+    Shake {},
+    TapPattern {},
+    PowerButton {},
+    Restore {},
+    Remote {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SosMessageKind {
+    Active {},
+    Update {},
+    Cancelled {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -242,6 +284,7 @@ pub struct AnnounceRecord {
     pub destination_hex: String,
     pub identity_hex: String,
     pub destination_kind: String,
+    pub announce_class: AnnounceClass,
     pub app_data: String,
     pub display_name: Option<String>,
     pub hops: u8,
@@ -349,6 +392,97 @@ pub struct TelemetrySettingsRecord {
     pub accuracy_threshold_meters: Option<f64>,
     pub stale_after_minutes: u32,
     pub expire_after_minutes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosSettingsRecord {
+    pub enabled: bool,
+    pub message_template: String,
+    #[serde(default)]
+    pub cancel_message_template: String,
+    pub countdown_seconds: u32,
+    pub include_location: bool,
+    pub trigger_shake: bool,
+    pub trigger_tap_pattern: bool,
+    pub trigger_power_button: bool,
+    pub shake_sensitivity: f64,
+    pub audio_recording: bool,
+    pub audio_duration_seconds: u32,
+    pub periodic_updates: bool,
+    pub update_interval_seconds: u32,
+    pub floating_button: bool,
+    pub silent_auto_answer: bool,
+    pub deactivation_pin_hash: Option<String>,
+    pub deactivation_pin_salt: Option<String>,
+    pub floating_button_x: f64,
+    pub floating_button_y: f64,
+    pub active_pill_x: f64,
+    pub active_pill_y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosDeviceTelemetryRecord {
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub alt: Option<f64>,
+    pub speed: Option<f64>,
+    pub course: Option<f64>,
+    pub accuracy: Option<f64>,
+    pub battery_percent: Option<f64>,
+    pub battery_charging: Option<bool>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosStatusRecord {
+    pub state: SosState,
+    pub incident_id: Option<String>,
+    pub trigger_source: Option<SosTriggerSource>,
+    pub countdown_deadline_ms: Option<u64>,
+    pub activated_at_ms: Option<u64>,
+    pub last_sent_at_ms: Option<u64>,
+    pub last_update_at_ms: Option<u64>,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosAlertRecord {
+    pub incident_id: String,
+    pub source_hex: String,
+    pub conversation_id: String,
+    pub state: SosMessageKind,
+    pub active: bool,
+    pub body_utf8: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub battery_percent: Option<f64>,
+    pub audio_id: Option<String>,
+    pub message_id_hex: Option<String>,
+    pub received_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosLocationRecord {
+    pub incident_id: String,
+    pub source_hex: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub alt: Option<f64>,
+    pub accuracy: Option<f64>,
+    pub battery_percent: Option<f64>,
+    pub recorded_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SosAudioRecord {
+    pub audio_id: String,
+    pub incident_id: String,
+    pub source_hex: String,
+    pub path: String,
+    pub mime_type: String,
+    pub duration_seconds: u32,
+    pub created_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -473,6 +607,7 @@ pub enum ProjectionScope {
     Conversations {},
     Messages {},
     Telemetry {},
+    Sos {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,7 +643,9 @@ pub enum NodeEvent {
         destination_hex: String,
         identity_hex: String,
         destination_kind: String,
+        announce_class: AnnounceClass,
         app_data: String,
+        display_name: Option<String>,
         hops: u8,
         interface_hex: String,
         received_at_ms: u64,
@@ -545,8 +682,22 @@ pub enum NodeEvent {
     HubDirectoryUpdated {
         snapshot: HubDirectorySnapshot,
     },
+    OperationalNotice {
+        notice: OperationalNotice,
+    },
     ProjectionInvalidated {
         invalidation: ProjectionInvalidation,
+    },
+    SosStatusChanged {
+        status: SosStatusRecord,
+    },
+    SosAlertChanged {
+        alert: SosAlertRecord,
+    },
+    SosTelemetryRequested {},
+    SosAudioRecordingRequested {
+        incident_id: String,
+        duration_seconds: u32,
     },
     Log {
         level: LogLevel,

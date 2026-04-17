@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { RouterLink, RouterView, useRoute } from "vue-router";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import logoUrl from "./assets/rem-logo.png";
-import { initAppNotifications } from "./services/notifications";
+import SosOverlay from "./components/sos/SosOverlay.vue";
+import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagingStore } from "./stores/messagingStore";
 import { useMessagesStore } from "./stores/messagesStore";
+import { useSosStore } from "./stores/sosStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
 
@@ -15,18 +17,35 @@ const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
 const telemetryStore = useTelemetryStore();
+const sosStore = useSosStore();
 const route = useRoute();
+const router = useRouter();
+
+registerNotificationNavigationHandler(async (target) => {
+  if (target.route !== "/inbox" && !target.conversationId) {
+    return;
+  }
+  await router.push({
+    path: "/inbox",
+    query: {
+      ...(target.conversationId ? { conversation: target.conversationId } : {}),
+      ...(target.messageIdHex ? { message: target.messageIdHex } : {}),
+    },
+  });
+});
 
 onMounted(async () => {
   try {
     await initAppNotifications();
     await nodeStore.init();
+    await messagingStore.init();
     await nodeStore.startNode();
+    await messagingStore.hydrateStartupHistory();
 
-    messagingStore.init();
     messagesStore.init();
     eventsStore.init();
     telemetryStore.init();
+    await sosStore.init();
 
     messagesStore.initReplication();
     eventsStore.initReplication();
@@ -196,6 +215,7 @@ function isTabActive(path: string): boolean {
           <span class="sr-only">{{ tab.label }}</span>
         </RouterLink>
       </nav>
+      <SosOverlay />
     </div>
   </div>
 </template>

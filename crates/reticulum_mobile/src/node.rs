@@ -9,16 +9,26 @@ use rmpv::Value as MsgPackValue;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::app_state::AppStateStore;
+use crate::app_state::{canonicalize_chat_message, AppStateStore};
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
+use crate::messaging_compat as sdkmsg;
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
+use crate::sos::{
+    active_status, compose_sos_body, countdown_status, default_sos_settings, idle_status,
+    new_incident_id, normalize_sos_settings, set_pin, verify_pin,
+};
+use crate::sos_detector::SosTriggerDetector;
+use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
     AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode, LegacyImportPayload,
-    LogLevel, MessageRecord, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SyncStatus, TelemetryPositionRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
+    LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
+    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
+    TelemetryPositionRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -46,6 +56,8 @@ struct NodeInner {
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
+    sos_device_telemetry: Arc<Mutex<Option<SosDeviceTelemetryRecord>>>,
+    sos_detector: Arc<Mutex<SosTriggerDetector>>,
     active_config: Option<NodeConfigFingerprint>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
@@ -140,9 +152,7 @@ fn effective_hub_mode(
         HubMode::Autonomous {} => HubMode::Autonomous {},
         HubMode::Connected {} => HubMode::Connected {},
         HubMode::SemiAutonomous {} => {
-            if hub_directory_snapshot
-                .is_some_and(|snapshot| snapshot.effective_connected_mode)
-            {
+            if hub_directory_snapshot.is_some_and(|snapshot| snapshot.effective_connected_mode) {
                 HubMode::Connected {}
             } else {
                 HubMode::SemiAutonomous {}
@@ -535,7 +545,8 @@ fn build_transient_replication_targets(
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
         });
-        let send_mode = if matched_peer.is_some_and(peer_is_directly_reachable) || !has_active_relay {
+        let send_mode = if matched_peer.is_some_and(peer_is_directly_reachable) || !has_active_relay
+        {
             SendMode::Auto {}
         } else {
             SendMode::PropagationOnly {}
@@ -578,7 +589,10 @@ fn build_runtime_mission_replication_targets(
             send_mode: SendMode::Auto {},
         }]),
         HubMode::SemiAutonomous {} => {
-            let Some(_hub_identity_hash) = config.hub_identity_hash.as_deref().and_then(normalize_hex_32)
+            let Some(_hub_identity_hash) = config
+                .hub_identity_hash
+                .as_deref()
+                .and_then(normalize_hex_32)
             else {
                 return Ok(build_mission_replication_targets(
                     status,
@@ -638,7 +652,10 @@ fn build_runtime_event_replication_targets(
             send_mode: SendMode::Auto {},
         }]),
         HubMode::SemiAutonomous {} => {
-            let Some(_hub_identity_hash) = config.hub_identity_hash.as_deref().and_then(normalize_hex_32)
+            let Some(_hub_identity_hash) = config
+                .hub_identity_hash
+                .as_deref()
+                .and_then(normalize_hex_32)
             else {
                 return Ok(build_event_replication_targets(
                     status,
@@ -1029,6 +1046,143 @@ fn build_event_replication_payload(
     Ok((body, fields_bytes))
 }
 
+fn emit_sos_status(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    status: &SosStatusRecord,
+    reason: &str,
+) -> Result<(), NodeError> {
+    let invalidation = app_state.set_sos_status(status, reason)?;
+    emit_projection_invalidation(bus, invalidation);
+    bus.emit(NodeEvent::SosStatusChanged {
+        status: status.clone(),
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_sos_fanout(
+    app_state: AppStateStore,
+    bus: EventBus,
+    tx: mpsc::Sender<Command>,
+    status: NodeStatus,
+    settings: SosSettingsRecord,
+    saved_peers: Vec<SavedPeerRecord>,
+    telemetry: Option<SosDeviceTelemetryRecord>,
+    incident_id: String,
+    trigger_source: SosTriggerSource,
+    kind: SosMessageKind,
+) -> Option<SosStatusRecord> {
+    let now = now_ms();
+    let sending = SosStatusRecord {
+        state: SosState::Sending {},
+        incident_id: Some(incident_id.clone()),
+        trigger_source: Some(trigger_source),
+        countdown_deadline_ms: None,
+        activated_at_ms: if matches!(kind, SosMessageKind::Cancelled {}) {
+            None
+        } else {
+            Some(now)
+        },
+        last_sent_at_ms: None,
+        last_update_at_ms: None,
+        updated_at_ms: now,
+    };
+    if emit_sos_status(&app_state, &bus, &sending, "sos-sending").is_err() {
+        return None;
+    }
+
+    if matches!(kind, SosMessageKind::Active {}) && settings.audio_recording {
+        bus.emit(NodeEvent::SosAudioRecordingRequested {
+            incident_id: incident_id.clone(),
+            duration_seconds: settings.audio_duration_seconds,
+        });
+    }
+
+    let body = compose_sos_body(&settings, kind, telemetry.as_ref());
+    for peer in saved_peers {
+        let destination_hex = peer.destination_hex.trim().to_ascii_lowercase();
+        if destination_hex.is_empty() {
+            continue;
+        }
+        let command = SosCommand {
+            state: kind,
+            incident_id: incident_id.clone(),
+            trigger_source,
+            sent_at_ms: now,
+            audio_id: None,
+        };
+        let fields = match build_sos_fields(&command, telemetry.as_ref()) {
+            Ok(fields) => fields,
+            Err(err) => {
+                bus.emit(NodeEvent::Error {
+                    code: "InternalError".to_string(),
+                    message: format!(
+                        "sos field encode failed destination={destination_hex} reason={err}"
+                    ),
+                });
+                continue;
+            }
+        };
+        let message_id_hex = format!(
+            "{}-{}-{}",
+            incident_id,
+            destination_hex.chars().take(8).collect::<String>(),
+            now
+        );
+        let record = canonicalize_chat_message(&MessageRecord {
+            message_id_hex: message_id_hex.clone(),
+            conversation_id: sdkmsg::MessagingStore::conversation_id_for(destination_hex.as_str()),
+            direction: MessageDirection::Outbound {},
+            destination_hex: destination_hex.clone(),
+            source_hex: Some(status.lxmf_destination_hex.clone()),
+            title: Some("SOS Emergency".to_string()),
+            body_utf8: body.clone(),
+            method: MessageMethod::Direct {},
+            state: MessageState::Queued {},
+            detail: Some(format!("sos:{}", crate::sos::sos_kind_label(kind))),
+            sent_at_ms: Some(now),
+            received_at_ms: None,
+            updated_at_ms: now,
+        });
+        if let Ok(invalidations) = app_state.upsert_message(&record) {
+            for invalidation in invalidations {
+                emit_projection_invalidation(&bus, invalidation);
+            }
+            bus.emit(NodeEvent::MessageUpdated { message: record });
+        }
+
+        let (resp_tx, _resp_rx) = cb::bounded(1);
+        if let Err(err) = dispatch_command(
+            &tx,
+            Command::SendBytes {
+                destination_hex: destination_hex.clone(),
+                bytes: body.as_bytes().to_vec(),
+                fields_bytes: Some(fields),
+                send_mode: SendMode::Auto {},
+                resp: resp_tx,
+            },
+        ) {
+            bus.emit(NodeEvent::Error {
+                code: "NotRunning".to_string(),
+                message: format!(
+                    "sos send enqueue failed destination={destination_hex} reason={err}"
+                ),
+            });
+        }
+    }
+
+    let next = if matches!(kind, SosMessageKind::Cancelled {}) {
+        idle_status()
+    } else {
+        active_status(incident_id, trigger_source, now)
+    };
+    if emit_sos_status(&app_state, &bus, &next, "sos-fanout-complete").is_err() {
+        return None;
+    }
+    Some(next)
+}
+
 pub struct Node {
     inner: Mutex<NodeInner>,
 }
@@ -1064,6 +1218,8 @@ impl Node {
                     detail: None,
                 })),
                 hub_directory_snapshot: Arc::new(Mutex::new(None)),
+                sos_device_telemetry: Arc::new(Mutex::new(None)),
+                sos_detector: Arc::new(Mutex::new(SosTriggerDetector::new())),
                 active_config: None,
                 runtime: None,
                 cmd_tx: None,
@@ -1202,7 +1358,15 @@ impl Node {
     }
 
     pub fn stop(&self) -> Result<(), NodeError> {
-        let (runtime, cmd_tx, bus, status, peers_snapshot, sync_status_snapshot, hub_directory_snapshot) = {
+        let (
+            runtime,
+            cmd_tx,
+            bus,
+            status,
+            peers_snapshot,
+            sync_status_snapshot,
+            hub_directory_snapshot,
+        ) = {
             let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             inner.active_config = None;
             (
@@ -2073,6 +2237,252 @@ impl Node {
         Ok(())
     }
 
+    pub fn get_sos_settings(&self) -> Result<SosSettingsRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        Ok(inner
+            .app_state
+            .get_sos_settings()?
+            .map(normalize_sos_settings)
+            .unwrap_or_else(default_sos_settings))
+    }
+
+    pub fn set_sos_settings(&self, settings: SosSettingsRecord) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let normalized = normalize_sos_settings(settings);
+        let invalidation = inner.app_state.set_sos_settings(&normalized)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn set_sos_pin(&self, pin: Option<String>) -> Result<(), NodeError> {
+        let mut settings = self.get_sos_settings()?;
+        set_pin(&mut settings, pin.as_deref().unwrap_or_default())?;
+        self.set_sos_settings(settings)
+    }
+
+    pub fn get_sos_status(&self) -> Result<SosStatusRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        Ok(inner
+            .app_state
+            .get_sos_status()?
+            .unwrap_or_else(idle_status))
+    }
+
+    pub fn list_sos_alerts(&self) -> Result<Vec<SosAlertRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.list_sos_alerts()
+    }
+
+    pub fn list_sos_locations(&self) -> Result<Vec<SosLocationRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.list_sos_locations()
+    }
+
+    pub fn list_sos_audio(&self) -> Result<Vec<SosAudioRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.list_sos_audio()
+    }
+
+    pub fn submit_sos_device_telemetry(
+        &self,
+        telemetry: SosDeviceTelemetryRecord,
+    ) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        *inner
+            .sos_device_telemetry
+            .lock()
+            .map_err(|_| NodeError::InternalError {})? = Some(telemetry);
+        inner.bus.emit(NodeEvent::SosTelemetryRequested {});
+        Ok(())
+    }
+
+    pub fn submit_sos_accelerometer_sample(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        at_ms: u64,
+    ) -> Result<Option<SosStatusRecord>, NodeError> {
+        let (settings, detector) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let settings = inner
+                .app_state
+                .get_sos_settings()?
+                .map(normalize_sos_settings)
+                .unwrap_or_else(default_sos_settings);
+            (settings, inner.sos_detector.clone())
+        };
+        let trigger = detector
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .accelerometer_sample(&settings, x, y, z, at_ms);
+        match trigger {
+            Some(source) => self.trigger_sos(source).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub fn submit_sos_screen_event(
+        &self,
+        at_ms: u64,
+    ) -> Result<Option<SosStatusRecord>, NodeError> {
+        let (settings, detector) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let settings = inner
+                .app_state
+                .get_sos_settings()?
+                .map(normalize_sos_settings)
+                .unwrap_or_else(default_sos_settings);
+            (settings, inner.sos_detector.clone())
+        };
+        let trigger = detector
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .screen_event(&settings, at_ms);
+        match trigger {
+            Some(source) => self.trigger_sos(source).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub fn trigger_sos(&self, source: SosTriggerSource) -> Result<SosStatusRecord, NodeError> {
+        let (app_state, bus, tx, status, settings, saved_peers, telemetry) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let settings = inner
+                .app_state
+                .get_sos_settings()?
+                .map(normalize_sos_settings)
+                .unwrap_or_else(default_sos_settings);
+            if !settings.enabled {
+                return Err(NodeError::InvalidConfig {});
+            }
+            let current = inner
+                .app_state
+                .get_sos_status()?
+                .unwrap_or_else(idle_status);
+            if !matches!(current.state, SosState::Idle {}) {
+                return Ok(current);
+            }
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let telemetry = inner
+                .sos_device_telemetry
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let values = (
+                inner.app_state.clone(),
+                inner.bus.clone(),
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                status,
+                settings,
+                inner.app_state.get_saved_peers()?,
+                telemetry,
+            );
+            values
+        };
+
+        let incident_id = new_incident_id(status.identity_hex.as_str());
+        let countdown = settings.countdown_seconds;
+        if countdown > 0 {
+            let deadline = now_ms().saturating_add(u64::from(countdown) * 1000);
+            let countdown_record = countdown_status(incident_id.clone(), source, deadline);
+            emit_sos_status(&app_state, &bus, &countdown_record, "sos-countdown")?;
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(u64::from(countdown)));
+                run_sos_fanout(
+                    app_state,
+                    bus,
+                    tx,
+                    status,
+                    settings,
+                    saved_peers,
+                    telemetry,
+                    incident_id,
+                    source,
+                    SosMessageKind::Active {},
+                );
+            });
+            return Ok(countdown_record);
+        }
+
+        let active = run_sos_fanout(
+            app_state,
+            bus,
+            tx,
+            status,
+            settings,
+            saved_peers,
+            telemetry,
+            incident_id,
+            source,
+            SosMessageKind::Active {},
+        )
+        .unwrap_or_else(idle_status);
+        Ok(active)
+    }
+
+    pub fn deactivate_sos(&self, pin: Option<String>) -> Result<SosStatusRecord, NodeError> {
+        let (app_state, bus, tx, status, settings, saved_peers, telemetry, current) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let settings = inner
+                .app_state
+                .get_sos_settings()?
+                .map(normalize_sos_settings)
+                .unwrap_or_else(default_sos_settings);
+            if !verify_pin(&settings, pin.as_deref()) {
+                return Err(NodeError::InvalidConfig {});
+            }
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let telemetry = inner
+                .sos_device_telemetry
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let current = inner
+                .app_state
+                .get_sos_status()?
+                .unwrap_or_else(idle_status);
+            let values = (
+                inner.app_state.clone(),
+                inner.bus.clone(),
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                status,
+                settings,
+                inner.app_state.get_saved_peers()?,
+                telemetry,
+                current,
+            );
+            values
+        };
+        let incident_id = current
+            .incident_id
+            .clone()
+            .unwrap_or_else(|| new_incident_id(status.identity_hex.as_str()));
+        run_sos_fanout(
+            app_state.clone(),
+            bus.clone(),
+            tx,
+            status,
+            settings,
+            saved_peers,
+            telemetry,
+            incident_id,
+            SosTriggerSource::Manual {},
+            SosMessageKind::Cancelled {},
+        );
+        let idle = idle_status();
+        emit_sos_status(&app_state, &bus, &idle, "sos-deactivated")?;
+        Ok(idle)
+    }
+
     pub fn get_operational_summary(&self) -> Result<OperationalSummary, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         let peers = inner
@@ -2646,7 +3056,10 @@ mod tests {
         .expect("semi-autonomous targets");
 
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].app_destination_hex, "abababababababababababababababab");
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "abababababababababababababababab"
+        );
         assert!(matches!(targets[0].send_mode, SendMode::Auto {}));
     }
 
@@ -2661,7 +3074,10 @@ mod tests {
         let destinations = build_runtime_telemetry_destinations(&status, &[], Some(&config), None)
             .expect("connected telemetry destinations");
 
-        assert_eq!(destinations, vec!["56565656565656565656565656565656".to_string()]);
+        assert_eq!(
+            destinations,
+            vec!["56565656565656565656565656565656".to_string()]
+        );
     }
 
     #[test]
@@ -2724,7 +3140,10 @@ mod tests {
         )
         .expect("semi-autonomous telemetry destinations");
 
-        assert_eq!(destinations, vec!["abababababababababababababababab".to_string()]);
+        assert_eq!(
+            destinations,
+            vec!["abababababababababababababababab".to_string()]
+        );
     }
 
     #[test]
@@ -2748,15 +3167,14 @@ mod tests {
             ),
         ];
 
-        let destinations = build_runtime_telemetry_destinations(
-            &status,
-            peers.as_slice(),
-            Some(&config),
-            None,
-        )
-        .expect("semi-autonomous fallback telemetry destinations");
+        let destinations =
+            build_runtime_telemetry_destinations(&status, peers.as_slice(), Some(&config), None)
+                .expect("semi-autonomous fallback telemetry destinations");
 
-        assert_eq!(destinations, vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]);
+        assert_eq!(
+            destinations,
+            vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+        );
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -2927,7 +3345,7 @@ mod tests {
                 expire_after_minutes: 30,
             },
             hub: HubSettingsRecord {
-            mode: HubMode::Autonomous {},
+                mode: HubMode::Autonomous {},
                 identity_hash: String::new(),
                 api_base_url: String::new(),
                 api_key: String::new(),
@@ -3082,15 +3500,15 @@ mod tests {
 
         let conversations = node.list_conversations().expect("list conversations");
         assert_eq!(conversations.len(), 1);
-        assert_eq!(conversations[0].conversation_id, "conversation-1");
-        assert_eq!(conversations[0].peer_destination_hex, "DEST-1");
+        assert_eq!(conversations[0].conversation_id, "dest-1");
+        assert_eq!(conversations[0].peer_destination_hex, "dest-1");
 
         let messages = node
-            .list_messages(Some("conversation-1".to_string()))
+            .list_messages(Some("dest-1".to_string()))
             .expect("list messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id_hex, "msg-1");
-        assert_eq!(messages[0].conversation_id, "conversation-1");
+        assert_eq!(messages[0].conversation_id, "dest-1");
         assert_eq!(messages[0].body_utf8, "hello from pre-start");
     }
 
@@ -3259,6 +3677,15 @@ mod tests {
 
         assert_packet_received(event, &node_a_status.lxmf_destination_hex, body, None);
         assert!(!message_id.is_empty());
+        let persisted_messages = node_b.list_messages(None).expect("persisted messages");
+        assert!(
+            persisted_messages
+                .iter()
+                .any(|message| message.body_utf8 == body
+                    && message.conversation_id
+                        == node_a_status.lxmf_destination_hex.to_ascii_lowercase()),
+            "received LXMF chat should be persisted in the canonical peer thread"
+        );
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -3324,12 +3751,15 @@ mod tests {
         assert_eq!(persisted_messages[0].message_id_hex, message.message_id_hex);
         assert_eq!(
             persisted_messages[0].conversation_id,
-            message.conversation_id
+            message.destination_hex.to_ascii_lowercase()
         );
 
         let conversations = node.list_conversations().expect("conversations");
         assert_eq!(conversations.len(), 1);
-        assert_eq!(conversations[0].conversation_id, message.conversation_id);
+        assert_eq!(
+            conversations[0].conversation_id,
+            message.destination_hex.to_ascii_lowercase()
+        );
         let persisted_telemetry = node.get_telemetry_positions().expect("telemetry");
         assert_eq!(persisted_telemetry.len(), 1);
         assert_eq!(persisted_telemetry[0].callsign, telemetry.callsign);

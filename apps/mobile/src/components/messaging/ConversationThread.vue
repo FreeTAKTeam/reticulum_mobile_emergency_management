@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { MessageRecord } from "@reticulum/node-client";
 
 const props = defineProps<{
@@ -10,6 +10,7 @@ const props = defineProps<{
   targetTeam?: string;
   targetLatitude?: string;
   targetLongitude?: string;
+  targetMessageId?: string;
   messages: MessageRecord[];
 }>();
 
@@ -19,6 +20,8 @@ const emit = defineEmits<{
 }>();
 
 const draft = ref("");
+const threadBody = ref<HTMLElement | null>(null);
+let lastTargetScrolled = "";
 
 function safeTrim(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -44,6 +47,68 @@ function submit(): void {
   emit("send", bodyUtf8);
   draft.value = "";
 }
+
+function isSosMessage(message: MessageRecord): boolean {
+  const detail = safeTrim(message.detail).toLowerCase();
+  const body = safeTrim(message.bodyUtf8).toLowerCase();
+  return detail.startsWith("sos") || body.startsWith("sos") || body.startsWith("urgence") || body.startsWith("emergency");
+}
+
+function messageStateLabel(state: string): string {
+  if (state === "SentDirect" || state === "Delivered") {
+    return "Delivered";
+  }
+  if (state === "SentToPropagation") {
+    return "Sent to propagation";
+  }
+  if (state === "PathRequested") {
+    return "Path requested";
+  }
+  if (state === "LinkEstablishing") {
+    return "Link establishing";
+  }
+  if (state === "TimedOut") {
+    return "Timed out";
+  }
+  return state;
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+watch(
+  () => [
+    props.messages.length,
+    props.messages[props.messages.length - 1]?.messageIdHex ?? "",
+    props.targetMessageId ?? "",
+  ],
+  async () => {
+    await nextTick();
+    const body = threadBody.value;
+    if (!body) {
+      return;
+    }
+
+    const targetMessageId = safeTrim(props.targetMessageId);
+    if (targetMessageId && targetMessageId !== lastTargetScrolled) {
+      const target = body.querySelector<HTMLElement>(
+        `[data-message-id="${cssEscape(targetMessageId)}"]`,
+      );
+      if (target) {
+        target.scrollIntoView({ block: "center" });
+        lastTargetScrolled = targetMessageId;
+        return;
+      }
+    }
+
+    body.scrollTop = body.scrollHeight;
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
@@ -90,17 +155,25 @@ function submit(): void {
     </header>
 
     <section class="thread-panel">
-      <div class="thread-body">
+      <div ref="threadBody" class="thread-body">
         <article
           v-for="message in messages"
           :key="message.messageIdHex"
+          :data-message-id="message.messageIdHex"
           class="bubble"
-          :class="{ outbound: message.direction === 'Outbound' }"
+          :class="{
+            inbound: message.direction !== 'Outbound',
+            outbound: message.direction === 'Outbound',
+            sos: isSosMessage(message),
+            targeted: message.messageIdHex === targetMessageId,
+          }"
         >
+          <span v-if="isSosMessage(message)" class="sos-badge">SOS EMERGENCY</span>
           <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
           <p class="bubble-content">{{ message.bodyUtf8 }}</p>
+          <a v-if="isSosMessage(message)" class="sos-map-link" href="#/telemetry">View on Map</a>
           <div class="bubble-meta">
-            <span>{{ message.state }}</span>
+            <span>{{ messageStateLabel(message.state) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
           </div>
         </article>
@@ -305,6 +378,35 @@ function submit(): void {
   overflow: hidden;
 }
 
+.bubble.sos {
+  background: #450a0a;
+  border-color: rgb(239 68 68 / 78%);
+}
+
+.bubble.targeted {
+  border-color: rgb(255 244 143 / 88%);
+  box-shadow: 0 0 0 2px rgb(255 244 143 / 18%), 0 0 24px rgb(255 244 143 / 14%);
+}
+
+.sos-badge {
+  align-self: start;
+  background: #b91c1c;
+  border-radius: 6px;
+  color: #fff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  padding: 0.2rem 0.45rem;
+}
+
+.sos-map-link {
+  color: #fecaca;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+}
+
 .thread-body {
   display: grid;
   gap: 0.65rem;
@@ -315,13 +417,18 @@ function submit(): void {
 }
 
 .bubble {
-  background: rgb(7 29 57 / 84%);
-  border: 1px solid rgb(78 121 183 / 26%);
-  border-radius: 16px 16px 16px 6px;
+  border: 1px solid transparent;
   display: grid;
   gap: 0.34rem;
   max-width: min(38rem, 92%);
   padding: 0.78rem 0.9rem;
+}
+
+.bubble.inbound {
+  background: rgb(7 29 57 / 84%);
+  border-color: rgb(78 121 183 / 32%);
+  border-radius: 16px 16px 16px 6px;
+  justify-self: start;
 }
 
 .bubble.outbound {
@@ -329,6 +436,14 @@ function submit(): void {
   border-color: rgb(120 227 255 / 36%);
   border-radius: 16px 16px 6px 16px;
   justify-self: end;
+}
+
+.bubble.inbound .bubble-meta {
+  color: #8ea8d1;
+}
+
+.bubble.outbound .bubble-meta {
+  color: #b6def4;
 }
 
 .bubble-title {

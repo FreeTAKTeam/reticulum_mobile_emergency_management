@@ -8,18 +8,24 @@ mod mission_sync;
 mod node;
 mod runtime;
 mod sdk_bridge;
+mod sos;
+mod sos_detector;
+mod sos_fields;
 mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
-    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, OperationalSummary, PeerChange, PeerRecord, PeerState, ProjectionInvalidation,
-    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord,
+    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord,
+    HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel,
+    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
+    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
+    NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary, PeerChange,
+    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

@@ -65,7 +65,14 @@ const MESSAGE_STATES = new Set<MessageState>([
   "Received",
 ]);
 const MESSAGE_DIRECTIONS = new Set<MessageDirection>(["Inbound", "Outbound"]);
-const HUB_MODES = new Set<HubMode>(["Disabled", "RchLxmf", "RchHttp"]);
+const HUB_MODES = new Set<string>([
+  "Autonomous",
+  "SemiAutonomous",
+  "Connected",
+  "Disabled",
+  "RchLxmf",
+  "RchHttp",
+]);
 
 function nowMs(): number {
   return Date.now();
