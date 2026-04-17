@@ -47,7 +47,8 @@ Treat these as generated or disposable unless the task explicitly targets them:
 - `tmp/`
 - `apps/mobile/android/app/build/`
 - `apps/mobile/android/app/src/main/jniLibs/`
-- `apps/mobile/android/uniffi/libs/`
+- `apps/mobile/android/uniffi/`
+- `apps/mobile/ios/uniffi/`
 
 On Windows, broad recursive directory scans can fail inside Android build intermediates. Prefer scoped searches over targeted source directories instead of walking the entire repo.
 
@@ -118,17 +119,26 @@ Run the narrowest command set that proves the change:
   - `npm run web:build`
   - `npm run mobile:build`
   - `npm --workspace packages/node-client run build`
+- Capacitor native workflow:
+  - `npm --workspace apps/mobile run sync`
+  - `npm --workspace apps/mobile run android`
+  - `npm --workspace apps/mobile run ios`
 - Type checking:
   - `npm --workspace apps/mobile run typecheck`
 - E2E:
   - `npx playwright install chromium`
   - `npm run test:e2e`
   - `npm run test:e2e:headed`
+  - `npm run test:e2e:debug`
 - Rust:
   - `cargo test -p reticulum_mobile`
 - UniFFI code generation:
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language kotlin`
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language swift`
+  - Shell: `./tools/codegen/generate-uniffi-bindings.sh kotlin`
+  - Shell: `./tools/codegen/generate-uniffi-bindings.sh swift`
+- Android release artifacts:
+  - From `apps/mobile/android`: `cmd /c gradlew.bat assembleRelease bundleRelease`
 
 There is no dedicated root lint script at the moment. For most app changes, `typecheck` + the relevant build + the closest Playwright spec is the minimum useful validation.
 
