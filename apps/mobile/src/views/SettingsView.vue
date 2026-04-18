@@ -16,6 +16,7 @@ interface KnownTcpServerOption {
 
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
+const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 
 const aboutItems = [
   {
@@ -28,7 +29,7 @@ const aboutItems = [
   },
   {
     label: "Version",
-    value: "0.8.1",
+    value: appVersion,
   },
   {
     label: "License",
