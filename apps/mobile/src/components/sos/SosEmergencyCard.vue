@@ -53,7 +53,7 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
 </script>
 
 <template>
-  <details class="panel fold-panel" open>
+  <details class="panel fold-panel">
     <summary class="panel-summary">
       <div class="summary-copy">
         <span class="summary-icon" aria-hidden="true">

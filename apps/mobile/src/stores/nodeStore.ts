@@ -133,7 +133,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   telemetry: {
     enabled: false,
-    publishIntervalSeconds: 10,
+    publishIntervalSeconds: 60,
     accuracyThresholdMeters: undefined,
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,

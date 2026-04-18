@@ -250,7 +250,7 @@ function applySettings(): void {
     broadcast: form.broadcast,
     telemetry: {
       enabled: form.telemetryEnabled,
-      publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 10))),
+      publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60))),
       accuracyThresholdMeters:
         form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
           ? undefined
