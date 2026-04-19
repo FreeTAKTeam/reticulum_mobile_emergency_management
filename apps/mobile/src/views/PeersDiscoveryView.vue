@@ -118,7 +118,7 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
     <header>
       <h1>Peers &amp; Discovery</h1>
       <p>
-        Select destination allowlist per device. New discoveries never auto-save.
+        Select your mesh Team.
       </p>
       <div class="header-actions">
         <button

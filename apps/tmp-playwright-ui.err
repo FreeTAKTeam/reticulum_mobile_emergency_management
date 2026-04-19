@@ -1,0 +1,24 @@
+(node:23672) ExperimentalWarning: CommonJS module C:\Users\broth\AppData\Roaming\nvm\v23.3.0\node_modules\npm\node_modules\debug\src\node.js is loading ES Module C:\Users\broth\AppData\Roaming\nvm\v23.3.0\node_modules\npm\node_modules\supports-color\index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+node:events:491
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 127.0.0.1:9323
+    at Server.setupListenHandle [as _listen2] (node:net:1912:16)
+    at listenInCluster (node:net:1969:12)
+    at node:net:2178:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Oc instance at:
+    at Server.emit (node:events:525:35)
+    at emitErrorNT (node:net:1948:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '127.0.0.1',
+  port: 9323
+}
+
+Node.js v23.3.0

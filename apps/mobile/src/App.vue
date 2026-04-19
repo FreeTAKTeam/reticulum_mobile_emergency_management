@@ -58,10 +58,10 @@ onMounted(async () => {
 
 const tabItems = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
-  { path: "/inbox", label: "Inbox", icon: "inbox" },
-  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
+  { path: "/inbox", label: "Inbox", icon: "inbox" },
+  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];

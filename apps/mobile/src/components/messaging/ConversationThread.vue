@@ -162,11 +162,25 @@ watch(
     <header v-if="displayName || destinationHex" class="target-card">
       <div class="target-card-top">
         <div class="target-card-main">
-          <div class="target-avatar" aria-hidden="true">
-            <svg class="target-avatar-icon" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="8" r="3.25" />
-              <path d="M5 18.25c1.9-3 4.2-4.5 7-4.5s5.1 1.5 7 4.5" />
-            </svg>
+          <div class="target-avatar-shell">
+            <button
+              v-if="showBackButton"
+              type="button"
+              class="thread-back-button"
+              aria-label="Back"
+              title="Back"
+              @click="emit('back')"
+            >
+              <svg class="thread-back-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M15.5 5.5 9 12l6.5 6.5" />
+              </svg>
+            </button>
+            <div class="target-avatar" aria-hidden="true">
+              <svg class="target-avatar-icon" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="8" r="3.25" />
+                <path d="M5 18.25c1.9-3 4.2-4.5 7-4.5s5.1 1.5 7 4.5" />
+              </svg>
+            </div>
           </div>
           <div class="target-copy">
             <h2 class="thread-title">{{ displayName || destinationHex || "Select a conversation" }}</h2>
@@ -181,18 +195,6 @@ watch(
             </div>
           </div>
         </div>
-        <button
-          v-if="showBackButton"
-          type="button"
-          class="thread-back-button"
-          aria-label="Back"
-          title="Back"
-          @click="emit('back')"
-        >
-          <svg class="thread-back-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M15.5 5.5 9 12l6.5 6.5" />
-          </svg>
-        </button>
       </div>
     </header>
 
@@ -304,7 +306,6 @@ watch(
   align-items: start;
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .target-card-main {
@@ -312,6 +313,11 @@ watch(
   display: grid;
   gap: 0.9rem;
   grid-template-columns: auto minmax(0, 1fr);
+}
+
+.target-avatar-shell {
+  display: inline-flex;
+  position: relative;
 }
 
 .target-avatar {
@@ -337,7 +343,6 @@ watch(
 
 .thread-back-button {
   align-items: center;
-  align-self: start;
   background: rgb(5 18 40 / 88%);
   border: 1px solid rgb(90 150 225 / 28%);
   border-radius: 10px;
@@ -347,8 +352,12 @@ watch(
   display: none;
   height: 2.2rem;
   justify-content: center;
+  left: -0.42rem;
   padding: 0;
+  position: absolute;
+  top: -0.42rem;
   width: 2.2rem;
+  z-index: 2;
 }
 
 .thread-back-button:active {
@@ -381,7 +390,7 @@ watch(
 .target-team {
   color: #9fcaf1;
   font-family: var(--font-body);
-  font-size: 0.98rem;
+  font-size: 0.86rem;
 }
 
 .target-status-block {
@@ -394,15 +403,15 @@ watch(
 .target-label {
   color: #60d8ff;
   font-family: var(--font-ui);
-  font-size: 0.68rem;
-  letter-spacing: 0.16em;
+  font-size: 0.58rem;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
 .target-status {
   color: #e6f8ff;
   font-family: var(--font-headline);
-  font-size: 0.94rem;
+  font-size: 0.78rem;
 }
 
 .target-coordinates {
@@ -468,6 +477,8 @@ watch(
 }
 
 .thread-body {
+  align-content: start;
+  align-items: start;
   display: grid;
   gap: 0.65rem;
   min-height: 0;
@@ -611,13 +622,23 @@ watch(
   }
 
   .target-team {
-    font-size: 0.9rem;
+    font-size: 0.76rem;
+  }
+
+  .target-label {
+    font-size: 0.54rem;
+  }
+
+  .target-status {
+    font-size: 0.72rem;
   }
 
   .thread-back-button {
     display: inline-flex;
-    height: 1.95rem;
-    width: 1.95rem;
+    height: 1.75rem;
+    left: -0.35rem;
+    top: -0.35rem;
+    width: 1.75rem;
   }
 
   .thread-back-icon {

@@ -22,6 +22,7 @@ const route = useRoute();
 const router = useRouter();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
+const isPeerPickerVisible = shallowRef(false);
 
 interface ConnectedPeerOption {
   value: string;
@@ -273,6 +274,10 @@ function showConversationList(): void {
   mobilePane.value = "list";
 }
 
+function togglePeerPicker(): void {
+  isPeerPickerVisible.value = !isPeerPickerVisible.value;
+}
+
 function handleThreadDestinationSelected(event: Event): void {
   const nextDestinationHex = safeTrim((event.target as HTMLSelectElement).value);
   selectedThreadDestinationHex.value = nextDestinationHex;
@@ -283,6 +288,7 @@ function handleThreadDestinationSelected(event: Event): void {
     destinationsMatch(entry.value, nextDestinationHex),
   );
   messagingStore.ensureConversationForDestination(nextDestinationHex, option?.displayName);
+  isPeerPickerVisible.value = false;
   mobilePane.value = "detail";
 }
 
@@ -342,33 +348,52 @@ watch(
           Sync status: <strong>{{ syncStatusLabel }}</strong>
         </p>
       </div>
+      <div class="header-actions">
+        <button
+          class="create-toggle"
+          type="button"
+          aria-label="Select connected peer"
+          :aria-expanded="isPeerPickerVisible"
+          title="Select connected peer"
+          @click="togglePeerPicker"
+        >
+          +
+        </button>
+      </div>
     </header>
+
+    <form
+      v-show="isPeerPickerVisible"
+      class="peer-picker-form"
+      @submit.prevent
+    >
+      <select
+        :value="selectedDestinationHex"
+        aria-label="Select connected peer"
+        class="thread-picker-select"
+        :disabled="threadDestinationOptions.length === 0"
+        @change="handleThreadDestinationSelected"
+      >
+        <option value="">Select connected peer</option>
+        <option
+          v-for="option in threadDestinationOptions"
+          :key="option.value"
+          :value="option.value"
+        >
+          {{ option.displayName }}
+        </option>
+      </select>
+      <p v-if="threadDestinationOptions.length === 0" class="peer-picker-empty">
+        No connected saved peers available.
+      </p>
+    </form>
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
         <header class="inbox-panel-header">
-        <div>
-          <p class="panel-kicker">Conversations</p>
-          <h2 class="panel-title">Encrypted Inbox</h2>
-        </div>
-        <label class="peer-thread-picker mobile-only">
-          <select
-            :value="selectedDestinationHex"
-            aria-label="Select connected peer"
-            class="thread-picker-select"
-            :disabled="threadDestinationOptions.length === 0"
-            @change="handleThreadDestinationSelected"
-          >
-            <option value="">Select connected peer</option>
-            <option
-              v-for="option in threadDestinationOptions"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.displayName }}
-            </option>
-          </select>
-        </label>
+          <div>
+            <p class="panel-kicker">Conversations</p>
+          </div>
         </header>
         <p class="panel-copy">
           {{ conversationCount }} conversation{{ conversationCount === 1 ? "" : "s" }} available.
@@ -407,7 +432,7 @@ watch(
 .view {
   display: grid;
   gap: 1rem;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -425,6 +450,13 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.header-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.55rem;
 }
 
 .view-title,
@@ -472,7 +504,6 @@ watch(
 }
 
 .panel-kicker,
-.panel-title,
 .panel-copy {
   margin: 0;
 }
@@ -483,12 +514,6 @@ watch(
   font-size: 0.72rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-}
-
-.panel-title {
-  color: #f1fbff;
-  font-family: var(--font-headline);
-  font-size: clamp(1.1rem, 2vw, 1.45rem);
 }
 
 .panel-copy {
@@ -511,15 +536,31 @@ watch(
   min-height: 0;
 }
 
-.mobile-only {
-  display: none;
+.create-toggle {
+  background: linear-gradient(110deg, #00a8ff, #14f0ff);
+  border: 0;
+  border-radius: 12px;
+  color: #032748;
+  cursor: pointer;
+  font-family: var(--font-headline);
+  font-size: 1.5rem;
+  font-weight: 700;
+  height: 2.3rem;
+  line-height: 1;
+  min-width: 2.3rem;
+  padding: 0;
 }
 
-.peer-thread-picker {
+.create-toggle:active {
+  background: linear-gradient(110deg, #0678bf, #10bbd8);
+  transform: translateY(1px) scale(0.985);
+}
+
+.peer-picker-form {
+  align-items: center;
   display: grid;
-  flex: 1 1 12rem;
-  min-width: 0;
-  max-width: 100%;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
 }
 
 .thread-picker-select {
@@ -539,6 +580,13 @@ watch(
   width: 100%;
 }
 
+.peer-picker-empty {
+  color: #8ea8d1;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
 .thread-picker-select:disabled {
   cursor: default;
   opacity: 0.82;
@@ -554,17 +602,24 @@ watch(
     display: none;
   }
 
+  .pane-detail .peer-picker-form {
+    display: none;
+  }
+
   .inbox-layout {
     grid-template-columns: 1fr;
   }
 
-  .inbox-panel-header {
-    flex-wrap: wrap;
+  .inbox-layout.pane-detail {
+    grid-row: 1 / -1;
   }
 
-  .mobile-only {
-    display: grid;
-    width: 100%;
+  .view-header {
+    align-items: center;
+  }
+
+  .peer-picker-form {
+    grid-template-columns: 1fr;
   }
 
   .pane-list .detail-panel,
