@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DEFAULT_SOS_SETTINGS, type SosSettingsRecord } from "@reticulum/node-client";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, defineExpose, onMounted, reactive, ref, watch } from "vue";
 
 import { useSosStore } from "../../stores/sosStore";
 
@@ -8,6 +8,20 @@ const sosStore = useSosStore();
 const pin = ref("");
 const feedback = ref("");
 const form = reactive<SosSettingsRecord>({ ...DEFAULT_SOS_SETTINGS });
+
+function normalizedSosSettings(source: SosSettingsRecord): SosSettingsRecord {
+  return {
+    ...source,
+    countdownSeconds: Math.max(0, Number(source.countdownSeconds || 0)),
+    shakeSensitivity: Math.max(1, Number(source.shakeSensitivity || 2.5)),
+    audioDurationSeconds: Math.min(60, Math.max(15, Number(source.audioDurationSeconds || 30))),
+    updateIntervalSeconds: Math.max(30, Number(source.updateIntervalSeconds || 120)),
+  };
+}
+
+const dirty = computed(
+  () => JSON.stringify(normalizedSosSettings(form)) !== JSON.stringify(normalizedSosSettings(sosStore.settings)),
+);
 
 const summary = computed(() => {
   if (!form.enabled) {
@@ -28,15 +42,21 @@ function syncFromStore(): void {
 }
 
 async function save(): Promise<void> {
-  await sosStore.saveSettings({
-    ...form,
-    countdownSeconds: Math.max(0, Number(form.countdownSeconds || 0)),
-    shakeSensitivity: Math.max(1, Number(form.shakeSensitivity || 2.5)),
-    audioDurationSeconds: Math.min(60, Math.max(15, Number(form.audioDurationSeconds || 30))),
-    updateIntervalSeconds: Math.max(30, Number(form.updateIntervalSeconds || 120)),
-  });
+  await sosStore.saveSettings(normalizedSosSettings(form));
   feedback.value = "SOS settings saved.";
 }
+
+function hasUnsavedChanges(): boolean {
+  return dirty.value;
+}
+
+defineExpose<{
+  saveSettings: () => Promise<void>;
+  hasUnsavedChanges: () => boolean;
+}>({
+  saveSettings: save,
+  hasUnsavedChanges,
+});
 
 async function savePin(): Promise<void> {
   await sosStore.setPin(pin.value.trim() || undefined);
@@ -151,7 +171,6 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
       </div>
 
       <div class="actions">
-        <button type="button" :disabled="sosStore.busy" @click="save">Save SOS</button>
         <button type="button" class="danger" @click="sosStore.trigger('Manual')">Trigger SOS</button>
       </div>
       <p v-if="feedback" class="feedback">{{ feedback }}</p>
@@ -297,14 +316,19 @@ textarea {
 }
 
 button {
-  background:
-    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
-  border: 1px solid rgb(74 133 207 / 45%);
+  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
+  --btn-border: rgb(74 133 207 / 45%);
+  --btn-border-pressed: rgb(224 248 255 / 86%);
+  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #8fdbff;
+  --btn-color-pressed: #042541;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
   border-radius: 999px;
-  box-shadow:
-    inset 0 1px 0 rgb(209 244 255 / 10%),
-    0 8px 18px rgb(2 14 32 / 18%);
-  color: #8fdbff;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: 0.78rem;
@@ -313,13 +337,6 @@ button {
   min-height: 32px;
   padding: 0 0.82rem;
   text-transform: uppercase;
-  touch-action: manipulation;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
 }
 
 textarea {
@@ -332,27 +349,14 @@ textarea {
 }
 
 .danger {
-  background:
-    linear-gradient(180deg, rgb(74 17 24 / 88%), rgb(45 10 17 / 92%));
-  border-color: rgb(239 68 68 / 52%);
-  color: #fecaca;
-}
-
-button:active {
-  background:
-    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
-  border-color: rgb(112 197 255 / 56%);
-  box-shadow:
-    inset 0 1px 0 rgb(220 248 255 / 16%),
-    0 4px 10px rgb(3 21 47 / 24%);
-  color: #e8fbff;
-  transform: translateY(1px) scale(0.985);
-}
-
-.danger:active {
-  background:
-    linear-gradient(180deg, rgb(111 25 32 / 94%), rgb(69 10 19 / 96%));
-  border-color: rgb(252 165 165 / 56%);
+  --btn-bg: linear-gradient(180deg, rgb(74 17 24 / 88%), rgb(45 10 17 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(255 232 232 / 97%), rgb(255 175 175 / 95%));
+  --btn-border: rgb(239 68 68 / 52%);
+  --btn-border-pressed: rgb(255 217 217 / 84%);
+  --btn-shadow: inset 0 1px 0 rgb(255 215 215 / 11%), 0 8px 18px rgb(33 7 11 / 26%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 70%), 0 4px 10px rgb(33 7 11 / 16%);
+  --btn-color: #fecaca;
+  --btn-color-pressed: #4a0d14;
 }
 
 button:disabled {

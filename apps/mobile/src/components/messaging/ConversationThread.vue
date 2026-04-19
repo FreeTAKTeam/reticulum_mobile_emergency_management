@@ -342,12 +342,20 @@ watch(
 }
 
 .thread-back-button {
+  --btn-bg: rgb(5 18 40 / 88%);
+  --btn-bg-pressed: rgb(188 236 255 / 97%);
+  --btn-border: rgb(90 150 225 / 28%);
+  --btn-border-pressed: rgb(224 248 255 / 88%);
+  --btn-shadow: 0 0 14px rgb(20 240 255 / 10%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 72%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #9ee2ff;
+  --btn-color-pressed: #042541;
   align-items: center;
-  background: rgb(5 18 40 / 88%);
-  border: 1px solid rgb(90 150 225 / 28%);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
   border-radius: 10px;
-  box-shadow: 0 0 14px rgb(20 240 255 / 10%);
-  color: #9ee2ff;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
   cursor: pointer;
   display: none;
   height: 2.2rem;
@@ -358,12 +366,6 @@ watch(
   top: -0.42rem;
   width: 2.2rem;
   z-index: 2;
-}
-
-.thread-back-button:active {
-  background: rgb(7 33 66 / 96%);
-  border-color: rgb(120 227 255 / 32%);
-  transform: translateY(1px) scale(0.985);
 }
 
 .thread-back-icon {
@@ -559,23 +561,26 @@ watch(
 }
 
 .composer-send {
+  --btn-bg: linear-gradient(110deg, #00a8ff, #14f0ff);
+  --btn-bg-pressed: linear-gradient(110deg, #d8f6ff, #94ebff);
+  --btn-border: rgb(20 240 255 / 35%);
+  --btn-border-pressed: rgb(238 252 255 / 88%);
+  --btn-shadow: 0 0 18px rgb(20 240 255 / 20%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 72%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #032748;
+  --btn-color-pressed: #053057;
   align-items: center;
-  background: linear-gradient(110deg, #00a8ff, #14f0ff);
-  border: 0;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
   border-radius: 12px;
-  box-shadow: 0 0 18px rgb(20 240 255 / 20%);
-  color: #032748;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
   cursor: pointer;
   display: inline-flex;
   height: 2.35rem;
   justify-content: center;
   padding: 0;
   width: 2.35rem;
-}
-
-.composer-send:active {
-  background: linear-gradient(110deg, #0678bf, #10bbd8);
-  transform: translateY(1px) scale(0.985);
 }
 
 .composer-send:disabled {

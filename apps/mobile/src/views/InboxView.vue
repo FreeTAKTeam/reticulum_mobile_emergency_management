@@ -537,8 +537,16 @@ watch(
 }
 
 .create-toggle {
+  --btn-bg: linear-gradient(110deg, #00a8ff, #14f0ff);
+  --btn-bg-pressed: linear-gradient(110deg, #d8f6ff, #94ebff);
+  --btn-border: rgb(20 240 255 / 35%);
+  --btn-border-pressed: rgb(238 252 255 / 88%);
+  --btn-shadow: 0 8px 18px rgb(3 24 56 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 72%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #032748;
+  --btn-color-pressed: #053057;
   background: linear-gradient(110deg, #00a8ff, #14f0ff);
-  border: 0;
+  border: 1px solid var(--btn-border);
   border-radius: 12px;
   color: #032748;
   cursor: pointer;
@@ -549,11 +557,6 @@ watch(
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
-}
-
-.create-toggle:active {
-  background: linear-gradient(110deg, #0678bf, #10bbd8);
-  transform: translateY(1px) scale(0.985);
 }
 
 .peer-picker-form {

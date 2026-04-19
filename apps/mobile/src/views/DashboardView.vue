@@ -145,28 +145,19 @@ h1 {
 }
 
 .badge-button {
+  --btn-bg: rgb(9 61 108 / 68%);
+  --btn-bg-pressed: linear-gradient(180deg, rgb(199 241 255 / 96%), rgb(132 219 255 / 94%));
+  --btn-border: rgb(73 173 255 / 62%);
+  --btn-border-pressed: rgb(234 251 255 / 88%);
+  --btn-shadow: inset 0 1px 0 rgb(186 236 255 / 8%), 0 8px 18px rgb(3 24 56 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 18 40 / 20%);
+  --btn-color: #64beff;
+  --btn-color-pressed: #063050;
   box-shadow:
     inset 0 1px 0 rgb(186 236 255 / 8%),
     0 8px 18px rgb(3 24 56 / 18%);
   cursor: pointer;
   min-height: 0;
-  touch-action: manipulation;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
-}
-
-.badge-button:active {
-  background: linear-gradient(118deg, #0b4d7d, #106f90);
-  border-color: rgb(86 197 255 / 72%);
-  box-shadow:
-    inset 0 1px 0 rgb(224 248 255 / 14%),
-    0 4px 10px rgb(3 18 40 / 20%);
-  color: #dff8ff;
-  transform: translateY(1px) scale(0.985);
 }
 
 .badge-button:focus-visible {

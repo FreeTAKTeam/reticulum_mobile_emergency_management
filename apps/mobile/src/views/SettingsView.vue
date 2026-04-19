@@ -16,7 +16,12 @@ interface KnownTcpServerOption {
 
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
+const sosCardRef = useTemplateRef<{
+  saveSettings: () => Promise<void>;
+  hasUnsavedChanges: () => boolean;
+}>("sosCard");
 const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
+const savingSettings = ref(false);
 
 const aboutItems = [
   {
@@ -171,6 +176,50 @@ const telemetrySummary = computed(() => {
   return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
 
+const persistedTcpClients = computed(() =>
+  [
+    ...new Set(
+      nodeStore.settings.tcpClients
+        .map((entry: string) => entry.trim())
+        .filter((entry: string) => entry.length > 0),
+    ),
+  ],
+);
+
+const hasMainSettingsChanges = computed(() =>
+  form.displayName !== nodeStore.settings.displayName
+  || form.clientMode !== nodeStore.settings.clientMode
+  || form.autoConnectSaved !== nodeStore.settings.autoConnectSaved
+  || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
+  || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
+  || form.broadcast !== nodeStore.settings.broadcast
+  || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
+  || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
+  || Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60)))
+    !== nodeStore.settings.telemetry.publishIntervalSeconds
+  || (
+    form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
+      ? undefined
+      : Math.max(1, Number(form.telemetryAccuracyThresholdMeters))
+  ) !== nodeStore.settings.telemetry.accuracyThresholdMeters
+  || Math.max(1, Number(form.telemetryStaleAfterMinutes || 30))
+    !== nodeStore.settings.telemetry.staleAfterMinutes
+  || Math.max(
+    Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
+    Number(form.telemetryExpireAfterMinutes || 180),
+  ) !== nodeStore.settings.telemetry.expireAfterMinutes
+  || form.hubMode !== nodeStore.settings.hub.mode
+  || form.hubIdentityHash.trim() !== nodeStore.settings.hub.identityHash
+  || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
+  || form.hubApiKey.trim() !== nodeStore.settings.hub.apiKey
+  || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
+    !== nodeStore.settings.hub.refreshIntervalSeconds,
+);
+
+const hasUnsavedSettings = computed(
+  () => hasMainSettingsChanges.value || Boolean(sosCardRef.value?.hasUnsavedChanges()),
+);
+
 function normalizeTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
   if (!candidate) {
@@ -236,39 +285,52 @@ function onHubCandidateSelected(event: Event): void {
   form.hubIdentityHash = value.trim();
 }
 
-function applySettings(): void {
+async function applySettings(): Promise<void> {
+  if (!hasUnsavedSettings.value || savingSettings.value) {
+    return;
+  }
   const previousDisplayName = nodeStore.settings.displayName;
   const previousHubMode = nodeStore.settings.hub.mode;
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
-  nodeStore.updateSettings({
-    displayName: form.displayName,
-    clientMode: form.clientMode,
-    autoConnectSaved: form.autoConnectSaved,
-    announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
-    announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
-    tcpClients: normalizedTcpClients.value,
-    broadcast: form.broadcast,
-    telemetry: {
-      enabled: form.telemetryEnabled,
-      publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60))),
-      accuracyThresholdMeters:
-        form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
-          ? undefined
-          : Math.max(1, Number(form.telemetryAccuracyThresholdMeters)),
-      staleAfterMinutes: Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
-      expireAfterMinutes: Math.max(
-        Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
-        Number(form.telemetryExpireAfterMinutes || 180),
-      ),
-    },
-    hub: {
-      mode: form.hubMode,
-      identityHash: form.hubIdentityHash.trim(),
-      apiBaseUrl: form.hubApiBaseUrl.trim(),
-      apiKey: form.hubApiKey.trim(),
-      refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
-    },
-  });
+  savingSettings.value = true;
+  try {
+    nodeStore.updateSettings({
+      displayName: form.displayName,
+      clientMode: form.clientMode,
+      autoConnectSaved: form.autoConnectSaved,
+      announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
+      announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
+      tcpClients: normalizedTcpClients.value,
+      broadcast: form.broadcast,
+      telemetry: {
+        enabled: form.telemetryEnabled,
+        publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60))),
+        accuracyThresholdMeters:
+          form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
+            ? undefined
+            : Math.max(1, Number(form.telemetryAccuracyThresholdMeters)),
+        staleAfterMinutes: Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
+        expireAfterMinutes: Math.max(
+          Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
+          Number(form.telemetryExpireAfterMinutes || 180),
+        ),
+      },
+      hub: {
+        mode: form.hubMode,
+        identityHash: form.hubIdentityHash.trim(),
+        apiBaseUrl: form.hubApiBaseUrl.trim(),
+        apiKey: form.hubApiKey.trim(),
+        refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
+      },
+    });
+    await sosCardRef.value?.saveSettings();
+  } catch (error: unknown) {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+    return;
+  } finally {
+    savingSettings.value = false;
+  }
+
   form.displayName = nodeStore.settings.displayName;
   form.announceCapabilities = nodeStore.settings.announceCapabilities;
   form.tcpClients = [...nodeStore.settings.tcpClients];
@@ -347,6 +409,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
       <div class="header-actions">
         <span class="badge">{{ nodeStore.status.running ? "Node Active" : "Node Offline" }}</span>
+        <button type="button" :disabled="!hasUnsavedSettings || savingSettings" @click="applySettings">
+          Save
+        </button>
       </div>
     </header>
 
@@ -460,21 +525,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
         </div>
 
-        <div class="actions">
-          <button type="button" @click="applySettings">Save</button>
-          <button
-            type="button"
-            @click="runNodeAction(() => nodeStore.reinitializeClient(), 'Node client recreated.')"
-          >
-            Recreate Client
-          </button>
-          <button
-            type="button"
-            @click="runNodeAction(() => nodeStore.restartNode(), 'Node restarted.')"
-          >
-            Restart Node
-          </button>
-        </div>
         <p v-if="telemetryStore.telemetryError" class="feedback">{{ telemetryStore.telemetryError }}</p>
       </div>
     </details>
@@ -593,7 +643,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </p>
 
         <div class="actions">
-          <button type="button" @click="applySettings">Save Hub Settings</button>
           <button
             type="button"
             @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub refresh requested.')"
@@ -671,7 +720,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </details>
 
-    <SosEmergencyCard />
+    <SosEmergencyCard ref="sosCard" />
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
@@ -709,6 +758,18 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             @click="runNodeAction(() => nodeStore.stopNode(), 'Node stopped.')"
           >
             Stop
+          </button>
+          <button
+            type="button"
+            @click="runNodeAction(() => nodeStore.reinitializeClient(), 'Node client recreated.')"
+          >
+            Restart UI
+          </button>
+          <button
+            type="button"
+            @click="runNodeAction(() => nodeStore.restartNode(), 'Node restarted.')"
+          >
+            Restart
           </button>
         </div>
         <p v-if="runtimeFeedback" class="feedback">{{ runtimeFeedback }}</p>
@@ -1048,14 +1109,19 @@ textarea {
 }
 
 button {
-  background:
-    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
-  border: 1px solid rgb(74 133 207 / 45%);
+  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
+  --btn-border: rgb(74 133 207 / 45%);
+  --btn-border-pressed: rgb(224 248 255 / 86%);
+  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #8fdbff;
+  --btn-color-pressed: #042541;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
   border-radius: 999px;
-  box-shadow:
-    inset 0 1px 0 rgb(209 244 255 / 10%),
-    0 8px 18px rgb(2 14 32 / 18%);
-  color: #8fdbff;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: 0.78rem;
@@ -1063,31 +1129,7 @@ button {
   letter-spacing: 0.08em;
   min-height: 32px;
   padding: 0 0.82rem;
-  touch-action: manipulation;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
   text-transform: uppercase;
-}
-
-button:active {
-  background:
-    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
-  border-color: rgb(112 197 255 / 56%);
-  box-shadow:
-    inset 0 1px 0 rgb(220 248 255 / 16%),
-    0 4px 10px rgb(3 21 47 / 24%);
-  color: #e8fbff;
-  transform: translateY(1px) scale(0.985);
-}
-
-.inline-remove:active {
-  box-shadow:
-    inset 0 1px 0 rgb(220 248 255 / 12%),
-    0 3px 8px rgb(3 21 47 / 22%);
 }
 
 button:disabled {

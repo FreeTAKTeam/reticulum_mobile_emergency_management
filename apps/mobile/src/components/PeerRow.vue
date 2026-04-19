@@ -180,14 +180,19 @@ const resolutionLabel = computed(() => {
 }
 
 .btn {
-  background:
-    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
-  border: 1px solid rgb(74 133 207 / 45%);
+  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
+  --btn-border: rgb(74 133 207 / 45%);
+  --btn-border-pressed: rgb(224 248 255 / 86%);
+  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #8fdbff;
+  --btn-color-pressed: #042541;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
   border-radius: 999px;
-  box-shadow:
-    inset 0 1px 0 rgb(209 244 255 / 10%),
-    0 8px 18px rgb(2 14 32 / 18%);
-  color: #8fdbff;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
   cursor: pointer;
   font-family: var(--font-ui);
   font-size: 0.78rem;
@@ -197,24 +202,6 @@ const resolutionLabel = computed(() => {
   min-width: 92px;
   padding: 0 0.82rem;
   text-transform: uppercase;
-  touch-action: manipulation;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    color 120ms ease,
-    transform 120ms ease;
-}
-
-.btn:active {
-  background:
-    linear-gradient(180deg, rgb(15 73 115 / 92%), rgb(8 35 72 / 96%));
-  border-color: rgb(112 197 255 / 56%);
-  box-shadow:
-    inset 0 1px 0 rgb(220 248 255 / 16%),
-    0 4px 10px rgb(3 21 47 / 24%);
-  color: #e8fbff;
-  transform: translateY(1px) scale(0.985);
 }
 
 .btn:disabled {
