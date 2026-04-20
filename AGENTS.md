@@ -45,6 +45,8 @@ Treat these as generated or disposable unless the task explicitly targets them:
 - `playwright-report/`
 - `test-results/`
 - `tmp/`
+- `apps/tmp-playwright-ui.err`
+- `apps/mobile/tmp-playwright-ui.err`
 - `apps/mobile/android/app/build/`
 - `apps/mobile/android/app/src/main/jniLibs/`
 - `apps/mobile/android/uniffi/`
@@ -59,6 +61,7 @@ On Windows, broad recursive directory scans can fail inside Android build interm
 - Pinia stores hold most stateful behavior. Keep business logic in stores and utilities, not inside view templates.
 - Reuse existing domain types from `apps/mobile/src/types/domain.ts` before inventing near-duplicates.
 - Keep wire/protocol helpers centralized in `apps/mobile/src/utils` and Rust runtime files rather than scattering message-shape logic across components.
+- App-wide button press feedback is defined on global `button` rules in `apps/mobile/src/styles.css`; component buttons should set the existing CSS custom properties rather than adding one-off `:active` behavior.
 - Maintain the existing style conventions in touched files:
   - double quotes
   - semicolons
@@ -131,7 +134,7 @@ Run the narrowest command set that proves the change:
   - `npm run test:e2e:headed`
   - `npm run test:e2e:debug`
 - Rust:
-  - `cargo test -p reticulum_mobile`
+  - `cargo test --manifest-path crates/reticulum_mobile/Cargo.toml`
 - UniFFI code generation:
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language kotlin`
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language swift`
