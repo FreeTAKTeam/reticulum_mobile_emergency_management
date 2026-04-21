@@ -1,9 +1,9 @@
 use rmpv::Value as MsgPackValue;
 
+use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::types::{NodeError, SosDeviceTelemetryRecord, SosMessageKind, SosTriggerSource};
 
 pub(crate) const LXMF_FIELD_TELEMETRY: i64 = 0x02;
-pub(crate) const LXMF_FIELD_COMMANDS: i64 = 0x09;
 pub(crate) const SID_TIME: i64 = 0x01;
 pub(crate) const SID_LOCATION: i64 = 0x02;
 pub(crate) const SID_BATTERY: i64 = 0x04;
@@ -28,7 +28,7 @@ pub(crate) fn build_sos_fields(
     telemetry: Option<&SosDeviceTelemetryRecord>,
 ) -> Result<Vec<u8>, NodeError> {
     let mut entries = vec![(
-        MsgPackValue::from(LXMF_FIELD_COMMANDS),
+        MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![command_to_msgpack(command)]),
     )];
 
@@ -45,10 +45,11 @@ pub(crate) fn build_sos_fields(
 pub(crate) fn parse_sos_fields(fields_bytes: &[u8]) -> Option<SosFields> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
     let entries = msgpack_map_entries(&fields)?;
-    Some(SosFields {
-        command: parse_command_field(msgpack_get_indexed(entries, LXMF_FIELD_COMMANDS)),
+    let parsed = SosFields {
+        command: parse_command_field(msgpack_get_indexed(entries, FIELD_COMMANDS)),
         telemetry: parse_telemetry_field(msgpack_get_indexed(entries, LXMF_FIELD_TELEMETRY)),
-    })
+    };
+    (parsed.command.is_some() || parsed.telemetry.is_some()).then_some(parsed)
 }
 
 pub(crate) fn looks_like_sos_text(body: &str) -> bool {
@@ -377,7 +378,10 @@ mod tests {
 
         let encoded = build_sos_fields(&command, Some(&telemetry)).expect("encoded fields");
         let parsed = parse_sos_fields(&encoded).expect("parsed fields");
+        let fields = rmp_serde::from_slice::<MsgPackValue>(&encoded).expect("field map");
+        let entries = msgpack_map_entries(&fields).expect("map entries");
 
+        assert!(msgpack_get_indexed(entries, FIELD_COMMANDS).is_some());
         assert_eq!(parsed.command.expect("command"), command);
         let parsed_telemetry = parsed.telemetry.expect("telemetry");
         assert_eq!(parsed_telemetry.lat.expect("lat").round(), 46.0);
@@ -460,5 +464,38 @@ mod tests {
         assert_eq!(parsed_telemetry.lon, None);
         assert_eq!(parsed_telemetry.battery_percent, Some(52.0));
         assert_eq!(parsed_telemetry.battery_charging, Some(false));
+    }
+
+    #[test]
+    fn parse_sos_fields_ignores_rch_command_envelope() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-123"),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from("corr-123"),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.log_entry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![(
+                        MsgPackValue::from("mission_uid"),
+                        MsgPackValue::from("mission-1"),
+                    )]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let parsed = parse_sos_fields(&bytes);
+
+        assert!(parsed.is_none());
     }
 }

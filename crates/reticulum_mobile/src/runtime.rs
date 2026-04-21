@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::announce_compat::{
     display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
 };
+use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
 use crate::sos::{location_from_alert, received_alert_from_sos};
@@ -57,9 +58,6 @@ use self::runtime_projection::RuntimeProjectionJournal;
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
-const LXMF_FIELD_COMMANDS: i64 = 0x09;
-const LXMF_FIELD_RESULTS: i64 = 0x0A;
-const LXMF_FIELD_EVENT: i64 = 0x0D;
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
     "topic_broker",
@@ -268,7 +266,7 @@ fn eam_command_action_from_fields(
 ) -> Option<EamCommandAction> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
     let field_entries = msgpack_map_entries(&fields)?;
-    let commands = msgpack_get_indexed(field_entries, 0x09)?;
+    let commands = msgpack_get_indexed(field_entries, FIELD_COMMANDS)?;
     let MsgPackValue::Array(command_entries) = commands else {
         return None;
     };
@@ -448,7 +446,7 @@ fn event_projection_from_fields(
 ) -> Option<EventProjectionRecord> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
     let field_entries = msgpack_map_entries(&fields)?;
-    let commands = msgpack_get_indexed(field_entries, LXMF_FIELD_COMMANDS)?;
+    let commands = msgpack_get_indexed(field_entries, FIELD_COMMANDS)?;
     let MsgPackValue::Array(command_entries) = commands else {
         return None;
     };
@@ -3206,7 +3204,7 @@ async fn refresh_hub_directory_lxmf(
 
     let command_id = format!("hub-directory-{}", now_ms());
     let fields = MsgPackValue::Map(vec![(
-        MsgPackValue::from(LXMF_FIELD_COMMANDS),
+        MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![MsgPackValue::Map(vec![
             (
                 MsgPackValue::from("command_id"),
@@ -4761,6 +4759,7 @@ pub fn load_or_create_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_EVENT, FIELD_RESULTS};
     use tokio::sync::oneshot;
 
     #[test]
@@ -4814,7 +4813,7 @@ mod tests {
     #[test]
     fn parse_mission_sync_metadata_extracts_command_fields() {
         let fields = MsgPackValue::Map(vec![(
-            MsgPackValue::from(LXMF_FIELD_COMMANDS),
+            MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![MsgPackValue::Map(vec![
                 (
                     MsgPackValue::from("command_id"),
@@ -4862,7 +4861,7 @@ mod tests {
     fn parse_mission_sync_metadata_extracts_result_and_event_fields() {
         let fields = MsgPackValue::Map(vec![
             (
-                MsgPackValue::from(LXMF_FIELD_RESULTS),
+                MsgPackValue::from(FIELD_RESULTS),
                 MsgPackValue::Map(vec![
                     (
                         MsgPackValue::from("command_id"),
@@ -4876,7 +4875,7 @@ mod tests {
                 ]),
             ),
             (
-                MsgPackValue::from(LXMF_FIELD_EVENT),
+                MsgPackValue::from(FIELD_EVENT),
                 MsgPackValue::Map(vec![
                     (
                         MsgPackValue::from("event_type"),
@@ -5008,7 +5007,7 @@ mod tests {
     #[test]
     fn parse_mission_sync_metadata_accepts_full_rch_command_envelope() {
         let fields = MsgPackValue::Map(vec![(
-            MsgPackValue::from(LXMF_FIELD_COMMANDS),
+            MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![MsgPackValue::Map(vec![
                 (
                     MsgPackValue::from("command_id"),

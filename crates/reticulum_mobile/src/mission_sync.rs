@@ -1,9 +1,7 @@
 use rmpv::Value as MsgPackValue;
 use std::borrow::ToOwned;
 
-const LXMF_FIELD_COMMANDS: i64 = 0x09;
-const LXMF_FIELD_RESULTS: i64 = 0x0A;
-const LXMF_FIELD_EVENT: i64 = 0x0D;
+use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_EVENT, FIELD_RESULTS};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MissionSyncMetadata {
@@ -152,8 +150,14 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
     let MsgPackValue::Map(map) = envelope else {
         return;
     };
-    metadata.command_present = true;
     let entries = map.as_slice();
+    let has_command_markers = msgpack_get_named(entries, &["command_id"]).is_some()
+        || msgpack_get_named(entries, &["correlation_id"]).is_some()
+        || msgpack_get_named(entries, &["command_type"]).is_some();
+    if !has_command_markers {
+        return;
+    }
+    metadata.command_present = true;
     parse_string_field(entries, &["command_id"], &mut metadata.command_id, false);
     parse_string_field(
         entries,
@@ -295,13 +299,13 @@ pub(crate) fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<Mission
     let mut metadata = MissionSyncMetadata::default();
 
     if let Some(entries) = msgpack_map_entries(&fields) {
-        if let Some(commands) = msgpack_get_indexed(entries, LXMF_FIELD_COMMANDS) {
+        if let Some(commands) = msgpack_get_indexed(entries, FIELD_COMMANDS) {
             parse_envelope_tree(commands, &mut metadata, parse_command_envelope);
         }
-        if let Some(results) = msgpack_get_indexed(entries, LXMF_FIELD_RESULTS) {
+        if let Some(results) = msgpack_get_indexed(entries, FIELD_RESULTS) {
             parse_envelope_tree(results, &mut metadata, parse_result_envelope);
         }
-        if let Some(events) = msgpack_get_indexed(entries, LXMF_FIELD_EVENT) {
+        if let Some(events) = msgpack_get_indexed(entries, FIELD_EVENT) {
             parse_envelope_tree(events, &mut metadata, parse_event_envelope);
         }
     }
@@ -324,7 +328,7 @@ mod tests {
     fn parse_mission_sync_metadata_recognizes_eam_command_lifecycle() {
         let fields = MsgPackValue::Map(vec![
             (
-                MsgPackValue::from(LXMF_FIELD_COMMANDS),
+                MsgPackValue::from(FIELD_COMMANDS),
                 MsgPackValue::Array(vec![MsgPackValue::Map(vec![
                     (
                         MsgPackValue::from("command_id"),
@@ -352,7 +356,7 @@ mod tests {
                 ])]),
             ),
             (
-                MsgPackValue::from(LXMF_FIELD_RESULTS),
+                MsgPackValue::from(FIELD_RESULTS),
                 MsgPackValue::Array(vec![
                     MsgPackValue::Map(vec![
                         (
@@ -379,7 +383,7 @@ mod tests {
                 ]),
             ),
             (
-                MsgPackValue::from(LXMF_FIELD_EVENT),
+                MsgPackValue::from(FIELD_EVENT),
                 MsgPackValue::Map(vec![
                     (
                         MsgPackValue::from("event_type"),
@@ -419,5 +423,32 @@ mod tests {
         assert_eq!(metadata.team_member_uid.as_deref(), Some("member-1"));
         assert!(metadata.is_mission_related());
         assert_eq!(metadata.primary_kind(), "command");
+    }
+
+    #[test]
+    fn parse_mission_sync_metadata_ignores_sos_command_envelope() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("sos_state"),
+                    MsgPackValue::from("active"),
+                ),
+                (
+                    MsgPackValue::from("incident_id"),
+                    MsgPackValue::from("incident-123"),
+                ),
+                (
+                    MsgPackValue::from("trigger_source"),
+                    MsgPackValue::from("manual"),
+                ),
+                (MsgPackValue::from("sent_at_ms"), MsgPackValue::from(42_u64)),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let metadata = parse_mission_sync_metadata(&bytes);
+
+        assert!(metadata.is_none());
     }
 }

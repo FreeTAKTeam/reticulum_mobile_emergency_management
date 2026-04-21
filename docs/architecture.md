@@ -8,6 +8,7 @@ Current mobile behavior differs from the older store-centric sketch below in two
 - The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
 - Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends target saved or explicitly managed peers that are mission-ready and currently direct-reachable (`active_link`, `communication_ready`, or native `Connected` state). If a saved peer is not directly reachable and a propagation relay is active, Rust sends that target via propagation instead of stalling on direct delivery first. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
 - RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` refreshes a transient hub directory by sending `rem.registry.peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH and then uses those returned peers for direct sends. `Connected` sends outbound traffic only to the selected RCH, and an `effective_connected_mode=true` hub response temporarily upgrades `SemiAutonomous` to connected routing.
+- SOS uses the same numeric LXMF command slot in this repo: `FIELD_COMMANDS (0x09)`. The shared Rust constants are the source of truth, and the runtime separates SOS from RCH by envelope keys (`sos_state` / `incident_id` vs `command_type` / `command_id`). The earlier SOS note that said `FIELD_COMMANDS (0x06)` is stale for the current REM/RCH wire contract.
 
 ```mermaid
 sequenceDiagram
@@ -249,7 +250,7 @@ Verification:
 - `npm --workspace apps/mobile run typecheck`
 - `npm --workspace apps/mobile run build:web`
 - `npx playwright test e2e/events.spec.ts`
-- `cargo test -p reticulum_mobile parse_mission_sync_metadata`
+- `cargo test --manifest-path crates/reticulum_mobile/Cargo.toml parse_mission_sync_metadata`
 - The Rust test suite now includes a full-RCH-envelope case that exercises `source`, `timestamp`, `args`, `correlation_id`, and `topics` through `parse_mission_sync_metadata(...)`.
 
 Routing:
@@ -260,6 +261,32 @@ Routing:
 Acknowledgement:
 - Sender success is tracked from the LXMF response path, not just packet send.
 - The runtime marks delivery `Acknowledged` when it receives a matching response/event on the same `correlation_id` or `command_id`.
+
+### LXMF Command Field Compatibility
+
+The current REM mobile wire contract intentionally shares the same numeric command field across multiple payload families:
+
+- `crates/reticulum_mobile/src/lxmf_fields.rs` is the Rust source of truth for:
+  - `FIELD_COMMANDS = 0x09`
+  - `FIELD_RESULTS = 0x0A`
+  - `FIELD_EVENT = 0x0D`
+- RCH-compatible mission/Event/EAM envelopes use `FIELD_COMMANDS (0x09)` with keys such as `command_id`, `correlation_id`, `command_type`, and `args`.
+- SOS uses that same `FIELD_COMMANDS (0x09)` slot, but its envelope keys are SOS-specific: `sos_state`, `incident_id`, `trigger_source`, and optional `audio_id`.
+- Telemetry snapshot requests also reuse `FIELD_COMMANDS (0x09)` as a small command list sent over the app destination.
+
+Parser separation is deliberate and happens by envelope shape, not by allocating different numeric field IDs:
+
+- `crates/reticulum_mobile/src/mission_sync.rs` now treats a `0x09` entry as mission-sync only when a command envelope exposes mission markers such as `command_id`, `correlation_id`, or `command_type`.
+- `crates/reticulum_mobile/src/sos_fields.rs` now treats a `0x09` entry as SOS only when it can actually decode an SOS command map or SOS telemetry payload.
+- Targeted Rust tests cover both directions:
+  - mission-sync ignores a pure SOS command envelope
+  - SOS parsing ignores an RCH-style command envelope
+
+This is a parser-boundary clarification, not a wire-format migration:
+
+- Existing mission/Event/EAM traffic remains on `0x09` / `0x0A` / `0x0D`.
+- Existing SOS command traffic remains on `0x09`.
+- The earlier SOS requirement that said `FIELD_COMMANDS (0x06)` does not match the current REM/RCH implementation and should be treated as stale for this repository.
 
 ### Telemetry
 

@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
+use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -33,7 +34,6 @@ use crate::types::{
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
-const LXMF_FIELD_COMMANDS: i64 = 0x09;
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMAND_QUEUE_CAPACITY: usize = 256;
 
@@ -788,7 +788,7 @@ fn build_mission_command_fields(
     args: Vec<(&str, MsgPackValue)>,
 ) -> Result<Vec<u8>, NodeError> {
     let fields = MsgPackValue::Map(vec![(
-        MsgPackValue::from(LXMF_FIELD_COMMANDS),
+        MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![msgpack_map(vec![
             ("command_id", MsgPackValue::from(command_id)),
             ("correlation_id", MsgPackValue::from(correlation_id)),
@@ -1019,7 +1019,7 @@ fn build_event_replication_payload(
 
     let fields =
         MsgPackValue::Map(vec![(
-            MsgPackValue::from(LXMF_FIELD_COMMANDS),
+            MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![MsgPackValue::Map(vec![
                 (
                     MsgPackValue::from("command_id"),
