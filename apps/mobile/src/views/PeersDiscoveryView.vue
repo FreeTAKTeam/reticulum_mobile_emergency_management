@@ -257,7 +257,7 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
 
 h1 {
   font-family: var(--font-headline);
-  font-size: clamp(1.8rem, 3.4vw, 2.9rem);
+  font-size: clamp(1.4rem, 3vw, 2.4rem);
   margin: 0;
 }
 
@@ -497,6 +497,10 @@ textarea {
 }
 
 @media (max-width: 760px) {
+  h1 {
+    font-size: 1.1rem;
+  }
+
   .header-actions {
     flex-wrap: wrap;
   }
