@@ -11,7 +11,10 @@ use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, ConversationRecord, EamProjectionRecord, EventProjectionRecord,
+    AppSettingsRecord, ChecklistCreateOnlineRequest, ChecklistListActiveRequest, ChecklistRecord,
+    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest, ChecklistUpdatePatch,
+    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EventProjectionRecord,
     HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload,
     LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
@@ -263,6 +266,93 @@ struct DeleteEamInput {
 struct DeleteEventInput {
     uid: String,
     deleted_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistListInput {
+    search: Option<String>,
+    sort_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistUidInput {
+    checklist_uid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistCreateInput {
+    checklist_uid: Option<String>,
+    mission_uid: Option<String>,
+    template_uid: String,
+    name: String,
+    description: String,
+    start_time: String,
+    created_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistUpdateInput {
+    checklist_uid: String,
+    patch: ChecklistUpdatePatchInput,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistUpdatePatchInput {
+    mission_uid: Option<String>,
+    template_uid: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    start_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTaskStatusInput {
+    checklist_uid: String,
+    task_uid: String,
+    user_status: String,
+    changed_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTaskRowAddInput {
+    checklist_uid: String,
+    task_uid: Option<String>,
+    number: u32,
+    due_relative_minutes: Option<u32>,
+    legacy_value: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTaskRowDeleteInput {
+    checklist_uid: String,
+    task_uid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTaskRowStyleInput {
+    checklist_uid: String,
+    task_uid: String,
+    row_background_color: Option<String>,
+    line_break_enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTaskCellInput {
+    checklist_uid: String,
+    task_uid: String,
+    column_uid: String,
+    value: String,
+    updated_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -763,6 +853,89 @@ fn to_telemetry_position_record(input: TelemetryPositionInput) -> TelemetryPosit
     }
 }
 
+fn to_checklist_create_request(input: ChecklistCreateInput) -> ChecklistCreateOnlineRequest {
+    ChecklistCreateOnlineRequest {
+        checklist_uid: input.checklist_uid,
+        mission_uid: input.mission_uid,
+        template_uid: input.template_uid,
+        name: input.name,
+        description: input.description,
+        start_time: input.start_time,
+        created_by_team_member_rns_identity: input.created_by_team_member_rns_identity,
+    }
+}
+
+fn to_checklist_update_request(input: ChecklistUpdateInput) -> ChecklistUpdateRequest {
+    ChecklistUpdateRequest {
+        checklist_uid: input.checklist_uid,
+        patch: ChecklistUpdatePatch {
+            mission_uid: input.patch.mission_uid,
+            template_uid: input.patch.template_uid,
+            name: input.patch.name,
+            description: input.patch.description,
+            start_time: input.patch.start_time,
+        },
+    }
+}
+
+fn to_checklist_task_status_request(
+    input: ChecklistTaskStatusInput,
+) -> Result<ChecklistTaskStatusSetRequest, NodeError> {
+    let user_status = match input.user_status.trim() {
+        "COMPLETE" => crate::types::ChecklistUserTaskStatus::Complete {},
+        "PENDING" => crate::types::ChecklistUserTaskStatus::Pending {},
+        _ => return Err(NodeError::InvalidConfig {}),
+    };
+    Ok(ChecklistTaskStatusSetRequest {
+        checklist_uid: input.checklist_uid,
+        task_uid: input.task_uid,
+        user_status,
+        changed_by_team_member_rns_identity: input.changed_by_team_member_rns_identity,
+    })
+}
+
+fn to_checklist_task_row_add_request(
+    input: ChecklistTaskRowAddInput,
+) -> ChecklistTaskRowAddRequest {
+    ChecklistTaskRowAddRequest {
+        checklist_uid: input.checklist_uid,
+        task_uid: input.task_uid,
+        number: input.number,
+        due_relative_minutes: input.due_relative_minutes,
+        legacy_value: input.legacy_value,
+    }
+}
+
+fn to_checklist_task_row_delete_request(
+    input: ChecklistTaskRowDeleteInput,
+) -> ChecklistTaskRowDeleteRequest {
+    ChecklistTaskRowDeleteRequest {
+        checklist_uid: input.checklist_uid,
+        task_uid: input.task_uid,
+    }
+}
+
+fn to_checklist_task_row_style_request(
+    input: ChecklistTaskRowStyleInput,
+) -> ChecklistTaskRowStyleSetRequest {
+    ChecklistTaskRowStyleSetRequest {
+        checklist_uid: input.checklist_uid,
+        task_uid: input.task_uid,
+        row_background_color: input.row_background_color,
+        line_break_enabled: input.line_break_enabled,
+    }
+}
+
+fn to_checklist_task_cell_request(input: ChecklistTaskCellInput) -> ChecklistTaskCellSetRequest {
+    ChecklistTaskCellSetRequest {
+        checklist_uid: input.checklist_uid,
+        task_uid: input.task_uid,
+        column_uid: input.column_uid,
+        value: input.value,
+        updated_by_team_member_rns_identity: input.updated_by_team_member_rns_identity,
+    }
+}
+
 fn status_to_json(status: NodeStatus) -> String {
     json!({
         "running": status.running,
@@ -1060,6 +1233,101 @@ fn event_projection_json(record: &EventProjectionRecord) -> serde_json::Value {
     })
 }
 
+fn checklist_column_json(column: &crate::types::ChecklistColumnRecord) -> serde_json::Value {
+    json!({
+        "columnUid": column.column_uid,
+        "columnName": column.column_name,
+        "columnType": column.column_type.as_str(),
+        "columnEditable": column.column_editable,
+        "backgroundColor": column.background_color,
+        "textColor": column.text_color,
+        "isRemovable": column.is_removable,
+        "systemKey": column.system_key.map(|key| key.as_str()),
+        "displayOrder": column.display_order
+    })
+}
+
+fn checklist_cell_json(cell: &crate::types::ChecklistCellRecord) -> serde_json::Value {
+    json!({
+        "cellUid": cell.cell_uid,
+        "taskUid": cell.task_uid,
+        "columnUid": cell.column_uid,
+        "value": cell.value,
+        "updatedAt": cell.updated_at,
+        "updatedByTeamMemberRnsIdentity": cell.updated_by_team_member_rns_identity
+    })
+}
+
+fn checklist_task_json(task: &crate::types::ChecklistTaskRecord) -> serde_json::Value {
+    json!({
+        "taskUid": task.task_uid,
+        "number": task.number,
+        "userStatus": task.user_status.as_str(),
+        "taskStatus": task.task_status.as_str(),
+        "isLate": task.is_late,
+        "updatedAt": task.updated_at,
+        "deletedAt": task.deleted_at,
+        "customStatus": task.custom_status,
+        "dueRelativeMinutes": task.due_relative_minutes,
+        "dueDtg": task.due_dtg,
+        "notes": task.notes,
+        "rowBackgroundColor": task.row_background_color,
+        "lineBreakEnabled": task.line_break_enabled,
+        "completedAt": task.completed_at,
+        "completedByTeamMemberRnsIdentity": task.completed_by_team_member_rns_identity,
+        "legacyValue": task.legacy_value,
+        "cells": task.cells.iter().map(checklist_cell_json).collect::<Vec<_>>()
+    })
+}
+
+fn checklist_feed_publication_json(
+    publication: &crate::types::ChecklistFeedPublicationRecord,
+) -> serde_json::Value {
+    json!({
+        "publicationUid": publication.publication_uid,
+        "checklistUid": publication.checklist_uid,
+        "missionFeedUid": publication.mission_feed_uid,
+        "publishedAt": publication.published_at,
+        "publishedByTeamMemberRnsIdentity": publication.published_by_team_member_rns_identity
+    })
+}
+
+fn checklist_record_json(record: &ChecklistRecord) -> serde_json::Value {
+    json!({
+        "uid": record.uid,
+        "missionUid": record.mission_uid,
+        "templateUid": record.template_uid,
+        "templateVersion": record.template_version,
+        "templateName": record.template_name,
+        "name": record.name,
+        "description": record.description,
+        "startTime": record.start_time,
+        "mode": record.mode.as_str(),
+        "syncState": record.sync_state.as_str(),
+        "originType": record.origin_type.as_str(),
+        "checklistStatus": record.checklist_status.as_str(),
+        "createdAt": record.created_at,
+        "createdByTeamMemberRnsIdentity": record.created_by_team_member_rns_identity,
+        "updatedAt": record.updated_at,
+        "deletedAt": record.deleted_at,
+        "uploadedAt": record.uploaded_at,
+        "participantRnsIdentities": record.participant_rns_identities,
+        "progressPercent": record.progress_percent,
+        "counts": {
+            "pendingCount": record.counts.pending_count,
+            "lateCount": record.counts.late_count,
+            "completeCount": record.counts.complete_count
+        },
+        "columns": record.columns.iter().map(checklist_column_json).collect::<Vec<_>>(),
+        "tasks": record.tasks.iter().map(checklist_task_json).collect::<Vec<_>>(),
+        "feedPublications": record
+            .feed_publications
+            .iter()
+            .map(checklist_feed_publication_json)
+            .collect::<Vec<_>>()
+    })
+}
+
 fn telemetry_position_json(record: &TelemetryPositionRecord) -> serde_json::Value {
     json!({
         "callsign": record.callsign,
@@ -1226,6 +1494,8 @@ fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Peers {} => "Peers",
         ProjectionScope::SyncStatus {} => "SyncStatus",
         ProjectionScope::HubRegistration {} => "HubRegistration",
+        ProjectionScope::Checklists {} => "Checklists",
+        ProjectionScope::ChecklistDetail {} => "ChecklistDetail",
         ProjectionScope::Eams {} => "Eams",
         ProjectionScope::Events {} => "Events",
         ProjectionScope::Conversations {} => "Conversations",
@@ -2478,6 +2748,394 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getOpera
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: ChecklistListInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid checklist list payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_active_checklists(Some(ChecklistListActiveRequest {
+        search: payload.search,
+        sort_by: payload.sort_by,
+    })) {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(checklist_record_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid checklist get payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_checklist(payload.checklist_uid) {
+        Ok(Some(record)) => ok_json_result(&mut env, &checklist_record_json(&record)),
+        Ok(None) => ok_json_result(&mut env, &json!({ "checklist": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createOnlineChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistCreateInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist create payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.create_online_checklist(to_checklist_create_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_updateChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistUpdateInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist update payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.update_checklist(to_checklist_update_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist delete payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_checklist(payload.checklist_uid) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_joinChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist join payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.join_checklist(payload.checklist_uid) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setChecklistTaskStatusJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTaskStatusInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist task status payload: {e}"),
+            )
+        }
+    };
+    let request = match to_checklist_task_status_request(payload) {
+        Ok(v) => v,
+        Err(err) => return err_result("InvalidConfig", err.to_string()),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_checklist_task_status(request) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_addChecklistTaskRowJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTaskRowAddInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist task row add payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.add_checklist_task_row(to_checklist_task_row_add_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteChecklistTaskRowJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTaskRowDeleteInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist task row delete payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_checklist_task_row(to_checklist_task_row_delete_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setChecklistTaskRowStyleJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTaskRowStyleInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist task row style payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_checklist_task_row_style(to_checklist_task_row_style_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setChecklistTaskCellJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTaskCellInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist task cell payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_checklist_task_cell(to_checklist_task_cell_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

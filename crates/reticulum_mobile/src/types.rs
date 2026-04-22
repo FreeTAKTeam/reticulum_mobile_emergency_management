@@ -1,6 +1,54 @@
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
+macro_rules! string_enum {
+    ($vis:vis enum $name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        $vis enum $name {
+            $(
+                $variant {},
+            )+
+        }
+
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(
+                        Self::$variant {} => $value,
+                    )+
+                }
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str((*self).as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                match value.trim().to_ascii_uppercase().as_str() {
+                    $(
+                        $value => Ok(Self::$variant {}),
+                    )+
+                    other => Err(D::Error::custom(format!(
+                        "unknown {}: {other}",
+                        stringify!($name)
+                    ))),
+                }
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum LogLevel {
     Trace {},
@@ -183,6 +231,72 @@ pub enum SosMessageKind {
     Active {},
     Update {},
     Cancelled {},
+}
+
+string_enum! {
+    pub enum ChecklistMode {
+        Online => "ONLINE",
+        Offline => "OFFLINE"
+    }
+}
+
+string_enum! {
+    pub enum ChecklistSyncState {
+        LocalOnly => "LOCAL_ONLY",
+        UploadPending => "UPLOAD_PENDING",
+        Synced => "SYNCED"
+    }
+}
+
+string_enum! {
+    pub enum ChecklistOriginType {
+        RchTemplate => "RCH_TEMPLATE",
+        BlankTemplate => "BLANK_TEMPLATE",
+        CsvImport => "CSV_IMPORT",
+        ExistingTemplateClone => "EXISTING_TEMPLATE_CLONE"
+    }
+}
+
+string_enum! {
+    pub enum ChecklistUserTaskStatus {
+        Pending => "PENDING",
+        Complete => "COMPLETE"
+    }
+}
+
+string_enum! {
+    pub enum ChecklistTaskStatus {
+        Pending => "PENDING",
+        Complete => "COMPLETE",
+        CompleteLate => "COMPLETE_LATE",
+        Late => "LATE"
+    }
+}
+
+impl ChecklistTaskStatus {
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::Complete {} | Self::CompleteLate {})
+    }
+
+    pub fn is_late(self) -> bool {
+        matches!(self, Self::Late {} | Self::CompleteLate {})
+    }
+}
+
+string_enum! {
+    pub enum ChecklistColumnType {
+        ShortString => "SHORT_STRING",
+        LongString => "LONG_STRING",
+        Integer => "INTEGER",
+        ActualTime => "ACTUAL_TIME",
+        RelativeTime => "RELATIVE_TIME"
+    }
+}
+
+string_enum! {
+    pub enum ChecklistSystemColumnKey {
+        DueRelativeDtg => "DUE_RELATIVE_DTG"
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -573,6 +687,165 @@ pub struct EventProjectionRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistStatusCounts {
+    pub pending_count: u32,
+    pub late_count: u32,
+    pub complete_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistColumnRecord {
+    pub column_uid: String,
+    pub column_name: String,
+    pub display_order: u32,
+    pub column_type: ChecklistColumnType,
+    pub column_editable: bool,
+    pub background_color: Option<String>,
+    pub text_color: Option<String>,
+    pub is_removable: bool,
+    pub system_key: Option<ChecklistSystemColumnKey>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistCellRecord {
+    pub cell_uid: String,
+    pub task_uid: String,
+    pub column_uid: String,
+    pub value: Option<String>,
+    pub updated_at: Option<String>,
+    pub updated_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskRecord {
+    pub task_uid: String,
+    pub number: u32,
+    pub user_status: ChecklistUserTaskStatus,
+    pub task_status: ChecklistTaskStatus,
+    pub is_late: bool,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+    pub custom_status: Option<i32>,
+    pub due_relative_minutes: Option<u32>,
+    pub due_dtg: Option<String>,
+    pub notes: Option<String>,
+    pub row_background_color: Option<String>,
+    pub line_break_enabled: bool,
+    pub completed_at: Option<String>,
+    pub completed_by_team_member_rns_identity: Option<String>,
+    pub legacy_value: Option<String>,
+    pub cells: Vec<ChecklistCellRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistFeedPublicationRecord {
+    pub publication_uid: String,
+    pub checklist_uid: String,
+    pub mission_feed_uid: String,
+    pub published_at: Option<String>,
+    pub published_by_team_member_rns_identity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistRecord {
+    pub uid: String,
+    pub mission_uid: Option<String>,
+    pub template_uid: Option<String>,
+    pub template_version: Option<u32>,
+    pub template_name: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub start_time: Option<String>,
+    pub mode: ChecklistMode,
+    pub sync_state: ChecklistSyncState,
+    pub origin_type: ChecklistOriginType,
+    pub checklist_status: ChecklistTaskStatus,
+    pub created_at: Option<String>,
+    pub created_by_team_member_rns_identity: String,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+    pub uploaded_at: Option<String>,
+    pub participant_rns_identities: Vec<String>,
+    pub progress_percent: f64,
+    pub counts: ChecklistStatusCounts,
+    pub columns: Vec<ChecklistColumnRecord>,
+    pub tasks: Vec<ChecklistTaskRecord>,
+    pub feed_publications: Vec<ChecklistFeedPublicationRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistListActiveRequest {
+    pub search: Option<String>,
+    pub sort_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistCreateOnlineRequest {
+    pub checklist_uid: Option<String>,
+    pub mission_uid: Option<String>,
+    pub template_uid: String,
+    pub name: String,
+    pub description: String,
+    pub start_time: String,
+    pub created_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistUpdatePatch {
+    pub mission_uid: Option<String>,
+    pub template_uid: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub start_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistUpdateRequest {
+    pub checklist_uid: String,
+    pub patch: ChecklistUpdatePatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskStatusSetRequest {
+    pub checklist_uid: String,
+    pub task_uid: String,
+    pub user_status: ChecklistUserTaskStatus,
+    pub changed_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskRowAddRequest {
+    pub checklist_uid: String,
+    pub task_uid: Option<String>,
+    pub number: u32,
+    pub due_relative_minutes: Option<u32>,
+    pub legacy_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskRowDeleteRequest {
+    pub checklist_uid: String,
+    pub task_uid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskRowStyleSetRequest {
+    pub checklist_uid: String,
+    pub task_uid: String,
+    pub row_background_color: Option<String>,
+    pub line_break_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTaskCellSetRequest {
+    pub checklist_uid: String,
+    pub task_uid: String,
+    pub column_uid: String,
+    pub value: String,
+    pub updated_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryPositionRecord {
     pub callsign: String,
     pub lat: f64,
@@ -602,6 +875,8 @@ pub enum ProjectionScope {
     Peers {},
     SyncStatus {},
     HubRegistration {},
+    Checklists {},
+    ChecklistDetail {},
     Eams {},
     Events {},
     Conversations {},
@@ -711,7 +986,10 @@ pub enum NodeEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::HubMode;
+    use super::{
+        ChecklistColumnType, ChecklistMode, ChecklistOriginType, ChecklistSystemColumnKey,
+        ChecklistTaskStatus, ChecklistUserTaskStatus, HubMode,
+    };
 
     #[test]
     fn hub_mode_deserialize_migrates_legacy_values() {
@@ -730,6 +1008,52 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<HubMode>("\"Connected\"").expect("connected mode"),
             HubMode::Connected {}
+        ));
+    }
+
+    #[test]
+    fn checklist_enums_serialize_as_contract_strings() {
+        assert_eq!(
+            serde_json::to_string(&ChecklistMode::Online {}).expect("serialize checklist mode"),
+            "\"ONLINE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ChecklistOriginType::RchTemplate {})
+                .expect("serialize origin type"),
+            "\"RCH_TEMPLATE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ChecklistTaskStatus::CompleteLate {})
+                .expect("serialize task status"),
+            "\"COMPLETE_LATE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ChecklistColumnType::RelativeTime {})
+                .expect("serialize column type"),
+            "\"RELATIVE_TIME\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ChecklistSystemColumnKey::DueRelativeDtg {})
+                .expect("serialize system key"),
+            "\"DUE_RELATIVE_DTG\""
+        );
+    }
+
+    #[test]
+    fn checklist_enums_deserialize_from_contract_strings() {
+        assert!(matches!(
+            serde_json::from_str::<ChecklistMode>("\"online\"").expect("deserialize mode"),
+            ChecklistMode::Online {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ChecklistUserTaskStatus>("\"COMPLETE\"")
+                .expect("deserialize user status"),
+            ChecklistUserTaskStatus::Complete {}
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ChecklistTaskStatus>("\"late\"")
+                .expect("deserialize task status"),
+            ChecklistTaskStatus::Late {}
         ));
     }
 }

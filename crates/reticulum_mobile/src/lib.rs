@@ -16,17 +16,23 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceClass, AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord,
-    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord,
-    HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel,
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
-    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary, PeerChange,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
-    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
-    SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
-    TelemetrySettingsRecord,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
+    ChecklistColumnType, ChecklistCreateOnlineRequest, ChecklistFeedPublicationRecord,
+    ChecklistListActiveRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
+    ChecklistStatusCounts, ChecklistSyncState, ChecklistSystemColumnKey,
+    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
+    ChecklistTaskStatusSetRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
+    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, OperationalNotice, OperationalSummary, PeerChange, PeerRecord, PeerState,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
+    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
+    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

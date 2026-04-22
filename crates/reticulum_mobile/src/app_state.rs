@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fs_err as fs;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -7,7 +8,12 @@ use serde::Serialize;
 
 use crate::runtime::now_ms;
 use crate::types::{
-    AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
+    AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
+    ChecklistCreateOnlineRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
+    ChecklistSyncState, ChecklistTaskCellSetRequest, ChecklistTaskRecord,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatus, ChecklistTaskStatusSetRequest, ChecklistUpdateRequest,
+    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
     EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
     SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
@@ -151,6 +157,14 @@ impl AppStateStore {
                     mission_uid TEXT NOT NULL,
                     updated_at_ms INTEGER NOT NULL,
                     deleted_at_ms INTEGER,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS checklists (
+                    uid TEXT PRIMARY KEY,
+                    mission_uid TEXT,
+                    template_uid TEXT,
+                    checklist_status TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS messages (
@@ -551,6 +565,482 @@ impl AppStateStore {
         )?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(invalidation)
+    }
+
+    pub fn get_active_checklists(&self) -> Result<Vec<ChecklistRecord>, NodeError> {
+        Ok(query_json_records(
+            &self.connect()?,
+            "SELECT json FROM checklists ORDER BY updated_at_ms DESC, uid ASC",
+        )?
+        .into_iter()
+        .filter_map(|record| sanitize_active_checklist(record))
+        .collect())
+    }
+
+    pub fn get_checklist(&self, checklist_uid: &str) -> Result<Option<ChecklistRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM checklists WHERE uid = ?1",
+                params![checklist_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value))
+            .transpose()
+            .map(|record| record.and_then(sanitize_active_checklist))
+    }
+
+    pub(crate) fn get_checklist_any(
+        &self,
+        checklist_uid: &str,
+    ) -> Result<Option<ChecklistRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM checklists WHERE uid = ?1",
+                params![checklist_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub fn upsert_checklist(
+        &self,
+        checklist: &ChecklistRecord,
+        reason: &str,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut normalized = checklist.clone();
+        normalize_checklist(&mut normalized);
+        self.write_checklist_tx(&transaction, &normalized)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            normalized.uid.as_str(),
+            reason,
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn create_online_checklist(
+        &self,
+        request: &ChecklistCreateOnlineRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let timestamp = current_timestamp_rfc3339();
+        let checklist_uid = request
+            .checklist_uid
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("chk-{}", now_ms()));
+        let checklist = ChecklistRecord {
+            uid: checklist_uid,
+            mission_uid: normalize_optional_string(request.mission_uid.as_deref()),
+            template_uid: Some(request.template_uid.trim().to_string()),
+            template_version: None,
+            template_name: None,
+            name: request.name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            start_time: Some(request.start_time.trim().to_string()),
+            mode: ChecklistMode::Online {},
+            sync_state: ChecklistSyncState::Synced {},
+            origin_type: ChecklistOriginType::RchTemplate {},
+            checklist_status: ChecklistTaskStatus::Pending {},
+            created_at: Some(timestamp.clone()),
+            created_by_team_member_rns_identity: request
+                .created_by_team_member_rns_identity
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_string(),
+            updated_at: Some(timestamp),
+            deleted_at: None,
+            uploaded_at: None,
+            participant_rns_identities: request
+                .created_by_team_member_rns_identity
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| vec![value.to_string()])
+                .unwrap_or_default(),
+            progress_percent: 0.0,
+            counts: crate::types::ChecklistStatusCounts {
+                pending_count: 0,
+                late_count: 0,
+                complete_count: 0,
+            },
+            columns: Vec::new(),
+            tasks: Vec::new(),
+            feed_publications: Vec::new(),
+        };
+        self.upsert_checklist(&checklist, "checklist-created")
+    }
+
+    pub fn update_checklist(
+        &self,
+        request: &ChecklistUpdateRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        checklist.updated_at = Some(current_timestamp_rfc3339());
+        if let Some(mission_uid) = request.patch.mission_uid.as_deref() {
+            checklist.mission_uid = normalize_optional_string(Some(mission_uid));
+        }
+        if let Some(template_uid) = request.patch.template_uid.as_deref() {
+            checklist.template_uid = normalize_optional_string(Some(template_uid));
+        }
+        if let Some(name) = request.patch.name.as_deref() {
+            checklist.name = name.trim().to_string();
+        }
+        if let Some(description) = request.patch.description.as_deref() {
+            checklist.description = description.trim().to_string();
+        }
+        if let Some(start_time) = request.patch.start_time.as_deref() {
+            checklist.start_time = normalize_optional_string(Some(start_time));
+        }
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-updated",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn delete_checklist(
+        &self,
+        checklist_uid: &str,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, checklist_uid)?;
+        let timestamp = current_timestamp_rfc3339();
+        checklist.deleted_at = Some(timestamp.clone());
+        checklist.updated_at = Some(timestamp);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist_uid,
+            "checklist-deleted",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn set_checklist_task_status(
+        &self,
+        request: &ChecklistTaskStatusSetRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let task = find_checklist_task_mut(&mut checklist, request.task_uid.as_str())?;
+        if task.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let timestamp = current_timestamp_rfc3339();
+        task.updated_at = Some(timestamp.clone());
+        task.user_status = request.user_status;
+        task.task_status = checklist_task_status_for(task.user_status, task.is_late);
+        if task.task_status.is_complete() {
+            task.completed_at = Some(timestamp.clone());
+            task.completed_by_team_member_rns_identity = request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+        } else {
+            task.completed_at = None;
+            task.completed_by_team_member_rns_identity = None;
+        }
+        checklist.updated_at = Some(timestamp);
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-task-status-set",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn add_checklist_task_row(
+        &self,
+        request: &ChecklistTaskRowAddRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let timestamp = current_timestamp_rfc3339();
+        let task_uid = request
+            .task_uid
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}-task-{}-{}", checklist.uid, request.number, now_ms()));
+        if checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
+            let task = checklist
+                .tasks
+                .iter_mut()
+                .find(|task| task.task_uid == task_uid)
+                .ok_or(NodeError::InvalidConfig {})?;
+            if task.deleted_at.is_some() {
+                task.deleted_at = None;
+                task.updated_at = Some(timestamp.clone());
+                task.number = request.number;
+                task.user_status = ChecklistUserTaskStatus::Pending {};
+                task.task_status = ChecklistTaskStatus::Pending {};
+                task.is_late = false;
+                task.custom_status = None;
+                task.due_relative_minutes = request.due_relative_minutes;
+                task.due_dtg = None;
+                task.notes = None;
+                task.row_background_color = None;
+                task.line_break_enabled = false;
+                task.completed_at = None;
+                task.completed_by_team_member_rns_identity = None;
+                task.legacy_value = request.legacy_value.clone();
+                task.cells = checklist
+                    .columns
+                    .iter()
+                    .map(|column| ChecklistCellRecord {
+                        cell_uid: format!("{}:{}", task.task_uid, column.column_uid),
+                        task_uid: task.task_uid.clone(),
+                        column_uid: column.column_uid.clone(),
+                        value: None,
+                        updated_at: None,
+                        updated_by_team_member_rns_identity: None,
+                    })
+                    .collect();
+                checklist.updated_at = Some(timestamp);
+                normalize_checklist(&mut checklist);
+                self.write_checklist_tx(&transaction, &checklist)?;
+                let invalidations = self.bump_checklist_projection_revisions_tx(
+                    &transaction,
+                    checklist.uid.as_str(),
+                    "checklist-task-row-added",
+                )?;
+                transaction.commit().map_err(|_| NodeError::IoError {})?;
+                return Ok(invalidations);
+            }
+            return Err(NodeError::InvalidConfig {});
+        }
+        let cells = checklist
+            .columns
+            .iter()
+            .map(|column| ChecklistCellRecord {
+                cell_uid: format!("{task_uid}:{}", column.column_uid),
+                task_uid: task_uid.clone(),
+                column_uid: column.column_uid.clone(),
+                value: None,
+                updated_at: None,
+                updated_by_team_member_rns_identity: None,
+            })
+            .collect::<Vec<_>>();
+        checklist.tasks.push(ChecklistTaskRecord {
+            task_uid,
+            number: request.number,
+            user_status: ChecklistUserTaskStatus::Pending {},
+            task_status: ChecklistTaskStatus::Pending {},
+            is_late: false,
+            updated_at: Some(timestamp.clone()),
+            deleted_at: None,
+            custom_status: None,
+            due_relative_minutes: request.due_relative_minutes,
+            due_dtg: None,
+            notes: None,
+            row_background_color: None,
+            line_break_enabled: false,
+            completed_at: None,
+            completed_by_team_member_rns_identity: None,
+            legacy_value: request.legacy_value.clone(),
+            cells,
+        });
+        checklist.updated_at = Some(timestamp);
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-task-row-added",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn delete_checklist_task_row(
+        &self,
+        request: &ChecklistTaskRowDeleteRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let timestamp = current_timestamp_rfc3339();
+        let task = checklist
+            .tasks
+            .iter_mut()
+            .find(|task| task.task_uid == request.task_uid)
+            .ok_or(NodeError::InvalidConfig {})?;
+        task.deleted_at = Some(timestamp.clone());
+        task.updated_at = Some(timestamp.clone());
+        checklist.updated_at = Some(timestamp);
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-task-row-deleted",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn set_checklist_task_row_style(
+        &self,
+        request: &ChecklistTaskRowStyleSetRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let task = find_checklist_task_mut(&mut checklist, request.task_uid.as_str())?;
+        if task.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let timestamp = current_timestamp_rfc3339();
+        task.updated_at = Some(timestamp.clone());
+        if let Some(row_background_color) = request.row_background_color.as_deref() {
+            task.row_background_color = normalize_optional_string(Some(row_background_color));
+        }
+        if let Some(line_break_enabled) = request.line_break_enabled {
+            task.line_break_enabled = line_break_enabled;
+        }
+        checklist.updated_at = Some(timestamp);
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-task-row-style-set",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
+    }
+
+    pub fn set_checklist_task_cell(
+        &self,
+        request: &ChecklistTaskCellSetRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
+        if checklist.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        if !checklist
+            .columns
+            .iter()
+            .any(|column| column.column_uid == request.column_uid)
+        {
+            let display_order = checklist.columns.len() as u32;
+            checklist.columns.push(ChecklistColumnRecord {
+                column_uid: request.column_uid.clone(),
+                column_name: request.column_uid.clone(),
+                display_order,
+                column_type: ChecklistColumnType::ShortString {},
+                column_editable: true,
+                background_color: None,
+                text_color: None,
+                is_removable: true,
+                system_key: None,
+            });
+        }
+        let timestamp = current_timestamp_rfc3339();
+        let task = find_checklist_task_mut(&mut checklist, request.task_uid.as_str())?;
+        if task.deleted_at.is_some() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        task.updated_at = Some(timestamp.clone());
+        if let Some(cell) = task
+            .cells
+            .iter_mut()
+            .find(|cell| cell.column_uid == request.column_uid)
+        {
+            cell.value = Some(request.value.clone());
+            cell.updated_at = Some(timestamp.clone());
+            cell.updated_by_team_member_rns_identity = request
+                .updated_by_team_member_rns_identity
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+        } else {
+            task.cells.push(ChecklistCellRecord {
+                cell_uid: format!("{}:{}", task.task_uid, request.column_uid),
+                task_uid: task.task_uid.clone(),
+                column_uid: request.column_uid.clone(),
+                value: Some(request.value.clone()),
+                updated_at: Some(timestamp.clone()),
+                updated_by_team_member_rns_identity: request
+                    .updated_by_team_member_rns_identity
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string),
+            });
+        }
+        checklist.updated_at = Some(timestamp);
+        normalize_checklist(&mut checklist);
+        self.write_checklist_tx(&transaction, &checklist)?;
+        let invalidations = self.bump_checklist_projection_revisions_tx(
+            &transaction,
+            checklist.uid.as_str(),
+            "checklist-task-cell-set",
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidations)
     }
 
     pub fn list_messages(
@@ -1065,6 +1555,54 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn write_checklist_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        checklist: &ChecklistRecord,
+    ) -> Result<(), NodeError> {
+        let json = serialize_json(checklist)?;
+        transaction
+            .execute(
+                "INSERT INTO checklists (uid, mission_uid, template_uid, checklist_status, updated_at_ms, json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(uid) DO UPDATE SET
+                    mission_uid = excluded.mission_uid,
+                    template_uid = excluded.template_uid,
+                    checklist_status = excluded.checklist_status,
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                params![
+                    checklist.uid,
+                    checklist.mission_uid,
+                    checklist.template_uid,
+                    checklist.checklist_status.as_str(),
+                    now_ms() as i64,
+                    json
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn load_checklist_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        checklist_uid: &str,
+    ) -> Result<ChecklistRecord, NodeError> {
+        let raw: Option<String> = transaction
+            .query_row(
+                "SELECT json FROM checklists WHERE uid = ?1",
+                params![checklist_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        match raw {
+            Some(value) => deserialize_json(&value),
+            None => Err(NodeError::InvalidConfig {}),
+        }
+    }
+
     fn write_message_tx(
         &self,
         transaction: &Transaction<'_>,
@@ -1221,6 +1759,27 @@ impl AppStateStore {
             reason,
         })
     }
+
+    fn bump_checklist_projection_revisions_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        checklist_uid: &str,
+        reason: &str,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let list = self.bump_projection_revision_tx(
+            transaction,
+            ProjectionScope::Checklists {},
+            None,
+            Some(reason.to_string()),
+        )?;
+        let detail = self.bump_projection_revision_tx(
+            transaction,
+            ProjectionScope::ChecklistDetail {},
+            Some(checklist_uid.to_string()),
+            Some(reason.to_string()),
+        )?;
+        Ok(vec![list, detail])
+    }
 }
 
 fn serialize_json<T: Serialize>(value: &T) -> Result<String, NodeError> {
@@ -1303,6 +1862,8 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Peers {} => "Peers",
         ProjectionScope::SyncStatus {} => "SyncStatus",
         ProjectionScope::HubRegistration {} => "HubRegistration",
+        ProjectionScope::Checklists {} => "Checklists",
+        ProjectionScope::ChecklistDetail {} => "ChecklistDetail",
         ProjectionScope::Eams {} => "Eams",
         ProjectionScope::Events {} => "Events",
         ProjectionScope::Conversations {} => "Conversations",
@@ -1312,13 +1873,167 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
     }
 }
 
+pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn sanitize_active_checklist(mut checklist: ChecklistRecord) -> Option<ChecklistRecord> {
+    if checklist.deleted_at.is_some() {
+        return None;
+    }
+    checklist.tasks.retain(|task| task.deleted_at.is_none());
+    Some(checklist)
+}
+
+pub(crate) fn normalize_checklist_record(checklist: &mut ChecklistRecord) {
+    for task in &mut checklist.tasks {
+        task.is_late = task.task_status.is_late();
+        task.task_status = checklist_task_status_for(task.user_status, task.is_late);
+        task.cells.sort_by(|left, right| {
+            left.column_uid
+                .cmp(&right.column_uid)
+                .then_with(|| left.cell_uid.cmp(&right.cell_uid))
+        });
+    }
+    checklist.columns.sort_by(|left, right| {
+        left.display_order
+            .cmp(&right.display_order)
+            .then_with(|| left.column_uid.cmp(&right.column_uid))
+    });
+    checklist.tasks.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.task_uid.cmp(&right.task_uid))
+    });
+
+    let active_tasks = checklist
+        .tasks
+        .iter()
+        .filter(|task| task.deleted_at.is_none())
+        .collect::<Vec<_>>();
+    let pending_count = active_tasks
+        .iter()
+        .copied()
+        .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Pending {}))
+        .count() as u32;
+    let late_count = active_tasks
+        .iter()
+        .copied()
+        .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Late {}))
+        .count() as u32;
+    let complete_count = active_tasks
+        .iter()
+        .copied()
+        .filter(|task| task.task_status.is_complete())
+        .count() as u32;
+    checklist.counts.pending_count = pending_count;
+    checklist.counts.late_count = late_count;
+    checklist.counts.complete_count = complete_count;
+    let total = active_tasks.len() as u32;
+    checklist.progress_percent = if total == 0 {
+        0.0
+    } else {
+        (f64::from(complete_count) * 100.0) / f64::from(total)
+    };
+    checklist.checklist_status = if late_count > 0 {
+        ChecklistTaskStatus::Late {}
+    } else if pending_count > 0 || total == 0 {
+        ChecklistTaskStatus::Pending {}
+    } else if active_tasks
+        .iter()
+        .copied()
+        .any(|task| matches!(task.task_status, ChecklistTaskStatus::CompleteLate {}))
+    {
+        ChecklistTaskStatus::CompleteLate {}
+    } else {
+        ChecklistTaskStatus::Complete {}
+    };
+}
+
+fn normalize_checklist(checklist: &mut ChecklistRecord) {
+    normalize_checklist_record(checklist);
+}
+
+pub(crate) fn checklist_task_status_for(
+    user_status: ChecklistUserTaskStatus,
+    is_late: bool,
+) -> ChecklistTaskStatus {
+    match user_status {
+        ChecklistUserTaskStatus::Pending {} => {
+            if is_late {
+                ChecklistTaskStatus::Late {}
+            } else {
+                ChecklistTaskStatus::Pending {}
+            }
+        }
+        ChecklistUserTaskStatus::Complete {} => {
+            if is_late {
+                ChecklistTaskStatus::CompleteLate {}
+            } else {
+                ChecklistTaskStatus::Complete {}
+            }
+        }
+    }
+}
+
+pub(crate) fn find_checklist_task_mut<'a>(
+    checklist: &'a mut ChecklistRecord,
+    task_uid: &str,
+) -> Result<&'a mut ChecklistTaskRecord, NodeError> {
+    checklist
+        .tasks
+        .iter_mut()
+        .find(|task| task.task_uid == task_uid && task.deleted_at.is_none())
+        .ok_or(NodeError::InvalidConfig {})
+}
+
+pub(crate) fn current_timestamp_rfc3339() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let seconds_since_epoch = duration.as_secs() as i64;
+    let nanos = duration.subsec_nanos();
+    let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
+    let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
-    use crate::types::{MessageDirection, MessageMethod, MessageState};
+    use crate::types::{
+        ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType, ChecklistMode,
+        ChecklistOriginType, ChecklistRecord, ChecklistStatusCounts, ChecklistSystemColumnKey,
+        ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+        ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
+        ChecklistTaskStatusSetRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
+        ChecklistUserTaskStatus, MessageDirection, MessageMethod, MessageState, ProjectionScope,
+    };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1354,6 +2069,86 @@ mod tests {
             sent_at_ms: Some(updated_at_ms),
             received_at_ms: None,
             updated_at_ms,
+        }
+    }
+
+    fn checklist(uid: &str) -> ChecklistRecord {
+        ChecklistRecord {
+            uid: uid.to_string(),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: Some("tmpl-alpha".to_string()),
+            template_version: Some(1),
+            template_name: Some("Alpha Template".to_string()),
+            name: "Alpha Checklist".to_string(),
+            description: "Shared alpha checklist".to_string(),
+            start_time: Some("2026-04-22T12:00:00Z".to_string()),
+            mode: ChecklistMode::Online {},
+            sync_state: crate::types::ChecklistSyncState::Synced {},
+            origin_type: ChecklistOriginType::RchTemplate {},
+            checklist_status: ChecklistTaskStatus::Pending {},
+            created_at: Some("2026-04-22T12:00:00Z".to_string()),
+            created_by_team_member_rns_identity: "abcd1234".to_string(),
+            updated_at: Some("2026-04-22T12:00:00Z".to_string()),
+            deleted_at: None,
+            uploaded_at: None,
+            participant_rns_identities: vec!["abcd1234".to_string()],
+            progress_percent: 0.0,
+            counts: ChecklistStatusCounts {
+                pending_count: 1,
+                late_count: 0,
+                complete_count: 0,
+            },
+            columns: vec![
+                ChecklistColumnRecord {
+                    column_uid: "col-due".to_string(),
+                    column_name: "Due".to_string(),
+                    display_order: 0,
+                    column_type: ChecklistColumnType::RelativeTime {},
+                    column_editable: false,
+                    background_color: None,
+                    text_color: None,
+                    is_removable: false,
+                    system_key: Some(ChecklistSystemColumnKey::DueRelativeDtg {}),
+                },
+                ChecklistColumnRecord {
+                    column_uid: "col-task".to_string(),
+                    column_name: "Task".to_string(),
+                    display_order: 1,
+                    column_type: ChecklistColumnType::ShortString {},
+                    column_editable: true,
+                    background_color: None,
+                    text_color: None,
+                    is_removable: true,
+                    system_key: None,
+                },
+            ],
+            tasks: vec![ChecklistTaskRecord {
+                task_uid: "task-1".to_string(),
+                number: 1,
+                user_status: ChecklistUserTaskStatus::Pending {},
+                task_status: ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: None,
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: Some(15),
+                due_dtg: None,
+                notes: None,
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some("Check in".to_string()),
+                cells: vec![ChecklistCellRecord {
+                    cell_uid: "task-1:col-task".to_string(),
+                    task_uid: "task-1".to_string(),
+                    column_uid: "col-task".to_string(),
+                    value: Some("Check in".to_string()),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                }],
+            }],
+            feed_publications: Vec::new(),
         }
     }
 
@@ -1542,5 +2337,185 @@ mod tests {
             .expect("list remaining messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id_hex, "delete-unrelated");
+    }
+
+    #[test]
+    fn checklist_lifecycle_persists_and_invalidates_list_and_detail_scopes() {
+        let storage_dir = test_storage_dir("checklist-lifecycle");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let checklist = checklist("chk-1");
+
+        let invalidations = store
+            .upsert_checklist(&checklist, "checklist-upserted")
+            .expect("upsert checklist");
+        assert_eq!(invalidations.len(), 2);
+        assert!(matches!(
+            invalidations[0].scope,
+            ProjectionScope::Checklists {}
+        ));
+        assert!(matches!(
+            invalidations[1].scope,
+            ProjectionScope::ChecklistDetail {}
+        ));
+        assert_eq!(invalidations[1].key.as_deref(), Some("chk-1"));
+
+        let list = store
+            .get_active_checklists()
+            .expect("get active checklists");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].uid, "chk-1");
+
+        let fetched = store
+            .get_checklist("chk-1")
+            .expect("get checklist")
+            .expect("checklist exists");
+        assert_eq!(fetched.name, "Alpha Checklist");
+
+        let updated = store
+            .update_checklist(&ChecklistUpdateRequest {
+                checklist_uid: "chk-1".to_string(),
+                patch: ChecklistUpdatePatch {
+                    mission_uid: Some("mission-bravo".to_string()),
+                    template_uid: None,
+                    name: Some("Bravo Checklist".to_string()),
+                    description: Some("Updated after briefing".to_string()),
+                    start_time: None,
+                },
+            })
+            .expect("update checklist");
+        assert_eq!(updated.len(), 2);
+        let fetched = store
+            .get_checklist("chk-1")
+            .expect("get updated checklist")
+            .expect("updated checklist exists");
+        assert_eq!(fetched.mission_uid.as_deref(), Some("mission-bravo"));
+        assert_eq!(fetched.name, "Bravo Checklist");
+
+        let deleted = store.delete_checklist("chk-1").expect("delete checklist");
+        assert_eq!(deleted.len(), 2);
+        assert!(store
+            .get_checklist("chk-1")
+            .expect("query deleted checklist")
+            .is_none());
+    }
+
+    #[test]
+    fn checklist_task_mutations_update_counts_and_cells() {
+        let storage_dir = test_storage_dir("checklist-task-mutations");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        store
+            .upsert_checklist(&checklist("chk-2"), "seed-checklist")
+            .expect("seed checklist");
+
+        store
+            .add_checklist_task_row(&ChecklistTaskRowAddRequest {
+                checklist_uid: "chk-2".to_string(),
+                task_uid: Some("task-2".to_string()),
+                number: 2,
+                due_relative_minutes: Some(30),
+                legacy_value: Some("Confirm rally point".to_string()),
+            })
+            .expect("add task row");
+        store
+            .set_checklist_task_row_style(&ChecklistTaskRowStyleSetRequest {
+                checklist_uid: "chk-2".to_string(),
+                task_uid: "task-2".to_string(),
+                row_background_color: Some("#402020".to_string()),
+                line_break_enabled: Some(true),
+            })
+            .expect("set row style");
+        store
+            .set_checklist_task_cell(&ChecklistTaskCellSetRequest {
+                checklist_uid: "chk-2".to_string(),
+                task_uid: "task-2".to_string(),
+                column_uid: "col-task".to_string(),
+                value: "Move to alternate pickup".to_string(),
+                updated_by_team_member_rns_identity: Some("abcd1234".to_string()),
+            })
+            .expect("set task cell");
+        store
+            .set_checklist_task_status(&ChecklistTaskStatusSetRequest {
+                checklist_uid: "chk-2".to_string(),
+                task_uid: "task-2".to_string(),
+                user_status: ChecklistUserTaskStatus::Complete {},
+                changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
+            })
+            .expect("set task status");
+
+        let checklist = store
+            .get_checklist("chk-2")
+            .expect("get checklist")
+            .expect("checklist exists");
+        assert_eq!(checklist.tasks.len(), 2);
+        assert_eq!(checklist.counts.pending_count, 1);
+        assert_eq!(checklist.counts.complete_count, 1);
+        assert_eq!(checklist.progress_percent, 50.0);
+        let second_task = checklist
+            .tasks
+            .iter()
+            .find(|task| task.task_uid == "task-2")
+            .expect("second task exists");
+        assert!(matches!(
+            second_task.task_status,
+            ChecklistTaskStatus::Complete {}
+        ));
+        assert_eq!(second_task.row_background_color.as_deref(), Some("#402020"));
+        assert!(second_task.line_break_enabled);
+        assert_eq!(
+            second_task
+                .cells
+                .iter()
+                .find(|cell| cell.column_uid == "col-task")
+                .and_then(|cell| cell.value.as_deref()),
+            Some("Move to alternate pickup")
+        );
+
+        store
+            .delete_checklist_task_row(&ChecklistTaskRowDeleteRequest {
+                checklist_uid: "chk-2".to_string(),
+                task_uid: "task-2".to_string(),
+            })
+            .expect("delete task row");
+        let checklist = store
+            .get_checklist("chk-2")
+            .expect("get checklist after delete")
+            .expect("checklist still exists");
+        assert_eq!(checklist.tasks.len(), 1);
+        assert_eq!(checklist.counts.pending_count, 1);
+        assert_eq!(checklist.counts.complete_count, 0);
+    }
+
+    #[test]
+    fn deleted_checklists_reject_local_mutations() {
+        let storage_dir = test_storage_dir("checklist-deleted-mutations");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        store
+            .upsert_checklist(&checklist("chk-3"), "seed-checklist")
+            .expect("seed checklist");
+        store.delete_checklist("chk-3").expect("delete checklist");
+
+        let update = store.update_checklist(&ChecklistUpdateRequest {
+            checklist_uid: "chk-3".to_string(),
+            patch: ChecklistUpdatePatch {
+                mission_uid: Some("mission-bravo".to_string()),
+                template_uid: None,
+                name: Some("Bravo Checklist".to_string()),
+                description: None,
+                start_time: None,
+            },
+        });
+        assert!(matches!(update, Err(NodeError::InvalidConfig {})));
+
+        let add_row = store.add_checklist_task_row(&ChecklistTaskRowAddRequest {
+            checklist_uid: "chk-3".to_string(),
+            task_uid: Some("task-2".to_string()),
+            number: 2,
+            due_relative_minutes: Some(30),
+            legacy_value: Some("Confirm rally point".to_string()),
+        });
+        assert!(matches!(add_row, Err(NodeError::InvalidConfig {})));
     }
 }

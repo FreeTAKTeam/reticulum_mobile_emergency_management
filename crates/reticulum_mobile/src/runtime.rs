@@ -40,11 +40,16 @@ use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 #[path = "runtime_projection.rs"]
 mod runtime_projection;
 
-use crate::app_state::{canonicalize_chat_message, AppStateStore};
+use crate::app_state::{
+    canonicalize_chat_message, checklist_task_status_for, find_checklist_task_mut,
+    normalize_checklist_record, normalize_optional_string, AppStateStore,
+};
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    AnnounceClass, AnnounceRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    AnnounceClass, AnnounceRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
+    ChecklistRecord, ChecklistSyncState, ChecklistTaskRecord, ChecklistTaskStatus,
+    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, LogLevel,
     LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
@@ -570,6 +575,874 @@ async fn persist_received_event_if_present(
                     record.uid, err
                 ),
             });
+        }
+    }
+}
+
+fn parse_rfc3339_sort_key(timestamp: &str) -> Option<(i64, u32)> {
+    let trimmed = timestamp.trim();
+    let suffix = trimmed.strip_suffix('Z')?;
+    let (date, time) = suffix.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year = date_parts.next()?.parse::<i64>().ok()?;
+    let month = date_parts.next()?.parse::<i64>().ok()?;
+    let day = date_parts.next()?.parse::<i64>().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+
+    let (time_main, fraction) = match time.split_once('.') {
+        Some((main, fraction)) => (main, Some(fraction)),
+        None => (time, None),
+    };
+    let mut time_parts = time_main.split(':');
+    let hour = time_parts.next()?.parse::<i64>().ok()?;
+    let minute = time_parts.next()?.parse::<i64>().ok()?;
+    let second = time_parts.next()?.parse::<i64>().ok()?;
+    if time_parts.next().is_some() {
+        return None;
+    }
+
+    let nanos = match fraction {
+        Some(value) => {
+            if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            let truncated = &value[..value.len().min(9)];
+            let mut padded = truncated.to_string();
+            while padded.len() < 9 {
+                padded.push('0');
+            }
+            padded.parse::<u32>().ok()?
+        }
+        None => 0,
+    };
+
+    let y = year - i64::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_since_epoch = era * 146_097 + doe - 719_468;
+    let seconds_since_epoch = days_since_epoch * 86_400 + hour * 3_600 + minute * 60 + second;
+    Some((seconds_since_epoch, nanos))
+}
+
+fn incoming_timestamp_is_newer(local_timestamp: Option<&str>, incoming_timestamp: &str) -> bool {
+    match (
+        local_timestamp.and_then(parse_rfc3339_sort_key),
+        parse_rfc3339_sort_key(incoming_timestamp),
+    ) {
+        (None, Some(_)) => true,
+        (Some(local), Some(incoming)) => local < incoming,
+        _ => local_timestamp.is_none_or(|local| local < incoming_timestamp),
+    }
+}
+
+fn checklist_command_source_identity(
+    command_map: &[(MsgPackValue, MsgPackValue)],
+) -> Option<String> {
+    let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries)?;
+    msgpack_get_named(source, &["rns_identity"]).and_then(msgpack_string)
+}
+
+fn emit_checklist_invalidations(
+    bus: &EventBus,
+    invalidations: Vec<crate::types::ProjectionInvalidation>,
+) {
+    for invalidation in invalidations {
+        bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+    }
+}
+
+fn upsert_inbound_checklist(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    checklist: &ChecklistRecord,
+    reason: &str,
+) {
+    match state.app_state.upsert_checklist(checklist, reason) {
+        Ok(invalidations) => emit_checklist_invalidations(bus, invalidations),
+        Err(err) => bus.emit(NodeEvent::Error {
+            code: "IoError".to_string(),
+            message: format!(
+                "failed to persist inbound checklist uid={} reason={reason} error={err}",
+                checklist.uid
+            ),
+        }),
+    }
+}
+
+fn blank_checklist_record(
+    checklist_uid: &str,
+    timestamp: &str,
+    source_identity: Option<&str>,
+) -> ChecklistRecord {
+    ChecklistRecord {
+        uid: checklist_uid.to_string(),
+        mission_uid: None,
+        template_uid: None,
+        template_version: None,
+        template_name: None,
+        name: String::new(),
+        description: String::new(),
+        start_time: None,
+        mode: crate::types::ChecklistMode::Online {},
+        sync_state: ChecklistSyncState::Synced {},
+        origin_type: crate::types::ChecklistOriginType::RchTemplate {},
+        checklist_status: ChecklistTaskStatus::Pending {},
+        created_at: Some(timestamp.to_string()),
+        created_by_team_member_rns_identity: source_identity.unwrap_or_default().to_string(),
+        updated_at: Some(timestamp.to_string()),
+        deleted_at: None,
+        uploaded_at: None,
+        participant_rns_identities: source_identity
+            .map(|value| vec![value.to_string()])
+            .unwrap_or_default(),
+        progress_percent: 0.0,
+        counts: crate::types::ChecklistStatusCounts {
+            pending_count: 0,
+            late_count: 0,
+            complete_count: 0,
+        },
+        columns: Vec::new(),
+        tasks: Vec::new(),
+        feed_publications: Vec::new(),
+    }
+}
+
+fn hidden_placeholder_checklist_record(checklist_uid: &str, timestamp: &str) -> ChecklistRecord {
+    let mut record = blank_checklist_record(checklist_uid, timestamp, None);
+    record.deleted_at = Some(timestamp.to_string());
+    record.updated_at = Some(timestamp.to_string());
+    record
+}
+
+fn is_hidden_placeholder_checklist(record: &ChecklistRecord) -> bool {
+    record.deleted_at.is_some()
+        && record.mission_uid.is_none()
+        && record.template_uid.is_none()
+        && record.template_version.is_none()
+        && record.template_name.is_none()
+        && record.name.is_empty()
+        && record.description.is_empty()
+        && record.start_time.is_none()
+        && record.created_by_team_member_rns_identity.trim().is_empty()
+}
+
+fn blank_task_cells(columns: &[ChecklistColumnRecord], task_uid: &str) -> Vec<ChecklistCellRecord> {
+    columns
+        .iter()
+        .map(|column| ChecklistCellRecord {
+            cell_uid: format!("{task_uid}:{}", column.column_uid),
+            task_uid: task_uid.to_string(),
+            column_uid: column.column_uid.clone(),
+            value: None,
+            updated_at: None,
+            updated_by_team_member_rns_identity: None,
+        })
+        .collect()
+}
+
+fn placeholder_task_record(task_uid: &str, timestamp: &str) -> ChecklistTaskRecord {
+    ChecklistTaskRecord {
+        task_uid: task_uid.to_string(),
+        number: 0,
+        user_status: ChecklistUserTaskStatus::Pending {},
+        task_status: ChecklistTaskStatus::Pending {},
+        is_late: false,
+        updated_at: Some(timestamp.to_string()),
+        deleted_at: None,
+        custom_status: None,
+        due_relative_minutes: None,
+        due_dtg: None,
+        notes: None,
+        row_background_color: None,
+        line_break_enabled: false,
+        completed_at: None,
+        completed_by_team_member_rns_identity: None,
+        legacy_value: None,
+        cells: Vec::new(),
+    }
+}
+
+fn tombstoned_task_record(task_uid: &str, timestamp: &str) -> ChecklistTaskRecord {
+    ChecklistTaskRecord {
+        task_uid: task_uid.to_string(),
+        number: 0,
+        user_status: ChecklistUserTaskStatus::Pending {},
+        task_status: ChecklistTaskStatus::Pending {},
+        is_late: false,
+        updated_at: Some(timestamp.to_string()),
+        deleted_at: Some(timestamp.to_string()),
+        custom_status: None,
+        due_relative_minutes: None,
+        due_dtg: None,
+        notes: None,
+        row_background_color: None,
+        line_break_enabled: false,
+        completed_at: None,
+        completed_by_team_member_rns_identity: None,
+        legacy_value: None,
+        cells: Vec::new(),
+    }
+}
+
+fn persist_received_checklist_if_present(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    _metadata: Option<&MissionSyncMetadata>,
+    fields_bytes: Option<&[u8]>,
+) {
+    let Some(fields_bytes) = fields_bytes else {
+        return;
+    };
+    let fields = match rmp_serde::from_slice::<MsgPackValue>(fields_bytes) {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+    let Some(field_entries) = msgpack_map_entries(&fields) else {
+        return;
+    };
+    let Some(commands) = msgpack_get_indexed(field_entries, FIELD_COMMANDS) else {
+        return;
+    };
+    let MsgPackValue::Array(command_entries) = commands else {
+        return;
+    };
+
+    for command in command_entries {
+        let Some(command_map) = msgpack_map_entries(command) else {
+            continue;
+        };
+        let Some(command_type) =
+            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)
+        else {
+            continue;
+        };
+        if !command_type.starts_with("checklist.") {
+            continue;
+        }
+        let timestamp = msgpack_get_named(command_map, &["timestamp"])
+            .and_then(msgpack_string)
+            .unwrap_or_else(current_timestamp_rfc3339);
+        let source_identity = checklist_command_source_identity(command_map);
+        let Some(args) = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)
+        else {
+            continue;
+        };
+
+        match command_type.as_str() {
+            "checklist.create.online" => {
+                let checklist_uid = msgpack_get_named(args, &["checklist_uid"])
+                    .and_then(msgpack_string)
+                    .or_else(|| {
+                        msgpack_get_named(command_map, &["command_id"])
+                            .and_then(msgpack_string)
+                            .map(|value| value.trim_start_matches("cmd-").to_string())
+                    });
+                let Some(checklist_uid) = checklist_uid else {
+                    continue;
+                };
+                let Some(mission_uid) =
+                    msgpack_get_named(args, &["mission_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(template_uid) =
+                    msgpack_get_named(args, &["template_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(name) = msgpack_get_named(args, &["name"]).and_then(msgpack_string) else {
+                    continue;
+                };
+                let description = msgpack_get_named(args, &["description"])
+                    .and_then(msgpack_string)
+                    .unwrap_or_default();
+                let start_time = msgpack_get_named(args, &["start_time"]).and_then(msgpack_string);
+                let existing = match state.app_state.get_checklist_any(checklist_uid.as_str()) {
+                    Ok(value) => value,
+                    Err(_) => None,
+                };
+                if existing.as_ref().is_some_and(|record| {
+                    !incoming_timestamp_is_newer(record.updated_at.as_deref(), timestamp.as_str())
+                        || record.deleted_at.as_deref().is_some_and(|deleted_at| {
+                            !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                        })
+                }) {
+                    continue;
+                }
+                let reused_placeholder = existing
+                    .as_ref()
+                    .is_some_and(is_hidden_placeholder_checklist);
+                let mut checklist = match existing {
+                    Some(record)
+                        if record.deleted_at.is_some()
+                            && !is_hidden_placeholder_checklist(&record) =>
+                    {
+                        blank_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                            source_identity.as_deref(),
+                        )
+                    }
+                    Some(record) => record,
+                    None => blank_checklist_record(
+                        checklist_uid.as_str(),
+                        timestamp.as_str(),
+                        source_identity.as_deref(),
+                    ),
+                };
+                checklist.mission_uid = Some(mission_uid);
+                checklist.template_uid = Some(template_uid);
+                checklist.name = name;
+                checklist.description = description;
+                checklist.start_time = start_time;
+                checklist.updated_at = Some(timestamp.clone());
+                checklist.deleted_at = None;
+                if reused_placeholder || checklist.created_at.is_none() {
+                    checklist.created_at = Some(timestamp.clone());
+                }
+                if checklist
+                    .created_by_team_member_rns_identity
+                    .trim()
+                    .is_empty()
+                {
+                    checklist.created_by_team_member_rns_identity =
+                        source_identity.unwrap_or_default();
+                }
+                if let Some(source_identity) = checklist_command_source_identity(command_map) {
+                    if !checklist
+                        .participant_rns_identities
+                        .iter()
+                        .any(|value| value == &source_identity)
+                    {
+                        checklist.participant_rns_identities.push(source_identity);
+                    }
+                }
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
+            }
+            "checklist.update" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if !incoming_timestamp_is_newer(checklist.updated_at.as_deref(), timestamp.as_str())
+                    || (checklist.deleted_at.is_some()
+                        && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                let Some(patch) = msgpack_get_named(args, &["patch"]).and_then(msgpack_map_entries)
+                else {
+                    continue;
+                };
+                if let Some(value) =
+                    msgpack_get_named(patch, &["mission_uid"]).and_then(msgpack_string)
+                {
+                    checklist.mission_uid = normalize_optional_string(Some(value.as_str()));
+                }
+                if let Some(value) =
+                    msgpack_get_named(patch, &["template_uid"]).and_then(msgpack_string)
+                {
+                    checklist.template_uid = normalize_optional_string(Some(value.as_str()));
+                }
+                if let Some(value) = msgpack_get_named(patch, &["name"]).and_then(msgpack_string) {
+                    checklist.name = value.trim().to_string();
+                }
+                if let Some(value) =
+                    msgpack_get_named(patch, &["description"]).and_then(msgpack_string)
+                {
+                    checklist.description = value.trim().to_string();
+                }
+                if let Some(value) =
+                    msgpack_get_named(patch, &["start_time"]).and_then(msgpack_string)
+                {
+                    checklist.start_time = normalize_optional_string(Some(value.as_str()));
+                }
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-update");
+            }
+            "checklist.delete" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let existing = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten();
+                if existing.as_ref().is_some_and(|checklist| {
+                    !incoming_timestamp_is_newer(
+                        checklist.updated_at.as_deref(),
+                        timestamp.as_str(),
+                    ) || checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                        !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                    })
+                }) {
+                    continue;
+                }
+                let mut checklist = existing.unwrap_or_else(|| {
+                    blank_checklist_record(checklist_uid.as_str(), timestamp.as_str(), None)
+                });
+                checklist.deleted_at = Some(timestamp.clone());
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
+            }
+            "checklist.task.row.add" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(task_uid) =
+                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(number) = msgpack_get_named(args, &["number"]).and_then(msgpack_u64)
+                else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                }) || (checklist.deleted_at.is_some()
+                    && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                if let Some(task) = checklist
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_uid == task_uid)
+                {
+                    if !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str())
+                        || task.deleted_at.as_deref().is_some_and(|deleted_at| {
+                            !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                        })
+                    {
+                        continue;
+                    }
+                }
+                let due_relative_minutes = msgpack_get_named(args, &["due_relative_minutes"])
+                    .and_then(msgpack_u64)
+                    .map(|value| value as u32);
+                let legacy_value =
+                    msgpack_get_named(args, &["legacy_value"]).and_then(msgpack_string);
+                if let Some(task) = checklist
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.task_uid == task_uid)
+                {
+                    task.number = number as u32;
+                    task.custom_status = None;
+                    task.due_relative_minutes = due_relative_minutes;
+                    task.due_dtg = None;
+                    task.notes = None;
+                    task.row_background_color = None;
+                    task.line_break_enabled = false;
+                    task.legacy_value = legacy_value;
+                    task.user_status = ChecklistUserTaskStatus::Pending {};
+                    task.task_status = ChecklistTaskStatus::Pending {};
+                    task.is_late = false;
+                    task.completed_at = None;
+                    task.completed_by_team_member_rns_identity = None;
+                    task.deleted_at = None;
+                    task.cells = blank_task_cells(checklist.columns.as_slice(), task_uid.as_str());
+                    task.updated_at = Some(timestamp.clone());
+                } else {
+                    let cells = blank_task_cells(checklist.columns.as_slice(), task_uid.as_str());
+                    checklist.tasks.push(ChecklistTaskRecord {
+                        task_uid,
+                        number: number as u32,
+                        user_status: ChecklistUserTaskStatus::Pending {},
+                        task_status: ChecklistTaskStatus::Pending {},
+                        is_late: false,
+                        updated_at: Some(timestamp.clone()),
+                        deleted_at: None,
+                        custom_status: None,
+                        due_relative_minutes,
+                        due_dtg: None,
+                        notes: None,
+                        row_background_color: None,
+                        line_break_enabled: false,
+                        completed_at: None,
+                        completed_by_team_member_rns_identity: None,
+                        legacy_value,
+                        cells,
+                    });
+                }
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-row-add");
+            }
+            "checklist.task.row.delete" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(task_uid) =
+                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let existing = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten();
+                if existing.as_ref().is_some_and(|checklist| {
+                    checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                        !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                    }) || (checklist.deleted_at.is_some()
+                        && !is_hidden_placeholder_checklist(checklist))
+                }) {
+                    continue;
+                }
+                let mut checklist = existing.unwrap_or_else(|| {
+                    hidden_placeholder_checklist_record(checklist_uid.as_str(), timestamp.as_str())
+                });
+                if let Some(existing_task) = checklist
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_uid == task_uid)
+                {
+                    if !incoming_timestamp_is_newer(
+                        existing_task.updated_at.as_deref(),
+                        timestamp.as_str(),
+                    ) || existing_task
+                        .deleted_at
+                        .as_deref()
+                        .is_some_and(|deleted_at| {
+                            !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                        })
+                    {
+                        continue;
+                    }
+                }
+                if !checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
+                    checklist.tasks.push(tombstoned_task_record(
+                        task_uid.as_str(),
+                        timestamp.as_str(),
+                    ));
+                }
+                if let Some(task) = checklist
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.task_uid == task_uid)
+                {
+                    task.deleted_at = Some(timestamp.clone());
+                    task.updated_at = Some(timestamp.clone());
+                } else {
+                    continue;
+                }
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(
+                    state,
+                    bus,
+                    &checklist,
+                    "checklist-received-task-row-delete",
+                );
+            }
+            "checklist.task.status.set" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(task_uid) =
+                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                }) || (checklist.deleted_at.is_some()
+                    && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                if !checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
+                    checklist.tasks.push(placeholder_task_record(
+                        task_uid.as_str(),
+                        timestamp.as_str(),
+                    ));
+                }
+                let Ok(task) = find_checklist_task_mut(&mut checklist, task_uid.as_str()) else {
+                    continue;
+                };
+                if !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str()) {
+                    continue;
+                }
+                let user_status = match msgpack_get_named(args, &["user_status"])
+                    .and_then(msgpack_string)
+                    .as_deref()
+                {
+                    Some("COMPLETE") => ChecklistUserTaskStatus::Complete {},
+                    _ => ChecklistUserTaskStatus::Pending {},
+                };
+                task.user_status = user_status;
+                task.task_status = checklist_task_status_for(task.user_status, task.is_late);
+                task.updated_at = Some(timestamp.clone());
+                if task.task_status.is_complete() {
+                    task.completed_at = Some(timestamp.clone());
+                    task.completed_by_team_member_rns_identity =
+                        msgpack_get_named(args, &["changed_by_team_member_rns_identity"])
+                            .and_then(msgpack_string)
+                            .or_else(|| source_identity.clone());
+                } else {
+                    task.completed_at = None;
+                    task.completed_by_team_member_rns_identity = None;
+                }
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-status");
+            }
+            "checklist.task.row.style.set" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(task_uid) =
+                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                }) || (checklist.deleted_at.is_some()
+                    && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                if !checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
+                    checklist.tasks.push(placeholder_task_record(
+                        task_uid.as_str(),
+                        timestamp.as_str(),
+                    ));
+                }
+                let Ok(task) = find_checklist_task_mut(&mut checklist, task_uid.as_str()) else {
+                    continue;
+                };
+                if !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str()) {
+                    continue;
+                }
+                if let Some(value) =
+                    msgpack_get_named(args, &["row_background_color"]).and_then(msgpack_string)
+                {
+                    task.row_background_color = normalize_optional_string(Some(value.as_str()));
+                }
+                if let Some(value) =
+                    msgpack_get_named(args, &["line_break_enabled"]).and_then(msgpack_bool)
+                {
+                    task.line_break_enabled = value;
+                }
+                task.updated_at = Some(timestamp.clone());
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(
+                    state,
+                    bus,
+                    &checklist,
+                    "checklist-received-task-row-style",
+                );
+            }
+            "checklist.task.cell.set" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(task_uid) =
+                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(column_uid) =
+                    msgpack_get_named(args, &["column_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(value) = msgpack_get_named(args, &["value"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                }) || (checklist.deleted_at.is_some()
+                    && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                if !checklist
+                    .columns
+                    .iter()
+                    .any(|column| column.column_uid == column_uid)
+                {
+                    let display_order = checklist.columns.len() as u32;
+                    checklist.columns.push(ChecklistColumnRecord {
+                        column_uid: column_uid.clone(),
+                        column_name: column_uid.clone(),
+                        display_order,
+                        column_type: ChecklistColumnType::ShortString {},
+                        column_editable: true,
+                        background_color: None,
+                        text_color: None,
+                        is_removable: true,
+                        system_key: None,
+                    });
+                }
+                if !checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
+                    checklist.tasks.push(placeholder_task_record(
+                        task_uid.as_str(),
+                        timestamp.as_str(),
+                    ));
+                }
+                let Ok(task) = find_checklist_task_mut(&mut checklist, task_uid.as_str()) else {
+                    continue;
+                };
+                if let Some(cell) = task.cells.iter().find(|cell| cell.column_uid == column_uid) {
+                    if !incoming_timestamp_is_newer(cell.updated_at.as_deref(), timestamp.as_str())
+                    {
+                        continue;
+                    }
+                }
+                if let Some(cell) = task
+                    .cells
+                    .iter_mut()
+                    .find(|cell| cell.column_uid == column_uid)
+                {
+                    cell.value = Some(value);
+                    cell.updated_at = Some(timestamp.clone());
+                    cell.updated_by_team_member_rns_identity =
+                        msgpack_get_named(args, &["updated_by_team_member_rns_identity"])
+                            .and_then(msgpack_string)
+                            .or_else(|| source_identity.clone());
+                } else {
+                    task.cells.push(ChecklistCellRecord {
+                        cell_uid: format!("{}:{column_uid}", task.task_uid),
+                        task_uid: task.task_uid.clone(),
+                        column_uid: column_uid.clone(),
+                        value: Some(value),
+                        updated_at: Some(timestamp.clone()),
+                        updated_by_team_member_rns_identity: msgpack_get_named(
+                            args,
+                            &["updated_by_team_member_rns_identity"],
+                        )
+                        .and_then(msgpack_string)
+                        .or_else(|| source_identity.clone()),
+                    });
+                }
+                task.updated_at = Some(timestamp.clone());
+                checklist.updated_at = Some(timestamp.clone());
+                normalize_checklist_record(&mut checklist);
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-cell");
+            }
+            "checklist.join" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(source_identity) = source_identity.clone() else {
+                    continue;
+                };
+                let mut checklist = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        hidden_placeholder_checklist_record(
+                            checklist_uid.as_str(),
+                            timestamp.as_str(),
+                        )
+                    });
+                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                }) || (checklist.deleted_at.is_some()
+                    && !is_hidden_placeholder_checklist(&checklist))
+                {
+                    continue;
+                }
+                if !checklist
+                    .participant_rns_identities
+                    .iter()
+                    .any(|value| value == &source_identity)
+                {
+                    checklist.participant_rns_identities.push(source_identity);
+                    checklist.updated_at = Some(timestamp.clone());
+                    normalize_checklist_record(&mut checklist);
+                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-join");
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -2831,6 +3704,12 @@ async fn emit_received_payload(
             .await;
             persist_received_event_if_present(state, bus, Some(metadata), fields_bytes.as_deref())
                 .await;
+            persist_received_checklist_if_present(
+                state,
+                bus,
+                Some(metadata),
+                fields_bytes.as_deref(),
+            );
         }
         if is_sos_message {
             let peer_hex = source_hex
@@ -4911,6 +5790,22 @@ mod tests {
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
         assert!(metadata.is_mission_related());
+    }
+
+    #[test]
+    fn incoming_timestamp_is_newer_handles_fractional_seconds() {
+        assert!(incoming_timestamp_is_newer(
+            Some("2026-04-22T12:00:00Z"),
+            "2026-04-22T12:00:00.000000001Z"
+        ));
+        assert!(incoming_timestamp_is_newer(
+            Some("2026-04-22T12:00:00.000000001Z"),
+            "2026-04-22T12:00:00.000000002Z"
+        ));
+        assert!(!incoming_timestamp_is_newer(
+            Some("2026-04-22T12:00:00.100000000Z"),
+            "2026-04-22T12:00:00Z"
+        ));
     }
 
     #[test]
