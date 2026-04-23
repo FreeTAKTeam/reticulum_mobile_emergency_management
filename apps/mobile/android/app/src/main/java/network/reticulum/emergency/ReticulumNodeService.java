@@ -145,6 +145,10 @@ public final class ReticulumNodeService extends Service {
             return;
         }
         listeners.add(listener);
+        mainHandler.post(() -> {
+            emitCachedState(listener);
+            emitProjectionRefreshSweep(listener);
+        });
     }
 
     public void removeListener(ServiceEventListener listener) {

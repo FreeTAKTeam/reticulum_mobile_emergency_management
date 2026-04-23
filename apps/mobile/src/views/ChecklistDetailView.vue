@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import {
   getChecklistDetailById,
   getChecklistRecordById,
+  type ChecklistTask,
   type ChecklistTaskMetaTone,
   type ChecklistTaskStatus,
 } from "../utils/checklists";
@@ -14,6 +15,15 @@ const route = useRoute();
 const checklistId = computed(() => String(route.params.checklistId ?? ""));
 const checklistRecord = computed(() => getChecklistRecordById(checklistId.value));
 const checklistDetail = computed(() => getChecklistDetailById(checklistId.value));
+const visibleTasks = ref<ChecklistTask[]>([]);
+
+watch(
+  checklistDetail,
+  (detail) => {
+    visibleTasks.value = detail ? detail.tasks.map((task) => ({ ...task })) : [];
+  },
+  { immediate: true },
+);
 
 function taskStatusClass(status: ChecklistTaskStatus): string {
   return `task-${status}`;
@@ -31,6 +41,21 @@ function taskStatusLabel(status: ChecklistTaskStatus): string {
 
 function taskMetaClass(tone: ChecklistTaskMetaTone): string {
   return `task-meta-${tone}`;
+}
+
+function completeTask(taskId: string): void {
+  visibleTasks.value = visibleTasks.value.map((task) => {
+    if (task.id !== taskId || task.status === "completed") {
+      return task;
+    }
+
+    return {
+      ...task,
+      status: "completed",
+      metaTone: "done",
+      metaLabel: "Completed just now",
+    };
+  });
 }
 </script>
 
@@ -105,17 +130,24 @@ function taskMetaClass(tone: ChecklistTaskMetaTone): string {
 
         <div class="task-list">
           <article
-            v-for="task in checklistDetail.tasks"
+            v-for="task in visibleTasks"
             :key="task.id"
             class="detail-panel task-card"
             :class="taskStatusClass(task.status)"
           >
             <div class="task-card-shell">
-              <div class="task-toggle" :class="taskStatusClass(task.status)" aria-hidden="true">
+              <button
+                type="button"
+                class="task-toggle"
+                :class="taskStatusClass(task.status)"
+                :aria-label="`Mark ${task.title} as completed`"
+                :disabled="task.status === 'completed'"
+                @click="completeTask(task.id)"
+              >
                 <svg v-if="task.status === 'completed'" viewBox="0 0 24 24" fill="none">
                   <path d="m8 12 2.5 2.5L16 9" />
                 </svg>
-              </div>
+              </button>
 
               <div class="task-copy">
                 <div class="task-copy-topline">
@@ -371,12 +403,15 @@ function taskMetaClass(tone: ChecklistTaskMetaTone): string {
 
 .task-toggle {
   align-items: center;
+  background: transparent;
   border: 1px solid currentColor;
   border-radius: 10px;
   color: #45abff;
+  cursor: pointer;
   display: inline-flex;
   height: 2.2rem;
   justify-content: center;
+  padding: 0;
   width: 2.2rem;
 }
 
@@ -393,6 +428,10 @@ function taskMetaClass(tone: ChecklistTaskMetaTone): string {
 .task-toggle svg {
   height: 0.92rem;
   width: 0.92rem;
+}
+
+.task-toggle:disabled {
+  cursor: default;
 }
 
 .task-copy {

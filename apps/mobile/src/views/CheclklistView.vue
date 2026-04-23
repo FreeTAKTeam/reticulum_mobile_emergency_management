@@ -4,9 +4,9 @@ import { useRouter } from "vue-router";
 
 import { useNodeStore } from "../stores/nodeStore";
 import {
+  addLocalChecklist,
   getChecklistRecords,
   type ChecklistFilter,
-  type ChecklistRecord,
   type ChecklistSegment,
   type ChecklistStatus,
 } from "../utils/checklists";
@@ -17,7 +17,6 @@ const activeSegment = ref<ChecklistSegment>("live");
 const activeFilter = ref<ChecklistFilter>("all");
 const expandedChecklistIds = ref<string[]>([]);
 const isCreateFormVisible = ref(false);
-const localChecklists = ref<ChecklistRecord[]>([]);
 
 function createDefaultChecklistFormState(): {
   title: string;
@@ -34,14 +33,16 @@ function createDefaultChecklistFormState(): {
 }
 
 const createForm = reactive(createDefaultChecklistFormState());
-
-const checklistRecords = computed(() => {
-  const records = getChecklistRecords(activeSegment.value);
-  if (activeSegment.value === "live") {
-    return [...localChecklists.value, ...records];
-  }
-  return records;
-});
+const checklistRecords = computed(() => getChecklistRecords(activeSegment.value));
+const hasChecklistRecords = computed(() => checklistRecords.value.length > 0);
+const emptyStateTitle = computed(() =>
+  activeSegment.value === "templates" ? "No checklist templates available." : "No checklists available.",
+);
+const emptyStateCopy = computed(() =>
+  activeSegment.value === "templates"
+    ? "The runtime has not loaded any checklist templates yet."
+    : "The runtime has not loaded any checklist data yet.",
+);
 
 const summary = computed(() => {
   const records = checklistRecords.value;
@@ -138,26 +139,23 @@ function createChecklist(): void {
     return;
   }
 
-  localChecklists.value = [
-    {
-      id: `local-${Date.now()}`,
-      title,
-      subtitle: createForm.subtitle.trim() || "New task list",
-      status: "active",
-      progress: 0,
-      statusCountLabel: "0 pending",
-      scheduledAt: createForm.scheduledAt.trim() || new Intl.DateTimeFormat(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(new Date()),
-      teamLabel: createForm.teamLabel.trim() || "Task Group",
-      compatibilityLabel: "RCH compatible",
-    },
-    ...localChecklists.value,
-  ];
+  addLocalChecklist({
+    id: `local-${Date.now()}`,
+    title,
+    subtitle: createForm.subtitle.trim() || "New task list",
+    status: "active",
+    progress: 0,
+    statusCountLabel: "0 pending",
+    scheduledAt: createForm.scheduledAt.trim() || new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date()),
+    teamLabel: createForm.teamLabel.trim() || "Task Group",
+    compatibilityLabel: "RCH compatible",
+  });
 
   activeSegment.value = "live";
   resetCreateForm();
@@ -257,7 +255,7 @@ function openChecklist(checklistId: string): void {
       </div>
     </form>
 
-    <section class="summary-panel">
+    <section v-if="hasChecklistRecords" class="summary-panel">
       <div class="summary-grid">
         <article
           v-for="metric in summaryMetrics"
@@ -271,7 +269,7 @@ function openChecklist(checklistId: string): void {
       </div>
     </section>
 
-    <section class="filter-row">
+    <section v-if="hasChecklistRecords" class="filter-row">
       <label class="filter-field">
         <span class="filter-label">Filter</span>
         <select
@@ -400,8 +398,14 @@ function openChecklist(checklistId: string): void {
       </article>
 
       <article v-if="filteredRecords.length === 0" class="empty-state">
-        <h2>No checklist matches this filter.</h2>
-        <p>Switch filters or open the template library to prepare a new checklist package.</p>
+        <h2>{{ hasChecklistRecords ? "No checklist matches this filter." : emptyStateTitle }}</h2>
+        <p>
+          {{
+            hasChecklistRecords
+              ? "Switch filters or open the template library to prepare a new checklist package."
+              : emptyStateCopy
+          }}
+        </p>
       </article>
     </section>
   </section>
