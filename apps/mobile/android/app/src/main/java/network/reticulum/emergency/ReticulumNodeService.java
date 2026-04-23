@@ -341,6 +341,66 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
     }
 
+    public synchronized String getChecklistsJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.getChecklistsJson(payloadJson), "{\"items\":[]}");
+    }
+
+    public synchronized String getChecklistJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.getChecklistJson(payloadJson), "{}");
+    }
+
+    public synchronized String getChecklistTemplatesJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.getChecklistTemplatesJson(payloadJson), "{\"items\":[]}");
+    }
+
+    public synchronized int importChecklistTemplateCsvJson(String payloadJson) {
+        return ReticulumBridge.importChecklistTemplateCsvJson(payloadJson);
+    }
+
+    public synchronized int createChecklistFromTemplateJson(String payloadJson) {
+        return ReticulumBridge.createChecklistFromTemplateJson(payloadJson);
+    }
+
+    public synchronized int createOnlineChecklistJson(String payloadJson) {
+        return ReticulumBridge.createOnlineChecklistJson(payloadJson);
+    }
+
+    public synchronized int updateChecklistJson(String payloadJson) {
+        return ReticulumBridge.updateChecklistJson(payloadJson);
+    }
+
+    public synchronized int deleteChecklistJson(String payloadJson) {
+        return ReticulumBridge.deleteChecklistJson(payloadJson);
+    }
+
+    public synchronized int joinChecklistJson(String payloadJson) {
+        return ReticulumBridge.joinChecklistJson(payloadJson);
+    }
+
+    public synchronized int uploadChecklistJson(String payloadJson) {
+        return ReticulumBridge.uploadChecklistJson(payloadJson);
+    }
+
+    public synchronized int setChecklistTaskStatusJson(String payloadJson) {
+        return ReticulumBridge.setChecklistTaskStatusJson(payloadJson);
+    }
+
+    public synchronized int addChecklistTaskRowJson(String payloadJson) {
+        return ReticulumBridge.addChecklistTaskRowJson(payloadJson);
+    }
+
+    public synchronized int deleteChecklistTaskRowJson(String payloadJson) {
+        return ReticulumBridge.deleteChecklistTaskRowJson(payloadJson);
+    }
+
+    public synchronized int setChecklistTaskRowStyleJson(String payloadJson) {
+        return ReticulumBridge.setChecklistTaskRowStyleJson(payloadJson);
+    }
+
+    public synchronized int setChecklistTaskCellJson(String payloadJson) {
+        return ReticulumBridge.setChecklistTaskCellJson(payloadJson);
+    }
+
     public synchronized String getEamsJson() {
         return nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}");
     }

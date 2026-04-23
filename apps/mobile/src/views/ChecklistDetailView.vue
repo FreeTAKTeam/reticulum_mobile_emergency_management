@@ -1,29 +1,69 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import type {
+  ChecklistRecord as RuntimeChecklistRecord,
+  ChecklistTemplateRecord as RuntimeChecklistTemplateRecord,
+} from "@reticulum/node-client";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import { useChecklistsStore } from "../stores/checklistsStore";
+import { useNodeStore } from "../stores/nodeStore";
 import {
-  getChecklistDetailById,
-  getChecklistRecordById,
+  runtimeChecklistDetailToUi,
+  runtimeChecklistToUi,
+  runtimeTemplateDetailToUi,
+  runtimeTemplateToUi,
   type ChecklistTask,
+  type ChecklistTaskCell,
   type ChecklistTaskMetaTone,
   type ChecklistTaskStatus,
 } from "../utils/checklists";
 
 const route = useRoute();
+const checklistsStore = useChecklistsStore();
+const nodeStore = useNodeStore();
 
 const checklistId = computed(() => String(route.params.checklistId ?? ""));
-const checklistRecord = computed(() => getChecklistRecordById(checklistId.value));
-const checklistDetail = computed(() => getChecklistDetailById(checklistId.value));
-const visibleTasks = ref<ChecklistTask[]>([]);
+const checklistRuntimeRecord = computed(() => checklistsStore.getChecklistDetailById(checklistId.value));
 
-watch(
-  checklistDetail,
-  (detail) => {
-    visibleTasks.value = detail ? detail.tasks.map((task) => ({ ...task })) : [];
-  },
-  { immediate: true },
+function isLiveChecklistRecord(
+  record: RuntimeChecklistRecord | RuntimeChecklistTemplateRecord | null,
+): record is RuntimeChecklistRecord {
+  return Boolean(record && "syncState" in record);
+}
+
+const liveChecklistRuntimeRecord = computed(() =>
+  isLiveChecklistRecord(checklistRuntimeRecord.value) ? checklistRuntimeRecord.value : null,
 );
+const isTemplatePreview = computed(() => Boolean(checklistRuntimeRecord.value && !liveChecklistRuntimeRecord.value));
+const checklistRecord = computed(() => {
+  const record = checklistRuntimeRecord.value;
+  if (!record) {
+    return undefined;
+  }
+  return isLiveChecklistRecord(record) ? runtimeChecklistToUi(record) : runtimeTemplateToUi(record);
+});
+const checklistDetail = computed(() => {
+  const record = checklistRuntimeRecord.value;
+  if (!record) {
+    return undefined;
+  }
+  return isLiveChecklistRecord(record) ? runtimeChecklistDetailToUi(record) : runtimeTemplateDetailToUi(record);
+});
+const visibleTasks = computed<ChecklistTask[]>(() => checklistDetail.value?.tasks ?? []);
+const isCurrentParticipant = computed(() => {
+  const record = liveChecklistRuntimeRecord.value;
+  const identity = nodeStore.status.identityHex.trim().toLowerCase();
+  if (!record || !identity) {
+    return true;
+  }
+  return record.participantRnsIdentities.some((participant) => participant.toLowerCase() === identity);
+});
+const shouldShowJoin = computed(() => Boolean(liveChecklistRuntimeRecord.value && !isCurrentParticipant.value));
+const isMutating = ref(false);
+const editingTaskId = ref<string | null>(null);
+const editingTaskValue = ref("");
+const cellDrafts = ref<Record<string, string>>({});
 
 function taskStatusClass(status: ChecklistTaskStatus): string {
   return `task-${status}`;
@@ -43,30 +83,222 @@ function taskMetaClass(tone: ChecklistTaskMetaTone): string {
   return `task-meta-${tone}`;
 }
 
-function completeTask(taskId: string): void {
-  visibleTasks.value = visibleTasks.value.map((task) => {
-    if (task.id !== taskId || task.status === "completed") {
-      return task;
-    }
-
-    return {
-      ...task,
-      status: "completed",
-      metaTone: "done",
-      metaLabel: "Completed just now",
-    };
-  });
+async function completeTask(taskId: string): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.setTaskStatus({
+      checklistUid: checklistId.value,
+      taskUid: taskId,
+      userStatus: "COMPLETE",
+    });
+  } finally {
+    isMutating.value = false;
+  }
 }
+
+async function joinChecklist(): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.joinChecklist(checklistId.value);
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+async function uploadChecklist(): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.uploadChecklist(checklistId.value);
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+function startTaskEdit(task: ChecklistTask): void {
+  if (isTemplatePreview.value || isMutating.value) {
+    return;
+  }
+  editingTaskId.value = task.id;
+  editingTaskValue.value = task.title;
+}
+
+function cancelTaskEdit(): void {
+  editingTaskId.value = null;
+  editingTaskValue.value = "";
+}
+
+function taskCellDraftKey(task: ChecklistTask, cell: ChecklistTaskCell): string {
+  return `${task.id}:${cell.columnUid}`;
+}
+
+function taskCellDraftValue(task: ChecklistTask, cell: ChecklistTaskCell): string {
+  return cellDrafts.value[taskCellDraftKey(task, cell)] ?? cell.value;
+}
+
+function updateTaskCellDraft(task: ChecklistTask, cell: ChecklistTaskCell, event: Event): void {
+  const target = event.target as HTMLInputElement;
+  cellDrafts.value = {
+    ...cellDrafts.value,
+    [taskCellDraftKey(task, cell)]: target.value,
+  };
+}
+
+function taskCellHasDraft(task: ChecklistTask, cell: ChecklistTaskCell): boolean {
+  return taskCellDraftValue(task, cell) !== cell.value;
+}
+
+function clearTaskCellDraft(task: ChecklistTask, cell: ChecklistTaskCell): void {
+  const nextDrafts = { ...cellDrafts.value };
+  delete nextDrafts[taskCellDraftKey(task, cell)];
+  cellDrafts.value = nextDrafts;
+}
+
+async function saveTaskCell(task: ChecklistTask): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  const value = editingTaskValue.value.trim();
+  if (!value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.setTaskCell({
+      checklistUid: checklistId.value,
+      taskUid: task.id,
+      columnUid: task.primaryColumnUid,
+      value,
+    });
+    cancelTaskEdit();
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+async function saveTaskCellDraft(task: ChecklistTask, cell: ChecklistTaskCell): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value || !cell.editable) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.setTaskCell({
+      checklistUid: checklistId.value,
+      taskUid: task.id,
+      columnUid: cell.columnUid,
+      value: taskCellDraftValue(task, cell),
+    });
+    clearTaskCellDraft(task, cell);
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+async function toggleTaskStyle(task: ChecklistTask): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.setTaskRowStyle({
+      checklistUid: checklistId.value,
+      taskUid: task.id,
+      rowBackgroundColor: task.rowBackgroundColor ? "" : "#10304f",
+      lineBreakEnabled: !task.lineBreakEnabled,
+    });
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+async function deleteTaskRow(task: ChecklistTask): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  if (!window.confirm(`Delete checklist row "${task.title}"?`)) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.deleteTaskRow({
+      checklistUid: checklistId.value,
+      taskUid: task.id,
+    });
+    if (editingTaskId.value === task.id) {
+      cancelTaskEdit();
+    }
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+async function addTaskRow(): Promise<void> {
+  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
+    return;
+  }
+  const nextNumber = liveChecklistRuntimeRecord.value.tasks.length + 1;
+  isMutating.value = true;
+  try {
+    await checklistsStore.addTaskRow({
+      checklistUid: checklistId.value,
+      number: nextNumber,
+      legacyValue: `Task ${nextNumber}`,
+    });
+  } finally {
+    isMutating.value = false;
+  }
+}
+
+watch(checklistId, (value) => {
+  if (!value) {
+    return;
+  }
+  void checklistsStore.refreshDetail(value);
+}, { immediate: true });
+
+onMounted(() => {
+  if (checklistId.value) {
+    void checklistsStore.refreshDetail(checklistId.value);
+  }
+});
 </script>
 
 <template>
   <section class="view checklist-detail-view">
     <template v-if="checklistDetail && checklistRecord">
-      <section class="detail-toolbar">
-        <button type="button" class="detail-pill detail-pill-primary">
+      <section v-if="!isTemplatePreview" class="detail-toolbar">
+        <button
+          v-if="shouldShowJoin"
+          type="button"
+          class="detail-pill"
+          :disabled="isMutating"
+          @click="joinChecklist"
+        >
+          <span>Join</span>
+        </button>
+        <button
+          type="button"
+          class="detail-pill detail-pill-primary"
+          :disabled="isMutating"
+          @click="uploadChecklist"
+        >
           <span>Sync</span>
         </button>
-        <button type="button" class="detail-pill detail-pill-compact" aria-label="Add checklist task">
+        <button
+          type="button"
+          class="detail-pill detail-pill-compact"
+          aria-label="Add checklist task"
+          :disabled="isMutating"
+          @click="addTaskRow"
+        >
           +
         </button>
       </section>
@@ -133,7 +365,8 @@ function completeTask(taskId: string): void {
             v-for="task in visibleTasks"
             :key="task.id"
             class="detail-panel task-card"
-            :class="taskStatusClass(task.status)"
+            :class="[taskStatusClass(task.status), { 'task-line-break': task.lineBreakEnabled }]"
+            :style="task.rowBackgroundColor ? { '--task-accent': task.rowBackgroundColor } : undefined"
           >
             <div class="task-card-shell">
               <button
@@ -141,7 +374,7 @@ function completeTask(taskId: string): void {
                 class="task-toggle"
                 :class="taskStatusClass(task.status)"
                 :aria-label="`Mark ${task.title} as completed`"
-                :disabled="task.status === 'completed'"
+                :disabled="isTemplatePreview || task.status === 'completed' || isMutating"
                 @click="completeTask(task.id)"
               >
                 <svg v-if="task.status === 'completed'" viewBox="0 0 24 24" fill="none">
@@ -152,7 +385,19 @@ function completeTask(taskId: string): void {
               <div class="task-copy">
                 <div class="task-copy-topline">
                   <div class="task-copy-heading">
-                    <h3>{{ task.title }}</h3>
+                    <template v-if="editingTaskId === task.id">
+                      <label class="task-edit-label" :for="`task-edit-${task.id}`">Task text</label>
+                      <input
+                        :id="`task-edit-${task.id}`"
+                        v-model="editingTaskValue"
+                        class="task-edit-input"
+                        type="text"
+                        :disabled="isMutating"
+                        @keyup.enter="saveTaskCell(task)"
+                        @keyup.esc="cancelTaskEdit"
+                      />
+                    </template>
+                    <h3 v-else>{{ task.title }}</h3>
                     <p>{{ task.description }}</p>
                   </div>
 
@@ -179,6 +424,86 @@ function completeTask(taskId: string): void {
                   </svg>
                   <span>{{ task.metaLabel }}</span>
                 </p>
+
+                <div v-if="!isTemplatePreview && task.cells.length > 0" class="task-cells">
+                  <div
+                    v-for="cell in task.cells"
+                    :key="cell.columnUid"
+                    class="task-cell"
+                    :class="{ 'task-cell-readonly': !cell.editable }"
+                  >
+                    <label class="task-cell-label" :for="`task-cell-${task.id}-${cell.columnUid}`">
+                      {{ cell.label }}
+                    </label>
+                    <div class="task-cell-control">
+                      <input
+                        :id="`task-cell-${task.id}-${cell.columnUid}`"
+                        class="task-cell-input"
+                        type="text"
+                        :value="taskCellDraftValue(task, cell)"
+                        :disabled="isMutating || !cell.editable"
+                        @input="updateTaskCellDraft(task, cell, $event)"
+                        @keyup.enter="saveTaskCellDraft(task, cell)"
+                        @keyup.esc="clearTaskCellDraft(task, cell)"
+                      />
+                      <button
+                        type="button"
+                        class="task-action-button"
+                        :disabled="isMutating || !cell.editable || !taskCellHasDraft(task, cell)"
+                        @click="saveTaskCellDraft(task, cell)"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="!isTemplatePreview" class="task-actions" aria-label="Task row actions">
+                  <template v-if="editingTaskId === task.id">
+                    <button
+                      type="button"
+                      class="task-action-button"
+                      :disabled="isMutating || !editingTaskValue.trim()"
+                      @click="saveTaskCell(task)"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      class="task-action-button"
+                      :disabled="isMutating"
+                      @click="cancelTaskEdit"
+                    >
+                      Cancel
+                    </button>
+                  </template>
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="task-action-button"
+                      :disabled="isMutating"
+                      @click="startTaskEdit(task)"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      class="task-action-button"
+                      :disabled="isMutating"
+                      @click="toggleTaskStyle(task)"
+                    >
+                      Style
+                    </button>
+                    <button
+                      type="button"
+                      class="task-action-button task-action-danger"
+                      :disabled="isMutating"
+                      @click="deleteTaskRow(task)"
+                    >
+                      Delete
+                    </button>
+                  </template>
+                </div>
               </div>
             </div>
           </article>
@@ -379,7 +704,7 @@ function completeTask(taskId: string): void {
 }
 
 .task-card::before {
-  background: #45abff;
+  background: var(--task-accent, #45abff);
   content: "";
   inset: 0 auto 0 0;
   position: absolute;
@@ -387,11 +712,15 @@ function completeTask(taskId: string): void {
 }
 
 .task-card.task-late::before {
-  background: #ef4e60;
+  background: var(--task-accent, #ef4e60);
 }
 
 .task-card.task-completed::before {
-  background: #2ebf7c;
+  background: var(--task-accent, #2ebf7c);
+}
+
+.task-card.task-line-break .task-copy-heading p {
+  white-space: pre-line;
 }
 
 .task-card-shell {
@@ -464,6 +793,33 @@ function completeTask(taskId: string): void {
   max-width: 32rem;
 }
 
+.task-edit-label {
+  color: #64beff;
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+}
+
+.task-edit-input {
+  background: rgb(5 17 38 / 86%);
+  border: 1px solid rgb(73 173 255 / 52%);
+  border-radius: 10px;
+  color: #f1f8ff;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  min-height: 2.35rem;
+  padding: 0.45rem 0.65rem;
+  width: min(100%, 32rem);
+}
+
+.task-edit-input:focus {
+  border-color: rgb(132 219 255 / 86%);
+  outline: none;
+}
+
 .task-status-pill {
   align-items: center;
   background: rgb(8 29 61 / 88%);
@@ -524,6 +880,84 @@ function completeTask(taskId: string): void {
 
 .task-meta-done {
   color: #8df3c1;
+}
+
+.task-cells {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.task-cell {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.task-cell-label {
+  color: #64beff;
+  font-family: var(--font-ui);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-cell-control {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.task-cell-input {
+  background: rgb(5 17 38 / 74%);
+  border: 1px solid rgb(73 173 255 / 34%);
+  border-radius: 10px;
+  color: #f1f8ff;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  min-width: 0;
+  padding: 0.38rem 0.55rem;
+}
+
+.task-cell-input:focus {
+  border-color: rgb(132 219 255 / 76%);
+  outline: none;
+}
+
+.task-cell-readonly {
+  opacity: 0.72;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.task-action-button {
+  --btn-bg: rgb(8 38 72 / 78%);
+  --btn-bg-pressed: linear-gradient(180deg, rgb(199 241 255 / 96%), rgb(132 219 255 / 94%));
+  --btn-border: rgb(73 173 255 / 46%);
+  --btn-border-pressed: rgb(234 251 255 / 88%);
+  --btn-shadow: inset 0 1px 0 rgb(186 236 255 / 6%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%);
+  --btn-color: #83c9ff;
+  --btn-color-pressed: #063050;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 999px;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  padding: 0.36rem 0.68rem;
+  text-transform: uppercase;
+}
+
+.task-action-danger {
+  --btn-border: rgb(255 100 117 / 48%);
+  --btn-color: #ff8190;
 }
 
 .detail-pill {

@@ -731,6 +731,269 @@ fn is_hidden_placeholder_checklist(record: &ChecklistRecord) -> bool {
         && record.created_by_team_member_rns_identity.trim().is_empty()
 }
 
+fn timestamp_is_newer(left: Option<&str>, right: Option<&str>) -> bool {
+    match (
+        left.and_then(parse_rfc3339_sort_key),
+        right.and_then(parse_rfc3339_sort_key),
+    ) {
+        (Some(left), Some(right)) => left > right,
+        (Some(_), None) => true,
+        (None, Some(_)) | (None, None) => false,
+    }
+}
+
+fn timestamp_is_at_least(left: Option<&str>, right: Option<&str>) -> bool {
+    match (
+        left.and_then(parse_rfc3339_sort_key),
+        right.and_then(parse_rfc3339_sort_key),
+    ) {
+        (Some(left), Some(right)) => left >= right,
+        (Some(_), None) | (None, None) => true,
+        (None, Some(_)) => false,
+    }
+}
+
+fn newest_timestamp<'a>(left: Option<&'a str>, right: Option<&'a str>) -> Option<&'a str> {
+    if timestamp_is_at_least(left, right) {
+        left.or(right)
+    } else {
+        right.or(left)
+    }
+}
+
+fn task_freshness_timestamp(task: &ChecklistTaskRecord) -> Option<&str> {
+    newest_timestamp(task.deleted_at.as_deref(), task.updated_at.as_deref())
+}
+
+fn merge_uploaded_cells(
+    mut local_cells: Vec<ChecklistCellRecord>,
+    incoming_cells: Vec<ChecklistCellRecord>,
+) -> Vec<ChecklistCellRecord> {
+    for incoming_cell in incoming_cells {
+        if let Some(index) = local_cells
+            .iter()
+            .position(|cell| cell.column_uid == incoming_cell.column_uid)
+        {
+            if timestamp_is_newer(
+                incoming_cell.updated_at.as_deref(),
+                local_cells[index].updated_at.as_deref(),
+            ) {
+                local_cells[index] = incoming_cell;
+            }
+        } else {
+            local_cells.push(incoming_cell);
+        }
+    }
+    local_cells
+}
+
+fn merge_uploaded_task_record(
+    local_task: ChecklistTaskRecord,
+    incoming_task: ChecklistTaskRecord,
+) -> ChecklistTaskRecord {
+    let local_task_at = task_freshness_timestamp(&local_task);
+    let incoming_task_at = task_freshness_timestamp(&incoming_task);
+    if local_task.deleted_at.is_some()
+        && timestamp_is_at_least(local_task.deleted_at.as_deref(), incoming_task_at)
+    {
+        return local_task;
+    }
+    if incoming_task.deleted_at.is_some()
+        && timestamp_is_at_least(incoming_task.deleted_at.as_deref(), local_task_at)
+    {
+        return incoming_task;
+    }
+
+    let mut merged = if timestamp_is_newer(
+        incoming_task.updated_at.as_deref(),
+        local_task.updated_at.as_deref(),
+    ) {
+        incoming_task.clone()
+    } else {
+        local_task.clone()
+    };
+    merged.cells = merge_uploaded_cells(local_task.cells, incoming_task.cells);
+    merged
+}
+
+fn merge_uploaded_columns(
+    mut local_columns: Vec<ChecklistColumnRecord>,
+    incoming_columns: Vec<ChecklistColumnRecord>,
+) -> Vec<ChecklistColumnRecord> {
+    for incoming_column in incoming_columns {
+        if !local_columns
+            .iter()
+            .any(|column| column.column_uid == incoming_column.column_uid)
+        {
+            local_columns.push(incoming_column);
+        }
+    }
+    local_columns
+}
+
+fn merge_uploaded_tasks(
+    mut local_tasks: Vec<ChecklistTaskRecord>,
+    incoming_tasks: Vec<ChecklistTaskRecord>,
+) -> Vec<ChecklistTaskRecord> {
+    for incoming_task in incoming_tasks {
+        if let Some(index) = local_tasks
+            .iter()
+            .position(|task| task.task_uid == incoming_task.task_uid)
+        {
+            let local_task = local_tasks[index].clone();
+            local_tasks[index] = merge_uploaded_task_record(local_task, incoming_task);
+        } else {
+            local_tasks.push(incoming_task);
+        }
+    }
+    local_tasks
+}
+
+fn merge_uploaded_participants(
+    mut local_participants: Vec<String>,
+    incoming_participants: Vec<String>,
+    source_identity: Option<&str>,
+) -> Vec<String> {
+    for participant in incoming_participants {
+        if !local_participants.iter().any(|value| value == &participant) {
+            local_participants.push(participant);
+        }
+    }
+    if let Some(source_identity) = normalize_optional_string(source_identity) {
+        if !local_participants
+            .iter()
+            .any(|value| value == &source_identity)
+        {
+            local_participants.push(source_identity);
+        }
+    }
+    local_participants
+}
+
+fn merge_uploaded_feed_publications(
+    mut local_publications: Vec<crate::types::ChecklistFeedPublicationRecord>,
+    incoming_publications: Vec<crate::types::ChecklistFeedPublicationRecord>,
+) -> Vec<crate::types::ChecklistFeedPublicationRecord> {
+    for incoming_publication in incoming_publications {
+        if !local_publications
+            .iter()
+            .any(|publication| publication.publication_uid == incoming_publication.publication_uid)
+        {
+            local_publications.push(incoming_publication);
+        }
+    }
+    local_publications
+}
+
+fn prepare_uploaded_snapshot(
+    mut incoming: ChecklistRecord,
+    timestamp: &str,
+    source_identity: Option<&str>,
+) -> ChecklistRecord {
+    incoming.deleted_at = None;
+    incoming.uploaded_at = normalize_optional_string(
+        incoming
+            .uploaded_at
+            .clone()
+            .or_else(|| Some(timestamp.to_string()))
+            .as_deref(),
+    );
+    if incoming.created_at.is_none() {
+        incoming.created_at = Some(timestamp.to_string());
+    }
+    if incoming.updated_at.is_none() {
+        incoming.updated_at = Some(timestamp.to_string());
+    }
+    if incoming
+        .created_by_team_member_rns_identity
+        .trim()
+        .is_empty()
+    {
+        incoming.created_by_team_member_rns_identity =
+            source_identity.unwrap_or_default().to_string();
+    }
+    incoming.participant_rns_identities = merge_uploaded_participants(
+        Vec::new(),
+        incoming.participant_rns_identities,
+        source_identity,
+    );
+    incoming.sync_state = ChecklistSyncState::Synced {};
+    normalize_checklist_record(&mut incoming);
+    incoming
+}
+
+fn merge_uploaded_checklist_snapshot(
+    existing: Option<ChecklistRecord>,
+    incoming: ChecklistRecord,
+    timestamp: &str,
+    source_identity: Option<&str>,
+) -> Option<ChecklistRecord> {
+    let incoming = prepare_uploaded_snapshot(incoming, timestamp, source_identity);
+    let incoming_snapshot_at = incoming
+        .uploaded_at
+        .as_deref()
+        .or(incoming.updated_at.as_deref())
+        .unwrap_or(timestamp)
+        .to_string();
+    let incoming_content_at = incoming
+        .updated_at
+        .as_deref()
+        .unwrap_or(incoming_snapshot_at.as_str())
+        .to_string();
+    let Some(existing) = existing else {
+        return Some(incoming);
+    };
+    if is_hidden_placeholder_checklist(&existing) {
+        return Some(incoming);
+    }
+    if existing.deleted_at.as_deref().is_some_and(|deleted_at| {
+        !incoming_timestamp_is_newer(Some(deleted_at), incoming_content_at.as_str())
+    }) {
+        return None;
+    }
+
+    let incoming_metadata_is_newer = incoming_timestamp_is_newer(
+        existing.updated_at.as_deref(),
+        incoming
+            .updated_at
+            .as_deref()
+            .unwrap_or(incoming_snapshot_at.as_str()),
+    );
+    let mut merged = if incoming_metadata_is_newer {
+        let mut record = incoming.clone();
+        record.created_at = existing.created_at.clone().or(record.created_at);
+        if record.created_by_team_member_rns_identity.trim().is_empty() {
+            record.created_by_team_member_rns_identity =
+                existing.created_by_team_member_rns_identity.clone();
+        }
+        record
+    } else {
+        existing.clone()
+    };
+
+    merged.deleted_at = None;
+    merged.sync_state = ChecklistSyncState::Synced {};
+    merged.uploaded_at = newest_timestamp(
+        merged.uploaded_at.as_deref(),
+        incoming.uploaded_at.as_deref(),
+    )
+    .map(ToString::to_string);
+    merged.updated_at =
+        newest_timestamp(merged.updated_at.as_deref(), incoming.updated_at.as_deref())
+            .map(ToString::to_string);
+    merged.columns = merge_uploaded_columns(existing.columns, incoming.columns);
+    merged.tasks = merge_uploaded_tasks(existing.tasks, incoming.tasks);
+    merged.participant_rns_identities = merge_uploaded_participants(
+        existing.participant_rns_identities,
+        incoming.participant_rns_identities,
+        source_identity,
+    );
+    merged.feed_publications =
+        merge_uploaded_feed_publications(existing.feed_publications, incoming.feed_publications);
+    normalize_checklist_record(&mut merged);
+    Some(merged)
+}
+
 fn blank_task_cells(columns: &[ChecklistColumnRecord], task_uid: &str) -> Vec<ChecklistCellRecord> {
     columns
         .iter()
@@ -924,6 +1187,37 @@ fn persist_received_checklist_if_present(
                 }
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
+            }
+            "checklist.upload" => {
+                let Some(checklist_uid) =
+                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Some(snapshot_json) =
+                    msgpack_get_named(command_map, &["snapshot_json"]).and_then(msgpack_string)
+                else {
+                    continue;
+                };
+                let Ok(mut checklist) =
+                    serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str())
+                else {
+                    continue;
+                };
+                checklist.uid = checklist_uid.clone();
+                let existing = match state.app_state.get_checklist_any(checklist_uid.as_str()) {
+                    Ok(value) => value,
+                    Err(_) => None,
+                };
+                let Some(checklist) = merge_uploaded_checklist_snapshot(
+                    existing,
+                    checklist,
+                    timestamp.as_str(),
+                    source_identity.as_deref(),
+                ) else {
+                    continue;
+                };
+                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-upload");
             }
             "checklist.update" => {
                 let Some(checklist_uid) =
@@ -5806,6 +6100,213 @@ mod tests {
             Some("2026-04-22T12:00:00.100000000Z"),
             "2026-04-22T12:00:00Z"
         ));
+    }
+
+    fn checklist_test_column(column_uid: &str) -> ChecklistColumnRecord {
+        ChecklistColumnRecord {
+            column_uid: column_uid.to_string(),
+            column_name: column_uid.to_string(),
+            display_order: 0,
+            column_type: ChecklistColumnType::ShortString {},
+            column_editable: true,
+            background_color: None,
+            text_color: None,
+            is_removable: true,
+            system_key: None,
+        }
+    }
+
+    fn checklist_test_cell(
+        task_uid: &str,
+        column_uid: &str,
+        value: &str,
+        updated_at: &str,
+    ) -> ChecklistCellRecord {
+        ChecklistCellRecord {
+            cell_uid: format!("{task_uid}:{column_uid}"),
+            task_uid: task_uid.to_string(),
+            column_uid: column_uid.to_string(),
+            value: Some(value.to_string()),
+            updated_at: Some(updated_at.to_string()),
+            updated_by_team_member_rns_identity: Some("peer-a".to_string()),
+        }
+    }
+
+    fn checklist_test_task(
+        task_uid: &str,
+        number: u32,
+        title: &str,
+        updated_at: &str,
+    ) -> ChecklistTaskRecord {
+        let mut task = placeholder_task_record(task_uid, updated_at);
+        task.number = number;
+        task.legacy_value = Some(title.to_string());
+        task.cells = vec![checklist_test_cell(task_uid, "col-task", title, updated_at)];
+        task
+    }
+
+    fn checklist_test_record(updated_at: &str, task: ChecklistTaskRecord) -> ChecklistRecord {
+        let mut record = blank_checklist_record("chk-merge", updated_at, Some("peer-a"));
+        record.mission_uid = Some("mission-alpha".to_string());
+        record.template_uid = Some("template-alpha".to_string());
+        record.name = "Shared Excheck".to_string();
+        record.description = "Collaborative checklist".to_string();
+        record.updated_at = Some(updated_at.to_string());
+        record.columns = vec![checklist_test_column("col-task")];
+        record.tasks = vec![task];
+        normalize_checklist_record(&mut record);
+        record
+    }
+
+    #[test]
+    fn upload_snapshot_hydrates_hidden_placeholder_even_when_snapshot_is_older() {
+        let existing = hidden_placeholder_checklist_record("chk-merge", "2026-04-22T12:00:01Z");
+        let mut incoming = checklist_test_record(
+            "2026-04-22T12:00:00Z",
+            checklist_test_task("task-1", 1, "Hydrated task", "2026-04-22T12:00:00Z"),
+        );
+        incoming.uploaded_at = Some("2026-04-22T12:00:00Z".to_string());
+
+        let merged = merge_uploaded_checklist_snapshot(
+            Some(existing),
+            incoming,
+            "2026-04-22T12:00:02Z",
+            Some("peer-a"),
+        )
+        .expect("placeholder should hydrate");
+
+        assert_eq!(merged.tasks.len(), 1);
+        assert_eq!(
+            merged.tasks[0].legacy_value.as_deref(),
+            Some("Hydrated task")
+        );
+        assert!(merged.deleted_at.is_none());
+    }
+
+    #[test]
+    fn upload_snapshot_preserves_newer_local_task_and_cell_state() {
+        let mut local_task =
+            checklist_test_task("task-1", 1, "Completed locally", "2026-04-22T12:10:00Z");
+        local_task.user_status = ChecklistUserTaskStatus::Complete {};
+        local_task.task_status = ChecklistTaskStatus::Complete {};
+        local_task.completed_at = Some("2026-04-22T12:10:00Z".to_string());
+        let local = checklist_test_record("2026-04-22T12:10:00Z", local_task);
+
+        let mut incoming = checklist_test_record(
+            "2026-04-22T12:00:00Z",
+            checklist_test_task("task-1", 1, "Stale snapshot", "2026-04-22T12:00:00Z"),
+        );
+        incoming.uploaded_at = Some("2026-04-22T12:30:00Z".to_string());
+
+        let merged = merge_uploaded_checklist_snapshot(
+            Some(local),
+            incoming,
+            "2026-04-22T12:30:00Z",
+            Some("peer-b"),
+        )
+        .expect("stale upload should merge");
+
+        assert!(matches!(
+            merged.tasks[0].user_status,
+            ChecklistUserTaskStatus::Complete {}
+        ));
+        assert_eq!(
+            merged.tasks[0]
+                .cells
+                .iter()
+                .find(|cell| cell.column_uid == "col-task")
+                .and_then(|cell| cell.value.as_deref()),
+            Some("Completed locally")
+        );
+        assert!(merged
+            .participant_rns_identities
+            .iter()
+            .any(|identity| identity == "peer-b"));
+    }
+
+    #[test]
+    fn upload_snapshot_appends_missing_columns_and_tasks() {
+        let local = checklist_test_record(
+            "2026-04-22T12:00:00Z",
+            checklist_test_task("task-1", 1, "Local task", "2026-04-22T12:00:00Z"),
+        );
+        let mut incoming = checklist_test_record(
+            "2026-04-22T12:05:00Z",
+            checklist_test_task("task-2", 2, "Incoming task", "2026-04-22T12:05:00Z"),
+        );
+        incoming.columns.push(checklist_test_column("col-notes"));
+        incoming.tasks[0].cells.push(checklist_test_cell(
+            "task-2",
+            "col-notes",
+            "Incoming notes",
+            "2026-04-22T12:05:00Z",
+        ));
+        incoming.uploaded_at = Some("2026-04-22T12:05:00Z".to_string());
+
+        let merged = merge_uploaded_checklist_snapshot(
+            Some(local),
+            incoming,
+            "2026-04-22T12:05:00Z",
+            Some("peer-b"),
+        )
+        .expect("upload should merge");
+
+        assert!(merged
+            .columns
+            .iter()
+            .any(|column| column.column_uid == "col-notes"));
+        assert!(merged.tasks.iter().any(|task| task.task_uid == "task-1"));
+        assert!(merged.tasks.iter().any(|task| task.task_uid == "task-2"));
+    }
+
+    #[test]
+    fn upload_snapshot_preserves_newer_local_task_tombstone() {
+        let mut tombstone =
+            checklist_test_task("task-1", 1, "Deleted task", "2026-04-22T12:20:00Z");
+        tombstone.deleted_at = Some("2026-04-22T12:20:00Z".to_string());
+        let local = checklist_test_record("2026-04-22T12:20:00Z", tombstone);
+
+        let mut incoming = checklist_test_record(
+            "2026-04-22T12:10:00Z",
+            checklist_test_task("task-1", 1, "Stale live task", "2026-04-22T12:10:00Z"),
+        );
+        incoming.uploaded_at = Some("2026-04-22T12:40:00Z".to_string());
+
+        let merged = merge_uploaded_checklist_snapshot(
+            Some(local),
+            incoming,
+            "2026-04-22T12:40:00Z",
+            Some("peer-b"),
+        )
+        .expect("upload should merge");
+
+        assert_eq!(
+            merged.tasks[0].deleted_at.as_deref(),
+            Some("2026-04-22T12:20:00Z")
+        );
+    }
+
+    #[test]
+    fn upload_snapshot_does_not_revive_newer_deleted_checklist() {
+        let mut deleted = checklist_test_record(
+            "2026-04-22T12:20:00Z",
+            checklist_test_task("task-1", 1, "Deleted checklist", "2026-04-22T12:20:00Z"),
+        );
+        deleted.deleted_at = Some("2026-04-22T12:20:00Z".to_string());
+
+        let mut incoming = checklist_test_record(
+            "2026-04-22T12:10:00Z",
+            checklist_test_task("task-1", 1, "Stale checklist", "2026-04-22T12:10:00Z"),
+        );
+        incoming.uploaded_at = Some("2026-04-22T12:40:00Z".to_string());
+
+        assert!(merge_uploaded_checklist_snapshot(
+            Some(deleted),
+            incoming,
+            "2026-04-22T12:40:00Z",
+            Some("peer-b"),
+        )
+        .is_none());
     }
 
     #[test]

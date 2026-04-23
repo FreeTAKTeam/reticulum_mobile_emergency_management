@@ -9,10 +9,11 @@ use serde::Serialize;
 use crate::runtime::now_ms;
 use crate::types::{
     AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-    ChecklistCreateOnlineRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
-    ChecklistSyncState, ChecklistTaskCellSetRequest, ChecklistTaskRecord,
-    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
-    ChecklistTaskStatus, ChecklistTaskStatusSetRequest, ChecklistUpdateRequest,
+    ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest, ChecklistMode,
+    ChecklistOriginType, ChecklistRecord, ChecklistSyncState, ChecklistTaskCellSetRequest,
+    ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
+    ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord, ChecklistUpdateRequest,
     ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
     EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
@@ -112,6 +113,7 @@ impl AppStateStore {
             db_path: base_dir.join(DB_FILE_NAME),
         };
         store.initialize()?;
+        store.seed_default_checklist_templates()?;
         Ok(store)
     }
 
@@ -164,6 +166,11 @@ impl AppStateStore {
                     mission_uid TEXT,
                     template_uid TEXT,
                     checklist_status TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS checklist_templates (
+                    uid TEXT PRIMARY KEY,
                     updated_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
@@ -592,6 +599,38 @@ impl AppStateStore {
             .map(|record| record.and_then(sanitize_active_checklist))
     }
 
+    pub fn list_checklist_templates(&self) -> Result<Vec<ChecklistTemplateRecord>, NodeError> {
+        let mut items = query_json_records(
+            &self.connect()?,
+            "SELECT json FROM checklist_templates ORDER BY updated_at_ms DESC, uid ASC",
+        )?;
+        for item in &mut items {
+            normalize_checklist_template(item);
+        }
+        Ok(items)
+    }
+
+    pub fn get_checklist_template(
+        &self,
+        template_uid: &str,
+    ) -> Result<Option<ChecklistTemplateRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM checklist_templates WHERE uid = ?1",
+                params![template_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| {
+            let mut record: ChecklistTemplateRecord = deserialize_json(&value)?;
+            normalize_checklist_template(&mut record);
+            Ok(record)
+        })
+        .transpose()
+    }
+
     pub(crate) fn get_checklist_any(
         &self,
         checklist_uid: &str,
@@ -682,6 +721,76 @@ impl AppStateStore {
             feed_publications: Vec::new(),
         };
         self.upsert_checklist(&checklist, "checklist-created")
+    }
+
+    pub fn create_checklist_from_template(
+        &self,
+        request: &ChecklistCreateFromTemplateRequest,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        let template = self
+            .get_checklist_template(request.template_uid.trim())?
+            .ok_or(NodeError::InvalidConfig {})?;
+        let timestamp = current_timestamp_rfc3339();
+        let checklist_uid = request
+            .checklist_uid
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("chk-{}", now_ms()));
+        let created_by = request
+            .created_by_team_member_rns_identity
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let mut checklist = ChecklistRecord {
+            uid: checklist_uid,
+            mission_uid: normalize_optional_string(request.mission_uid.as_deref()),
+            template_uid: Some(template.uid.clone()),
+            template_version: Some(template.version),
+            template_name: Some(template.name.clone()),
+            name: request.name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            start_time: Some(request.start_time.trim().to_string()),
+            mode: ChecklistMode::Online {},
+            sync_state: ChecklistSyncState::Synced {},
+            origin_type: template.origin_type,
+            checklist_status: ChecklistTaskStatus::Pending {},
+            created_at: Some(timestamp.clone()),
+            created_by_team_member_rns_identity: created_by.clone(),
+            updated_at: Some(timestamp),
+            deleted_at: None,
+            uploaded_at: None,
+            participant_rns_identities: normalize_optional_string(Some(created_by.as_str()))
+                .map(|value| vec![value])
+                .unwrap_or_default(),
+            progress_percent: 0.0,
+            counts: crate::types::ChecklistStatusCounts {
+                pending_count: 0,
+                late_count: 0,
+                complete_count: 0,
+            },
+            columns: template.columns.clone(),
+            tasks: template.tasks.clone(),
+            feed_publications: Vec::new(),
+        };
+        normalize_checklist(&mut checklist);
+        self.upsert_checklist(&checklist, "checklist-created-from-template")
+    }
+
+    pub fn import_checklist_template_csv(
+        &self,
+        request: &ChecklistTemplateImportCsvRequest,
+    ) -> Result<ChecklistTemplateRecord, NodeError> {
+        let mut template = parse_checklist_template_csv(request)?;
+        let timestamp = current_timestamp_rfc3339();
+        if template.created_at.is_none() {
+            template.created_at = Some(timestamp.clone());
+        }
+        template.updated_at = Some(timestamp);
+        self.upsert_checklist_template(&template)?;
+        Ok(template)
     }
 
     pub fn update_checklist(
@@ -1584,6 +1693,59 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn upsert_checklist_template(
+        &self,
+        template: &ChecklistTemplateRecord,
+    ) -> Result<(), NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_checklist_template_tx(&transaction, template)?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn write_checklist_template_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        template: &ChecklistTemplateRecord,
+    ) -> Result<(), NodeError> {
+        let mut normalized = template.clone();
+        normalize_checklist_template(&mut normalized);
+        let json = serialize_json(&normalized)?;
+        transaction
+            .execute(
+                "INSERT INTO checklist_templates (uid, updated_at_ms, json)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(uid) DO UPDATE SET
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                params![normalized.uid, now_ms() as i64, json],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn seed_default_checklist_templates(&self) -> Result<(), NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let existing: i64 = transaction
+            .query_row("SELECT COUNT(1) FROM checklist_templates", [], |row| {
+                row.get(0)
+            })
+            .map_err(|_| NodeError::IoError {})?;
+        if existing == 0 {
+            for template in default_checklist_templates() {
+                self.write_checklist_template_tx(&transaction, &template)?;
+            }
+        }
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
     fn load_checklist_tx(
         &self,
         transaction: &Transaction<'_>,
@@ -1854,6 +2016,336 @@ fn query_json_records<T: serde::de::DeserializeOwned>(
     Ok(records)
 }
 
+fn parse_checklist_template_csv(
+    request: &ChecklistTemplateImportCsvRequest,
+) -> Result<ChecklistTemplateRecord, NodeError> {
+    let name = request.name.trim();
+    if name.is_empty() || request.csv_text.trim().is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
+        .trim(csv::Trim::All)
+        .from_reader(request.csv_text.as_bytes());
+    let headers = reader
+        .headers()
+        .map_err(|_| NodeError::InvalidConfig {})?
+        .clone();
+    let expected = ["Item", "Description", "Category", "Quantity"];
+    if headers.len() < expected.len()
+        || !expected.iter().enumerate().all(|(index, value)| {
+            headers
+                .get(index)
+                .is_some_and(|header| header.eq_ignore_ascii_case(value))
+        })
+    {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let mut tasks = Vec::new();
+    for (index, row) in reader.records().enumerate() {
+        let row = row.map_err(|_| NodeError::InvalidConfig {})?;
+        let item = row.get(0).map(str::trim).unwrap_or_default();
+        if item.is_empty() {
+            continue;
+        }
+        let description = normalize_optional_string(row.get(1));
+        let category = normalize_optional_string(row.get(2));
+        let quantity_value = row.get(3).map(str::trim).unwrap_or_default();
+        let quantity = quantity_value
+            .parse::<u32>()
+            .map_err(|_| NodeError::InvalidConfig {})?;
+        let task_uid = format!(
+            "{}-task-{}",
+            request
+                .template_uid
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("tmpl-import"),
+            index + 1
+        );
+        tasks.push(ChecklistTaskRecord {
+            task_uid: task_uid.clone(),
+            number: (index + 1) as u32,
+            user_status: ChecklistUserTaskStatus::Pending {},
+            task_status: ChecklistTaskStatus::Pending {},
+            is_late: false,
+            updated_at: None,
+            deleted_at: None,
+            custom_status: None,
+            due_relative_minutes: None,
+            due_dtg: None,
+            notes: description.clone(),
+            row_background_color: None,
+            line_break_enabled: false,
+            completed_at: None,
+            completed_by_team_member_rns_identity: None,
+            legacy_value: Some(item.to_string()),
+            cells: vec![
+                ChecklistCellRecord {
+                    cell_uid: format!("{task_uid}:col-item"),
+                    task_uid: task_uid.clone(),
+                    column_uid: "col-item".to_string(),
+                    value: Some(item.to_string()),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                },
+                ChecklistCellRecord {
+                    cell_uid: format!("{task_uid}:col-description"),
+                    task_uid: task_uid.clone(),
+                    column_uid: "col-description".to_string(),
+                    value: description.clone(),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                },
+                ChecklistCellRecord {
+                    cell_uid: format!("{task_uid}:col-category"),
+                    task_uid: task_uid.clone(),
+                    column_uid: "col-category".to_string(),
+                    value: category,
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                },
+                ChecklistCellRecord {
+                    cell_uid: format!("{task_uid}:col-quantity"),
+                    task_uid,
+                    column_uid: "col-quantity".to_string(),
+                    value: Some(quantity.to_string()),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                },
+            ],
+        });
+    }
+
+    if tasks.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let timestamp = current_timestamp_rfc3339();
+    let template_uid = request
+        .template_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("tmpl-{}", now_ms()));
+    let mut template = ChecklistTemplateRecord {
+        uid: template_uid,
+        name: name.to_string(),
+        description: request
+            .description
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        version: 1,
+        origin_type: ChecklistOriginType::CsvImport {},
+        created_at: Some(timestamp.clone()),
+        updated_at: Some(timestamp),
+        source_filename: normalize_optional_string(request.source_filename.as_deref()),
+        columns: checklist_template_columns(),
+        tasks,
+    };
+    normalize_checklist_template(&mut template);
+    Ok(template)
+}
+
+fn checklist_template_columns() -> Vec<ChecklistColumnRecord> {
+    vec![
+        ChecklistColumnRecord {
+            column_uid: "col-item".to_string(),
+            column_name: "Item".to_string(),
+            display_order: 0,
+            column_type: ChecklistColumnType::ShortString {},
+            column_editable: true,
+            background_color: None,
+            text_color: None,
+            is_removable: false,
+            system_key: None,
+        },
+        ChecklistColumnRecord {
+            column_uid: "col-description".to_string(),
+            column_name: "Description".to_string(),
+            display_order: 1,
+            column_type: ChecklistColumnType::LongString {},
+            column_editable: true,
+            background_color: None,
+            text_color: None,
+            is_removable: false,
+            system_key: None,
+        },
+        ChecklistColumnRecord {
+            column_uid: "col-category".to_string(),
+            column_name: "Category".to_string(),
+            display_order: 2,
+            column_type: ChecklistColumnType::ShortString {},
+            column_editable: true,
+            background_color: None,
+            text_color: None,
+            is_removable: false,
+            system_key: None,
+        },
+        ChecklistColumnRecord {
+            column_uid: "col-quantity".to_string(),
+            column_name: "Quantity".to_string(),
+            display_order: 3,
+            column_type: ChecklistColumnType::Integer {},
+            column_editable: true,
+            background_color: None,
+            text_color: None,
+            is_removable: false,
+            system_key: None,
+        },
+    ]
+}
+
+fn checklist_template_from_rows(
+    uid: &str,
+    name: &str,
+    description: &str,
+    rows: &[(&str, &str, &str, u32)],
+) -> ChecklistTemplateRecord {
+    let timestamp = current_timestamp_rfc3339();
+    let tasks = rows
+        .iter()
+        .enumerate()
+        .map(|(index, (item, description, category, quantity))| {
+            let task_uid = format!("{uid}-task-{}", index + 1);
+            ChecklistTaskRecord {
+                task_uid: task_uid.clone(),
+                number: (index + 1) as u32,
+                user_status: ChecklistUserTaskStatus::Pending {},
+                task_status: ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: None,
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: None,
+                due_dtg: None,
+                notes: Some((*description).to_string()),
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some((*item).to_string()),
+                cells: vec![
+                    ChecklistCellRecord {
+                        cell_uid: format!("{task_uid}:col-item"),
+                        task_uid: task_uid.clone(),
+                        column_uid: "col-item".to_string(),
+                        value: Some((*item).to_string()),
+                        updated_at: None,
+                        updated_by_team_member_rns_identity: None,
+                    },
+                    ChecklistCellRecord {
+                        cell_uid: format!("{task_uid}:col-description"),
+                        task_uid: task_uid.clone(),
+                        column_uid: "col-description".to_string(),
+                        value: Some((*description).to_string()),
+                        updated_at: None,
+                        updated_by_team_member_rns_identity: None,
+                    },
+                    ChecklistCellRecord {
+                        cell_uid: format!("{task_uid}:col-category"),
+                        task_uid: task_uid.clone(),
+                        column_uid: "col-category".to_string(),
+                        value: Some((*category).to_string()),
+                        updated_at: None,
+                        updated_by_team_member_rns_identity: None,
+                    },
+                    ChecklistCellRecord {
+                        cell_uid: format!("{task_uid}:col-quantity"),
+                        task_uid,
+                        column_uid: "col-quantity".to_string(),
+                        value: Some(quantity.to_string()),
+                        updated_at: None,
+                        updated_by_team_member_rns_identity: None,
+                    },
+                ],
+            }
+        })
+        .collect();
+    let mut template = ChecklistTemplateRecord {
+        uid: uid.to_string(),
+        name: name.to_string(),
+        description: description.to_string(),
+        version: 1,
+        origin_type: ChecklistOriginType::RchTemplate {},
+        created_at: Some(timestamp.clone()),
+        updated_at: Some(timestamp),
+        source_filename: None,
+        columns: checklist_template_columns(),
+        tasks,
+    };
+    normalize_checklist_template(&mut template);
+    template
+}
+
+fn default_checklist_templates() -> Vec<ChecklistTemplateRecord> {
+    vec![
+        checklist_template_from_rows(
+            "tmpl-24-hour-survival-pack",
+            "24 Hour Survival Pack",
+            "Personal 24-hour emergency loadout for rapid deployment and sustainment.",
+            &[
+                ("Mini Bic or waterproof lighter", "Reliable ignition source", "Fire & Light", 1),
+                ("Compact headlamp", "Hands-free light source", "Fire & Light", 1),
+                ("1L Nalgene bottle or canteen", "Durable water container", "Water", 1),
+                ("Water purification tabs", "Lightweight and effective", "Water", 10),
+                ("MRE or freeze-dried meal", "Primary field ration", "Food", 1),
+                ("Energy bars", "High-calorie snack", "Food", 4),
+                ("Multitool", "Repair and utility tool", "Tools & Utility", 1),
+                ("550 Paracord", "Shelter and lashing", "Tools & Utility", 1),
+                ("Emergency mylar blanket", "Warmth and signaling", "Clothing / Warmth", 1),
+                ("IFAK", "Trauma bandage, gloves, tourniquet", "Medical / Hygiene", 1),
+                ("Compass", "Reliable navigation tool", "Navigation / Communication", 1),
+                ("Printed map", "Area-specific map", "Navigation / Communication", 1),
+            ],
+        ),
+        checklist_template_from_rows(
+            "tmpl-72-hour-home-preparedness",
+            "72 Hour Home Preparedness",
+            "Household emergency readiness checklist for shelter-in-place and temporary disruption.",
+            &[
+                ("Stored drinking water", "Three-day reserve for household use", "Water", 12),
+                ("Shelf-stable meals", "Ready-to-eat or low-prep food", "Food", 9),
+                ("Manual can opener", "Access canned food during outage", "Food", 1),
+                ("Flashlights", "Area lighting during power loss", "Power / Lighting", 2),
+                ("Battery bank", "Phone and radio charging backup", "Power / Lighting", 1),
+                ("AA/AAA batteries", "Spare cells for lights and radios", "Power / Lighting", 12),
+                ("First aid kit", "Household medical supplies", "Medical", 1),
+                ("Prescription refill copy", "Medication continuity reference", "Medical", 1),
+                ("Hygiene kit", "Soap, wipes, sanitation bags", "Hygiene", 1),
+                ("Printed contact sheet", "Emergency contacts and rally info", "Communications", 1),
+                ("Weather or crank radio", "Situation updates during outage", "Communications", 1),
+                ("Copies of IDs and insurance", "Critical documents protected", "Documents", 1),
+            ],
+        ),
+        checklist_template_from_rows(
+            "tmpl-vehicle-emergency-preparedness",
+            "Vehicle Emergency Preparedness",
+            "Vehicle-based emergency kit for evacuation, roadside survival, and communications continuity.",
+            &[
+                ("Vehicle first aid kit", "Trauma and minor wound support", "Medical", 1),
+                ("Jumper cables", "Battery recovery", "Vehicle Recovery", 1),
+                ("Tire inflator or sealant", "Flat tire contingency", "Vehicle Recovery", 1),
+                ("Tow strap", "Recovery from mud or ditch", "Vehicle Recovery", 1),
+                ("Reflective triangles", "Roadside visibility", "Safety", 3),
+                ("High-visibility vest", "Roadside operator visibility", "Safety", 1),
+                ("Blanket", "Cold-weather warmth", "Shelter / Warmth", 2),
+                ("Stored water bottles", "Occupant hydration", "Water", 6),
+                ("Shelf-stable snacks", "Travel sustainment", "Food", 6),
+                ("Paper map", "Navigation backup if devices fail", "Navigation", 1),
+                ("12V phone charger", "Device power continuity", "Communications", 1),
+                ("Handheld radio", "Backup local comms", "Communications", 1),
+            ],
+        ),
+    ]
+}
+
 fn projection_scope_name(scope: ProjectionScope) -> &'static str {
     match scope {
         ProjectionScope::AppSettings {} => "AppSettings",
@@ -1953,6 +2445,35 @@ pub(crate) fn normalize_checklist_record(checklist: &mut ChecklistRecord) {
     };
 }
 
+fn normalize_checklist_template(template: &mut ChecklistTemplateRecord) {
+    template.name = template.name.trim().to_string();
+    template.description = template.description.trim().to_string();
+    template
+        .source_filename
+        .clone_from(&normalize_optional_string(
+            template.source_filename.as_deref(),
+        ));
+    for task in &mut template.tasks {
+        task.is_late = task.task_status.is_late();
+        task.task_status = checklist_task_status_for(task.user_status, task.is_late);
+        task.cells.sort_by(|left, right| {
+            left.column_uid
+                .cmp(&right.column_uid)
+                .then_with(|| left.cell_uid.cmp(&right.cell_uid))
+        });
+    }
+    template.columns.sort_by(|left, right| {
+        left.display_order
+            .cmp(&right.display_order)
+            .then_with(|| left.column_uid.cmp(&right.column_uid))
+    });
+    template.tasks.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.task_uid.cmp(&right.task_uid))
+    });
+}
+
 fn normalize_checklist(checklist: &mut ChecklistRecord) {
     normalize_checklist_record(checklist);
 }
@@ -2027,11 +2548,12 @@ mod tests {
 
     use super::*;
     use crate::types::{
-        ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType, ChecklistMode,
-        ChecklistOriginType, ChecklistRecord, ChecklistStatusCounts, ChecklistSystemColumnKey,
-        ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
-        ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
-        ChecklistTaskStatusSetRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
+        ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
+        ChecklistCreateFromTemplateRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
+        ChecklistStatusCounts, ChecklistSystemColumnKey, ChecklistTaskCellSetRequest,
+        ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+        ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
+        ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
         ChecklistUserTaskStatus, MessageDirection, MessageMethod, MessageState, ProjectionScope,
     };
 
@@ -2517,5 +3039,59 @@ mod tests {
             legacy_value: Some("Confirm rally point".to_string()),
         });
         assert!(matches!(add_row, Err(NodeError::InvalidConfig {})));
+    }
+
+    #[test]
+    fn default_checklist_templates_are_seeded() {
+        let storage_dir = test_storage_dir("checklist-template-seed");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        let templates = store
+            .list_checklist_templates()
+            .expect("list checklist templates");
+        assert_eq!(templates.len(), 3);
+        assert!(templates
+            .iter()
+            .any(|template| template.uid == "tmpl-24-hour-survival-pack"));
+    }
+
+    #[test]
+    fn csv_template_import_can_spawn_checklist_from_template() {
+        let storage_dir = test_storage_dir("checklist-template-import");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        let template = store
+            .import_checklist_template_csv(&ChecklistTemplateImportCsvRequest {
+                template_uid: Some("tmpl-imported".to_string()),
+                name: "Imported Preparedness".to_string(),
+                description: Some("CSV import".to_string()),
+                csv_text: "Item,Description,Category,Quantity\nTorch,Portable light,Lighting,2\nRadio,Receive alerts,Comms,1\n".to_string(),
+                source_filename: Some("preparedness.csv".to_string()),
+            })
+            .expect("import csv template");
+        assert_eq!(template.origin_type.as_str(), "CSV_IMPORT");
+        assert_eq!(template.tasks.len(), 2);
+
+        store
+            .create_checklist_from_template(&ChecklistCreateFromTemplateRequest {
+                checklist_uid: Some("chk-imported".to_string()),
+                mission_uid: Some("mission-ready".to_string()),
+                template_uid: template.uid.clone(),
+                name: "Imported Checklist".to_string(),
+                description: "Generated from imported template".to_string(),
+                start_time: "2026-04-23T12:00:00Z".to_string(),
+                created_by_team_member_rns_identity: Some("alpha".to_string()),
+            })
+            .expect("create from template");
+
+        let checklist = store
+            .get_checklist("chk-imported")
+            .expect("get checklist")
+            .expect("checklist exists");
+        assert_eq!(checklist.template_uid.as_deref(), Some("tmpl-imported"));
+        assert_eq!(checklist.tasks.len(), 2);
+        assert_eq!(checklist.counts.pending_count, 2);
     }
 }

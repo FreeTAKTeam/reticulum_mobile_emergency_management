@@ -23,9 +23,11 @@ use crate::sos::{
 use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ChecklistCreateOnlineRequest, ChecklistListActiveRequest,
-    ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
-    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
+    AnnounceRecord, AppSettingsRecord, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistListActiveRequest, ChecklistRecord,
+    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
+    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
@@ -977,6 +979,59 @@ fn build_checklist_command_fields(
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
 }
 
+fn build_checklist_command_fields_with_snapshot(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+    command_id_override: Option<&str>,
+    snapshot_json: &str,
+) -> Result<Vec<u8>, NodeError> {
+    let timestamp = current_timestamp_rfc3339();
+    let send_ts_ms = now_ms();
+    let subject = checklist_subject_token(command_type, args);
+    let command_slug = sanitize_correlation_token(command_type);
+    let destination_hint = &target.app_destination_hex[..target.app_destination_hex.len().min(8)];
+    let correlation_id = format!("{command_slug}-{subject}-{destination_hint}-{send_ts_ms}");
+    let command_id = command_id_override
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("cmd-{correlation_id}"));
+    let source_display_name = status.name.trim();
+    let topics = checklist_topics_from_args(args)
+        .into_iter()
+        .map(MsgPackValue::from)
+        .collect::<Vec<_>>();
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![msgpack_map(vec![
+            ("command_id", MsgPackValue::from(command_id.as_str())),
+            (
+                "correlation_id",
+                MsgPackValue::from(correlation_id.as_str()),
+            ),
+            ("command_type", MsgPackValue::from(command_type)),
+            (
+                "source",
+                msgpack_map(vec![
+                    (
+                        "rns_identity",
+                        MsgPackValue::from(status.identity_hex.as_str()),
+                    ),
+                    ("display_name", MsgPackValue::from(source_display_name)),
+                ]),
+            ),
+            ("timestamp", MsgPackValue::from(timestamp.as_str())),
+            ("topics", MsgPackValue::Array(topics)),
+            (
+                "args",
+                json_value_to_msgpack(&JsonValue::Object(args.clone()))?,
+            ),
+            ("snapshot_json", MsgPackValue::from(snapshot_json)),
+        ])]),
+    )]);
+    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+}
+
 fn build_checklist_replication_payload(
     status: &NodeStatus,
     target: &MissionReplicationTarget,
@@ -995,6 +1050,31 @@ fn build_checklist_replication_payload_with_command_id(
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let fields =
         build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
+    let body = format!(
+        "Checklist {} {}",
+        command_type,
+        checklist_subject_token(command_type, args)
+    )
+    .into_bytes();
+    Ok((body, fields))
+}
+
+fn build_checklist_replication_payload_with_snapshot(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+    command_id_override: Option<&str>,
+    snapshot_json: &str,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let fields = build_checklist_command_fields_with_snapshot(
+        status,
+        target,
+        command_type,
+        args,
+        command_id_override,
+        snapshot_json,
+    )?;
     let body = format!(
         "Checklist {} {}",
         command_type,
@@ -2484,6 +2564,208 @@ impl Node {
         inner.app_state.get_checklist(checklist_uid.trim())
     }
 
+    pub fn list_checklist_templates(
+        &self,
+        request: Option<ChecklistTemplateListRequest>,
+    ) -> Result<Vec<ChecklistTemplateRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut items = inner.app_state.list_checklist_templates()?;
+        if let Some(request) = request {
+            if let Some(search) = request
+                .search
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let needle = search.to_ascii_lowercase();
+                items.retain(|record| {
+                    record.uid.to_ascii_lowercase().contains(needle.as_str())
+                        || record.name.to_ascii_lowercase().contains(needle.as_str())
+                        || record
+                            .description
+                            .to_ascii_lowercase()
+                            .contains(needle.as_str())
+                });
+            }
+        }
+        Ok(items)
+    }
+
+    pub fn get_checklist_template(
+        &self,
+        template_uid: String,
+    ) -> Result<Option<ChecklistTemplateRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_checklist_template(template_uid.trim())
+    }
+
+    pub fn import_checklist_template_csv(
+        &self,
+        request: ChecklistTemplateImportCsvRequest,
+    ) -> Result<ChecklistTemplateRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.import_checklist_template_csv(&request)
+    }
+
+    pub fn create_checklist_from_template(
+        &self,
+        request: ChecklistCreateFromTemplateRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .checklist_uid
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.checklist_uid = Some(format!("chk-{}", now_ms()));
+            }
+            if request
+                .created_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.created_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let checklist_uid = request
+                .checklist_uid
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(NodeError::InvalidConfig {})?
+                .to_string();
+            let create_command_id = format!("cmd-{checklist_uid}");
+            let upload_command_id = format!("cmd-{checklist_uid}-upload");
+            let invalidations = inner.app_state.create_checklist_from_template(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let create_request = ChecklistCreateOnlineRequest {
+                    checklist_uid: Some(checklist_uid.clone()),
+                    mission_uid: request.mission_uid.clone(),
+                    template_uid: request.template_uid.clone(),
+                    name: request.name.clone(),
+                    description: request.description.clone(),
+                    start_time: request.start_time.clone(),
+                    created_by_team_member_rns_identity: request
+                        .created_by_team_member_rns_identity
+                        .clone(),
+                };
+                let create_args = checklist_create_online_args_json(&create_request)?;
+                let upload_args = checklist_uid_args_json(checklist_uid.as_str());
+                let mut snapshot = inner
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())?
+                    .ok_or(NodeError::InternalError {})?;
+                snapshot.uploaded_at = Some(current_timestamp_rfc3339());
+                snapshot.sync_state = crate::types::ChecklistSyncState::Synced {};
+                let invalidations = inner
+                    .app_state
+                    .upsert_checklist(&snapshot, "checklist-uploaded")?;
+                for invalidation in invalidations {
+                    emit_projection_invalidation(&inner.bus, invalidation);
+                }
+                let snapshot_json =
+                    serde_json::to_string(&snapshot).map_err(|_| NodeError::InternalError {})?;
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for target in replication_targets {
+                    match build_checklist_replication_payload_with_command_id(
+                        &status,
+                        &target,
+                        "checklist.create.online",
+                        &create_args,
+                        Some(create_command_id.as_str()),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.create.online", err
+                            ),
+                        }),
+                    }
+                    match build_checklist_replication_payload_with_snapshot(
+                        &status,
+                        &target,
+                        "checklist.upload",
+                        &upload_args,
+                        Some(upload_command_id.as_str()),
+                        snapshot_json.as_str(),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.upload", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.create.online/checklist.upload", err
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn create_online_checklist(
         &self,
         request: ChecklistCreateOnlineRequest,
@@ -2587,6 +2869,110 @@ impl Node {
                     message: format!(
                         "checklist replication enqueue failed destination={} command={} reason={}",
                         destination_hex, "checklist.create.online", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn upload_checklist(&self, checklist_uid: String) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let normalized_uid = checklist_uid.trim();
+        if normalized_uid.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut checklist = inner
+                .app_state
+                .get_checklist_any(normalized_uid)?
+                .ok_or(NodeError::InvalidConfig {})?;
+            if checklist.deleted_at.is_some() {
+                return Err(NodeError::InvalidConfig {});
+            }
+            checklist.uploaded_at = Some(current_timestamp_rfc3339());
+            checklist.sync_state = crate::types::ChecklistSyncState::Synced {};
+            let invalidations = inner
+                .app_state
+                .upsert_checklist(&checklist, "checklist-uploaded")?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let args = checklist_uid_args_json(normalized_uid);
+                let snapshot_json =
+                    serde_json::to_string(&checklist).map_err(|_| NodeError::InternalError {})?;
+                let upload_command_id = format!("cmd-{normalized_uid}-upload");
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for target in replication_targets {
+                    match build_checklist_replication_payload_with_snapshot(
+                        &status,
+                        &target,
+                        "checklist.upload",
+                        &args,
+                        Some(upload_command_id.as_str()),
+                        snapshot_json.as_str(),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.upload", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.upload", err
                     ),
                 });
             }

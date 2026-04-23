@@ -11,17 +11,19 @@ use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, ChecklistCreateOnlineRequest, ChecklistListActiveRequest, ChecklistRecord,
-    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
-    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest, ChecklistUpdatePatch,
-    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EventProjectionRecord,
-    HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload,
-    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
-    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope,
-    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
-    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
-    SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
+    AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
+    ChecklistListActiveRequest, ChecklistRecord, ChecklistTaskCellSetRequest,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
+    ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
+    EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
+    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
+    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
+    TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -291,6 +293,16 @@ struct ChecklistCreateInput {
     description: String,
     start_time: String,
     created_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistTemplateImportInput {
+    template_uid: Option<String>,
+    name: String,
+    description: Option<String>,
+    csv_text: String,
+    source_filename: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -865,6 +877,18 @@ fn to_checklist_create_request(input: ChecklistCreateInput) -> ChecklistCreateOn
     }
 }
 
+fn to_checklist_template_import_request(
+    input: ChecklistTemplateImportInput,
+) -> ChecklistTemplateImportCsvRequest {
+    ChecklistTemplateImportCsvRequest {
+        template_uid: input.template_uid,
+        name: input.name,
+        description: input.description,
+        csv_text: input.csv_text,
+        source_filename: input.source_filename,
+    }
+}
+
 fn to_checklist_update_request(input: ChecklistUpdateInput) -> ChecklistUpdateRequest {
     ChecklistUpdateRequest {
         checklist_uid: input.checklist_uid,
@@ -1325,6 +1349,21 @@ fn checklist_record_json(record: &ChecklistRecord) -> serde_json::Value {
             .iter()
             .map(checklist_feed_publication_json)
             .collect::<Vec<_>>()
+    })
+}
+
+fn checklist_template_json(record: &ChecklistTemplateRecord) -> serde_json::Value {
+    json!({
+        "uid": record.uid,
+        "name": record.name,
+        "description": record.description,
+        "version": record.version,
+        "originType": record.origin_type.as_str(),
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+        "sourceFilename": record.source_filename,
+        "columns": record.columns.iter().map(checklist_column_json).collect::<Vec<_>>(),
+        "tasks": record.tasks.iter().map(checklist_task_json).collect::<Vec<_>>()
     })
 }
 
@@ -2840,6 +2879,134 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
 }
 
 #[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistTemplatesJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: ChecklistListInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid checklist template list payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_checklist_templates(Some(ChecklistTemplateListRequest {
+        search: payload.search,
+        sort_by: payload.sort_by,
+    })) {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(checklist_template_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importChecklistTemplateCsvJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let err_result = |code: &str, message: String| {
+        set_last_error(code, message);
+        RESULT_ERR
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistTemplateImportInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist template import payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned".to_string()),
+    };
+    let node = ensure_node(&mut guard);
+    match node.import_checklist_template_csv(to_checklist_template_import_request(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createChecklistFromTemplateJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let err_result = |code: &str, message: String| {
+        set_last_error(code, message);
+        RESULT_ERR
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistCreateInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist create-from-template payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned".to_string()),
+    };
+    let node = ensure_node(&mut guard);
+    match node.create_checklist_from_template(ChecklistCreateFromTemplateRequest {
+        checklist_uid: payload.checklist_uid,
+        mission_uid: payload.mission_uid,
+        template_uid: payload.template_uid,
+        name: payload.name,
+        description: payload.description,
+        start_time: payload.start_time,
+        created_by_team_member_rns_identity: payload.created_by_team_member_rns_identity,
+    }) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createOnlineChecklistJson(
     mut env: JNIEnv,
     _class: JClass,
@@ -2963,6 +3130,39 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_joinChec
     };
     let node = ensure_node(&mut guard);
     match node.join_checklist(payload.checklist_uid) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_uploadChecklistJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid checklist upload payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.upload_checklist(payload.checklist_uid) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);

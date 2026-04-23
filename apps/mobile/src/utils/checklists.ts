@@ -1,4 +1,9 @@
-import { ref } from "vue";
+import type {
+  ChecklistColumnRecord as RuntimeChecklistColumnRecord,
+  ChecklistRecord as RuntimeChecklistRecord,
+  ChecklistTaskRecord as RuntimeChecklistTaskRecord,
+  ChecklistTemplateRecord as RuntimeChecklistTemplateRecord,
+} from "@reticulum/node-client";
 
 export type ChecklistSegment = "live" | "templates";
 export type ChecklistStatus = "active" | "late" | "completed";
@@ -25,6 +30,17 @@ export interface ChecklistTask {
   status: ChecklistTaskStatus;
   metaLabel: string;
   metaTone: ChecklistTaskMetaTone;
+  primaryColumnUid: string;
+  rowBackgroundColor?: string;
+  lineBreakEnabled: boolean;
+  cells: ChecklistTaskCell[];
+}
+
+export interface ChecklistTaskCell {
+  columnUid: string;
+  label: string;
+  value: string;
+  editable: boolean;
 }
 
 export interface ChecklistDetail {
@@ -38,35 +54,167 @@ export interface ChecklistDetail {
   tasks: ChecklistTask[];
 }
 
-const liveChecklists = ref<ChecklistRecord[]>([]);
-const templateChecklists = ref<ChecklistRecord[]>([]);
-const checklistDetails = ref<Record<string, ChecklistDetail>>({});
-
-export function getChecklistRecords(segment: ChecklistSegment): ChecklistRecord[] {
-  return segment === "templates" ? templateChecklists.value : liveChecklists.value;
+export function formatChecklistTimestamp(value?: string): string {
+  if (!value) {
+    return "No schedule";
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
 }
 
-export function getChecklistRecordById(checklistId: string): ChecklistRecord | undefined {
-  return [...liveChecklists.value, ...templateChecklists.value].find((record) => record.id === checklistId);
+export function checklistStatusFromRuntime(value: string): ChecklistStatus {
+  if (value === "LATE") {
+    return "late";
+  }
+  if (value === "COMPLETE" || value === "COMPLETE_LATE") {
+    return "completed";
+  }
+  return "active";
 }
 
-export function getChecklistDetailById(checklistId: string): ChecklistDetail | undefined {
-  return checklistDetails.value[checklistId];
+export function checklistTaskStatusFromRuntime(value: string): ChecklistTaskStatus {
+  if (value === "LATE") {
+    return "late";
+  }
+  if (value === "COMPLETE" || value === "COMPLETE_LATE") {
+    return "completed";
+  }
+  return "pending";
 }
 
-export function addLocalChecklist(record: ChecklistRecord): void {
-  liveChecklists.value = [record, ...liveChecklists.value];
-  checklistDetails.value = {
-    ...checklistDetails.value,
-    [record.id]: {
-      id: record.id,
-      heroTitle: record.title,
-      heroSubtitle: record.subtitle,
-      progress: record.progress,
-      progressLabel: `${record.progress}% complete`,
-      pendingLabel: record.statusCountLabel,
-      tasksHeading: "Tasks",
-      tasks: [],
-    },
+function findTaskValue(task: RuntimeChecklistTaskRecord, columnUid: string): string | undefined {
+  return task.cells.find((cell) => cell.columnUid === columnUid)?.value;
+}
+
+function findPrimaryTaskColumnUid(task: RuntimeChecklistTaskRecord): string {
+  if (task.cells.some((cell) => cell.columnUid === "col-task")) {
+    return "col-task";
+  }
+  if (task.cells.some((cell) => cell.columnUid === "col-item")) {
+    return "col-item";
+  }
+  return task.cells.find((cell) => typeof cell.value === "string" && cell.value.trim())?.columnUid
+    ?? task.cells[0]?.columnUid
+    ?? "col-task";
+}
+
+function runtimeChecklistCellsToUi(
+  task: RuntimeChecklistTaskRecord,
+  columns: RuntimeChecklistColumnRecord[],
+): ChecklistTaskCell[] {
+  const sortedColumns = [...columns].sort((left, right) => left.displayOrder - right.displayOrder);
+  return sortedColumns.map((column) => ({
+    columnUid: column.columnUid,
+    label: column.columnName,
+    value: findTaskValue(task, column.columnUid) ?? "",
+    editable: column.columnEditable,
+  }));
+}
+
+export function runtimeChecklistTaskToUi(
+  task: RuntimeChecklistTaskRecord,
+  columns: RuntimeChecklistColumnRecord[] = [],
+): ChecklistTask {
+  const status = checklistTaskStatusFromRuntime(task.taskStatus);
+  const title = findTaskValue(task, "col-task")
+    ?? findTaskValue(task, "col-item")
+    ?? task.legacyValue
+    ?? `Task ${task.number}`;
+  const description = findTaskValue(task, "col-description")
+    ?? findTaskValue(task, "col-category")
+    ?? task.notes
+    ?? "No additional task details.";
+  let metaLabel = "Pending action";
+  if (status === "completed") {
+    metaLabel = task.completedAt
+      ? `Completed ${formatChecklistTimestamp(task.completedAt)}`
+      : "Completed";
+  } else if (status === "late") {
+    metaLabel = "Action overdue";
+  } else if (task.dueDtg) {
+    metaLabel = `Due ${formatChecklistTimestamp(task.dueDtg)}`;
+  } else if (typeof task.dueRelativeMinutes === "number") {
+    metaLabel = `${task.dueRelativeMinutes} min window`;
+  }
+
+  return {
+    id: task.taskUid,
+    title,
+    description,
+    status,
+    metaLabel,
+    metaTone: status === "completed" ? "done" : status === "late" ? "alert" : "clock",
+    primaryColumnUid: findPrimaryTaskColumnUid(task),
+    rowBackgroundColor: task.rowBackgroundColor ?? undefined,
+    lineBreakEnabled: task.lineBreakEnabled ?? false,
+    cells: runtimeChecklistCellsToUi(task, columns),
+  };
+}
+
+export function runtimeChecklistToUi(record: RuntimeChecklistRecord): ChecklistRecord {
+  const status = checklistStatusFromRuntime(record.checklistStatus);
+  return {
+    id: record.uid,
+    title: record.name,
+    subtitle: record.description || "Checklist package",
+    status,
+    progress: Math.round(record.progressPercent),
+    statusCountLabel:
+      status === "completed"
+        ? `${record.counts.completeCount} completed`
+        : record.counts.lateCount > 0
+          ? `${record.counts.lateCount} late`
+          : `${record.counts.pendingCount} pending`,
+    scheduledAt: formatChecklistTimestamp(record.startTime ?? record.updatedAt),
+    teamLabel: record.missionUid ?? "Emergency Preparedness",
+    compatibilityLabel: record.templateName ?? "RCH compatible",
+  };
+}
+
+export function runtimeTemplateToUi(record: RuntimeChecklistTemplateRecord): ChecklistRecord {
+  return {
+    id: record.uid,
+    title: record.name,
+    subtitle: record.description || "Template",
+    status: "active",
+    progress: 0,
+    statusCountLabel: `${record.tasks.length} tasks`,
+    scheduledAt: formatChecklistTimestamp(record.updatedAt),
+    teamLabel: "Template Library",
+    compatibilityLabel: record.originType === "CSV_IMPORT" ? "CSV template" : "Default REM template",
+  };
+}
+
+export function runtimeChecklistDetailToUi(record: RuntimeChecklistRecord): ChecklistDetail {
+  return {
+    id: record.uid,
+    heroTitle: record.name,
+    heroSubtitle: record.description || "Emergency preparedness checklist",
+    progress: Math.round(record.progressPercent),
+    progressLabel: `${Math.round(record.progressPercent)}% complete`,
+    pendingLabel: `${record.counts.pendingCount} pending | ${record.counts.lateCount} late | ${record.counts.completeCount} done`,
+    tasksHeading: "Tasks",
+    tasks: record.tasks.map((task) => runtimeChecklistTaskToUi(task, record.columns)),
+  };
+}
+
+export function runtimeTemplateDetailToUi(record: RuntimeChecklistTemplateRecord): ChecklistDetail {
+  return {
+    id: record.uid,
+    heroTitle: record.name,
+    heroSubtitle: record.description || "Checklist template",
+    progress: 0,
+    progressLabel: `${record.tasks.length} template tasks`,
+    pendingLabel: "Template preview",
+    tasksHeading: "Template Tasks",
+    tasks: record.tasks.map((task) => runtimeChecklistTaskToUi(task, record.columns)),
   };
 }

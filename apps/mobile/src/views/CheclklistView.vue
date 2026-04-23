@@ -1,22 +1,27 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import { useChecklistsStore } from "../stores/checklistsStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
-  addLocalChecklist,
-  getChecklistRecords,
+  runtimeChecklistToUi,
+  runtimeTemplateToUi,
   type ChecklistFilter,
   type ChecklistSegment,
   type ChecklistStatus,
 } from "../utils/checklists";
 
 const nodeStore = useNodeStore();
+const checklistsStore = useChecklistsStore();
 const router = useRouter();
 const activeSegment = ref<ChecklistSegment>("live");
 const activeFilter = ref<ChecklistFilter>("all");
 const expandedChecklistIds = ref<string[]>([]);
 const isCreateFormVisible = ref(false);
+const selectedTemplateId = ref("");
+const importFileInput = ref<HTMLInputElement | null>(null);
+const isMutating = ref(false);
 
 function createDefaultChecklistFormState(): {
   title: string;
@@ -33,7 +38,12 @@ function createDefaultChecklistFormState(): {
 }
 
 const createForm = reactive(createDefaultChecklistFormState());
-const checklistRecords = computed(() => getChecklistRecords(activeSegment.value));
+const checklistRecords = computed(() =>
+  activeSegment.value === "templates"
+    ? checklistsStore.templates.map(runtimeTemplateToUi)
+    : checklistsStore.live.map(runtimeChecklistToUi),
+);
+const templateRecords = computed(() => checklistsStore.templates.map(runtimeTemplateToUi));
 const hasChecklistRecords = computed(() => checklistRecords.value.length > 0);
 const emptyStateTitle = computed(() =>
   activeSegment.value === "templates" ? "No checklist templates available." : "No checklists available.",
@@ -133,33 +143,38 @@ function toggleCreateForm(): void {
   isCreateFormVisible.value = !isCreateFormVisible.value;
 }
 
-function createChecklist(): void {
+async function ensureChecklistData(segment?: ChecklistSegment): Promise<void> {
+  if (!segment || segment === "live") {
+    await checklistsStore.refreshLive();
+  }
+  if (!segment || segment === "templates") {
+    await checklistsStore.refreshTemplates();
+  }
+  if (!selectedTemplateId.value && templateRecords.value.length > 0) {
+    selectedTemplateId.value = templateRecords.value[0]?.id ?? "";
+  }
+}
+
+async function createChecklist(): Promise<void> {
   const title = createForm.title.trim();
-  if (!title) {
+  if (!title || !selectedTemplateId.value || isMutating.value) {
     return;
   }
-
-  addLocalChecklist({
-    id: `local-${Date.now()}`,
-    title,
-    subtitle: createForm.subtitle.trim() || "New task list",
-    status: "active",
-    progress: 0,
-    statusCountLabel: "0 pending",
-    scheduledAt: createForm.scheduledAt.trim() || new Intl.DateTimeFormat(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date()),
-    teamLabel: createForm.teamLabel.trim() || "Task Group",
-    compatibilityLabel: "RCH compatible",
-  });
-
-  activeSegment.value = "live";
-  resetCreateForm();
-  isCreateFormVisible.value = false;
+  isMutating.value = true;
+  try {
+    await checklistsStore.createFromTemplate({
+      templateUid: selectedTemplateId.value,
+      missionUid: createForm.teamLabel.trim() || undefined,
+      name: title,
+      description: createForm.subtitle.trim() || "Emergency preparedness checklist",
+      startTime: createForm.scheduledAt.trim() || new Date().toISOString(),
+    });
+    activeSegment.value = "live";
+    resetCreateForm();
+    isCreateFormVisible.value = false;
+  } finally {
+    isMutating.value = false;
+  }
 }
 
 function isMetadataExpanded(checklistId: string): boolean {
@@ -177,6 +192,35 @@ function toggleMetadata(checklistId: string): void {
 function openChecklist(checklistId: string): void {
   void router.push({ name: "checlklist-detail", params: { checklistId } });
 }
+
+function triggerTemplateUpload(): void {
+  importFileInput.value?.click();
+}
+
+async function handleTemplateUpload(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || isMutating.value) {
+    return;
+  }
+  isMutating.value = true;
+  try {
+    await checklistsStore.importTemplateCsv(file);
+    activeSegment.value = "templates";
+    await ensureChecklistData("templates");
+  } finally {
+    input.value = "";
+    isMutating.value = false;
+  }
+}
+
+watch(activeSegment, (segment) => {
+  void ensureChecklistData(segment);
+});
+
+onMounted(() => {
+  void ensureChecklistData();
+});
 </script>
 
 <template>
@@ -227,8 +271,8 @@ function openChecklist(checklistId: string): void {
         <input
           v-model="createForm.teamLabel"
           type="text"
-          placeholder="Assigned team"
-          aria-label="Assigned team"
+          placeholder="Assignment label (optional)"
+          aria-label="Assignment label"
         />
         <input
           v-model="createForm.scheduledAt"
@@ -236,6 +280,14 @@ function openChecklist(checklistId: string): void {
           placeholder="Schedule"
           aria-label="Checklist schedule"
         />
+        <select v-model="selectedTemplateId" aria-label="Checklist template">
+          <option value="" disabled>
+            Select template
+          </option>
+          <option v-for="template in templateRecords" :key="template.id" :value="template.id">
+            {{ template.title }}
+          </option>
+        </select>
         <div class="create-form-actions">
           <button
             type="button"
@@ -245,15 +297,22 @@ function openChecklist(checklistId: string): void {
           >
             Templates
           </button>
-          <button type="button" class="upload-chip">
+          <button type="button" class="upload-chip" :disabled="isMutating" @click="triggerTemplateUpload">
             Upload
           </button>
-          <button type="submit" class="create-submit">
+          <button type="submit" class="create-submit" :disabled="isMutating || !selectedTemplateId">
             Create checklist
           </button>
         </div>
       </div>
     </form>
+    <input
+      ref="importFileInput"
+      type="file"
+      accept=".csv,text/csv"
+      class="sr-only"
+      @change="handleTemplateUpload"
+    />
 
     <section v-if="hasChecklistRecords" class="summary-panel">
       <div class="summary-grid">

@@ -5,6 +5,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import logoUrl from "./assets/rem-logo.png";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
+import { useChecklistsStore } from "./stores/checklistsStore";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagingStore } from "./stores/messagingStore";
 import { useMessagesStore } from "./stores/messagesStore";
@@ -16,6 +17,7 @@ const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
+const checklistsStore = useChecklistsStore();
 const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
@@ -44,11 +46,13 @@ onMounted(async () => {
 
     messagesStore.init();
     eventsStore.init();
+    checklistsStore.init();
     telemetryStore.init();
     await sosStore.init();
 
     messagesStore.initReplication();
     eventsStore.initReplication();
+    checklistsStore.initReplication();
     telemetryStore.initReplication();
     await telemetryStore.requestStartupPermission();
   } catch (error: unknown) {

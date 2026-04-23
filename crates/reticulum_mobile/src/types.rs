@@ -774,6 +774,46 @@ pub struct ChecklistRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTemplateRecord {
+    pub uid: String,
+    pub name: String,
+    pub description: String,
+    pub version: u32,
+    pub origin_type: ChecklistOriginType,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub source_filename: Option<String>,
+    pub columns: Vec<ChecklistColumnRecord>,
+    pub tasks: Vec<ChecklistTaskRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTemplateListRequest {
+    pub search: Option<String>,
+    pub sort_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistTemplateImportCsvRequest {
+    pub template_uid: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub csv_text: String,
+    pub source_filename: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistCreateFromTemplateRequest {
+    pub checklist_uid: Option<String>,
+    pub mission_uid: Option<String>,
+    pub template_uid: String,
+    pub name: String,
+    pub description: String,
+    pub start_time: String,
+    pub created_by_team_member_rns_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistListActiveRequest {
     pub search: Option<String>,
     pub sort_by: Option<String>,
