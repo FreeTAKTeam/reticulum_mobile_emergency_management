@@ -1762,6 +1762,21 @@ export const useNodeStore = defineStore("node", () => {
     return latest;
   }
 
+  async function syncRuntimeSnapshot(reason: string): Promise<void> {
+    const nextStatus = await refreshStatusSnapshot(2, 250);
+    if (!nextStatus.running) {
+      appendLog("Debug", `[startup] native runtime snapshot idle after ${reason}.`);
+      return;
+    }
+
+    await refreshMessagingState();
+    await refreshAnnounceState();
+    await refreshOperationalSummaryProjection();
+    await configureClientLogging();
+    await refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+    appendLog("Debug", `[startup] native runtime snapshot restored after ${reason}.`);
+  }
+
   async function refreshMessagingState(): Promise<void> {
     if (!client.value || !status.value.running) {
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
@@ -1813,6 +1828,7 @@ export const useNodeStore = defineStore("node", () => {
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
       ]);
+      await syncRuntimeSnapshot("client init");
       if (presenceTickerId === null) {
         presenceTickerId = window.setInterval(() => {
           presenceNow.value = nowMs();
