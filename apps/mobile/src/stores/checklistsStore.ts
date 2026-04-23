@@ -8,6 +8,11 @@ import {
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
+import {
+  notifyOperationalUpdateOnce,
+  primeOperationalNotificationScope,
+  truncateNotificationBody,
+} from "../services/operationalNotifications";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -16,6 +21,15 @@ type ProjectionClientCache = typeof globalThis & {
 };
 
 type RuntimeChecklistDetailRecord = RuntimeChecklistRecord | RuntimeChecklistTemplateRecord;
+type ChecklistNotificationWork = {
+  key: string;
+  title: string;
+  body: string;
+  route: string;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+const CHECKLIST_NOTIFICATION_DEBOUNCE_MS = 2_000;
 
 function getProjectionClient(clientMode: "auto" | "capacitor"): ReticulumNodeClient {
   const cache = globalThis as ProjectionClientCache;
@@ -41,6 +55,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
   const detailById = ref<Record<string, RuntimeChecklistDetailRecord | null>>({});
   const initialized = ref(false);
   const replicationInitialized = ref(false);
+  const notificationsPrimed = ref(false);
   const loadingLive = ref(false);
   const loadingTemplates = ref(false);
   const loadingDetailIds = ref<Record<string, boolean>>({});
@@ -49,6 +64,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   let refreshLivePromise: Promise<void> | null = null;
   let refreshTemplatesPromise: Promise<void> | null = null;
+  const pendingChecklistNotifications = new Map<string, ChecklistNotificationWork>();
   const detailPromises = new Map<string, Promise<void>>();
 
   function client(): ReticulumNodeClient {
@@ -60,6 +76,72 @@ export const useChecklistsStore = defineStore("checklists", () => {
       ...loadingDetailIds.value,
       [checklistUid]: value,
     };
+  }
+
+  function latestChecklistChangeStamp(record: RuntimeChecklistRecord): string {
+    const stamps = [
+      record.updatedAt,
+      record.uploadedAt,
+      record.deletedAt,
+    ].filter((value): value is string => Boolean(value?.trim()));
+    return stamps.reduce((latest, value) => (value > latest ? value : latest), "");
+  }
+
+  function checklistNotificationKey(record: RuntimeChecklistRecord): string {
+    return `${record.uid}:${latestChecklistChangeStamp(record)}`;
+  }
+
+  function checklistNotificationBody(record: RuntimeChecklistRecord): string {
+    const counts = record.counts ?? { pendingCount: 0, completeCount: 0, lateCount: 0 };
+    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+    const summary = `${counts.pendingCount} pending, ${counts.completeCount} complete`;
+    const late = counts.lateCount > 0 ? `, ${counts.lateCount} late` : "";
+    const taskCount = tasks.length === 1 ? "1 task" : `${tasks.length} tasks`;
+    return truncateNotificationBody(`${summary}${late} across ${taskCount}`);
+  }
+
+  function queueChecklistNotification(record: RuntimeChecklistRecord): void {
+    const key = checklistNotificationKey(record);
+    if (!key.trim()) {
+      return;
+    }
+    const existing = pendingChecklistNotifications.get(record.uid);
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+    const work: ChecklistNotificationWork = {
+      key,
+      title: `Checklist updated: ${record.name || "Checklist"}`,
+      body: checklistNotificationBody(record),
+      route: `/checlklist/${record.uid}`,
+      timer: setTimeout(() => {
+        pendingChecklistNotifications.delete(record.uid);
+        void notifyOperationalUpdateOnce(
+          "checklist",
+          work.key,
+          work.title,
+          work.body,
+          { route: work.route },
+        );
+      }, CHECKLIST_NOTIFICATION_DEBOUNCE_MS),
+    };
+    pendingChecklistNotifications.set(record.uid, work);
+  }
+
+  async function notifyForChecklistChanges(records: RuntimeChecklistRecord[]): Promise<void> {
+    const activeRecords = records.filter((record) => record && !record.deletedAt);
+    if (!notificationsPrimed.value) {
+      primeOperationalNotificationScope(
+        "checklist",
+        activeRecords.map((record) => checklistNotificationKey(record)),
+      );
+      notificationsPrimed.value = true;
+      return;
+    }
+
+    for (const record of activeRecords) {
+      queueChecklistNotification(record);
+    }
   }
 
   async function refreshLive(): Promise<void> {
@@ -76,6 +158,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
           ...detailById.value,
           ...Object.fromEntries(records.map((record) => [record.uid, record])),
         };
+        await notifyForChecklistChanges(records);
       } finally {
         loadingLive.value = false;
       }
@@ -305,13 +388,11 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   async function deleteChecklist(checklistUid: string): Promise<void> {
     await client().deleteChecklist(checklistUid);
-    if (!supportsNativeNodeRuntime) {
-      await refreshLive();
-      detailById.value = {
-        ...detailById.value,
-        [checklistUid]: null,
-      };
-    }
+    await refreshLive();
+    detailById.value = {
+      ...detailById.value,
+      [checklistUid]: null,
+    };
   }
 
   async function uploadChecklist(checklistUid: string): Promise<void> {

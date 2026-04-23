@@ -118,7 +118,7 @@ export function registerNotificationNavigationHandler(
 }
 
 export async function initAppNotifications(): Promise<void> {
-  await ensureNotificationsReady();
+  await ensureNotificationsReady().catch(() => false);
 }
 
 export async function notifyOperationalUpdate(
@@ -126,7 +126,7 @@ export async function notifyOperationalUpdate(
   body: string,
   extra: NotificationExtra = {},
 ): Promise<void> {
-  if (!(await ensureNotificationsReady())) {
+  if (!(await ensureNotificationsReady().catch(() => false))) {
     return;
   }
 

@@ -22,6 +22,7 @@ const isCreateFormVisible = ref(false);
 const selectedTemplateId = ref("");
 const importFileInput = ref<HTMLInputElement | null>(null);
 const isMutating = ref(false);
+const deletingChecklistIds = ref<string[]>([]);
 
 function createDefaultChecklistFormState(): {
   title: string;
@@ -193,6 +194,26 @@ function openChecklist(checklistId: string): void {
   void router.push({ name: "checlklist-detail", params: { checklistId } });
 }
 
+function isDeletingChecklist(checklistId: string): boolean {
+  return deletingChecklistIds.value.includes(checklistId);
+}
+
+async function deleteChecklist(checklistId: string, title: string): Promise<void> {
+  if (activeSegment.value !== "live" || isDeletingChecklist(checklistId)) {
+    return;
+  }
+  if (!window.confirm(`Delete checklist "${title}"?`)) {
+    return;
+  }
+  deletingChecklistIds.value = [...deletingChecklistIds.value, checklistId];
+  try {
+    await checklistsStore.deleteChecklist(checklistId);
+    expandedChecklistIds.value = expandedChecklistIds.value.filter((id) => id !== checklistId);
+  } finally {
+    deletingChecklistIds.value = deletingChecklistIds.value.filter((id) => id !== checklistId);
+  }
+}
+
 function triggerTemplateUpload(): void {
   importFileInput.value?.click();
 }
@@ -354,34 +375,53 @@ onMounted(() => {
         class="checklist-card"
         :class="statusCardClass(record.status)"
       >
-        <button
-          type="button"
-          class="card-primary"
-          :aria-label="`Open ${record.title}`"
-          @click="openChecklist(record.id)"
-        >
+        <div class="card-primary">
           <div class="card-topline">
-            <div class="card-icon" aria-hidden="true">
-              <svg v-if="record.status === 'completed'" viewBox="0 0 24 24" fill="none">
-                <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
-                <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
-                <path d="m9.5 13 2 2 4-5" />
-              </svg>
-              <svg v-else viewBox="0 0 24 24" fill="none">
-                <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
-                <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
-                <path d="M9.5 10h5" />
-                <path d="M9.5 13.5h5" />
-                <path d="M9.5 17h5" />
-              </svg>
-            </div>
+            <button
+              type="button"
+              class="card-open card-heading-action"
+              :aria-label="`Open ${record.title}`"
+              @click="openChecklist(record.id)"
+            >
+              <div class="card-icon" aria-hidden="true">
+                <svg v-if="record.status === 'completed'" viewBox="0 0 24 24" fill="none">
+                  <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
+                  <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
+                  <path d="m9.5 13 2 2 4-5" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" fill="none">
+                  <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
+                  <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
+                  <path d="M9.5 10h5" />
+                  <path d="M9.5 13.5h5" />
+                  <path d="M9.5 17h5" />
+                </svg>
+              </div>
 
-            <div class="card-heading">
-              <h2>{{ record.title }}</h2>
-              <p>{{ record.subtitle }}</p>
-            </div>
+              <div class="card-heading">
+                <h2>{{ record.title }}</h2>
+                <p>{{ record.subtitle }}</p>
+              </div>
+            </button>
 
             <div class="card-top-actions">
+              <button
+                v-if="activeSegment === 'live'"
+                class="action delete"
+                type="button"
+                :aria-label="`Delete ${record.title}`"
+                title="Delete"
+                :disabled="isDeletingChecklist(record.id)"
+                @click="deleteChecklist(record.id, record.title)"
+              >
+                <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6l-1 14H6L5 6" />
+                  <path d="M10 11v5" />
+                  <path d="M14 11v5" />
+                </svg>
+              </button>
               <span class="status-pill" :class="statusCardClass(record.status)">
                 {{ statusLabel(record.status) }}
               </span>
@@ -389,15 +429,22 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="progress-copy">
-            <span>{{ record.progress }}% complete</span>
-            <span>{{ record.statusCountLabel }}</span>
-          </div>
+          <button
+            type="button"
+            class="card-open card-progress-action"
+            :aria-label="`Open ${record.title}`"
+            @click="openChecklist(record.id)"
+          >
+            <div class="progress-copy">
+              <span>{{ record.progress }}% complete</span>
+              <span>{{ record.statusCountLabel }}</span>
+            </div>
 
-          <div class="progress-track" aria-hidden="true">
-            <div class="progress-fill" :style="{ width: `${record.progress}%` }"></div>
-          </div>
-        </button>
+            <div class="progress-track" aria-hidden="true">
+              <div class="progress-fill" :style="{ width: `${record.progress}%` }"></div>
+            </div>
+          </button>
+        </div>
 
         <div class="card-footer">
           <button
@@ -816,18 +863,23 @@ onMounted(() => {
 }
 
 .card-primary {
+  color: inherit;
+  display: grid;
+  gap: 1rem;
+  width: 100%;
+}
+
+.card-open {
   background: none;
   border: 0;
   color: inherit;
   cursor: pointer;
-  display: grid;
-  gap: 1rem;
   padding: 0;
   text-align: left;
   width: 100%;
 }
 
-.card-primary:focus-visible {
+.card-open:focus-visible {
   border-radius: 14px;
   outline: 2px solid rgb(111 219 255 / 70%);
   outline-offset: 3px;
@@ -836,8 +888,19 @@ onMounted(() => {
 .card-topline {
   display: grid;
   gap: 1rem;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
+}
+
+.card-heading-action {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.card-progress-action {
+  display: grid;
+  gap: 1rem;
 }
 
 .card-icon {
@@ -880,6 +943,40 @@ onMounted(() => {
   align-items: center;
   display: inline-flex;
   gap: 0.9rem;
+}
+
+.action {
+  align-items: center;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+}
+
+.action-icon {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
+}
+
+.delete {
+  background: rgb(53 15 25 / 70%);
+  border: 1px solid rgb(255 70 91 / 84%);
+  box-shadow: 0 0 16px rgb(255 72 104 / 24%);
+  color: #ff7b89;
+}
+
+.action:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .status-pill.status-active,
@@ -1093,11 +1190,10 @@ onMounted(() => {
   }
 
   .card-topline {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: 1fr;
   }
 
   .card-top-actions {
-    grid-column: 1 / -1;
     justify-content: space-between;
   }
 

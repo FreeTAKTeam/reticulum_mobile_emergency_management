@@ -892,19 +892,32 @@ fn checklist_topics_from_args(args: &JsonMap<String, JsonValue>) -> Vec<String> 
     topics
 }
 
+fn checklist_subject_part(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
+    checklist_key_arg(args, key)
+        .map(|value| sanitize_correlation_token(value.as_str()))
+        .filter(|value| !value.is_empty())
+}
+
 fn checklist_subject_token(command_type: &str, args: &JsonMap<String, JsonValue>) -> String {
-    for key in [
-        "column_uid",
-        "task_uid",
-        "checklist_uid",
-        "mission_uid",
-        "template_uid",
-    ] {
-        if let Some(value) = checklist_key_arg(args, key) {
-            let sanitized = sanitize_correlation_token(value.as_str());
-            if !sanitized.is_empty() {
-                return sanitized;
-            }
+    let checklist_uid = checklist_subject_part(args, "checklist_uid");
+    let task_uid = checklist_subject_part(args, "task_uid");
+    let column_uid = checklist_subject_part(args, "column_uid");
+    if task_uid.is_some() || column_uid.is_some() {
+        let parts = [
+            checklist_uid.as_deref(),
+            task_uid.as_deref(),
+            column_uid.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !parts.is_empty() {
+            return parts.join("-");
+        }
+    }
+    for key in ["checklist_uid", "mission_uid", "template_uid"] {
+        if let Some(sanitized) = checklist_subject_part(args, key) {
+            return sanitized;
         }
     }
     sanitize_correlation_token(command_type)
@@ -1001,6 +1014,7 @@ fn build_checklist_command_fields_with_snapshot(
         .into_iter()
         .map(MsgPackValue::from)
         .collect::<Vec<_>>();
+    let snapshot_entry = checklist_snapshot_msgpack_entry(snapshot_json)?;
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![msgpack_map(vec![
@@ -1026,10 +1040,18 @@ fn build_checklist_command_fields_with_snapshot(
                 "args",
                 json_value_to_msgpack(&JsonValue::Object(args.clone()))?,
             ),
-            ("snapshot_json", MsgPackValue::from(snapshot_json)),
+            snapshot_entry,
         ])]),
     )]);
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+}
+
+fn checklist_snapshot_msgpack_entry(
+    snapshot_json: &str,
+) -> Result<(&'static str, MsgPackValue), NodeError> {
+    let snapshot_value = serde_json::from_str::<JsonValue>(snapshot_json)
+        .map_err(|_| NodeError::InternalError {})?;
+    Ok(("snapshot", json_value_to_msgpack(&snapshot_value)?))
 }
 
 fn build_checklist_replication_payload(
@@ -1087,6 +1109,11 @@ fn build_checklist_replication_payload_with_snapshot(
 fn checklist_create_online_args_json(
     request: &ChecklistCreateOnlineRequest,
 ) -> Result<JsonMap<String, JsonValue>, NodeError> {
+    let checklist_uid = request
+        .checklist_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let name = request.name.trim();
     if name.is_empty() {
         return Err(NodeError::InvalidConfig {});
@@ -1113,9 +1140,47 @@ fn checklist_create_online_args_json(
         "start_time": start_time,
     });
     match value {
-        JsonValue::Object(map) => Ok(map),
+        JsonValue::Object(mut map) => {
+            if let Some(checklist_uid) = checklist_uid {
+                map.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+            }
+            Ok(map)
+        }
         _ => Err(NodeError::InternalError {}),
     }
+}
+
+fn append_checklist_create_snapshot_args(
+    args: &mut JsonMap<String, JsonValue>,
+    checklist: &ChecklistRecord,
+) -> Result<(), NodeError> {
+    let JsonValue::Object(snapshot) =
+        serde_json::to_value(checklist).map_err(|_| NodeError::InternalError {})?
+    else {
+        return Err(NodeError::InternalError {});
+    };
+    for key in [
+        "columns",
+        "tasks",
+        "participant_rns_identities",
+        "feed_publications",
+        "created_at",
+        "created_by_team_member_rns_identity",
+        "updated_at",
+        "uploaded_at",
+        "template_name",
+        "template_version",
+        "sync_state",
+        "origin_type",
+        "checklist_status",
+        "progress_percent",
+        "counts",
+    ] {
+        if let Some(value) = snapshot.get(key) {
+            args.insert(key.to_string(), value.clone());
+        }
+    }
+    Ok(())
 }
 
 fn checklist_update_args_json(request: &ChecklistUpdateRequest) -> JsonMap<String, JsonValue> {
@@ -2660,7 +2725,6 @@ impl Node {
                         .created_by_team_member_rns_identity
                         .clone(),
                 };
-                let create_args = checklist_create_online_args_json(&create_request)?;
                 let upload_args = checklist_uid_args_json(checklist_uid.as_str());
                 let mut snapshot = inner
                     .app_state
@@ -2676,6 +2740,8 @@ impl Node {
                 }
                 let snapshot_json =
                     serde_json::to_string(&snapshot).map_err(|_| NodeError::InternalError {})?;
+                let mut create_args = checklist_create_online_args_json(&create_request)?;
+                append_checklist_create_snapshot_args(&mut create_args, &snapshot)?;
                 let peers = inner
                     .peers_snapshot
                     .lock()
@@ -2800,12 +2866,17 @@ impl Node {
                 .filter(|value| !value.is_empty())
                 .ok_or(NodeError::InvalidConfig {})?
                 .to_string();
-            let args = checklist_create_online_args_json(&request)?;
+            let mut args = checklist_create_online_args_json(&request)?;
             let command_id = format!("cmd-{checklist_uid}");
             let invalidations = inner.app_state.create_online_checklist(&request)?;
             for invalidation in invalidations {
                 emit_projection_invalidation(&inner.bus, invalidation);
             }
+            let checklist = inner
+                .app_state
+                .get_checklist_any(checklist_uid.as_str())?
+                .ok_or(NodeError::InternalError {})?;
+            append_checklist_create_snapshot_args(&mut args, &checklist)?;
 
             if inner.cmd_tx.is_some() {
                 let peers = inner
@@ -4638,6 +4709,142 @@ mod tests {
             ]),
         )]);
         rmp_serde::to_vec(&fields).expect("msgpack event fields")
+    }
+
+    #[test]
+    fn checklist_upload_snapshot_uses_native_msgpack_map() {
+        let snapshot_json =
+            r#"{"uid":"chk-native","name":"Native","tasks":[{"task_uid":"task-1","number":1}]}"#;
+        let (snapshot_key, snapshot_value) =
+            checklist_snapshot_msgpack_entry(snapshot_json).expect("snapshot msgpack");
+
+        assert_eq!(snapshot_key, "snapshot");
+        assert!(matches!(snapshot_value, MsgPackValue::Map(_)));
+    }
+
+    #[test]
+    fn checklist_create_args_include_full_snapshot() {
+        let checklist = ChecklistRecord {
+            uid: "chk-hydrate".to_string(),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: None,
+            template_version: None,
+            template_name: None,
+            name: "Hydrate".to_string(),
+            description: String::new(),
+            start_time: None,
+            mode: crate::types::ChecklistMode::Online {},
+            sync_state: crate::types::ChecklistSyncState::Synced {},
+            origin_type: crate::types::ChecklistOriginType::RchTemplate {},
+            checklist_status: crate::types::ChecklistTaskStatus::Pending {},
+            created_at: Some("2026-04-23T12:00:00Z".to_string()),
+            created_by_team_member_rns_identity: "peer-a".to_string(),
+            updated_at: Some("2026-04-23T12:00:00Z".to_string()),
+            deleted_at: None,
+            uploaded_at: Some("2026-04-23T12:00:00Z".to_string()),
+            participant_rns_identities: vec!["peer-a".to_string()],
+            progress_percent: 0.0,
+            counts: crate::types::ChecklistStatusCounts {
+                pending_count: 1,
+                late_count: 0,
+                complete_count: 0,
+            },
+            columns: vec![crate::types::ChecklistColumnRecord {
+                column_uid: "col-item".to_string(),
+                column_name: "Item".to_string(),
+                display_order: 0,
+                column_type: crate::types::ChecklistColumnType::ShortString {},
+                column_editable: true,
+                background_color: None,
+                text_color: None,
+                is_removable: true,
+                system_key: None,
+            }],
+            tasks: vec![crate::types::ChecklistTaskRecord {
+                task_uid: "task-1".to_string(),
+                number: 1,
+                user_status: crate::types::ChecklistUserTaskStatus::Pending {},
+                task_status: crate::types::ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: Some("2026-04-23T12:00:00Z".to_string()),
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: None,
+                due_dtg: None,
+                notes: None,
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some("Water".to_string()),
+                cells: vec![crate::types::ChecklistCellRecord {
+                    cell_uid: "task-1:col-item".to_string(),
+                    task_uid: "task-1".to_string(),
+                    column_uid: "col-item".to_string(),
+                    value: Some("Water".to_string()),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                }],
+            }],
+            feed_publications: Vec::new(),
+        };
+        let mut create_args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+            checklist_uid: Some(checklist.uid.clone()),
+            mission_uid: checklist.mission_uid.clone(),
+            template_uid: "tmpl-hydrate".to_string(),
+            name: checklist.name.clone(),
+            description: checklist.description.clone(),
+            start_time: "2026-04-23T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some(
+                checklist.created_by_team_member_rns_identity.clone(),
+            ),
+        })
+        .expect("create args");
+        append_checklist_create_snapshot_args(&mut create_args, &checklist)
+            .expect("append create snapshot");
+        assert_eq!(
+            create_args.get("checklist_uid").and_then(JsonValue::as_str),
+            Some("chk-hydrate")
+        );
+        assert_eq!(
+            create_args
+                .get("columns")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            create_args
+                .get("tasks")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn checklist_cell_subject_includes_task_and_column() {
+        let task_one_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-hydrate".to_string(),
+            task_uid: "task-1".to_string(),
+            column_uid: "col-description".to_string(),
+            value: "Reliable ignition source".to_string(),
+            updated_by_team_member_rns_identity: None,
+        });
+        let task_two_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-hydrate".to_string(),
+            task_uid: "task-2".to_string(),
+            column_uid: "col-description".to_string(),
+            value: "Hands-free lighting".to_string(),
+            updated_by_team_member_rns_identity: None,
+        });
+
+        let task_one_subject = checklist_subject_token("checklist.task.cell.set", &task_one_args);
+        let task_two_subject = checklist_subject_token("checklist.task.cell.set", &task_two_args);
+
+        assert_eq!(task_one_subject, "chk-hydrate-task-1-col-description");
+        assert_eq!(task_two_subject, "chk-hydrate-task-2-col-description");
+        assert_ne!(task_one_subject, task_two_subject);
     }
 
     async fn start_node_pair(test_name: &str) -> (TcpRelayHandle, Node, Node) {
@@ -7113,7 +7320,10 @@ mod tests {
             args.get("start_time").and_then(JsonValue::as_str),
             Some("2026-04-22T12:00:00Z")
         );
-        assert!(!args.contains_key("checklist_uid"));
+        assert_eq!(
+            args.get("checklist_uid").and_then(JsonValue::as_str),
+            Some("chk-001")
+        );
     }
 
     #[test]
