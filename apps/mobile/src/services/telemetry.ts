@@ -1,5 +1,7 @@
 import { Capacitor } from "@capacitor/core";
 
+import { telemetryLocationPlugin } from "./telemetryLocationPlugin";
+
 export interface TelemetryFix {
   lat: number;
   lon: number;
@@ -55,8 +57,7 @@ export class TelemetryService {
   async getPermissionState(): Promise<TelemetryPermissionState> {
     if (Capacitor.isNativePlatform()) {
       try {
-        const plugin = await import("@capacitor/geolocation");
-        const permissions = await plugin.Geolocation.checkPermissions();
+        const permissions = await telemetryLocationPlugin.checkPermissions();
         const location = permissions.location;
         if (location === "granted") {
           return "granted";
@@ -95,8 +96,7 @@ export class TelemetryService {
   async requestPermission(): Promise<TelemetryPermissionState> {
     if (Capacitor.isNativePlatform()) {
       try {
-        const plugin = await import("@capacitor/geolocation");
-        const permissions = await plugin.Geolocation.requestPermissions();
+        const permissions = await telemetryLocationPlugin.requestPermissions();
         const location = permissions.location;
         if (location === "granted") {
           return "granted";
@@ -124,8 +124,7 @@ export class TelemetryService {
   async getCurrentPosition(): Promise<TelemetryFix> {
     if (Capacitor.isNativePlatform()) {
       try {
-        const plugin = await import("@capacitor/geolocation");
-        const position = await plugin.Geolocation.getCurrentPosition({
+        const position = await telemetryLocationPlugin.getCurrentPosition({
           enableHighAccuracy: true,
           timeout: 15000,
           maximumAge: 5000,

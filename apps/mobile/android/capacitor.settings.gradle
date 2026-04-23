@@ -5,9 +5,6 @@ project(':capacitor-android').projectDir = new File('../../../node_modules/@capa
 include ':capacitor-clipboard'
 project(':capacitor-clipboard').projectDir = new File('../../../node_modules/@capacitor/clipboard/android')
 
-include ':capacitor-geolocation'
-project(':capacitor-geolocation').projectDir = new File('../../../node_modules/@capacitor/geolocation/android')
-
 include ':capacitor-local-notifications'
 project(':capacitor-local-notifications').projectDir = new File('../../../node_modules/@capacitor/local-notifications/android')
 
