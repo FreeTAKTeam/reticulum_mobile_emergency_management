@@ -145,6 +145,7 @@ public final class ReticulumNodeService extends Service {
             return;
         }
         listeners.add(listener);
+        mainHandler.post(() -> emitCachedState(listener));
     }
 
     public void removeListener(ServiceEventListener listener) {
