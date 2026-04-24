@@ -209,10 +209,11 @@ export function runtimeChecklistTaskToUi(
 
 export function runtimeChecklistToUi(record: RuntimeChecklistRecord): ChecklistRecord {
   const status = checklistStatusFromRuntime(record.checklistStatus);
-  const receivedTasks = record.tasks.filter(isHydratedChecklistTask).length;
+  const activeTasks = record.tasks.filter((task) => !task.deletedAt);
+  const receivedTasks = activeTasks.filter(isHydratedChecklistTask).length;
   const countedTasks = record.counts.pendingCount + record.counts.lateCount + record.counts.completeCount;
   const expectedTasks = typeof record.expectedTaskCount === "number" ? record.expectedTaskCount : 0;
-  const highestTaskNumber = record.tasks.reduce((highest, task) => Math.max(highest, task.number), 0);
+  const highestTaskNumber = activeTasks.reduce((highest, task) => Math.max(highest, task.number), 0);
   const totalTasks = Math.max(receivedTasks, countedTasks, expectedTasks, highestTaskNumber);
   const pendingTasks = Math.max(totalTasks - receivedTasks, 0);
   const taskSyncProgress = totalTasks === 0 ? 100 : Math.round((receivedTasks * 100) / totalTasks);

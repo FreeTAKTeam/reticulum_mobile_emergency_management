@@ -724,10 +724,12 @@ export interface ReticulumNodeClient {
     number: number;
     dueRelativeMinutes?: number;
     legacyValue?: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   deleteChecklistTaskRow(input: {
     checklistUid: string;
     taskUid: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   setChecklistTaskRowStyle(input: {
     checklistUid: string;
@@ -950,10 +952,12 @@ interface ReticulumNodePlugin {
     number: number;
     dueRelativeMinutes?: number;
     legacyValue?: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   deleteChecklistTaskRow(options: {
     checklistUid: string;
     taskUid: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   setChecklistTaskRowStyle(options: {
     checklistUid: string;
@@ -2755,11 +2759,13 @@ function addInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRowAd
     })),
   });
   checklist.updatedAt = now;
+  checklist.lastChangedByTeamMemberRnsIdentity =
+    input.changedByTeamMemberRnsIdentity || checklist.lastChangedByTeamMemberRnsIdentity;
   checklist.expectedTaskCount = Math.max(checklist.expectedTaskCount ?? 0, checklist.tasks.length);
   normalizeInMemoryChecklist(checklist);
 }
 
-function deleteInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRowDeleteInput, changedBy?: string): void {
+function deleteInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRowDeleteInput): void {
   const checklist = findInMemoryChecklist(checklists, input.checklistUid);
   const now = new Date().toISOString();
   const task = checklist.tasks.find((item) => item.taskUid === input.taskUid);
@@ -2768,7 +2774,8 @@ function deleteInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRo
     task.updatedAt = now;
   }
   checklist.updatedAt = now;
-  checklist.lastChangedByTeamMemberRnsIdentity = changedBy || checklist.lastChangedByTeamMemberRnsIdentity;
+  checklist.lastChangedByTeamMemberRnsIdentity =
+    input.changedByTeamMemberRnsIdentity || checklist.lastChangedByTeamMemberRnsIdentity;
   normalizeInMemoryChecklist(checklist);
 }
 
@@ -3346,6 +3353,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     number: number;
     dueRelativeMinutes?: number;
     legacyValue?: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void> {
     await this.ready();
     await this.plugin.addChecklistTaskRow(input);
@@ -3354,6 +3362,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async deleteChecklistTaskRow(input: {
     checklistUid: string;
     taskUid: string;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void> {
     await this.ready();
     await this.plugin.deleteChecklistTaskRow(input);
@@ -3886,7 +3895,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async deleteChecklistTaskRow(input: ChecklistRowDeleteInput): Promise<void> {
-    deleteInMemoryTaskRow(this.checklists, input, this.status.identityHex);
+    deleteInMemoryTaskRow(this.checklists, input);
     emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskDelete");
   }
 
@@ -4420,7 +4429,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async deleteChecklistTaskRow(input: ChecklistRowDeleteInput): Promise<void> {
-    deleteInMemoryTaskRow(this.checklists, input, this.status.identityHex);
+    deleteInMemoryTaskRow(this.checklists, input);
     emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskDelete");
   }
 

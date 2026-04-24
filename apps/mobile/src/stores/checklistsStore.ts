@@ -480,7 +480,10 @@ export const useChecklistsStore = defineStore("checklists", () => {
     legacyValue?: string;
   }): Promise<void> {
     await ensureJoined(input.checklistUid);
-    await client().addChecklistTaskRow(input);
+    await client().addChecklistTaskRow({
+      ...input,
+      changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
+    });
     await refreshAfterMutation(input.checklistUid);
   }
 
@@ -489,7 +492,10 @@ export const useChecklistsStore = defineStore("checklists", () => {
     taskUid: string;
   }): Promise<void> {
     await ensureJoined(input.checklistUid);
-    await client().deleteChecklistTaskRow(input);
+    await client().deleteChecklistTaskRow({
+      ...input,
+      changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
+    });
     await refreshAfterMutation(input.checklistUid);
   }
 

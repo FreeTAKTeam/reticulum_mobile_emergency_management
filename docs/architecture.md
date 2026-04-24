@@ -139,6 +139,29 @@ sequenceDiagram
 - Telemetry works even when only the app-destination route is healthy; events additionally require the peer's `lxmf/delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly.
 - Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
 
+## Checklist / Excheck Flow
+
+Checklist state is Rust-authoritative. The Vue screens call the node-client checklist API, the Android bridge forwards those calls to the native service, and `crates/reticulum_mobile` persists checklist records before emitting projection invalidations. The UI refreshes `Checklists` and keyed `ChecklistDetail` projections instead of caching checklist state in the browser layer.
+
+Checklist templates can be built in or imported from CSV. CSV import is handled in Rust. The importer accepts arbitrary normal columns and treats `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` as the deadline column. REM stores that column as the pinned system column `DUE_RELATIVE_DTG` with relative task deadlines in `due_relative_minutes`. If the CSV does not include a deadline column, Rust creates one and applies the configured default deadline step, currently 30 minutes per row.
+
+Live checklist deadlines are calculated from the checklist start DTG plus each task's `due_relative_minutes`. A pending task becomes late when the current time is after that due DTG. A completed task is `Complete Late` only when its `completed_at` timestamp is after the calculated due DTG. `CompletedDTG` is therefore a required-by deadline, not the actual completion timestamp.
+
+Initial autonomous sharing uses two steps:
+
+- `checklist.create.online` carries the RCH-compatible checklist metadata and schema-level args.
+- `checklist.upload` follows immediately with the full checklist snapshot so a peer without the local template can hydrate the same columns, rows, cell values, deadline metadata, and participant list.
+
+Incremental collaboration keeps using the specific task commands:
+
+- `checklist.task.row.add`
+- `checklist.task.row.delete`
+- `checklist.task.row.style.set`
+- `checklist.task.cell.set`
+- `checklist.task.status.set`
+
+Large checklist snapshots use the existing LXMF resource-capable delivery path rather than a separate transport. Smaller task edits send only the changed data. Incoming checklist commands update the Rust aggregate, emit `Checklists` and `ChecklistDetail` invalidations, and Android posts inbound checklist notifications through the same service notification path used by other operational updates.
+
 ## Payloads And Transport
 
 ### EmergencyMessage

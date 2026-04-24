@@ -349,6 +349,7 @@ struct ChecklistTaskRowAddInput {
     number: u32,
     due_relative_minutes: Option<u32>,
     legacy_value: Option<String>,
+    changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +357,7 @@ struct ChecklistTaskRowAddInput {
 struct ChecklistTaskRowDeleteInput {
     checklist_uid: String,
     task_uid: String,
+    changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -946,7 +948,7 @@ fn to_checklist_task_row_add_request(
         number: input.number,
         due_relative_minutes: input.due_relative_minutes,
         legacy_value: input.legacy_value,
-        changed_by_team_member_rns_identity: None,
+        changed_by_team_member_rns_identity: input.changed_by_team_member_rns_identity,
     }
 }
 
@@ -956,7 +958,7 @@ fn to_checklist_task_row_delete_request(
     ChecklistTaskRowDeleteRequest {
         checklist_uid: input.checklist_uid,
         task_uid: input.task_uid,
-        changed_by_team_member_rns_identity: None,
+        changed_by_team_member_rns_identity: input.changed_by_team_member_rns_identity,
     }
 }
 

@@ -56,6 +56,18 @@ An Emergency Action Message, 9 liners or EAM, is a structured status report used
 
 An event is a short replicated timeline entry, such as a road closure, checkpoint update, or logistics note. Events are intended for operational logging and shared awareness rather than direct person-to-person chat.
 
+### Checklist
+
+A checklist is a shared task list used by REM clients to coordinate operational work. Checklists are Rust-owned records: the app screens show projections from the local Rust runtime, and changes are saved locally before they are shared to peers.
+
+Checklist templates define the rows and columns used when a new checklist is created. Templates can come from the built-in REM library or from a CSV file uploaded by the operator.
+
+### CompletedDTG
+
+`CompletedDTG` is the checklist deadline column. It does not mean the task has already been completed. It means the task should be completed by a time relative to the checklist start DTG.
+
+For example, if a checklist starts at 10:00 and a row has `CompletedDTG` of `+1h`, that row is due at 11:00. REM stores this as a relative task deadline and calculates whether the row is late from the checklist start time.
+
 ### Telemetry
 
 This is the live or recent location information published by devices. The app treats telemetry as:
@@ -455,6 +467,65 @@ Important behavior:
 - If the app is not ready, the add control is disabled and the page keeps the operator on the read-only timeline.
 - If there are no events yet, the page shows an explicit empty-state message.
 
+## Checklists
+
+Purpose:
+
+- Creates and tracks shared operational task lists.
+- Lets REM clients exchange checklist creation, task rows, cell edits, completion updates, and resync snapshots over LXMF.
+- Helps operators see whether task lists are fully received, pending, late, or complete.
+
+How it works:
+
+- The `# TSK` badge shows the number of checklist tasks currently represented by the selected checklist segment.
+- `?` opens checklist help and explains how syncing, completion, and collaboration work.
+- `Sync` requests an LXMF sync from the Rust runtime.
+- `+` opens the create checklist form.
+- `Upload` imports a CSV file as a checklist template. Uploading a CSV does not immediately share a live checklist; sharing starts when a checklist is created from that template.
+- The template picker selects the template used to create the live checklist.
+- The `Checklist DTG` field selects the start date and time. It defaults to current time plus 30 days and opens the platform date/time picker.
+
+Creating a checklist:
+
+1. Tap `+`.
+2. Enter a checklist title.
+3. Optionally enter a subtitle and assignment label.
+4. Review or change `Checklist DTG`.
+5. Select a template.
+6. Tap `Create checklist`.
+
+CSV template import:
+
+- CSV files can contain any number of columns.
+- A column named `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` is treated as the deadline column.
+- Deadline values are relative to the checklist start DTG. Supported examples include `60`, `+60`, `+1h`, `+1 hour`, and `+01:00`.
+- If the CSV has no deadline column, REM creates `CompletedDTG` automatically and assigns deadlines using the configured default step, currently 30 minutes per row.
+- The deadline column is a system column and is not edited like a normal checklist cell.
+
+Task status and deadlines:
+
+- A task is `Pending` until it is completed.
+- A pending task becomes `Late` when current time is after `Checklist DTG + CompletedDTG`.
+- A completed task is recorded with its actual completion time.
+- A task completed after its due time becomes `Complete Late`.
+- Actual completion time is separate from the `CompletedDTG` deadline.
+
+Collaboration behavior:
+
+- Checklist create, upload, task row, cell, status, style, join, and delete operations are handled by the Rust runtime.
+- In autonomous mode, the initial shared checklist is sent with a create command and a full upload snapshot so a peer can reconstruct the checklist even if it does not have the source template.
+- Large checklist snapshots are sent through the existing LXMF resource-capable delivery path.
+- Incremental edits send only the changed row, status, style, or cell data.
+- The receiver refreshes from Rust projections; the UI does not own checklist replication state.
+
+What the operator sees:
+
+- While a checklist is still hydrating from LXMF, REM shows task sync progress based on expected task count versus received task rows.
+- After all expected rows are present, the sync bar disappears and the completion bar is shown.
+- Checklist cards show creation/update metadata and author information when available.
+- Open a checklist to review rows, join it, mark tasks complete, edit cells, add rows, delete rows, or reshare the checklist.
+- Local edits are saved first and then replicated to peers.
+
 ## Peers & Discovery
 
 <img src="../pixel_peers.png" alt="Peers and Discovery screen" width="320" />
@@ -612,8 +683,9 @@ Use this section to control the runtime:
 3. Use `Inbox` for encrypted LXMF traffic once peers and conversations exist.
 4. Use `Action Messages` to publish current status snapshots.
 5. Use `Dashboard` to monitor the rolled-up readiness picture from those messages.
-6. Use `Events` to publish short timeline updates.
-7. Use `Telemetry` to monitor current positions when telemetry sharing is enabled and data is being received.
+6. Use `Checklists` to create shared task lists and track operational completion.
+7. Use `Events` to publish short timeline updates.
+8. Use `Telemetry` to monitor current positions when telemetry sharing is enabled and data is being received.
 
 ## Typical SOS workflow
 
@@ -641,4 +713,5 @@ Several pages are intentionally sparse until live or saved data exists:
 - `Inbox` is empty until conversations exist.
 - `Telemetry` is empty until positions are received.
 - `Events` is empty until local or replicated event records exist.
+- `Checklists` is empty until templates are loaded, a checklist is created, or a peer sends a checklist.
 - `Peers` becomes more useful after announces are received or peers are saved manually.
