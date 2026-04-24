@@ -763,6 +763,8 @@ pub struct ChecklistRecord {
     pub created_at: Option<String>,
     pub created_by_team_member_rns_identity: String,
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub last_changed_by_team_member_rns_identity: Option<String>,
     pub deleted_at: Option<String>,
     pub uploaded_at: Option<String>,
     pub participant_rns_identities: Vec<String>,
@@ -843,6 +845,7 @@ pub struct ChecklistUpdatePatch {
 pub struct ChecklistUpdateRequest {
     pub checklist_uid: String,
     pub patch: ChecklistUpdatePatch,
+    pub changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -860,12 +863,14 @@ pub struct ChecklistTaskRowAddRequest {
     pub number: u32,
     pub due_relative_minutes: Option<u32>,
     pub legacy_value: Option<String>,
+    pub changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistTaskRowDeleteRequest {
     pub checklist_uid: String,
     pub task_uid: String,
+    pub changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -874,6 +879,7 @@ pub struct ChecklistTaskRowStyleSetRequest {
     pub task_uid: String,
     pub row_background_color: Option<String>,
     pub line_break_enabled: Option<bool>,
+    pub changed_by_team_member_rns_identity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

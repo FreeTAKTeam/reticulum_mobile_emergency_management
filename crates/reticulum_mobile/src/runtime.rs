@@ -43,7 +43,8 @@ mod runtime_projection;
 
 use crate::app_state::{
     canonicalize_chat_message, checklist_task_status_for, find_checklist_task_mut,
-    normalize_checklist_record, normalize_optional_string, AppStateStore,
+    normalize_checklist_record, normalize_optional_string, set_checklist_last_changed_by,
+    AppStateStore,
 };
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
@@ -696,6 +697,7 @@ fn blank_checklist_record(
         created_at: Some(timestamp.to_string()),
         created_by_team_member_rns_identity: source_identity.unwrap_or_default().to_string(),
         updated_at: Some(timestamp.to_string()),
+        last_changed_by_team_member_rns_identity: normalize_optional_string(source_identity),
         deleted_at: None,
         uploaded_at: None,
         participant_rns_identities: source_identity
@@ -930,6 +932,7 @@ fn prepare_uploaded_snapshot(
         incoming.created_by_team_member_rns_identity =
             source_identity.unwrap_or_default().to_string();
     }
+    set_checklist_last_changed_by(&mut incoming, source_identity);
     incoming.participant_rns_identities = merge_uploaded_participants(
         Vec::new(),
         incoming.participant_rns_identities,
@@ -1008,6 +1011,7 @@ fn merge_uploaded_checklist_snapshot(
     );
     merged.feed_publications =
         merge_uploaded_feed_publications(existing.feed_publications, incoming.feed_publications);
+    set_checklist_last_changed_by(&mut merged, source_identity);
     normalize_checklist_record(&mut merged);
     Some(merged)
 }
@@ -1083,6 +1087,29 @@ fn checklist_snapshot_json_from_command(
         return Some(snapshot_json);
     }
     None
+}
+
+fn checklist_snapshot_json_from_content(
+    content_bytes: Option<&[u8]>,
+    checklist_uid: &str,
+) -> Option<String> {
+    let content = content_bytes?;
+    let snapshot_payload = rmp_serde::from_slice::<MsgPackValue>(content).ok()?;
+    let entries = msgpack_map_entries(&snapshot_payload)?;
+    let payload_type = msgpack_get_named(entries, &["type"]).and_then(msgpack_string)?;
+    if payload_type != "rem.checklist.snapshot.v1" {
+        return None;
+    }
+    if let Some(payload_uid) =
+        msgpack_get_named(entries, &["checklist_uid"]).and_then(msgpack_string)
+    {
+        if payload_uid != checklist_uid {
+            return None;
+        }
+    }
+    let snapshot = msgpack_get_named(entries, &["snapshot"])?;
+    let json = msgpack_value_to_json(snapshot)?;
+    serde_json::to_string(&json).ok()
 }
 
 fn msgpack_json_arg<T: DeserializeOwned>(
@@ -1163,6 +1190,7 @@ fn persist_received_checklist_if_present(
     bus: &EventBus,
     _metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
+    content_bytes: Option<&[u8]>,
 ) {
     let Some(fields_bytes) = fields_bytes else {
         return;
@@ -1305,7 +1333,7 @@ fn persist_received_checklist_if_present(
                     .is_empty()
                 {
                     checklist.created_by_team_member_rns_identity =
-                        source_identity.unwrap_or_default();
+                        source_identity.clone().unwrap_or_default();
                 }
                 if let Some(source_identity) = checklist_command_source_identity(command_map) {
                     if !checklist
@@ -1316,6 +1344,7 @@ fn persist_received_checklist_if_present(
                         checklist.participant_rns_identities.push(source_identity);
                     }
                 }
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
             }
@@ -1325,7 +1354,10 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let Some(snapshot_json) = checklist_snapshot_json_from_command(command_map) else {
+                let Some(snapshot_json) =
+                    checklist_snapshot_json_from_content(content_bytes, checklist_uid.as_str())
+                        .or_else(|| checklist_snapshot_json_from_command(command_map))
+                else {
                     continue;
                 };
                 let Ok(mut checklist) =
@@ -1399,6 +1431,7 @@ fn persist_received_checklist_if_present(
                     checklist.start_time = normalize_optional_string(Some(value.as_str()));
                 }
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-update");
             }
@@ -1428,6 +1461,7 @@ fn persist_received_checklist_if_present(
                 });
                 checklist.deleted_at = Some(timestamp.clone());
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
             }
@@ -1485,6 +1519,8 @@ fn persist_received_checklist_if_present(
                     .map(|value| value as u32);
                 let legacy_value =
                     msgpack_get_named(args, &["legacy_value"]).and_then(msgpack_string);
+                let due_dtg = msgpack_get_named(args, &["due_dtg"]).and_then(msgpack_string);
+                let notes = msgpack_get_named(args, &["notes"]).and_then(msgpack_string);
                 if let Some(task) = checklist
                     .tasks
                     .iter_mut()
@@ -1492,6 +1528,8 @@ fn persist_received_checklist_if_present(
                 {
                     task.number = number as u32;
                     task.due_relative_minutes = due_relative_minutes;
+                    task.due_dtg = due_dtg.clone();
+                    task.notes = notes.clone();
                     task.legacy_value = legacy_value;
                     task.deleted_at = None;
                     task.updated_at =
@@ -1509,8 +1547,8 @@ fn persist_received_checklist_if_present(
                         deleted_at: None,
                         custom_status: None,
                         due_relative_minutes,
-                        due_dtg: None,
-                        notes: None,
+                        due_dtg,
+                        notes,
                         row_background_color: None,
                         line_break_enabled: false,
                         completed_at: None,
@@ -1520,6 +1558,7 @@ fn persist_received_checklist_if_present(
                     });
                 }
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-row-add");
             }
@@ -1585,6 +1624,7 @@ fn persist_received_checklist_if_present(
                     continue;
                 }
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(
                     state,
@@ -1656,6 +1696,7 @@ fn persist_received_checklist_if_present(
                     task.completed_by_team_member_rns_identity = None;
                 }
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-status");
             }
@@ -1713,6 +1754,7 @@ fn persist_received_checklist_if_present(
                 }
                 task.updated_at = Some(timestamp.clone());
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(
                     state,
@@ -1820,6 +1862,7 @@ fn persist_received_checklist_if_present(
                 }
                 task.updated_at = Some(timestamp.clone());
                 checklist.updated_at = Some(timestamp.clone());
+                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-cell");
             }
@@ -1855,8 +1898,10 @@ fn persist_received_checklist_if_present(
                     .iter()
                     .any(|value| value == &source_identity)
                 {
+                    let changed_by = source_identity.clone();
                     checklist.participant_rns_identities.push(source_identity);
                     checklist.updated_at = Some(timestamp.clone());
+                    set_checklist_last_changed_by(&mut checklist, Some(changed_by.as_str()));
                     normalize_checklist_record(&mut checklist);
                     upsert_inbound_checklist(state, bus, &checklist, "checklist-received-join");
                 }
@@ -4128,6 +4173,7 @@ async fn emit_received_payload(
                 bus,
                 Some(metadata),
                 fields_bytes.as_deref(),
+                Some(message.content.as_slice()),
             );
         }
         if is_sos_message {
@@ -6333,6 +6379,44 @@ mod tests {
     }
 
     #[test]
+    fn native_upload_snapshot_decodes_from_msgpack_content() {
+        let content = MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("type"),
+                MsgPackValue::from("rem.checklist.snapshot.v1"),
+            ),
+            (
+                MsgPackValue::from("checklist_uid"),
+                MsgPackValue::from("chk-native"),
+            ),
+            (
+                MsgPackValue::from("snapshot"),
+                MsgPackValue::Map(vec![
+                    (MsgPackValue::from("uid"), MsgPackValue::from("chk-native")),
+                    (MsgPackValue::from("name"), MsgPackValue::from("Native")),
+                    (
+                        MsgPackValue::from("tasks"),
+                        MsgPackValue::Array(vec![MsgPackValue::Map(vec![(
+                            MsgPackValue::from("task_uid"),
+                            MsgPackValue::from("task-1"),
+                        )])]),
+                    ),
+                ]),
+            ),
+        ]);
+        let bytes = rmp_serde::to_vec(&content).expect("snapshot content");
+        let snapshot_json =
+            checklist_snapshot_json_from_content(Some(bytes.as_slice()), "chk-native")
+                .expect("content snapshot");
+
+        assert!(snapshot_json.contains("\"uid\":\"chk-native\""));
+        assert!(snapshot_json.contains("\"task_uid\":\"task-1\""));
+        assert!(
+            checklist_snapshot_json_from_content(Some(bytes.as_slice()), "chk-other").is_none()
+        );
+    }
+
+    #[test]
     fn first_status_update_can_apply_to_missing_task_placeholder() {
         let mut checklist =
             blank_checklist_record("chk-missing-task", "2026-04-22T12:00:00Z", None);
@@ -6398,6 +6482,10 @@ mod tests {
 
         assert_eq!(merged.tasks.len(), 1);
         assert_eq!(
+            merged.last_changed_by_team_member_rns_identity.as_deref(),
+            Some("peer-a")
+        );
+        assert_eq!(
             merged.tasks[0].legacy_value.as_deref(),
             Some("Hydrated task")
         );
@@ -6443,6 +6531,10 @@ mod tests {
             .participant_rns_identities
             .iter()
             .any(|identity| identity == "peer-b"));
+        assert_eq!(
+            merged.last_changed_by_team_member_rns_identity.as_deref(),
+            Some("peer-b")
+        );
     }
 
     #[test]

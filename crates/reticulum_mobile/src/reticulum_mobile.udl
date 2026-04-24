@@ -470,6 +470,7 @@ dictionary ChecklistRecord {
   string? created_at;
   string created_by_team_member_rns_identity;
   string? updated_at;
+  string? last_changed_by_team_member_rns_identity;
   string? deleted_at;
   string? uploaded_at;
   sequence<string> participant_rns_identities;
@@ -506,6 +507,7 @@ dictionary ChecklistUpdatePatch {
 dictionary ChecklistUpdateRequest {
   string checklist_uid;
   ChecklistUpdatePatch patch;
+  string? changed_by_team_member_rns_identity;
 };
 
 dictionary ChecklistTaskStatusSetRequest {
@@ -521,11 +523,13 @@ dictionary ChecklistTaskRowAddRequest {
   u32 number;
   u32? due_relative_minutes;
   string? legacy_value;
+  string? changed_by_team_member_rns_identity;
 };
 
 dictionary ChecklistTaskRowDeleteRequest {
   string checklist_uid;
   string task_uid;
+  string? changed_by_team_member_rns_identity;
 };
 
 dictionary ChecklistTaskRowStyleSetRequest {
@@ -533,6 +537,7 @@ dictionary ChecklistTaskRowStyleSetRequest {
   string task_uid;
   string? row_background_color;
   boolean? line_break_enabled;
+  string? changed_by_team_member_rns_identity;
 };
 
 dictionary ChecklistTaskCellSetRequest {

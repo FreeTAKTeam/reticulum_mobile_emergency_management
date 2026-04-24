@@ -680,6 +680,8 @@ impl AppStateStore {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| format!("chk-{}", now_ms()));
+        let changed_by =
+            normalize_optional_string(request.created_by_team_member_rns_identity.as_deref());
         let checklist = ChecklistRecord {
             uid: checklist_uid,
             mission_uid: normalize_optional_string(request.mission_uid.as_deref()),
@@ -701,6 +703,7 @@ impl AppStateStore {
                 .unwrap_or_default()
                 .to_string(),
             updated_at: Some(timestamp),
+            last_changed_by_team_member_rns_identity: changed_by,
             deleted_at: None,
             uploaded_at: None,
             participant_rns_identities: request
@@ -760,6 +763,9 @@ impl AppStateStore {
             created_at: Some(timestamp.clone()),
             created_by_team_member_rns_identity: created_by.clone(),
             updated_at: Some(timestamp),
+            last_changed_by_team_member_rns_identity: normalize_optional_string(Some(
+                created_by.as_str(),
+            )),
             deleted_at: None,
             uploaded_at: None,
             participant_rns_identities: normalize_optional_string(Some(created_by.as_str()))
@@ -806,6 +812,10 @@ impl AppStateStore {
             return Err(NodeError::InvalidConfig {});
         }
         checklist.updated_at = Some(current_timestamp_rfc3339());
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.changed_by_team_member_rns_identity.as_deref(),
+        );
         if let Some(mission_uid) = request.patch.mission_uid.as_deref() {
             checklist.mission_uid = normalize_optional_string(Some(mission_uid));
         }
@@ -836,6 +846,14 @@ impl AppStateStore {
         &self,
         checklist_uid: &str,
     ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
+        self.delete_checklist_with_actor(checklist_uid, None)
+    }
+
+    pub fn delete_checklist_with_actor(
+        &self,
+        checklist_uid: &str,
+        changed_by_team_member_rns_identity: Option<&str>,
+    ) -> Result<Vec<ProjectionInvalidation>, NodeError> {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
@@ -844,6 +862,7 @@ impl AppStateStore {
         let timestamp = current_timestamp_rfc3339();
         checklist.deleted_at = Some(timestamp.clone());
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(&mut checklist, changed_by_team_member_rns_identity);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
             &transaction,
@@ -887,6 +906,10 @@ impl AppStateStore {
             task.completed_by_team_member_rns_identity = None;
         }
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.changed_by_team_member_rns_identity.as_deref(),
+        );
         normalize_checklist(&mut checklist);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -953,6 +976,10 @@ impl AppStateStore {
                     })
                     .collect();
                 checklist.updated_at = Some(timestamp);
+                set_checklist_last_changed_by(
+                    &mut checklist,
+                    request.changed_by_team_member_rns_identity.as_deref(),
+                );
                 normalize_checklist(&mut checklist);
                 self.write_checklist_tx(&transaction, &checklist)?;
                 let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -997,6 +1024,10 @@ impl AppStateStore {
             cells,
         });
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.changed_by_team_member_rns_identity.as_deref(),
+        );
         normalize_checklist(&mut checklist);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -1029,6 +1060,10 @@ impl AppStateStore {
         task.deleted_at = Some(timestamp.clone());
         task.updated_at = Some(timestamp.clone());
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.changed_by_team_member_rns_identity.as_deref(),
+        );
         normalize_checklist(&mut checklist);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -1065,6 +1100,10 @@ impl AppStateStore {
             task.line_break_enabled = line_break_enabled;
         }
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.changed_by_team_member_rns_identity.as_deref(),
+        );
         normalize_checklist(&mut checklist);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -1141,6 +1180,10 @@ impl AppStateStore {
             });
         }
         checklist.updated_at = Some(timestamp);
+        set_checklist_last_changed_by(
+            &mut checklist,
+            request.updated_by_team_member_rns_identity.as_deref(),
+        );
         normalize_checklist(&mut checklist);
         self.write_checklist_tx(&transaction, &checklist)?;
         let invalidations = self.bump_checklist_projection_revisions_tx(
@@ -2372,6 +2415,13 @@ pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+pub(crate) fn set_checklist_last_changed_by(
+    checklist: &mut ChecklistRecord,
+    identity: Option<&str>,
+) {
+    checklist.last_changed_by_team_member_rns_identity = normalize_optional_string(identity);
+}
+
 fn sanitize_active_checklist(mut checklist: ChecklistRecord) -> Option<ChecklistRecord> {
     if checklist.deleted_at.is_some() {
         return None;
@@ -2611,6 +2661,7 @@ mod tests {
             created_at: Some("2026-04-22T12:00:00Z".to_string()),
             created_by_team_member_rns_identity: "abcd1234".to_string(),
             updated_at: Some("2026-04-22T12:00:00Z".to_string()),
+            last_changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             deleted_at: None,
             uploaded_at: None,
             participant_rns_identities: vec!["abcd1234".to_string()],
@@ -2904,6 +2955,7 @@ mod tests {
                     description: Some("Updated after briefing".to_string()),
                     start_time: None,
                 },
+                changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             })
             .expect("update checklist");
         assert_eq!(updated.len(), 2);
@@ -2913,6 +2965,10 @@ mod tests {
             .expect("updated checklist exists");
         assert_eq!(fetched.mission_uid.as_deref(), Some("mission-bravo"));
         assert_eq!(fetched.name, "Bravo Checklist");
+        assert_eq!(
+            fetched.last_changed_by_team_member_rns_identity.as_deref(),
+            Some("abcd1234")
+        );
 
         let deleted = store.delete_checklist("chk-1").expect("delete checklist");
         assert_eq!(deleted.len(), 2);
@@ -2938,6 +2994,7 @@ mod tests {
                 number: 2,
                 due_relative_minutes: Some(30),
                 legacy_value: Some("Confirm rally point".to_string()),
+                changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             })
             .expect("add task row");
         store
@@ -2946,6 +3003,7 @@ mod tests {
                 task_uid: "task-2".to_string(),
                 row_background_color: Some("#402020".to_string()),
                 line_break_enabled: Some(true),
+                changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             })
             .expect("set row style");
         store
@@ -2974,6 +3032,12 @@ mod tests {
         assert_eq!(checklist.counts.pending_count, 1);
         assert_eq!(checklist.counts.complete_count, 1);
         assert_eq!(checklist.progress_percent, 50.0);
+        assert_eq!(
+            checklist
+                .last_changed_by_team_member_rns_identity
+                .as_deref(),
+            Some("abcd1234")
+        );
         let second_task = checklist
             .tasks
             .iter()
@@ -2998,6 +3062,7 @@ mod tests {
             .delete_checklist_task_row(&ChecklistTaskRowDeleteRequest {
                 checklist_uid: "chk-2".to_string(),
                 task_uid: "task-2".to_string(),
+                changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             })
             .expect("delete task row");
         let checklist = store
@@ -3028,6 +3093,7 @@ mod tests {
                 description: None,
                 start_time: None,
             },
+            changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
         });
         assert!(matches!(update, Err(NodeError::InvalidConfig {})));
 
@@ -3037,6 +3103,7 @@ mod tests {
             number: 2,
             due_relative_minutes: Some(30),
             legacy_value: Some("Confirm rally point".to_string()),
+            changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
         });
         assert!(matches!(add_row, Err(NodeError::InvalidConfig {})));
     }

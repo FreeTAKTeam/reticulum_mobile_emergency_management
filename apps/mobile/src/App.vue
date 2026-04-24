@@ -24,6 +24,10 @@ const route = useRoute();
 const router = useRouter();
 
 registerNotificationNavigationHandler(async (target) => {
+  if (target.route && target.route !== "/inbox") {
+    await router.push(target.route);
+    return;
+  }
   if (target.route !== "/inbox" && !target.conversationId) {
     return;
   }

@@ -332,6 +332,7 @@ export interface ChecklistRecord {
   createdAt?: string;
   createdByTeamMemberRnsIdentity: string;
   updatedAt?: string;
+  lastChangedByTeamMemberRnsIdentity?: string;
   deletedAt?: string;
   uploadedAt?: string;
   participantRnsIdentities: string[];
@@ -2184,6 +2185,11 @@ function toChecklistRecord(raw: Record<string, unknown>): ChecklistRecord {
       raw.createdByTeamMemberRnsIdentity ?? raw.created_by_team_member_rns_identity ?? "",
     ),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : typeof raw.updated_at === "string" ? raw.updated_at : undefined,
+    lastChangedByTeamMemberRnsIdentity: typeof raw.lastChangedByTeamMemberRnsIdentity === "string"
+      ? raw.lastChangedByTeamMemberRnsIdentity
+      : typeof raw.last_changed_by_team_member_rns_identity === "string"
+        ? raw.last_changed_by_team_member_rns_identity
+        : undefined,
     deletedAt: typeof raw.deletedAt === "string" ? raw.deletedAt : typeof raw.deleted_at === "string" ? raw.deleted_at : undefined,
     uploadedAt: typeof raw.uploadedAt === "string" ? raw.uploadedAt : typeof raw.uploaded_at === "string" ? raw.uploaded_at : undefined,
     participantRnsIdentities: Array.isArray(raw.participantRnsIdentities)

@@ -80,6 +80,7 @@ public final class ReticulumNodeService extends Service {
     private SosPlatformCoordinator sosPlatformCoordinator;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
+    private final Set<String> seenChecklistKeys = new HashSet<>();
     private final Set<String> seenMessageIds = new HashSet<>();
     private int nextBackgroundNotificationId = BACKGROUND_NOTIFICATION_BASE_ID;
 
@@ -736,6 +737,8 @@ public final class ReticulumNodeService extends Service {
             "Peers",
             "SyncStatus",
             "HubRegistration",
+            "Checklists",
+            "ChecklistDetail",
             "Eams",
             "Events",
             "Conversations",
@@ -906,6 +909,8 @@ public final class ReticulumNodeService extends Service {
                 maybeNotifyInboundEams();
             } else if ("Events".equals(scope)) {
                 maybeNotifyInboundEvents();
+            } else if ("Checklists".equals(scope)) {
+                maybeNotifyInboundChecklists();
             }
         }
     }
@@ -1046,6 +1051,63 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
+    private void maybeNotifyInboundChecklists() {
+        try {
+            final JSONObject root = new JSONObject(nonEmptyJson(
+                ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
+                "{\"items\":[]}"
+            ));
+            final JSONArray items = root.optJSONArray("items");
+            if (items == null) {
+                return;
+            }
+            final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
+            final String localIdentity = status.optString("identityHex", "").trim().toLowerCase(Locale.US);
+
+            for (int index = 0; index < items.length(); index += 1) {
+                final JSONObject item = items.optJSONObject(index);
+                if (item == null || item.has("deletedAt") || item.has("deleted_at")) {
+                    continue;
+                }
+                final String key = checklistNotificationKey(item);
+                if (key.isEmpty() || !seenChecklistKeys.add(key)) {
+                    continue;
+                }
+                final String changedBy = optStringAny(
+                    item,
+                    "lastChangedByTeamMemberRnsIdentity",
+                    "last_changed_by_team_member_rns_identity"
+                ).trim().toLowerCase(Locale.US);
+                final String createdBy = optStringAny(
+                    item,
+                    "createdByTeamMemberRnsIdentity",
+                    "created_by_team_member_rns_identity"
+                ).trim().toLowerCase(Locale.US);
+                if (
+                    !localIdentity.isEmpty()
+                        && (localIdentity.equals(changedBy)
+                            || (changedBy.isEmpty() && localIdentity.equals(createdBy)))
+                ) {
+                    continue;
+                }
+
+                final JSONObject counts = item.optJSONObject("counts");
+                final int pendingCount = optIntAny(counts, "pendingCount", "pending_count", 0);
+                final int completeCount = optIntAny(counts, "completeCount", "complete_count", 0);
+                final int lateCount = optIntAny(counts, "lateCount", "late_count", 0);
+                final JSONArray tasks = item.optJSONArray("tasks");
+                final int taskCount = tasks == null ? 0 : tasks.length();
+                final String lateSummary = lateCount > 0 ? ", " + lateCount + " late" : "";
+                final String taskSummary = taskCount == 1 ? "1 task" : taskCount + " tasks";
+                postBackgroundNotification(
+                    "Checklist updated: " + item.optString("name", "Checklist"),
+                    truncate(pendingCount + " pending, " + completeCount + " complete" + lateSummary + " across " + taskSummary)
+                );
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
     private void postBackgroundNotification(String title, String body) {
         final int notificationId = nextNotificationId();
         final Intent launchIntent = new Intent(this, MainActivity.class);
@@ -1096,6 +1158,7 @@ public final class ReticulumNodeService extends Service {
         seenMessageIds.clear();
         maybePrimeEamKeys();
         maybePrimeEventKeys();
+        maybePrimeChecklistKeys();
     }
 
     private void maybePrimeEamKeys() {
@@ -1146,6 +1209,64 @@ public final class ReticulumNodeService extends Service {
             }
         } catch (JSONException ignored) {
         }
+    }
+
+    private void maybePrimeChecklistKeys() {
+        seenChecklistKeys.clear();
+        try {
+            final JSONObject root = new JSONObject(nonEmptyJson(
+                ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
+                "{\"items\":[]}"
+            ));
+            final JSONArray items = root.optJSONArray("items");
+            if (items == null) {
+                return;
+            }
+            for (int index = 0; index < items.length(); index += 1) {
+                final JSONObject item = items.optJSONObject(index);
+                if (item == null || item.has("deletedAt") || item.has("deleted_at")) {
+                    continue;
+                }
+                final String key = checklistNotificationKey(item);
+                if (!key.isEmpty()) {
+                    seenChecklistKeys.add(key);
+                }
+            }
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private String checklistNotificationKey(JSONObject item) {
+        final String uid = item.optString("uid", "").trim();
+        final String stamp = latestChecklistStamp(item);
+        return uid.isEmpty() || stamp.isEmpty()
+            ? ""
+            : uid.toLowerCase(Locale.US) + ":" + stamp;
+    }
+
+    private String latestChecklistStamp(JSONObject item) {
+        String latest = "";
+        for (String key : new String[] {"updatedAt", "updated_at", "uploadedAt", "uploaded_at"}) {
+            final String value = item.optString(key, "").trim();
+            if (!value.isEmpty() && value.compareTo(latest) > 0) {
+                latest = value;
+            }
+        }
+        return latest;
+    }
+
+    private String optStringAny(JSONObject item, String camelKey, String snakeKey) {
+        if (item == null) {
+            return "";
+        }
+        return item.optString(camelKey, item.optString(snakeKey, ""));
+    }
+
+    private int optIntAny(JSONObject item, String camelKey, String snakeKey, int fallback) {
+        if (item == null) {
+            return fallback;
+        }
+        return item.optInt(camelKey, item.optInt(snakeKey, fallback));
     }
 
     private ResolvedConfig resolveConfig(String rawConfigJson) throws JSONException {

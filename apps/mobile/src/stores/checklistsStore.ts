@@ -91,6 +91,22 @@ export const useChecklistsStore = defineStore("checklists", () => {
     return `${record.uid}:${latestChecklistChangeStamp(record)}`;
   }
 
+  function normalizedIdentity(value: string | undefined): string {
+    return (value ?? "").trim().toLowerCase();
+  }
+
+  function isLocalChecklistRecord(record: RuntimeChecklistRecord): boolean {
+    const localIdentity = normalizedIdentity(nodeStore.status.identityHex);
+    if (!localIdentity) {
+      return false;
+    }
+    const changedBy = normalizedIdentity(record.lastChangedByTeamMemberRnsIdentity);
+    if (changedBy) {
+      return changedBy === localIdentity;
+    }
+    return normalizedIdentity(record.createdByTeamMemberRnsIdentity) === localIdentity;
+  }
+
   function checklistNotificationBody(record: RuntimeChecklistRecord): string {
     const counts = record.counts ?? { pendingCount: 0, completeCount: 0, lateCount: 0 };
     const tasks = Array.isArray(record.tasks) ? record.tasks : [];
@@ -140,6 +156,9 @@ export const useChecklistsStore = defineStore("checklists", () => {
     }
 
     for (const record of activeRecords) {
+      if (isLocalChecklistRecord(record)) {
+        continue;
+      }
       queueChecklistNotification(record);
     }
   }

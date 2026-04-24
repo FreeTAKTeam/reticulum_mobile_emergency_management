@@ -899,6 +899,7 @@ fn to_checklist_update_request(input: ChecklistUpdateInput) -> ChecklistUpdateRe
             description: input.patch.description,
             start_time: input.patch.start_time,
         },
+        changed_by_team_member_rns_identity: None,
     }
 }
 
@@ -927,6 +928,7 @@ fn to_checklist_task_row_add_request(
         number: input.number,
         due_relative_minutes: input.due_relative_minutes,
         legacy_value: input.legacy_value,
+        changed_by_team_member_rns_identity: None,
     }
 }
 
@@ -936,6 +938,7 @@ fn to_checklist_task_row_delete_request(
     ChecklistTaskRowDeleteRequest {
         checklist_uid: input.checklist_uid,
         task_uid: input.task_uid,
+        changed_by_team_member_rns_identity: None,
     }
 }
 
@@ -947,6 +950,7 @@ fn to_checklist_task_row_style_request(
         task_uid: input.task_uid,
         row_background_color: input.row_background_color,
         line_break_enabled: input.line_break_enabled,
+        changed_by_team_member_rns_identity: None,
     }
 }
 
@@ -1333,6 +1337,7 @@ fn checklist_record_json(record: &ChecklistRecord) -> serde_json::Value {
         "createdAt": record.created_at,
         "createdByTeamMemberRnsIdentity": record.created_by_team_member_rns_identity,
         "updatedAt": record.updated_at,
+        "lastChangedByTeamMemberRnsIdentity": record.last_changed_by_team_member_rns_identity,
         "deletedAt": record.deleted_at,
         "uploadedAt": record.uploaded_at,
         "participantRnsIdentities": record.participant_rns_identities,
