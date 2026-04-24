@@ -1,6 +1,6 @@
 import { notifyOperationalUpdate, type NotificationExtra } from "./notifications";
 
-export type OperationalNotificationScope = "eam" | "event" | "chat";
+export type OperationalNotificationScope = "eam" | "event" | "chat" | "checklist";
 
 const seenByScope = new Map<OperationalNotificationScope, Set<string>>();
 
@@ -44,7 +44,7 @@ export async function notifyOperationalUpdateOnce(
     return false;
   }
   bucket.add(normalizedKey);
-  await notifyOperationalUpdate(title, body, extra);
+  await notifyOperationalUpdate(title, body, extra).catch(() => undefined);
   return true;
 }
 

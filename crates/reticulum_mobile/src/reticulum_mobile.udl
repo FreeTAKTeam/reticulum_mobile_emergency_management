@@ -64,6 +64,31 @@ enum SosTriggerSource {
 
 enum SosMessageKind { "Active", "Update", "Cancelled" };
 
+enum ChecklistMode { "Online", "Offline" };
+
+enum ChecklistSyncState { "LocalOnly", "UploadPending", "Synced" };
+
+enum ChecklistOriginType {
+  "RchTemplate",
+  "BlankTemplate",
+  "CsvImport",
+  "ExistingTemplateClone"
+};
+
+enum ChecklistUserTaskStatus { "Pending", "Complete" };
+
+enum ChecklistTaskStatus { "Pending", "Complete", "CompleteLate", "Late" };
+
+enum ChecklistColumnType {
+  "ShortString",
+  "LongString",
+  "Integer",
+  "ActualTime",
+  "RelativeTime"
+};
+
+enum ChecklistSystemColumnKey { "DueRelativeDtg" };
+
 enum SyncPhase {
   "Idle",
   "PathRequested",
@@ -81,6 +106,8 @@ enum ProjectionScope {
   "Peers",
   "SyncStatus",
   "HubRegistration",
+  "Checklists",
+  "ChecklistDetail",
   "Eams",
   "Events",
   "Conversations",
@@ -291,6 +318,10 @@ dictionary TelemetrySettingsRecord {
   u32 expire_after_minutes;
 };
 
+dictionary ChecklistSettingsRecord {
+  u32 default_task_due_step_minutes;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -300,6 +331,7 @@ dictionary AppSettingsRecord {
   u32 announce_interval_seconds;
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
+  ChecklistSettingsRecord checklists;
 };
 
 dictionary SavedPeerRecord {
@@ -370,6 +402,158 @@ dictionary EventProjectionRecord {
   u64? deleted_at_ms;
   string? correlation_id;
   sequence<string> topics;
+};
+
+dictionary ChecklistStatusCounts {
+  u32 pending_count;
+  u32 late_count;
+  u32 complete_count;
+};
+
+dictionary ChecklistColumnRecord {
+  string column_uid;
+  string column_name;
+  u32 display_order;
+  ChecklistColumnType column_type;
+  boolean column_editable;
+  string? background_color;
+  string? text_color;
+  boolean is_removable;
+  ChecklistSystemColumnKey? system_key;
+};
+
+dictionary ChecklistCellRecord {
+  string cell_uid;
+  string task_uid;
+  string column_uid;
+  string? value;
+  string? updated_at;
+  string? updated_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskRecord {
+  string task_uid;
+  u32 number;
+  ChecklistUserTaskStatus user_status;
+  ChecklistTaskStatus task_status;
+  boolean is_late;
+  string? updated_at;
+  string? deleted_at;
+  i32? custom_status;
+  u32? due_relative_minutes;
+  string? due_dtg;
+  string? notes;
+  string? row_background_color;
+  boolean line_break_enabled;
+  string? completed_at;
+  string? completed_by_team_member_rns_identity;
+  string? legacy_value;
+  sequence<ChecklistCellRecord> cells;
+};
+
+dictionary ChecklistFeedPublicationRecord {
+  string publication_uid;
+  string checklist_uid;
+  string mission_feed_uid;
+  string? published_at;
+  string published_by_team_member_rns_identity;
+};
+
+dictionary ChecklistRecord {
+  string uid;
+  string? mission_uid;
+  string? template_uid;
+  u32? template_version;
+  string? template_name;
+  string name;
+  string description;
+  string? start_time;
+  ChecklistMode mode;
+  ChecklistSyncState sync_state;
+  ChecklistOriginType origin_type;
+  ChecklistTaskStatus checklist_status;
+    string? created_at;
+    string created_by_team_member_rns_identity;
+    string? created_by_team_member_display_name;
+    string? updated_at;
+  string? last_changed_by_team_member_rns_identity;
+  string? deleted_at;
+  string? uploaded_at;
+  sequence<string> participant_rns_identities;
+  u32? expected_task_count;
+  f64 progress_percent;
+  ChecklistStatusCounts counts;
+  sequence<ChecklistColumnRecord> columns;
+  sequence<ChecklistTaskRecord> tasks;
+  sequence<ChecklistFeedPublicationRecord> feed_publications;
+};
+
+dictionary ChecklistListActiveRequest {
+  string? search;
+  string? sort_by;
+};
+
+dictionary ChecklistCreateOnlineRequest {
+  string? checklist_uid;
+  string? mission_uid;
+  string template_uid;
+  string name;
+  string description;
+    string start_time;
+    string? created_by_team_member_rns_identity;
+    string? created_by_team_member_display_name;
+  };
+
+dictionary ChecklistUpdatePatch {
+  string? mission_uid;
+  string? template_uid;
+  string? name;
+  string? description;
+  string? start_time;
+};
+
+dictionary ChecklistUpdateRequest {
+  string checklist_uid;
+  ChecklistUpdatePatch patch;
+  string? changed_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskStatusSetRequest {
+  string checklist_uid;
+  string task_uid;
+  ChecklistUserTaskStatus user_status;
+  string? changed_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskRowAddRequest {
+  string checklist_uid;
+  string? task_uid;
+  u32 number;
+  u32? due_relative_minutes;
+  string? legacy_value;
+  string? changed_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskRowDeleteRequest {
+  string checklist_uid;
+  string task_uid;
+  string? changed_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskRowStyleSetRequest {
+  string checklist_uid;
+  string task_uid;
+  string? row_background_color;
+  boolean? line_break_enabled;
+  string? changed_by_team_member_rns_identity;
+};
+
+dictionary ChecklistTaskCellSetRequest {
+  string checklist_uid;
+  string task_uid;
+  string column_uid;
+  string value;
+  string? updated_by_team_member_rns_identity;
 };
 
 dictionary TelemetryPositionRecord {
@@ -625,6 +809,28 @@ interface Node {
   void upsert_event(EventProjectionRecord record);
   [Throws=NodeError]
   void delete_event(string uid, u64 deleted_at_ms);
+  [Throws=NodeError]
+  sequence<ChecklistRecord> list_active_checklists(ChecklistListActiveRequest? request);
+  [Throws=NodeError]
+  ChecklistRecord? get_checklist(string checklist_uid);
+  [Throws=NodeError]
+  void create_online_checklist(ChecklistCreateOnlineRequest request);
+  [Throws=NodeError]
+  void update_checklist(ChecklistUpdateRequest request);
+  [Throws=NodeError]
+  void delete_checklist(string checklist_uid);
+  [Throws=NodeError]
+  void join_checklist(string checklist_uid);
+  [Throws=NodeError]
+  void set_checklist_task_status(ChecklistTaskStatusSetRequest request);
+  [Throws=NodeError]
+  void add_checklist_task_row(ChecklistTaskRowAddRequest request);
+  [Throws=NodeError]
+  void delete_checklist_task_row(ChecklistTaskRowDeleteRequest request);
+  [Throws=NodeError]
+  void set_checklist_task_row_style(ChecklistTaskRowStyleSetRequest request);
+  [Throws=NodeError]
+  void set_checklist_task_cell(ChecklistTaskCellSetRequest request);
   [Throws=NodeError]
   sequence<TelemetryPositionRecord> get_telemetry_positions();
   [Throws=NodeError]

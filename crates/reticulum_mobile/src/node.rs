@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel as cb;
 use reticulum::destination::DestinationName;
 use rmpv::Value as MsgPackValue;
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
@@ -22,7 +23,12 @@ use crate::sos::{
 use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord, EamSourceRecord,
+    AnnounceRecord, AppSettingsRecord, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistListActiveRequest, ChecklistRecord,
+    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
+    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
+    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
@@ -36,7 +42,6 @@ const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMAND_QUEUE_CAPACITY: usize = 256;
-
 fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return tx.try_send(command).map_err(|error| match error {
@@ -781,6 +786,143 @@ fn msgpack_string_array(values: &[String]) -> MsgPackValue {
     )
 }
 
+fn current_timestamp_rfc3339() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let seconds_since_epoch = duration.as_secs() as i64;
+    let nanos = duration.subsec_nanos();
+    let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
+    let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{nanos:09}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year, month, day)
+}
+
+fn json_value_to_msgpack(value: &JsonValue) -> Result<MsgPackValue, NodeError> {
+    match value {
+        JsonValue::Null => Ok(MsgPackValue::Nil),
+        JsonValue::Bool(value) => Ok(MsgPackValue::Boolean(*value)),
+        JsonValue::Number(value) => {
+            if let Some(value) = value.as_u64() {
+                Ok(MsgPackValue::from(value))
+            } else if let Some(value) = value.as_i64() {
+                Ok(MsgPackValue::from(value))
+            } else if let Some(value) = value.as_f64() {
+                Ok(MsgPackValue::from(value))
+            } else {
+                Err(NodeError::InvalidConfig {})
+            }
+        }
+        JsonValue::String(value) => Ok(MsgPackValue::from(value.as_str())),
+        JsonValue::Array(values) => Ok(MsgPackValue::Array(
+            values
+                .iter()
+                .map(json_value_to_msgpack)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        JsonValue::Object(entries) => Ok(MsgPackValue::Map(
+            entries
+                .iter()
+                .map(|(key, value)| {
+                    Ok((
+                        MsgPackValue::from(key.as_str()),
+                        json_value_to_msgpack(value)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, NodeError>>()?,
+        )),
+    }
+}
+
+fn checklist_string_arg<'a>(args: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(JsonValue::as_str).map(str::trim)
+}
+
+fn checklist_key_arg(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
+    checklist_string_arg(args, key)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn sanitize_correlation_token(value: &str) -> String {
+    let mut token = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while token.contains("--") {
+        token = token.replace("--", "-");
+    }
+    token.trim_matches('-').to_string()
+}
+
+fn checklist_topics_from_args(args: &JsonMap<String, JsonValue>) -> Vec<String> {
+    let mut topics = Vec::new();
+    for key in ["mission_uid", "checklist_uid"] {
+        if let Some(value) = checklist_key_arg(args, key) {
+            if !topics.iter().any(|existing| existing == &value) {
+                topics.push(value);
+            }
+        }
+    }
+    topics
+}
+
+fn checklist_subject_part(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
+    checklist_key_arg(args, key)
+        .map(|value| sanitize_correlation_token(value.as_str()))
+        .filter(|value| !value.is_empty())
+}
+
+fn checklist_subject_token(command_type: &str, args: &JsonMap<String, JsonValue>) -> String {
+    let checklist_uid = checklist_subject_part(args, "checklist_uid");
+    let task_uid = checklist_subject_part(args, "task_uid");
+    let column_uid = checklist_subject_part(args, "column_uid");
+    if task_uid.is_some() || column_uid.is_some() {
+        let parts = [
+            checklist_uid.as_deref(),
+            task_uid.as_deref(),
+            column_uid.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !parts.is_empty() {
+            return parts.join("-");
+        }
+    }
+    for key in ["checklist_uid", "mission_uid", "template_uid"] {
+        if let Some(sanitized) = checklist_subject_part(args, key) {
+            return sanitized;
+        }
+    }
+    sanitize_correlation_token(command_type)
+}
+
 fn build_mission_command_fields(
     command_id: &str,
     correlation_id: &str,
@@ -797,6 +939,610 @@ fn build_mission_command_fields(
         ])]),
     )]);
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+}
+
+fn build_checklist_command_fields(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+    command_id_override: Option<&str>,
+) -> Result<Vec<u8>, NodeError> {
+    let timestamp = current_timestamp_rfc3339();
+    let send_ts_ms = now_ms();
+    let subject = checklist_subject_token(command_type, args);
+    let command_slug = sanitize_correlation_token(command_type);
+    let destination_hint = &target.app_destination_hex[..target.app_destination_hex.len().min(8)];
+    let correlation_id = format!("{command_slug}-{subject}-{destination_hint}-{send_ts_ms}");
+    let command_id = command_id_override
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("cmd-{correlation_id}"));
+    let source_display_name = status.name.trim();
+    let topics = checklist_topics_from_args(args)
+        .into_iter()
+        .map(MsgPackValue::from)
+        .collect::<Vec<_>>();
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![msgpack_map(vec![
+            ("command_id", MsgPackValue::from(command_id.as_str())),
+            (
+                "correlation_id",
+                MsgPackValue::from(correlation_id.as_str()),
+            ),
+            ("command_type", MsgPackValue::from(command_type)),
+            (
+                "source",
+                msgpack_map(vec![
+                    (
+                        "rns_identity",
+                        MsgPackValue::from(status.identity_hex.as_str()),
+                    ),
+                    ("display_name", MsgPackValue::from(source_display_name)),
+                ]),
+            ),
+            ("timestamp", MsgPackValue::from(timestamp.as_str())),
+            ("topics", MsgPackValue::Array(topics)),
+            (
+                "args",
+                json_value_to_msgpack(&JsonValue::Object(args.clone()))?,
+            ),
+        ])]),
+    )]);
+    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+}
+
+fn checklist_snapshot_msgpack_entry(
+    snapshot_json: &str,
+) -> Result<(&'static str, MsgPackValue), NodeError> {
+    let snapshot_value = serde_json::from_str::<JsonValue>(snapshot_json)
+        .map_err(|_| NodeError::InternalError {})?;
+    Ok(("snapshot", json_value_to_msgpack(&snapshot_value)?))
+}
+
+fn checklist_snapshot_content_bytes(
+    checklist_uid: &str,
+    snapshot_json: &str,
+) -> Result<Vec<u8>, NodeError> {
+    let snapshot_entry = checklist_snapshot_msgpack_entry(snapshot_json)?;
+    let content = msgpack_map(vec![
+        ("type", MsgPackValue::from("rem.checklist.snapshot.v1")),
+        ("checklist_uid", MsgPackValue::from(checklist_uid)),
+        snapshot_entry,
+    ]);
+    rmp_serde::to_vec(&content).map_err(|_| NodeError::InternalError {})
+}
+
+fn build_checklist_replication_payload(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    build_checklist_replication_payload_with_command_id(status, target, command_type, args, None)
+}
+
+fn build_checklist_replication_payload_with_command_id(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+    command_id_override: Option<&str>,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let fields =
+        build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
+    let body = format!(
+        "Checklist {} {}",
+        command_type,
+        checklist_subject_token(command_type, args)
+    )
+    .into_bytes();
+    Ok((body, fields))
+}
+
+fn build_checklist_replication_payload_with_snapshot(
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    command_type: &str,
+    args: &JsonMap<String, JsonValue>,
+    command_id_override: Option<&str>,
+    snapshot_json: &str,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let fields =
+        build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
+    let checklist_uid =
+        checklist_key_arg(args, "checklist_uid").ok_or(NodeError::InvalidConfig {})?;
+    let body = checklist_snapshot_content_bytes(checklist_uid.as_str(), snapshot_json)?;
+    Ok((body, fields))
+}
+
+fn checklist_create_online_args_json(
+    request: &ChecklistCreateOnlineRequest,
+) -> Result<JsonMap<String, JsonValue>, NodeError> {
+    let checklist_uid = request
+        .checklist_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+    let template_uid = request.template_uid.trim();
+    if template_uid.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+    let mission_uid = request
+        .mission_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(NodeError::InvalidConfig {})?;
+    let start_time = request.start_time.trim();
+    if start_time.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+    let value = json!({
+        "name": name,
+        "template_uid": template_uid,
+        "mission_uid": mission_uid,
+        "description": request.description.trim(),
+        "start_time": start_time,
+    });
+    match value {
+        JsonValue::Object(mut map) => {
+            if let Some(checklist_uid) = checklist_uid {
+                map.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+            }
+            Ok(map)
+        }
+        _ => Err(NodeError::InternalError {}),
+    }
+}
+
+fn append_checklist_create_snapshot_args(
+    args: &mut JsonMap<String, JsonValue>,
+    checklist: &ChecklistRecord,
+) -> Result<(), NodeError> {
+    let JsonValue::Object(snapshot) =
+        serde_json::to_value(checklist).map_err(|_| NodeError::InternalError {})?
+    else {
+        return Err(NodeError::InternalError {});
+    };
+    for key in [
+        "columns",
+        "participant_rns_identities",
+        "created_at",
+        "created_by_team_member_rns_identity",
+    ] {
+        if let Some(value) = snapshot.get(key) {
+            args.insert(key.to_string(), value.clone());
+        }
+    }
+    args.insert(
+        "total_tasks".to_string(),
+        JsonValue::from(checklist.expected_task_count.unwrap_or_else(|| {
+            checklist
+                .tasks
+                .iter()
+                .filter(|task| task.deleted_at.is_none())
+                .count() as u32
+        })),
+    );
+    Ok(())
+}
+
+fn checklist_task_row_add_args_from_task(
+    checklist_uid: &str,
+    task: &ChecklistTaskRecord,
+    changed_by_identity: Option<&str>,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(task.task_uid.as_str()),
+    );
+    args.insert("number".to_string(), JsonValue::from(task.number));
+    if let Some(due_relative_minutes) = task.due_relative_minutes {
+        args.insert(
+            "due_relative_minutes".to_string(),
+            JsonValue::from(due_relative_minutes),
+        );
+    }
+    if let Some(due_dtg) = task
+        .due_dtg
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert("due_dtg".to_string(), JsonValue::from(due_dtg));
+    }
+    if let Some(notes) = task
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert("notes".to_string(), JsonValue::from(notes));
+    }
+    if let Some(legacy_value) = task.legacy_value.as_deref() {
+        args.insert("legacy_value".to_string(), JsonValue::from(legacy_value));
+    }
+    if let Some(identity) = changed_by_identity
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert(
+            "changed_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    args
+}
+
+fn checklist_task_cell_args_from_cell(
+    checklist_uid: &str,
+    cell: &crate::types::ChecklistCellRecord,
+    updated_by_identity: Option<&str>,
+) -> Option<JsonMap<String, JsonValue>> {
+    let value = cell.value.as_deref()?;
+    let mut args = JsonMap::new();
+    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(cell.task_uid.as_str()),
+    );
+    args.insert(
+        "column_uid".to_string(),
+        JsonValue::from(cell.column_uid.as_str()),
+    );
+    args.insert("value".to_string(), JsonValue::from(value));
+    let identity = cell
+        .updated_by_team_member_rns_identity
+        .as_deref()
+        .or(updated_by_identity)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(identity) = identity {
+        args.insert(
+            "updated_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    Some(args)
+}
+
+fn checklist_task_status_args_from_task(
+    checklist_uid: &str,
+    task: &ChecklistTaskRecord,
+    changed_by_identity: Option<&str>,
+) -> Option<JsonMap<String, JsonValue>> {
+    if matches!(
+        task.user_status,
+        crate::types::ChecklistUserTaskStatus::Pending {}
+    ) {
+        return None;
+    }
+    let mut args = JsonMap::new();
+    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(task.task_uid.as_str()),
+    );
+    args.insert(
+        "user_status".to_string(),
+        JsonValue::from(task.user_status.as_str()),
+    );
+    let identity = task
+        .completed_by_team_member_rns_identity
+        .as_deref()
+        .or(changed_by_identity)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(identity) = identity {
+        args.insert(
+            "changed_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    Some(args)
+}
+
+fn checklist_task_row_style_args_from_task(
+    checklist_uid: &str,
+    task: &ChecklistTaskRecord,
+    changed_by_identity: Option<&str>,
+) -> Option<JsonMap<String, JsonValue>> {
+    if task.row_background_color.is_none() && !task.line_break_enabled {
+        return None;
+    }
+    let mut args = JsonMap::new();
+    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(task.task_uid.as_str()),
+    );
+    if let Some(color) = task.row_background_color.as_deref() {
+        args.insert("row_background_color".to_string(), JsonValue::from(color));
+    }
+    if task.line_break_enabled {
+        args.insert("line_break_enabled".to_string(), JsonValue::from(true));
+    }
+    if let Some(identity) = changed_by_identity
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert(
+            "changed_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    Some(args)
+}
+
+fn schedule_initial_checklist_task_payloads(
+    scheduled_sends: &mut Vec<(String, Vec<u8>, Vec<u8>, SendMode)>,
+    status: &NodeStatus,
+    target: &MissionReplicationTarget,
+    checklist: &ChecklistRecord,
+) {
+    let changed_by = checklist
+        .last_changed_by_team_member_rns_identity
+        .as_deref()
+        .or_else(|| Some(checklist.created_by_team_member_rns_identity.as_str()));
+    for task in checklist
+        .tasks
+        .iter()
+        .filter(|task| task.deleted_at.is_none())
+    {
+        let row_args =
+            checklist_task_row_add_args_from_task(checklist.uid.as_str(), task, changed_by);
+        if let Ok((body, fields)) =
+            build_checklist_replication_payload(status, target, "checklist.task.row.add", &row_args)
+        {
+            scheduled_sends.push((
+                target.app_destination_hex.clone(),
+                body,
+                fields,
+                target.send_mode,
+            ));
+        }
+
+        for cell in &task.cells {
+            let Some(cell_args) =
+                checklist_task_cell_args_from_cell(checklist.uid.as_str(), cell, changed_by)
+            else {
+                continue;
+            };
+            if let Ok((body, fields)) = build_checklist_replication_payload(
+                status,
+                target,
+                "checklist.task.cell.set",
+                &cell_args,
+            ) {
+                scheduled_sends.push((
+                    target.app_destination_hex.clone(),
+                    body,
+                    fields,
+                    target.send_mode,
+                ));
+            }
+        }
+
+        if let Some(status_args) =
+            checklist_task_status_args_from_task(checklist.uid.as_str(), task, changed_by)
+        {
+            if let Ok((body, fields)) = build_checklist_replication_payload(
+                status,
+                target,
+                "checklist.task.status.set",
+                &status_args,
+            ) {
+                scheduled_sends.push((
+                    target.app_destination_hex.clone(),
+                    body,
+                    fields,
+                    target.send_mode,
+                ));
+            }
+        }
+
+        if let Some(style_args) =
+            checklist_task_row_style_args_from_task(checklist.uid.as_str(), task, changed_by)
+        {
+            if let Ok((body, fields)) = build_checklist_replication_payload(
+                status,
+                target,
+                "checklist.task.row.style.set",
+                &style_args,
+            ) {
+                scheduled_sends.push((
+                    target.app_destination_hex.clone(),
+                    body,
+                    fields,
+                    target.send_mode,
+                ));
+            }
+        }
+    }
+}
+
+fn checklist_update_args_json(request: &ChecklistUpdateRequest) -> JsonMap<String, JsonValue> {
+    let mut patch = JsonMap::new();
+    if let Some(mission_uid) = request.patch.mission_uid.as_deref() {
+        patch.insert(
+            "mission_uid".to_string(),
+            JsonValue::from(mission_uid.trim()),
+        );
+    }
+    if let Some(template_uid) = request.patch.template_uid.as_deref() {
+        patch.insert(
+            "template_uid".to_string(),
+            JsonValue::from(template_uid.trim()),
+        );
+    }
+    if let Some(name) = request.patch.name.as_deref() {
+        patch.insert("name".to_string(), JsonValue::from(name.trim()));
+    }
+    if let Some(description) = request.patch.description.as_deref() {
+        patch.insert(
+            "description".to_string(),
+            JsonValue::from(description.trim()),
+        );
+    }
+    if let Some(start_time) = request.patch.start_time.as_deref() {
+        patch.insert("start_time".to_string(), JsonValue::from(start_time.trim()));
+    }
+
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    args.insert("patch".to_string(), JsonValue::Object(patch));
+    args
+}
+
+fn checklist_uid_args_json(checklist_uid: &str) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(checklist_uid.trim()),
+    );
+    args
+}
+
+fn checklist_task_status_args_json(
+    request: &ChecklistTaskStatusSetRequest,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(request.task_uid.trim()),
+    );
+    args.insert(
+        "user_status".to_string(),
+        JsonValue::from(request.user_status.as_str()),
+    );
+    if let Some(identity) = request
+        .changed_by_team_member_rns_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert(
+            "changed_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    args
+}
+
+fn checklist_task_row_add_args_json(
+    request: &ChecklistTaskRowAddRequest,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    if let Some(task_uid) = request
+        .task_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert("task_uid".to_string(), JsonValue::from(task_uid));
+    }
+    args.insert("number".to_string(), JsonValue::from(request.number));
+    if let Some(due_relative_minutes) = request.due_relative_minutes {
+        args.insert(
+            "due_relative_minutes".to_string(),
+            JsonValue::from(due_relative_minutes),
+        );
+    }
+    if let Some(legacy_value) = request.legacy_value.as_deref() {
+        args.insert("legacy_value".to_string(), JsonValue::from(legacy_value));
+    }
+    args
+}
+
+fn checklist_task_row_delete_args_json(
+    request: &ChecklistTaskRowDeleteRequest,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(request.task_uid.trim()),
+    );
+    args
+}
+
+fn checklist_task_row_style_args_json(
+    request: &ChecklistTaskRowStyleSetRequest,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(request.task_uid.trim()),
+    );
+    if let Some(color) = request.row_background_color.as_deref() {
+        args.insert(
+            "row_background_color".to_string(),
+            JsonValue::from(color.trim()),
+        );
+    }
+    if let Some(line_break_enabled) = request.line_break_enabled {
+        args.insert(
+            "line_break_enabled".to_string(),
+            JsonValue::from(line_break_enabled),
+        );
+    }
+    args
+}
+
+fn checklist_task_cell_args_json(
+    request: &ChecklistTaskCellSetRequest,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert(
+        "checklist_uid".to_string(),
+        JsonValue::from(request.checklist_uid.trim()),
+    );
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(request.task_uid.trim()),
+    );
+    args.insert(
+        "column_uid".to_string(),
+        JsonValue::from(request.column_uid.trim()),
+    );
+    args.insert("value".to_string(), JsonValue::from(request.value.clone()));
+    if let Some(identity) = request
+        .updated_by_team_member_rns_identity
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        args.insert(
+            "updated_by_team_member_rns_identity".to_string(),
+            JsonValue::from(identity),
+        );
+    }
+    args
 }
 
 fn build_eam_replication_payload(
@@ -1993,6 +2739,1262 @@ impl Node {
         Ok(())
     }
 
+    pub fn list_active_checklists(
+        &self,
+        request: Option<ChecklistListActiveRequest>,
+    ) -> Result<Vec<ChecklistRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut items = inner.app_state.get_active_checklists()?;
+        if let Some(request) = request {
+            if let Some(search) = request
+                .search
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let needle = search.to_ascii_lowercase();
+                items.retain(|item| {
+                    [
+                        Some(item.uid.as_str()),
+                        Some(item.name.as_str()),
+                        Some(item.description.as_str()),
+                        item.mission_uid.as_deref(),
+                        item.template_uid.as_deref(),
+                        item.template_name.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|value| value.to_ascii_lowercase().contains(needle.as_str()))
+                });
+            }
+            match request.sort_by.as_deref().map(str::trim) {
+                Some("name_asc") => items.sort_by(|left, right| {
+                    left.name
+                        .to_ascii_lowercase()
+                        .cmp(&right.name.to_ascii_lowercase())
+                        .then_with(|| left.uid.cmp(&right.uid))
+                }),
+                Some("name_desc") => items.sort_by(|left, right| {
+                    right
+                        .name
+                        .to_ascii_lowercase()
+                        .cmp(&left.name.to_ascii_lowercase())
+                        .then_with(|| right.uid.cmp(&left.uid))
+                }),
+                Some("updated_at_asc") | Some("created_at_asc") => items.sort_by(|left, right| {
+                    left.updated_at
+                        .cmp(&right.updated_at)
+                        .then_with(|| left.created_at.cmp(&right.created_at))
+                        .then_with(|| left.uid.cmp(&right.uid))
+                }),
+                Some("created_at_desc") => items.sort_by(|left, right| {
+                    right
+                        .created_at
+                        .cmp(&left.created_at)
+                        .then_with(|| right.updated_at.cmp(&left.updated_at))
+                        .then_with(|| right.uid.cmp(&left.uid))
+                }),
+                _ => items.sort_by(|left, right| {
+                    right
+                        .updated_at
+                        .cmp(&left.updated_at)
+                        .then_with(|| right.created_at.cmp(&left.created_at))
+                        .then_with(|| right.uid.cmp(&left.uid))
+                }),
+            }
+        }
+        Ok(items)
+    }
+
+    pub fn get_checklist(
+        &self,
+        checklist_uid: String,
+    ) -> Result<Option<ChecklistRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_checklist(checklist_uid.trim())
+    }
+
+    pub fn list_checklist_templates(
+        &self,
+        request: Option<ChecklistTemplateListRequest>,
+    ) -> Result<Vec<ChecklistTemplateRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut items = inner.app_state.list_checklist_templates()?;
+        if let Some(request) = request {
+            if let Some(search) = request
+                .search
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let needle = search.to_ascii_lowercase();
+                items.retain(|record| {
+                    record.uid.to_ascii_lowercase().contains(needle.as_str())
+                        || record.name.to_ascii_lowercase().contains(needle.as_str())
+                        || record
+                            .description
+                            .to_ascii_lowercase()
+                            .contains(needle.as_str())
+                });
+            }
+        }
+        Ok(items)
+    }
+
+    pub fn get_checklist_template(
+        &self,
+        template_uid: String,
+    ) -> Result<Option<ChecklistTemplateRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_checklist_template(template_uid.trim())
+    }
+
+    pub fn import_checklist_template_csv(
+        &self,
+        request: ChecklistTemplateImportCsvRequest,
+    ) -> Result<ChecklistTemplateRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.import_checklist_template_csv(&request)
+    }
+
+    pub fn create_checklist_from_template(
+        &self,
+        request: ChecklistCreateFromTemplateRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .checklist_uid
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.checklist_uid = Some(format!("chk-{}", now_ms()));
+            }
+            if request
+                .created_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.created_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let checklist_uid = request
+                .checklist_uid
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(NodeError::InvalidConfig {})?
+                .to_string();
+            let create_command_id = format!("cmd-{checklist_uid}");
+            let invalidations = inner.app_state.create_checklist_from_template(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let create_request = ChecklistCreateOnlineRequest {
+                    checklist_uid: Some(checklist_uid.clone()),
+                    mission_uid: request.mission_uid.clone(),
+                    template_uid: request.template_uid.clone(),
+                    name: request.name.clone(),
+                    description: request.description.clone(),
+                    start_time: request.start_time.clone(),
+                    created_by_team_member_rns_identity: request
+                        .created_by_team_member_rns_identity
+                        .clone(),
+                    created_by_team_member_display_name: request
+                        .created_by_team_member_display_name
+                        .clone(),
+                };
+                let mut snapshot = inner
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())?
+                    .ok_or(NodeError::InternalError {})?;
+                snapshot.uploaded_at = Some(current_timestamp_rfc3339());
+                snapshot.last_changed_by_team_member_rns_identity =
+                    request.created_by_team_member_rns_identity.clone();
+                snapshot.sync_state = crate::types::ChecklistSyncState::Synced {};
+                let invalidations = inner
+                    .app_state
+                    .upsert_checklist(&snapshot, "checklist-uploaded")?;
+                for invalidation in invalidations {
+                    emit_projection_invalidation(&inner.bus, invalidation);
+                }
+                let mut create_args = checklist_create_online_args_json(&create_request)?;
+                append_checklist_create_snapshot_args(&mut create_args, &snapshot)?;
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for target in replication_targets {
+                    match build_checklist_replication_payload_with_command_id(
+                        &status,
+                        &target,
+                        "checklist.create.online",
+                        &create_args,
+                        Some(create_command_id.as_str()),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.create.online", err
+                            ),
+                        }),
+                    }
+                    schedule_initial_checklist_task_payloads(
+                        &mut scheduled_sends,
+                        &status,
+                        &target,
+                        &snapshot,
+                    );
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.create.online/checklist.task.*", err
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn create_online_checklist(
+        &self,
+        request: ChecklistCreateOnlineRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .checklist_uid
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.checklist_uid = Some(format!("chk-{}", now_ms()));
+            }
+            if request
+                .created_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.created_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let checklist_uid = request
+                .checklist_uid
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(NodeError::InvalidConfig {})?
+                .to_string();
+            let mut args = checklist_create_online_args_json(&request)?;
+            let command_id = format!("cmd-{checklist_uid}");
+            let invalidations = inner.app_state.create_online_checklist(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+            let checklist = inner
+                .app_state
+                .get_checklist_any(checklist_uid.as_str())?
+                .ok_or(NodeError::InternalError {})?;
+            append_checklist_create_snapshot_args(&mut args, &checklist)?;
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for target in replication_targets {
+                    match build_checklist_replication_payload_with_command_id(
+                        &status,
+                        &target,
+                        "checklist.create.online",
+                        &args,
+                        Some(command_id.as_str()),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.create.online", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.create.online", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn upload_checklist(&self, checklist_uid: String) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let normalized_uid = checklist_uid.trim();
+        if normalized_uid.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut checklist = inner
+                .app_state
+                .get_checklist_any(normalized_uid)?
+                .ok_or(NodeError::InvalidConfig {})?;
+            if checklist.deleted_at.is_some() {
+                return Err(NodeError::InvalidConfig {});
+            }
+            checklist.uploaded_at = Some(current_timestamp_rfc3339());
+            checklist.last_changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            checklist.sync_state = crate::types::ChecklistSyncState::Synced {};
+            let invalidations = inner
+                .app_state
+                .upsert_checklist(&checklist, "checklist-uploaded")?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let args = checklist_uid_args_json(normalized_uid);
+                let snapshot_json =
+                    serde_json::to_string(&checklist).map_err(|_| NodeError::InternalError {})?;
+                let upload_command_id = format!("cmd-{normalized_uid}-upload");
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for target in replication_targets {
+                    match build_checklist_replication_payload_with_snapshot(
+                        &status,
+                        &target,
+                        "checklist.upload",
+                        &args,
+                        Some(upload_command_id.as_str()),
+                        snapshot_json.as_str(),
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.upload", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.upload", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn update_checklist(&self, request: ChecklistUpdateRequest) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.update_checklist(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_update_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.update",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.update", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.update", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_checklist(&self, checklist_uid: String) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let normalized_uid = checklist_uid.trim().to_string();
+            let invalidations = inner.app_state.delete_checklist_with_actor(
+                normalized_uid.as_str(),
+                Some(status.identity_hex.as_str()),
+            )?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_uid_args_json(normalized_uid.as_str());
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.delete",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.delete", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.delete", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn join_checklist(&self, checklist_uid: String) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let normalized_uid = checklist_uid.trim().to_string();
+            let mut checklist = inner
+                .app_state
+                .get_checklist_any(normalized_uid.as_str())?
+                .ok_or(NodeError::InvalidConfig {})?;
+            if checklist.deleted_at.is_some() {
+                return Err(NodeError::InvalidConfig {});
+            }
+            if !status.identity_hex.trim().is_empty()
+                && !checklist
+                    .participant_rns_identities
+                    .iter()
+                    .any(|value| value == &status.identity_hex)
+            {
+                checklist
+                    .participant_rns_identities
+                    .push(status.identity_hex.clone());
+                checklist.updated_at = Some(current_timestamp_rfc3339());
+                checklist.last_changed_by_team_member_rns_identity =
+                    Some(status.identity_hex.clone());
+                let invalidations = inner
+                    .app_state
+                    .upsert_checklist(&checklist, "checklist-joined")?;
+                for invalidation in invalidations {
+                    emit_projection_invalidation(&inner.bus, invalidation);
+                }
+            }
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_uid_args_json(normalized_uid.as_str());
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.join",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.join", err
+                            ),
+                        }),
+                    }
+                }
+            }
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.join", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_checklist_task_status(
+        &self,
+        request: ChecklistTaskStatusSetRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.set_checklist_task_status(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_task_status_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.task.status.set",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.task.status.set", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.task.status.set", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn add_checklist_task_row(
+        &self,
+        request: ChecklistTaskRowAddRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .task_uid
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.task_uid = Some(format!(
+                    "{}-task-{}-{}",
+                    request.checklist_uid.trim(),
+                    request.number,
+                    now_ms()
+                ));
+            }
+            if request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.add_checklist_task_row(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_task_row_add_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.task.row.add",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.task.row.add", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.task.row.add", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_checklist_task_row(
+        &self,
+        request: ChecklistTaskRowDeleteRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.delete_checklist_task_row(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_task_row_delete_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.task.row.delete",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.task.row.delete", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.task.row.delete", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_checklist_task_row_style(
+        &self,
+        request: ChecklistTaskRowStyleSetRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .changed_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.changed_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.set_checklist_task_row_style(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_task_row_style_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.task.row.style.set",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.task.row.style.set", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.task.row.style.set", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_checklist_task_cell(
+        &self,
+        request: ChecklistTaskCellSetRequest,
+    ) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let mut request = request;
+            if request
+                .updated_by_team_member_rns_identity
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                request.updated_by_team_member_rns_identity = Some(status.identity_hex.clone());
+            }
+            let invalidations = inner.app_state.set_checklist_task_cell(&request)?;
+            for invalidation in invalidations {
+                emit_projection_invalidation(&inner.bus, invalidation);
+            }
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let replication_targets = build_runtime_mission_replication_targets(
+                    &status,
+                    peers.as_slice(),
+                    saved_peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                let args = checklist_task_cell_args_json(&request);
+                for target in replication_targets {
+                    match build_checklist_replication_payload(
+                        &status,
+                        &target,
+                        "checklist.task.cell.set",
+                        &args,
+                    ) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex.clone(),
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "checklist replication skipped destination={} command={} reason={}",
+                                target.app_destination_hex, "checklist.task.cell.set", err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "checklist replication enqueue failed destination={} command={} reason={}",
+                        destination_hex, "checklist.task.cell.set", err
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn get_eams(&self) -> Result<Vec<EamProjectionRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.get_eams()
@@ -2916,6 +4918,192 @@ mod tests {
         rmp_serde::to_vec(&fields).expect("msgpack event fields")
     }
 
+    #[test]
+    fn checklist_upload_snapshot_uses_msgpack_content_not_command_fields() {
+        let status = NodeStatus {
+            running: true,
+            name: "Pixel".to_string(),
+            identity_hex: "11111111111111111111111111111111".to_string(),
+            app_destination_hex: "22222222222222222222222222222222".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let snapshot_json =
+            r#"{"uid":"chk-native","name":"Native","tasks":[{"task_uid":"task-1","number":1}]}"#;
+        let args = checklist_uid_args_json("chk-native");
+
+        let (body, fields) = build_checklist_replication_payload_with_snapshot(
+            &status,
+            &target,
+            "checklist.upload",
+            &args,
+            Some("cmd-upload"),
+            snapshot_json,
+        )
+        .expect("upload payload");
+        let fields = rmp_serde::from_slice::<MsgPackValue>(fields.as_slice()).expect("fields");
+        let MsgPackValue::Map(field_entries) = fields else {
+            panic!("fields should be a map");
+        };
+        let commands = field_entries
+            .iter()
+            .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
+            .and_then(|(_, value)| value.as_array())
+            .expect("commands");
+        let command = commands[0].as_map().expect("command map");
+
+        assert!(!command
+            .iter()
+            .any(|(key, _)| key.as_str() == Some("snapshot")));
+        let content =
+            rmp_serde::from_slice::<MsgPackValue>(body.as_slice()).expect("msgpack snapshot body");
+        let MsgPackValue::Map(content_entries) = content else {
+            panic!("snapshot body should be a map");
+        };
+        assert!(content_entries
+            .iter()
+            .any(|(key, value)| key.as_str() == Some("type")
+                && value.as_str() == Some("rem.checklist.snapshot.v1")));
+        assert!(content_entries
+            .iter()
+            .any(|(key, value)| key.as_str() == Some("snapshot")
+                && matches!(value, MsgPackValue::Map(_))));
+    }
+
+    #[test]
+    fn checklist_create_args_include_schema_but_not_full_task_snapshot() {
+        let checklist = ChecklistRecord {
+            uid: "chk-hydrate".to_string(),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: None,
+            template_version: None,
+            template_name: None,
+            name: "Hydrate".to_string(),
+            description: String::new(),
+            start_time: None,
+            mode: crate::types::ChecklistMode::Online {},
+            sync_state: crate::types::ChecklistSyncState::Synced {},
+            origin_type: crate::types::ChecklistOriginType::RchTemplate {},
+            checklist_status: crate::types::ChecklistTaskStatus::Pending {},
+            created_at: Some("2026-04-23T12:00:00Z".to_string()),
+            created_by_team_member_rns_identity: "peer-a".to_string(),
+            created_by_team_member_display_name: Some("Peer A".to_string()),
+            updated_at: Some("2026-04-23T12:00:00Z".to_string()),
+            last_changed_by_team_member_rns_identity: Some("peer-a".to_string()),
+            deleted_at: None,
+            uploaded_at: Some("2026-04-23T12:00:00Z".to_string()),
+            participant_rns_identities: vec!["peer-a".to_string()],
+            expected_task_count: Some(1),
+            progress_percent: 0.0,
+            counts: crate::types::ChecklistStatusCounts {
+                pending_count: 1,
+                late_count: 0,
+                complete_count: 0,
+            },
+            columns: vec![crate::types::ChecklistColumnRecord {
+                column_uid: "col-item".to_string(),
+                column_name: "Item".to_string(),
+                display_order: 0,
+                column_type: crate::types::ChecklistColumnType::ShortString {},
+                column_editable: true,
+                background_color: None,
+                text_color: None,
+                is_removable: true,
+                system_key: None,
+            }],
+            tasks: vec![crate::types::ChecklistTaskRecord {
+                task_uid: "task-1".to_string(),
+                number: 1,
+                user_status: crate::types::ChecklistUserTaskStatus::Pending {},
+                task_status: crate::types::ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: Some("2026-04-23T12:00:00Z".to_string()),
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: None,
+                due_dtg: None,
+                notes: None,
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some("Water".to_string()),
+                cells: vec![crate::types::ChecklistCellRecord {
+                    cell_uid: "task-1:col-item".to_string(),
+                    task_uid: "task-1".to_string(),
+                    column_uid: "col-item".to_string(),
+                    value: Some("Water".to_string()),
+                    updated_at: None,
+                    updated_by_team_member_rns_identity: None,
+                }],
+            }],
+            feed_publications: Vec::new(),
+        };
+        let mut create_args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+            checklist_uid: Some(checklist.uid.clone()),
+            mission_uid: checklist.mission_uid.clone(),
+            template_uid: "tmpl-hydrate".to_string(),
+            name: checklist.name.clone(),
+            description: checklist.description.clone(),
+            start_time: "2026-04-23T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some(
+                checklist.created_by_team_member_rns_identity.clone(),
+            ),
+            created_by_team_member_display_name: checklist
+                .created_by_team_member_display_name
+                .clone(),
+        })
+        .expect("create args");
+        append_checklist_create_snapshot_args(&mut create_args, &checklist)
+            .expect("append create snapshot");
+        assert_eq!(
+            create_args.get("checklist_uid").and_then(JsonValue::as_str),
+            Some("chk-hydrate")
+        );
+        assert_eq!(
+            create_args
+                .get("columns")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            create_args.get("total_tasks").and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert!(create_args.get("tasks").is_none());
+        assert!(create_args.get("counts").is_none());
+        assert!(create_args.get("progress_percent").is_none());
+    }
+
+    #[test]
+    fn checklist_cell_subject_includes_task_and_column() {
+        let task_one_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-hydrate".to_string(),
+            task_uid: "task-1".to_string(),
+            column_uid: "col-description".to_string(),
+            value: "Reliable ignition source".to_string(),
+            updated_by_team_member_rns_identity: None,
+        });
+        let task_two_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-hydrate".to_string(),
+            task_uid: "task-2".to_string(),
+            column_uid: "col-description".to_string(),
+            value: "Hands-free lighting".to_string(),
+            updated_by_team_member_rns_identity: None,
+        });
+
+        let task_one_subject = checklist_subject_token("checklist.task.cell.set", &task_one_args);
+        let task_two_subject = checklist_subject_token("checklist.task.cell.set", &task_two_args);
+
+        assert_eq!(task_one_subject, "chk-hydrate-task-1-col-description");
+        assert_eq!(task_two_subject, "chk-hydrate-task-2-col-description");
+        assert_ne!(task_one_subject, task_two_subject);
+    }
+
     async fn start_node_pair(test_name: &str) -> (TcpRelayHandle, Node, Node) {
         let relay = TcpRelayHandle::start().await;
 
@@ -3010,6 +5198,7 @@ mod tests {
                 api_key: String::new(),
                 refresh_interval_seconds: 3600,
             },
+            checklists: crate::types::ChecklistSettingsRecord::default(),
         }
     }
 
@@ -3464,6 +5653,7 @@ mod tests {
                 api_key: String::new(),
                 refresh_interval_seconds: 0,
             },
+            checklists: crate::types::ChecklistSettingsRecord::default(),
         }
     }
 
@@ -5354,5 +7544,296 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn checklist_create_online_args_match_supported_contract() {
+        let args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-001".to_string()),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: "tmpl-evac-001".to_string(),
+            name: "Mission Alpha Evac".to_string(),
+            description: "Shared run for Alpha".to_string(),
+            start_time: "2026-04-22T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some("abcd1234".to_string()),
+            created_by_team_member_display_name: None,
+        })
+        .expect("build create args");
+
+        assert_eq!(
+            args.get("name").and_then(JsonValue::as_str),
+            Some("Mission Alpha Evac")
+        );
+        assert_eq!(
+            args.get("template_uid").and_then(JsonValue::as_str),
+            Some("tmpl-evac-001")
+        );
+        assert_eq!(
+            args.get("mission_uid").and_then(JsonValue::as_str),
+            Some("mission-alpha")
+        );
+        assert_eq!(
+            args.get("description").and_then(JsonValue::as_str),
+            Some("Shared run for Alpha")
+        );
+        assert_eq!(
+            args.get("start_time").and_then(JsonValue::as_str),
+            Some("2026-04-22T12:00:00Z")
+        );
+        assert_eq!(
+            args.get("checklist_uid").and_then(JsonValue::as_str),
+            Some("chk-001")
+        );
+    }
+
+    #[test]
+    fn checklist_update_args_include_explicit_clears() {
+        let args = checklist_update_args_json(&ChecklistUpdateRequest {
+            checklist_uid: "chk-001".to_string(),
+            patch: crate::types::ChecklistUpdatePatch {
+                mission_uid: Some(String::new()),
+                template_uid: Some(String::new()),
+                name: Some("".to_string()),
+                description: Some("".to_string()),
+                start_time: Some(String::new()),
+            },
+            changed_by_team_member_rns_identity: None,
+        });
+        let patch = args
+            .get("patch")
+            .and_then(JsonValue::as_object)
+            .expect("patch object");
+
+        assert_eq!(
+            patch.get("mission_uid").and_then(JsonValue::as_str),
+            Some("")
+        );
+        assert_eq!(
+            patch.get("template_uid").and_then(JsonValue::as_str),
+            Some("")
+        );
+        assert_eq!(patch.get("name").and_then(JsonValue::as_str), Some(""));
+        assert_eq!(
+            patch.get("description").and_then(JsonValue::as_str),
+            Some("")
+        );
+        assert_eq!(
+            patch.get("start_time").and_then(JsonValue::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn checklist_task_payloads_preserve_whitespace_and_style_clears() {
+        let row_add_args = checklist_task_row_add_args_json(&ChecklistTaskRowAddRequest {
+            checklist_uid: "chk-001".to_string(),
+            task_uid: Some("task-001".to_string()),
+            number: 1,
+            due_relative_minutes: None,
+            legacy_value: Some("  Confirm rally point  ".to_string()),
+            changed_by_team_member_rns_identity: None,
+        });
+        assert_eq!(
+            row_add_args.get("legacy_value").and_then(JsonValue::as_str),
+            Some("  Confirm rally point  ")
+        );
+
+        let detail_row_args = checklist_task_row_add_args_from_task(
+            "chk-001",
+            &ChecklistTaskRecord {
+                task_uid: "task-detail".to_string(),
+                number: 2,
+                user_status: crate::types::ChecklistUserTaskStatus::Pending {},
+                task_status: crate::types::ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: Some("2026-04-24T12:00:00Z".to_string()),
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: Some(30),
+                due_dtg: Some("2026-04-24T12:30:00Z".to_string()),
+                notes: Some("Bring printed route card".to_string()),
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some("Confirm rally point".to_string()),
+                cells: Vec::new(),
+            },
+            Some("peer-a"),
+        );
+        assert_eq!(
+            detail_row_args.get("due_dtg").and_then(JsonValue::as_str),
+            Some("2026-04-24T12:30:00Z")
+        );
+        assert_eq!(
+            detail_row_args.get("notes").and_then(JsonValue::as_str),
+            Some("Bring printed route card")
+        );
+
+        let style_args = checklist_task_row_style_args_json(&ChecklistTaskRowStyleSetRequest {
+            checklist_uid: "chk-001".to_string(),
+            task_uid: "task-001".to_string(),
+            row_background_color: Some(String::new()),
+            line_break_enabled: None,
+            changed_by_team_member_rns_identity: None,
+        });
+        assert_eq!(
+            style_args
+                .get("row_background_color")
+                .and_then(JsonValue::as_str),
+            Some("")
+        );
+
+        let cell_args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-001".to_string(),
+            task_uid: "task-001".to_string(),
+            column_uid: "col-task".to_string(),
+            value: "  Move to alternate pickup  ".to_string(),
+            updated_by_team_member_rns_identity: None,
+        });
+        assert_eq!(
+            cell_args.get("value").and_then(JsonValue::as_str),
+            Some("  Move to alternate pickup  ")
+        );
+    }
+
+    #[test]
+    fn create_online_checklist_rejects_invalid_payload_before_local_persist() {
+        let storage_dir = prepare_storage_dir("checklist-create-prevalidate");
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        {
+            let inner = node.inner.lock().expect("node inner");
+            let mut status = inner.status.lock().expect("status");
+            status.identity_hex = "joiner-identity".to_string();
+        }
+
+        let result = node.create_online_checklist(ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-invalid".to_string()),
+            mission_uid: None,
+            template_uid: "tmpl-evac-001".to_string(),
+            name: "Mission Alpha Evac".to_string(),
+            description: "Shared run for Alpha".to_string(),
+            start_time: "2026-04-22T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: None,
+            created_by_team_member_display_name: None,
+        });
+
+        assert!(matches!(result, Err(NodeError::InvalidConfig {})));
+        assert!(node
+            .get_checklist("chk-invalid".to_string())
+            .expect("query checklist")
+            .is_none());
+    }
+
+    #[test]
+    fn join_checklist_updates_local_participants_immediately() {
+        let storage_dir = prepare_storage_dir("checklist-join-local");
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        {
+            let inner = node.inner.lock().expect("node inner");
+            let mut status = inner.status.lock().expect("status");
+            status.identity_hex = "joiner-identity".to_string();
+        }
+
+        node.create_online_checklist(ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-join".to_string()),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: "tmpl-evac-001".to_string(),
+            name: "Mission Alpha Evac".to_string(),
+            description: "Shared run for Alpha".to_string(),
+            start_time: "2026-04-22T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
+        })
+        .expect("create checklist");
+
+        node.join_checklist("chk-join".to_string())
+            .expect("join checklist");
+
+        let checklist = node
+            .get_checklist("chk-join".to_string())
+            .expect("get checklist")
+            .expect("checklist exists");
+        assert!(checklist
+            .participant_rns_identities
+            .iter()
+            .any(|value| value == "creator-identity"));
+        assert!(checklist
+            .participant_rns_identities
+            .iter()
+            .any(|value| value == "joiner-identity"));
+        assert_eq!(
+            checklist
+                .last_changed_by_team_member_rns_identity
+                .as_deref(),
+            Some("joiner-identity")
+        );
+    }
+
+    #[test]
+    fn list_active_checklists_supports_created_at_desc() {
+        let storage_dir = prepare_storage_dir("checklist-created-at-desc");
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+
+        node.create_online_checklist(ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-old".to_string()),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: "tmpl-evac-001".to_string(),
+            name: "Older Checklist".to_string(),
+            description: "Created first".to_string(),
+            start_time: "2026-04-22T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
+        })
+        .expect("create older checklist");
+        node.create_online_checklist(ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-new".to_string()),
+            mission_uid: Some("mission-alpha".to_string()),
+            template_uid: "tmpl-evac-001".to_string(),
+            name: "Newer Checklist".to_string(),
+            description: "Created second".to_string(),
+            start_time: "2026-04-22T12:05:00Z".to_string(),
+            created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
+        })
+        .expect("create newer checklist");
+
+        {
+            let inner = node.inner.lock().expect("node inner");
+            let mut older = inner
+                .app_state
+                .get_checklist_any("chk-old")
+                .expect("load older checklist")
+                .expect("older checklist present");
+            older.created_at = Some("2026-04-22T12:00:00Z".to_string());
+            older.updated_at = Some("2026-04-22T12:30:00Z".to_string());
+            inner
+                .app_state
+                .upsert_checklist(&older, "test-created-at-desc-old")
+                .expect("persist older checklist");
+
+            let mut newer = inner
+                .app_state
+                .get_checklist_any("chk-new")
+                .expect("load newer checklist")
+                .expect("newer checklist present");
+            newer.created_at = Some("2026-04-22T12:05:00Z".to_string());
+            newer.updated_at = Some("2026-04-22T12:10:00Z".to_string());
+            inner
+                .app_state
+                .upsert_checklist(&newer, "test-created-at-desc-new")
+                .expect("persist newer checklist");
+        }
+
+        let items = node
+            .list_active_checklists(Some(ChecklistListActiveRequest {
+                search: None,
+                sort_by: Some("created_at_desc".to_string()),
+            }))
+            .expect("list checklists");
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].uid, "chk-new");
+        assert_eq!(items[1].uid, "chk-old");
     }
 }

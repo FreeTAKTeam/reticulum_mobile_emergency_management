@@ -18,6 +18,7 @@ It is designed to be simple enough for anyone to use, even under stress.
 - **Works without any server**. Phones can form a peer-to-peer mesh of trusted peers and share updates directly.
 - **Exchanges encrypted Chat with Peers**. 
 - **Sends logs of Events**. Short text messages with SITREP.
+- **Shares operational Checklists**. Teams can create task lists from built-in or CSV templates, track deadlines, and collaborate on task completion.
 - **Stays compatible with RCH (Reticulum Community Hub)** if you want a directory to help discover peers, but it is not required. (in progress)
  
 ## Trust-Based Updates
@@ -37,9 +38,15 @@ The goal is one shared, evolving picture of the situation, not “who created th
 
 Alongside statuses, the app supports simple events and logs: short notes about conditions that affect the network or the response (for example, “power is out”, “bridge closed”, or “comms degraded”).
 
+## Checklists
+
+REM supports shared checklist work for autonomous field collaboration. A checklist can be created from a built-in template or from an uploaded CSV file. CSV templates can include arbitrary task columns and an optional `CompletedDTG` column, which is interpreted as a relative deadline from the checklist start date/time.
+
+When a checklist is shared, the Rust runtime persists it locally, sends a create command, and follows with a full checklist snapshot so peers can reconstruct the same task rows and columns. Later task updates send only the changed row, cell, or status.
+
 ## Under The Hood
 
-The network layer uses Reticulum, a secure mesh networking system. The core is implemented in Rust so it stays responsive on mobile devices.
+The network layer uses Reticulum, a secure mesh networking system. The core is implemented in Rust so it stays responsive on mobile devices. Checklist persistence, deadline calculation, and LXMF replication are Rust-owned; the mobile UI reads projected checklist state from the runtime.
 
 ## Install with Obtainium
 

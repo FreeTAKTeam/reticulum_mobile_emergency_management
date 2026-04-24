@@ -466,7 +466,7 @@ watch(
 
 .view-title {
   font-family: var(--font-headline);
-  font-size: clamp(1.9rem, 3vw, 2.8rem);
+  font-size: clamp(1.4rem, 3vw, 2.4rem);
 }
 
 .panel {
@@ -601,6 +601,10 @@ watch(
 }
 
 @media (max-width: 900px) {
+  .view-title {
+    font-size: 1.1rem;
+  }
+
   .pane-detail .view-header {
     display: none;
   }

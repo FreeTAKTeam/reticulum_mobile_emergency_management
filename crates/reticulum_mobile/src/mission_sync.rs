@@ -18,6 +18,9 @@ pub(crate) struct MissionSyncMetadata {
     pub(crate) team_member_uid: Option<String>,
     pub(crate) team_uid: Option<String>,
     pub(crate) mission_uid: Option<String>,
+    pub(crate) checklist_uid: Option<String>,
+    pub(crate) task_uid: Option<String>,
+    pub(crate) column_uid: Option<String>,
 }
 
 impl MissionSyncMetadata {
@@ -67,6 +70,9 @@ impl MissionSyncMetadata {
             || self.team_member_uid.is_some()
             || self.team_uid.is_some()
             || self.mission_uid.is_some()
+            || self.checklist_uid.is_some()
+            || self.task_uid.is_some()
+            || self.column_uid.is_some()
     }
 
     pub(crate) fn is_event_related(&self) -> bool {
@@ -146,6 +152,60 @@ fn parse_string_field(
     }
 }
 
+fn parse_identifier_fields(
+    entries: &[(MsgPackValue, MsgPackValue)],
+    metadata: &mut MissionSyncMetadata,
+) {
+    parse_string_field(
+        entries,
+        &["eam_uid", "event_uid", "entry_uid", "entryUid", "uid"],
+        &mut metadata.event_uid,
+        false,
+    );
+    parse_string_field(entries, &["eam_uid", "uid"], &mut metadata.eam_uid, false);
+    parse_string_field(
+        entries,
+        &[
+            "team_member_uid",
+            "teamMemberUid",
+            "subject_id",
+            "subjectId",
+        ],
+        &mut metadata.team_member_uid,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["team_uid", "teamUid", "team_id", "teamId"],
+        &mut metadata.team_uid,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["mission_uid", "missionUid", "uid"],
+        &mut metadata.mission_uid,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["checklist_uid", "checklistUid"],
+        &mut metadata.checklist_uid,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["task_uid", "taskUid"],
+        &mut metadata.task_uid,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["column_uid", "columnUid"],
+        &mut metadata.column_uid,
+        false,
+    );
+}
+
 fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetadata) {
     let MsgPackValue::Map(map) = envelope else {
         return;
@@ -173,41 +233,12 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
     );
     if let Some(args) = msgpack_get_named(entries, &["args"]) {
         if let Some(args_entries) = msgpack_map_entries(args) {
-            parse_string_field(
-                args_entries,
-                &["eam_uid", "event_uid", "entry_uid", "entryUid", "uid"],
-                &mut metadata.event_uid,
-                false,
-            );
-            parse_string_field(
-                args_entries,
-                &["eam_uid", "uid"],
-                &mut metadata.eam_uid,
-                false,
-            );
-            parse_string_field(
-                args_entries,
-                &[
-                    "team_member_uid",
-                    "teamMemberUid",
-                    "subject_id",
-                    "subjectId",
-                ],
-                &mut metadata.team_member_uid,
-                false,
-            );
-            parse_string_field(
-                args_entries,
-                &["team_uid", "teamUid", "team_id", "teamId"],
-                &mut metadata.team_uid,
-                false,
-            );
-            parse_string_field(
-                args_entries,
-                &["mission_uid", "missionUid", "uid"],
-                &mut metadata.mission_uid,
-                false,
-            );
+            parse_identifier_fields(args_entries, metadata);
+            if let Some(patch) = msgpack_get_named(args_entries, &["patch"]) {
+                if let Some(patch_entries) = msgpack_map_entries(patch) {
+                    parse_identifier_fields(patch_entries, metadata);
+                }
+            }
         }
     }
 }
@@ -226,6 +257,14 @@ fn parse_result_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMeta
         false,
     );
     parse_string_field(entries, &["status"], &mut metadata.result_status, true);
+    parse_identifier_fields(entries, metadata);
+    for key in ["result", "payload", "args"] {
+        if let Some(value) = msgpack_get_named(entries, &[key]) {
+            if let Some(nested_entries) = msgpack_map_entries(value) {
+                parse_identifier_fields(nested_entries, metadata);
+            }
+        }
+    }
 }
 
 fn parse_event_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetadata) {
@@ -241,39 +280,11 @@ fn parse_event_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetad
         &mut metadata.event_uid,
         false,
     );
+    parse_identifier_fields(entries, metadata);
 
     if let Some(payload) = msgpack_get_named(entries, &["payload"]) {
         if let Some(payload_entries) = msgpack_map_entries(payload) {
-            parse_string_field(
-                payload_entries,
-                &["eam_uid", "event_uid", "entry_uid", "entryUid", "uid"],
-                &mut metadata.event_uid,
-                false,
-            );
-            parse_string_field(payload_entries, &["eam_uid"], &mut metadata.eam_uid, false);
-            parse_string_field(
-                payload_entries,
-                &[
-                    "team_member_uid",
-                    "teamMemberUid",
-                    "subject_id",
-                    "subjectId",
-                ],
-                &mut metadata.team_member_uid,
-                false,
-            );
-            parse_string_field(
-                payload_entries,
-                &["team_uid", "teamUid", "team_id", "teamId"],
-                &mut metadata.team_uid,
-                false,
-            );
-            parse_string_field(
-                payload_entries,
-                &["mission_uid", "missionUid", "uid"],
-                &mut metadata.mission_uid,
-                false,
-            );
+            parse_identifier_fields(payload_entries, metadata);
         }
     }
 }
@@ -318,6 +329,110 @@ pub(crate) fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<Mission
     }
 
     None
+}
+
+#[cfg(test)]
+mod checklist_tests {
+    use super::{parse_mission_sync_metadata, MissionSyncMetadata};
+    use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
+    use rmpv::Value as MsgPackValue;
+
+    fn metadata_from_fields(fields: MsgPackValue) -> MissionSyncMetadata {
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack fields");
+        parse_mission_sync_metadata(&bytes).expect("mission sync metadata")
+    }
+
+    #[test]
+    fn checklist_metadata_is_extracted_from_command_args_and_patch() {
+        let metadata = metadata_from_fields(MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-checklist"),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from("corr-checklist"),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("checklist.update"),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (
+                            MsgPackValue::from("checklist_uid"),
+                            MsgPackValue::from("chk-001"),
+                        ),
+                        (
+                            MsgPackValue::from("task_uid"),
+                            MsgPackValue::from("task-002"),
+                        ),
+                        (
+                            MsgPackValue::from("column_uid"),
+                            MsgPackValue::from("col-task"),
+                        ),
+                        (
+                            MsgPackValue::from("patch"),
+                            MsgPackValue::Map(vec![(
+                                MsgPackValue::from("mission_uid"),
+                                MsgPackValue::from("mission-alpha"),
+                            )]),
+                        ),
+                    ]),
+                ),
+            ])]),
+        )]));
+
+        assert_eq!(metadata.command_type.as_deref(), Some("checklist.update"));
+        assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-001"));
+        assert_eq!(metadata.task_uid.as_deref(), Some("task-002"));
+        assert_eq!(metadata.column_uid.as_deref(), Some("col-task"));
+        assert_eq!(metadata.mission_uid.as_deref(), Some("mission-alpha"));
+        assert!(metadata.is_mission_related());
+    }
+
+    #[test]
+    fn checklist_metadata_is_extracted_from_nested_result_payload() {
+        let metadata = metadata_from_fields(MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_RESULTS),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-checklist-result"),
+                ),
+                (
+                    MsgPackValue::from("status"),
+                    MsgPackValue::from("completed"),
+                ),
+                (
+                    MsgPackValue::from("result"),
+                    MsgPackValue::Map(vec![
+                        (
+                            MsgPackValue::from("checklist_uid"),
+                            MsgPackValue::from("chk-010"),
+                        ),
+                        (
+                            MsgPackValue::from("task_uid"),
+                            MsgPackValue::from("task-010"),
+                        ),
+                        (
+                            MsgPackValue::from("column_uid"),
+                            MsgPackValue::from("col-style"),
+                        ),
+                    ]),
+                ),
+            ]),
+        )]));
+
+        assert_eq!(metadata.result_status.as_deref(), Some("completed"));
+        assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-010"));
+        assert_eq!(metadata.task_uid.as_deref(), Some("task-010"));
+        assert_eq!(metadata.column_uid.as_deref(), Some("col-style"));
+        assert!(metadata.is_mission_related());
+    }
 }
 
 #[cfg(test)]

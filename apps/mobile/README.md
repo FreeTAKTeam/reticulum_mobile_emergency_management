@@ -27,14 +27,30 @@ including peer discovery, replicated status messaging, and incident/event tracki
 5. Manage Events
    - Create/delete incident/event timeline entries
    - Replicate event updates across connected peers
-6. Monitor dashboard metrics
+6. Manage Checklists
+   - Create shared operational checklists from built-in or CSV-imported templates
+   - Import CSV files with arbitrary columns and optional `CompletedDTG` relative deadlines
+   - Track task sync progress, pending/late/complete status, and task completion over LXMF
+   - Add/delete rows and edit task cells through the Rust-backed checklist store
+7. Monitor dashboard metrics
    - View readiness widgets and peer counts (discovered/saved/connected)
 
 ## Data behavior
 
-- Messages, events, settings, and saved peers persist in local storage on-device.
+- Messages, events, checklists, settings, and saved peers persist in local storage on-device.
 - On web in `auto` mode (or when `mock` mode is selected), demo data is seeded for quick testing.
-- Replication uses JSON payloads exchanged over the node packet channel.
+- Checklist state is owned by the Rust runtime. The mobile UI reads Rust projections and calls native checklist commands for create, import, join, edit, upload, and delete operations.
+- Event and checklist replication use LXMF/RCH-compatible command payloads through the native runtime. Large checklist snapshots use the existing resource-capable LXMF delivery path.
+
+## Checklist CSV templates
+
+Checklist CSV upload creates a template only. The template becomes shared when the operator creates a live checklist from it.
+
+- CSV files may contain any number of normal task columns.
+- `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, and `Due Minutes` are treated as the relative deadline column.
+- Supported relative deadline examples: `60`, `+60`, `+1h`, `+1 hour`, and `+01:00`.
+- If no deadline column is present, REM creates `CompletedDTG` and uses the configured default step of 30 minutes per row.
+- A task is late when the checklist start DTG plus the row deadline is earlier than the current time, unless it was completed on time.
 
 ## Local development
 

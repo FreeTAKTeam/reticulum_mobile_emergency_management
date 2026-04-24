@@ -204,6 +204,15 @@ function normalizeRuntimeSettings(
         Number(value.hub?.refreshIntervalSeconds ?? defaults.hub.refreshIntervalSeconds),
       ),
     },
+    checklists: {
+      defaultTaskDueStepMinutes: Math.max(
+        1,
+        Number(
+          value.checklists?.defaultTaskDueStepMinutes
+            ?? defaults.checklists.defaultTaskDueStepMinutes,
+        ),
+      ),
+    },
   };
 }
 

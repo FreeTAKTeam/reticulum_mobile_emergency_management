@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import ActionMessagesView from "./views/ActionMessagesView.vue";
+import CheclklistView from "./views/CheclklistView.vue";
+import ChecklistDetailView from "./views/ChecklistDetailView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import EventsView from "./views/EventsView.vue";
 import InboxView from "./views/InboxView.vue";
@@ -22,6 +24,18 @@ const routes = [
     path: "/inbox",
     name: "inbox",
     component: InboxView,
+  },
+  {
+    path: "/checlklist",
+    alias: ["/checklists"],
+    name: "checlklist",
+    component: CheclklistView,
+  },
+  {
+    path: "/checlklist/:checklistId",
+    alias: ["/checklists/:checklistId"],
+    name: "checlklist-detail",
+    component: ChecklistDetailView,
   },
   {
     path: "/messages/help",

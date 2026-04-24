@@ -16,7 +16,15 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceClass, AnnounceRecord, AppSettingsRecord, ConversationRecord, EamProjectionRecord,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
+    ChecklistColumnType, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
+    ChecklistFeedPublicationRecord, ChecklistListActiveRequest, ChecklistMode, ChecklistOriginType,
+    ChecklistRecord, ChecklistSettingsRecord, ChecklistStatusCounts, ChecklistSyncState,
+    ChecklistSystemColumnKey, ChecklistTaskCellSetRequest, ChecklistTaskRecord,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatus, ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest,
+    ChecklistTemplateListRequest, ChecklistTemplateRecord, ChecklistUpdatePatch,
+    ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
     EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord,
     HubDirectorySnapshot, HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel,
     LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,

@@ -5,6 +5,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import logoUrl from "./assets/rem-logo.png";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
+import { useChecklistsStore } from "./stores/checklistsStore";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagingStore } from "./stores/messagingStore";
 import { useMessagesStore } from "./stores/messagesStore";
@@ -16,12 +17,17 @@ const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const eventsStore = useEventsStore();
+const checklistsStore = useChecklistsStore();
 const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
 
 registerNotificationNavigationHandler(async (target) => {
+  if (target.route && target.route !== "/inbox") {
+    await router.push(target.route);
+    return;
+  }
   if (target.route !== "/inbox" && !target.conversationId) {
     return;
   }
@@ -44,11 +50,13 @@ onMounted(async () => {
 
     messagesStore.init();
     eventsStore.init();
+    checklistsStore.init();
     telemetryStore.init();
     await sosStore.init();
 
     messagesStore.initReplication();
     eventsStore.initReplication();
+    checklistsStore.initReplication();
     telemetryStore.initReplication();
     await telemetryStore.requestStartupPermission();
   } catch (error: unknown) {
@@ -61,6 +69,7 @@ const tabItems = [
   { path: "/messages", label: "Action Messages", icon: "messages" },
   { path: "/events", label: "Events", icon: "events" },
   { path: "/inbox", label: "Inbox", icon: "inbox" },
+  { path: "/checlklist", label: "Checklists", icon: "checklists" },
   { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
@@ -86,6 +95,9 @@ const connectedPeerCountTitle = computed(() => {
 });
 
 function isTabActive(path: string): boolean {
+  if (path === "/checlklist") {
+    return route.path === path || route.path.startsWith(`${path}/`) || route.path === "/checklists";
+  }
   return route.path === path || route.path.startsWith(`${path}/`);
 }
 </script>
@@ -161,6 +173,17 @@ function isTabActive(path: string): boolean {
               <path d="M14 4.5v4h4" />
               <path d="M9 12h6" />
               <path d="M9 15.5h6" />
+            </svg>
+            <svg
+              v-else-if="tab.icon === 'checklists'"
+              class="icon-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <path d="M8 5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
+              <path d="M9.5 4h5a1 1 0 0 1 1 1v1h-7V5a1 1 0 0 1 1-1Z" />
+              <path d="m9.5 11 1.5 1.5 3.5-3.5" />
+              <path d="M9.5 16h5" />
             </svg>
             <svg
               v-else-if="tab.icon === 'dashboard'"
@@ -368,7 +391,7 @@ function isTabActive(path: string): boolean {
   border: 1px solid rgb(63 99 157 / 37%);
   border-radius: 13px;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   max-width: 100%;
 }
 

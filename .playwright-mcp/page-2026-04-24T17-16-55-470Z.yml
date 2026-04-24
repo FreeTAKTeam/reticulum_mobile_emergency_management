@@ -1,0 +1,42 @@
+- generic [ref=e264]:
+  - banner [ref=e265]:
+    - generic [ref=e266]:
+      - img "R.E.M. logo" [ref=e268]
+      - paragraph [ref=e269]: R.E.M.
+    - generic [ref=e270]:
+      - generic "Saved peers and connected saved peers" [ref=e271]: 0/0
+      - generic "App ready to send and receive events or messages." [ref=e272]: Ready
+  - main [ref=e273]
+  - navigation [ref=e406]:
+    - link "Dashboard" [ref=e407] [cursor=pointer]:
+      - /url: /dashboard
+      - img [ref=e409]
+      - generic [ref=e414]: Dashboard
+    - link "Action Messages" [ref=e415] [cursor=pointer]:
+      - /url: /messages
+      - img [ref=e417]
+      - generic [ref=e419]: Action Messages
+    - link "Events" [ref=e420] [cursor=pointer]:
+      - /url: /events
+      - img [ref=e422]
+      - generic [ref=e425]: Events
+    - link "Inbox" [ref=e426] [cursor=pointer]:
+      - /url: /inbox
+      - img [ref=e428]
+      - generic [ref=e431]: Inbox
+    - link "Checklists" [active] [ref=e432] [cursor=pointer]:
+      - /url: /checlklist
+      - img [ref=e434]
+      - generic [ref=e438]: Checklists
+    - link "Telemetry" [ref=e439] [cursor=pointer]:
+      - /url: /telemetry
+      - img [ref=e441]
+      - generic [ref=e444]: Telemetry
+    - link "Peers" [ref=e445] [cursor=pointer]:
+      - /url: /peers
+      - img [ref=e447]
+      - generic [ref=e453]: Peers
+    - link "Settings" [ref=e454] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e456]
+      - generic [ref=e459]: Settings
