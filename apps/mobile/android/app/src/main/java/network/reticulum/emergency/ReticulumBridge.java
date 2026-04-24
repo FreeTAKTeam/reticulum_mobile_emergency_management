@@ -40,7 +40,7 @@ public final class ReticulumBridge {
     public static native String getChecklistsJson(String payloadJson);
     public static native String getChecklistJson(String payloadJson);
     public static native String getChecklistTemplatesJson(String payloadJson);
-    public static native int importChecklistTemplateCsvJson(String payloadJson);
+    public static native String importChecklistTemplateCsvJson(String payloadJson);
     public static native int createChecklistFromTemplateJson(String payloadJson);
     public static native int createOnlineChecklistJson(String payloadJson);
     public static native int updateChecklistJson(String payloadJson);

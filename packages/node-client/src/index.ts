@@ -377,6 +377,10 @@ export interface TelemetrySettingsRecord {
   expireAfterMinutes: number;
 }
 
+export interface ChecklistSettingsRecord {
+  defaultTaskDueStepMinutes: number;
+}
+
 export interface AppSettingsRecord {
   displayName: string;
   autoConnectSaved: boolean;
@@ -386,6 +390,7 @@ export interface AppSettingsRecord {
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
+  checklists: ChecklistSettingsRecord;
 }
 
 export interface SavedPeerRecord {
@@ -673,7 +678,7 @@ export interface ReticulumNodeClient {
     description?: string;
     csvText: string;
     sourceFilename?: string;
-  }): Promise<void>;
+  }): Promise<ChecklistTemplateRecord>;
   createChecklistFromTemplate(input: {
     checklistUid?: string;
     missionUid?: string;
@@ -905,7 +910,7 @@ interface ReticulumNodePlugin {
     description?: string;
     csvText: string;
     sourceFilename?: string;
-  }): Promise<void>;
+  }): Promise<Record<string, unknown>>;
   createChecklistFromTemplate(options: {
     checklistUid?: string;
     missionUid?: string;
@@ -1739,6 +1744,8 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   }
   const telemetry = (raw.telemetry ?? {}) as Record<string, unknown>;
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
+  const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
+  const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
   return {
     displayName: String(raw.displayName ?? ""),
     autoConnectSaved: Boolean(raw.autoConnectSaved),
@@ -1759,6 +1766,11 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
       apiBaseUrl: String(hub.apiBaseUrl ?? ""),
       apiKey: String(hub.apiKey ?? ""),
       refreshIntervalSeconds: Number(hub.refreshIntervalSeconds ?? 3600),
+    },
+    checklists: {
+      defaultTaskDueStepMinutes: Number.isFinite(defaultTaskDueStepMinutes)
+        ? Math.max(1, defaultTaskDueStepMinutes)
+        : 30,
     },
   };
 }
@@ -2261,6 +2273,7 @@ type ChecklistRowAddInput = Parameters<ReticulumNodeClient["addChecklistTaskRow"
 type ChecklistRowDeleteInput = Parameters<ReticulumNodeClient["deleteChecklistTaskRow"]>[0];
 type ChecklistRowStyleInput = Parameters<ReticulumNodeClient["setChecklistTaskRowStyle"]>[0];
 type ChecklistCellInput = Parameters<ReticulumNodeClient["setChecklistTaskCell"]>[0];
+type ChecklistTemplateCsvInput = Parameters<ReticulumNodeClient["importChecklistTemplateCsv"]>[0];
 
 function cloneChecklistRecord(record: ChecklistRecord): ChecklistRecord {
   return JSON.parse(JSON.stringify(record)) as ChecklistRecord;
@@ -2273,9 +2286,18 @@ function cloneChecklistTemplateRecord(record: ChecklistTemplateRecord): Checklis
 function defaultChecklistColumns(): ChecklistColumnRecord[] {
   return [
     {
+      columnUid: "col-due-relative-dtg",
+      columnName: "CompletedDTG",
+      displayOrder: 0,
+      columnType: "RELATIVE_TIME",
+      columnEditable: false,
+      isRemovable: false,
+      systemKey: "DUE_RELATIVE_DTG",
+    },
+    {
       columnUid: "col-task",
       columnName: "Task",
-      displayOrder: 0,
+      displayOrder: 1,
       columnType: "SHORT_STRING",
       columnEditable: true,
       isRemovable: false,
@@ -2284,7 +2306,7 @@ function defaultChecklistColumns(): ChecklistColumnRecord[] {
     {
       columnUid: "col-description",
       columnName: "Detail",
-      displayOrder: 1,
+      displayOrder: 2,
       columnType: "LONG_STRING",
       columnEditable: true,
       isRemovable: true,
@@ -2292,7 +2314,7 @@ function defaultChecklistColumns(): ChecklistColumnRecord[] {
     {
       columnUid: "col-owner",
       columnName: "Owner",
-      displayOrder: 2,
+      displayOrder: 3,
       columnType: "SHORT_STRING",
       columnEditable: true,
       isRemovable: true,
@@ -2309,6 +2331,7 @@ function defaultChecklistTask(taskUid: string, number: number, title: string, de
     taskStatus: "PENDING",
     isLate: false,
     updatedAt: now,
+    dueRelativeMinutes: number * 30,
     legacyValue: title,
     lineBreakEnabled: false,
     cells: [
@@ -2337,6 +2360,190 @@ function defaultChecklistTask(taskUid: string, number: number, title: string, de
   };
 }
 
+function parseCsvRows(csvText: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < csvText.length; index += 1) {
+    const char = csvText[index];
+    const next = csvText[index + 1];
+    if (quoted) {
+      if (char === "\"" && next === "\"") {
+        cell += "\"";
+        index += 1;
+      } else if (char === "\"") {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell.replace(/^\uFEFF/, "").trim());
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell.replace(/^\uFEFF/, "").trim());
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+  row.push(cell.replace(/^\uFEFF/, "").trim());
+  rows.push(row);
+  return rows.filter((entry) => entry.some((value) => value.trim().length > 0));
+}
+
+function normalizeCsvHeader(value: string): string {
+  return value.replace(/^\uFEFF/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isDueCsvHeader(value: string): boolean {
+  return ["completeddtg", "due", "duerelativedtg", "duerelativeminutes", "dueminutes"].includes(normalizeCsvHeader(value));
+}
+
+function isTitleCsvHeader(value: string): boolean {
+  return ["item", "task", "name", "title"].includes(normalizeCsvHeader(value));
+}
+
+function isDescriptionCsvHeader(value: string): boolean {
+  return ["description", "detail", "details", "notes"].includes(normalizeCsvHeader(value));
+}
+
+function csvColumnUid(header: string, index: number, used: Map<string, number>): string {
+  const slug = header
+    .replace(/^\uFEFF/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || `column-${index + 1}`;
+  const base = `col-${slug}`;
+  const count = (used.get(base) ?? 0) + 1;
+  used.set(base, count);
+  return count === 1 ? base : `${base}-${count}`;
+}
+
+function parseDueRelativeMinutes(value: string): number {
+  let text = value.trim().toLowerCase();
+  if (!text || text.startsWith("-")) {
+    throw new Error("Invalid CompletedDTG value");
+  }
+  if (text.startsWith("+")) {
+    text = text.slice(1).trim();
+  }
+  const hhmm = text.match(/^(\d+):(\d{1,2})$/);
+  if (hhmm) {
+    const hours = Number(hhmm[1]);
+    const minutes = Number(hhmm[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes >= 60) {
+      throw new Error("Invalid CompletedDTG value");
+    }
+    return hours * 60 + minutes;
+  }
+  const hours = text.match(/^(\d+)\s*(h|hour|hours)$/);
+  if (hours) {
+    return Number(hours[1]) * 60;
+  }
+  const minutes = Number(text);
+  if (!Number.isInteger(minutes) || minutes < 0) {
+    throw new Error("Invalid CompletedDTG value");
+  }
+  return minutes;
+}
+
+function createInMemoryChecklistTemplateFromCsv(input: ChecklistTemplateCsvInput): ChecklistTemplateRecord {
+  const name = input.name.trim();
+  const rows = parseCsvRows(input.csvText);
+  if (!name || rows.length < 2) {
+    throw new Error("CSV must include a header row and at least one task row");
+  }
+  const headerRow = rows[0];
+  const taskRows = rows.slice(1);
+  const maxColumns = taskRows.reduce((max, row) => Math.max(max, row.length), headerRow.length);
+  if (maxColumns === 0) {
+    throw new Error("CSV header row is empty");
+  }
+  const headers = Array.from({ length: maxColumns }, (_, index) => headerRow[index]?.trim() || `Column ${index + 1}`);
+  const dueHeaderIndex = headers.findIndex(isDueCsvHeader);
+  const now = new Date().toISOString();
+  const columns: ChecklistColumnRecord[] = [{
+    columnUid: "col-due-relative-dtg",
+    columnName: dueHeaderIndex >= 0 ? headers[dueHeaderIndex] : "CompletedDTG",
+    displayOrder: 0,
+    columnType: "RELATIVE_TIME",
+    columnEditable: false,
+    isRemovable: false,
+    systemKey: "DUE_RELATIVE_DTG",
+  }];
+  const used = new Map<string, number>([["col-due-relative-dtg", 1]]);
+  const headerColumnUids = new Map<number, string>();
+  for (const [index, header] of headers.entries()) {
+    if (index === dueHeaderIndex) {
+      continue;
+    }
+    const columnUid = csvColumnUid(header, index, used);
+    headerColumnUids.set(index, columnUid);
+    columns.push({
+      columnUid,
+      columnName: header,
+      displayOrder: columns.length,
+      columnType: "SHORT_STRING",
+      columnEditable: true,
+      isRemovable: true,
+    });
+  }
+  if (headerColumnUids.size === 0) {
+    throw new Error("CSV must include at least one task data column");
+  }
+  const titleHeaderIndex = headers.findIndex((header, index) => index !== dueHeaderIndex && isTitleCsvHeader(header));
+  const descriptionHeaderIndex = headers.findIndex((header, index) => index !== dueHeaderIndex && isDescriptionCsvHeader(header));
+  const templateUid = input.templateUid?.trim() || `tmpl-web-${Date.now().toString(36)}`;
+  const tasks = taskRows.map((row, index): ChecklistTaskRecord => {
+    const number = index + 1;
+    const taskUid = `${templateUid}-task-${number}`;
+    const dueValue = dueHeaderIndex >= 0 ? row[dueHeaderIndex]?.trim() || "" : "";
+    const dueRelativeMinutes = dueValue ? parseDueRelativeMinutes(dueValue) : number * 30;
+    const title = (titleHeaderIndex >= 0 ? row[titleHeaderIndex]?.trim() : "")
+      || headers.map((_, headerIndex) => headerIndex === dueHeaderIndex ? "" : row[headerIndex]?.trim() || "").find(Boolean)
+      || `Task ${number}`;
+    const notes = descriptionHeaderIndex >= 0 ? row[descriptionHeaderIndex]?.trim() || undefined : undefined;
+    return {
+      taskUid,
+      number,
+      userStatus: "PENDING",
+      taskStatus: "PENDING",
+      isLate: false,
+      updatedAt: now,
+      dueRelativeMinutes,
+      notes,
+      legacyValue: title,
+      lineBreakEnabled: false,
+      cells: [...headerColumnUids.entries()].map(([headerIndex, columnUid]) => ({
+        cellUid: `${taskUid}:${columnUid}`,
+        taskUid,
+        columnUid,
+        value: row[headerIndex]?.trim() || "",
+        updatedAt: now,
+      })),
+    };
+  });
+  return {
+    uid: templateUid,
+    name,
+    description: input.description?.trim() || "Imported CSV checklist template",
+    version: 1,
+    originType: "CSV_IMPORT",
+    createdAt: now,
+    updatedAt: now,
+    sourceFilename: input.sourceFilename,
+    columns,
+    tasks,
+  };
+}
+
 function createDefaultChecklistTemplates(): ChecklistTemplateRecord[] {
   const now = new Date().toISOString();
   return [
@@ -2358,7 +2565,35 @@ function createDefaultChecklistTemplates(): ChecklistTemplateRecord[] {
   ];
 }
 
+function formatRfc3339FromEpochMs(epochMs: number): string | undefined {
+  if (!Number.isFinite(epochMs)) {
+    return undefined;
+  }
+  return new Date(epochMs).toISOString().replace(".000Z", "Z");
+}
+
+function checklistTaskStatusFor(userStatus: ChecklistUserTaskStatus, isLate: boolean): ChecklistTaskStatus {
+  if (userStatus === "COMPLETE") {
+    return isLate ? "COMPLETE_LATE" : "COMPLETE";
+  }
+  return isLate ? "LATE" : "PENDING";
+}
+
 function normalizeInMemoryChecklist(record: ChecklistRecord): void {
+  const startMs = typeof record.startTime === "string" ? Date.parse(record.startTime) : Number.NaN;
+  const nowMs = Date.now();
+  for (const task of record.tasks) {
+    const dueMs = Number.isFinite(startMs) && typeof task.dueRelativeMinutes === "number"
+      ? startMs + task.dueRelativeMinutes * 60_000
+      : Number.NaN;
+    task.dueDtg = formatRfc3339FromEpochMs(dueMs);
+    if (Number.isFinite(dueMs)) {
+      task.isLate = task.userStatus === "COMPLETE"
+        ? Boolean(task.completedAt && Date.parse(task.completedAt) > dueMs)
+        : nowMs > dueMs;
+    }
+    task.taskStatus = checklistTaskStatusFor(task.userStatus, task.isLate);
+  }
   const activeTasks = record.tasks.filter((task) => !task.deletedAt);
   const pendingCount = activeTasks.filter((task) => task.taskStatus === "PENDING").length;
   const lateCount = activeTasks.filter((task) => task.taskStatus === "LATE").length;
@@ -3033,9 +3268,9 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     description?: string;
     csvText: string;
     sourceFilename?: string;
-  }): Promise<void> {
+  }): Promise<ChecklistTemplateRecord> {
     await this.ready();
-    await this.plugin.importChecklistTemplateCsv(input);
+    return toChecklistTemplateRecord(await this.plugin.importChecklistTemplateCsv(input));
   }
 
   async createChecklistFromTemplate(input: {
@@ -3589,7 +3824,17 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       .map(cloneChecklistTemplateRecord);
   }
 
-  async importChecklistTemplateCsv(): Promise<void> {}
+  async importChecklistTemplateCsv(input: ChecklistTemplateCsvInput): Promise<ChecklistTemplateRecord> {
+    const template = createInMemoryChecklistTemplateFromCsv(input);
+    const existingIndex = this.checklistTemplates.findIndex((item) => item.uid === template.uid);
+    if (existingIndex >= 0) {
+      this.checklistTemplates.splice(existingIndex, 1, template);
+    } else {
+      this.checklistTemplates.unshift(template);
+    }
+    emitChecklistInvalidations(this.emitter, template.uid, "webChecklistTemplateImport");
+    return cloneChecklistTemplateRecord(template);
+  }
 
   async createChecklistFromTemplate(input: ChecklistCreateInput): Promise<void> {
     const uid = createInMemoryChecklistFromTemplate(this.checklists, this.checklistTemplates, this.status, input);
@@ -4113,7 +4358,17 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       .map(cloneChecklistTemplateRecord);
   }
 
-  async importChecklistTemplateCsv(): Promise<void> {}
+  async importChecklistTemplateCsv(input: ChecklistTemplateCsvInput): Promise<ChecklistTemplateRecord> {
+    const template = createInMemoryChecklistTemplateFromCsv(input);
+    const existingIndex = this.checklistTemplates.findIndex((item) => item.uid === template.uid);
+    if (existingIndex >= 0) {
+      this.checklistTemplates.splice(existingIndex, 1, template);
+    } else {
+      this.checklistTemplates.unshift(template);
+    }
+    emitChecklistInvalidations(this.emitter, template.uid, "mockChecklistTemplateImport");
+    return cloneChecklistTemplateRecord(template);
+  }
 
   async createChecklistFromTemplate(input: ChecklistCreateInput): Promise<void> {
     const uid = createInMemoryChecklistFromTemplate(this.checklists, this.checklistTemplates, this.status, input);

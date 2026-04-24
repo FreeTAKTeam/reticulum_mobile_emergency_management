@@ -391,15 +391,16 @@ export const useChecklistsStore = defineStore("checklists", () => {
     }));
   }
 
-  async function importTemplateCsv(file: File, name?: string, description?: string): Promise<void> {
+  async function importTemplateCsv(file: File, name?: string, description?: string): Promise<RuntimeChecklistTemplateRecord> {
     const csvText = await file.text();
-    await client().importChecklistTemplateCsv({
+    const template = await client().importChecklistTemplateCsv({
       name: (name?.trim() || file.name.replace(/\.csv$/i, "")).trim(),
       description: description?.trim() || "Imported CSV checklist template",
       csvText,
       sourceFilename: file.name,
     });
     await refreshTemplates();
+    return template;
   }
 
   async function createFromTemplate(input: {

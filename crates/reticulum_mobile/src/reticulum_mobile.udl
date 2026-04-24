@@ -318,6 +318,10 @@ dictionary TelemetrySettingsRecord {
   u32 expire_after_minutes;
 };
 
+dictionary ChecklistSettingsRecord {
+  u32 default_task_due_step_minutes;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -327,6 +331,7 @@ dictionary AppSettingsRecord {
   u32 announce_interval_seconds;
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
+  ChecklistSettingsRecord checklists;
 };
 
 dictionary SavedPeerRecord {

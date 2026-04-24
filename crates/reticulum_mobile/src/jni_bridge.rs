@@ -12,12 +12,13 @@ use serde_json::{json, Value};
 use crate::node::{EventSubscription, Node};
 use crate::types::{
     AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistListActiveRequest, ChecklistRecord, ChecklistTaskCellSetRequest,
-    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
-    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
-    ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
-    EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
+    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
+    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
+    ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord,
+    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
+    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
     PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
@@ -137,6 +138,14 @@ struct AppSettingsInput {
     announce_interval_seconds: u32,
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
+    #[serde(default)]
+    checklists: ChecklistSettingsInput,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistSettingsInput {
+    default_task_due_step_minutes: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -778,6 +787,13 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
             api_key: input.hub.api_key,
             refresh_interval_seconds: input.hub.refresh_interval_seconds,
         },
+        checklists: ChecklistSettingsRecord {
+            default_task_due_step_minutes: input
+                .checklists
+                .default_task_due_step_minutes
+                .unwrap_or(crate::types::DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES)
+                .max(1),
+        },
     }
 }
 
@@ -1097,7 +1113,10 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "broadcast": settings.broadcast,
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
-        "hub": hub_settings_json(&settings.hub)
+        "hub": hub_settings_json(&settings.hub),
+        "checklists": {
+            "defaultTaskDueStepMinutes": settings.checklists.default_task_due_step_minutes
+        }
     })
 }
 
@@ -2938,10 +2957,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importCh
     mut env: JNIEnv,
     _class: JClass,
     request_json: JString,
-) -> jint {
+) -> jstring {
     let err_result = |code: &str, message: String| {
         set_last_error(code, message);
-        RESULT_ERR
+        ptr::null_mut()
     };
     let raw = match jstring_to_rust(&mut env, request_json) {
         Ok(v) => v,
@@ -2962,10 +2981,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importCh
     };
     let node = ensure_node(&mut guard);
     match node.import_checklist_template_csv(to_checklist_template_import_request(payload)) {
-        Ok(_) => ok_result(),
+        Ok(template) => ok_json_result(&mut env, &checklist_template_json(&template)),
         Err(err) => {
             set_last_node_error(err);
-            RESULT_ERR
+            ptr::null_mut()
         }
     }
 }

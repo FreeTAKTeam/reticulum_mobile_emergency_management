@@ -5198,6 +5198,7 @@ mod tests {
                 api_key: String::new(),
                 refresh_interval_seconds: 3600,
             },
+            checklists: crate::types::ChecklistSettingsRecord::default(),
         }
     }
 
@@ -5652,6 +5653,7 @@ mod tests {
                 api_key: String::new(),
                 refresh_interval_seconds: 0,
             },
+            checklists: crate::types::ChecklistSettingsRecord::default(),
         }
     }
 

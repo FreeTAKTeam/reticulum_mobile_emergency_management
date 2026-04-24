@@ -354,8 +354,8 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.getChecklistTemplatesJson(payloadJson), "{\"items\":[]}");
     }
 
-    public synchronized int importChecklistTemplateCsvJson(String payloadJson) {
-        return ReticulumBridge.importChecklistTemplateCsvJson(payloadJson);
+    public synchronized String importChecklistTemplateCsvJson(String payloadJson) {
+        return nonEmptyJson(ReticulumBridge.importChecklistTemplateCsvJson(payloadJson), "{}");
     }
 
     public synchronized int createChecklistFromTemplateJson(String payloadJson) {

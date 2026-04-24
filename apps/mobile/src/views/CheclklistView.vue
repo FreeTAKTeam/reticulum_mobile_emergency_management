@@ -29,6 +29,18 @@ const importFileInput = ref<HTMLInputElement | null>(null);
 const isMutating = ref(false);
 const deletingChecklistIds = ref<string[]>([]);
 const isChecklistHelpVisible = ref(false);
+const DEFAULT_TARGET_DAYS = 30;
+
+function toDatetimeLocalValue(date: Date): string {
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function defaultChecklistTargetDtg(): string {
+  const target = new Date();
+  target.setDate(target.getDate() + DEFAULT_TARGET_DAYS);
+  return toDatetimeLocalValue(target);
+}
 
 function createDefaultChecklistFormState(): {
   title: string;
@@ -40,7 +52,7 @@ function createDefaultChecklistFormState(): {
     title: "",
     subtitle: "",
     teamLabel: "",
-    scheduledAt: "",
+    scheduledAt: defaultChecklistTargetDtg(),
   };
 }
 
@@ -108,6 +120,15 @@ function resetCreateForm(): void {
   Object.assign(createForm, createDefaultChecklistFormState());
 }
 
+function checklistStartTimeIso(): string {
+  const scheduledAt = createForm.scheduledAt.trim();
+  if (!scheduledAt) {
+    return new Date().toISOString();
+  }
+  const parsed = new Date(scheduledAt);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
 function toggleCreateForm(): void {
   if (isCreateFormVisible.value) {
     resetCreateForm();
@@ -147,7 +168,7 @@ async function createChecklist(): Promise<void> {
       missionUid: createForm.teamLabel.trim() || undefined,
       name: title,
       description: createForm.subtitle.trim() || "Emergency preparedness checklist",
-      startTime: createForm.scheduledAt.trim() || new Date().toISOString(),
+      startTime: checklistStartTimeIso(),
     });
     activeSegment.value = "live";
     resetCreateForm();
@@ -209,9 +230,10 @@ async function handleTemplateUpload(event: Event): Promise<void> {
   }
   isMutating.value = true;
   try {
-    await checklistsStore.importTemplateCsv(file);
+    const importedTemplate = await checklistsStore.importTemplateCsv(file);
     activeSegment.value = "templates";
     await ensureChecklistData("templates");
+    selectedTemplateId.value = importedTemplate.uid;
   } finally {
     input.value = "";
     isMutating.value = false;
@@ -290,9 +312,8 @@ onMounted(() => {
         />
         <input
           v-model="createForm.scheduledAt"
-          type="text"
-          placeholder="Schedule"
-          aria-label="Checklist schedule"
+          type="datetime-local"
+          aria-label="Checklist DTG"
         />
         <select v-model="selectedTemplateId" aria-label="Checklist template">
           <option value="" disabled>
@@ -728,7 +749,8 @@ onMounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.create-form input {
+.create-form input,
+.create-form select {
   background: rgb(8 22 50 / 82%);
   border: 1px solid rgb(75 118 185 / 44%);
   border-radius: 10px;
@@ -737,6 +759,20 @@ onMounted(() => {
   font-size: 1rem;
   min-height: 44px;
   padding: 0.58rem 0.7rem;
+}
+
+.create-form select {
+  appearance: none;
+  background:
+    linear-gradient(135deg, rgb(8 22 50 / 92%), rgb(4 16 38 / 94%)),
+    radial-gradient(circle at 100% 0%, rgb(0 168 255 / 18%), transparent 38%);
+  cursor: pointer;
+  padding-right: 2.1rem;
+}
+
+.create-form select option {
+  background: #061833;
+  color: #d1e9ff;
 }
 
 .create-form-actions {

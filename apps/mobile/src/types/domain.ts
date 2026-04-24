@@ -299,6 +299,9 @@ export interface NodeUiSettings {
     expireAfterMinutes: number;
   };
   hub: HubSettings;
+  checklists: {
+    defaultTaskDueStepMinutes: number;
+  };
 }
 
 export type ReplicationMessage =

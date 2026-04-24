@@ -602,9 +602,10 @@ public class ReticulumNodePlugin extends Plugin {
         payload.put("description", call.getString("description"));
         payload.put("csvText", call.getString("csvText", ""));
         payload.put("sourceFilename", call.getString("sourceFilename"));
-        runIntServiceCall(
+        runStringServiceCall(
             call,
             "Failed to import checklist template CSV.",
+            "Native checklist template import JSON parse failed.",
             service -> service.importChecklistTemplateCsvJson(payload.toString())
         );
     }

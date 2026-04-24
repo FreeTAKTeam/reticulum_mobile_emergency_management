@@ -299,6 +299,26 @@ string_enum! {
     }
 }
 
+pub const DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES: u32 = 30;
+
+fn default_checklist_task_due_step_minutes() -> u32 {
+    DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistSettingsRecord {
+    #[serde(default = "default_checklist_task_due_step_minutes")]
+    pub default_task_due_step_minutes: u32,
+}
+
+impl Default for ChecklistSettingsRecord {
+    fn default() -> Self {
+        Self {
+            default_task_due_step_minutes: DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NodeError {
     #[error("invalid config")]
@@ -609,6 +629,8 @@ pub struct AppSettingsRecord {
     pub announce_interval_seconds: u32,
     pub telemetry: TelemetrySettingsRecord,
     pub hub: HubSettingsRecord,
+    #[serde(default)]
+    pub checklists: ChecklistSettingsRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

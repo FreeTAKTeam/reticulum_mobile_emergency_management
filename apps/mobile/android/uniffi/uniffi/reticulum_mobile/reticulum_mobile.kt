@@ -832,6 +832,28 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -865,6 +887,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_reticulum_mobile_fn_constructor_node_new(uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_reticulum_mobile_fn_method_node_add_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_announce_now(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_broadcast_bytes(`ptr`: Pointer,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -873,8 +897,14 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_connect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_create_online_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_deactivate_sos(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_delete_eam(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_delete_event(`ptr`: Pointer,`uid`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -884,6 +914,8 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_fn_method_node_disconnect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_get_app_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_get_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_eam_team_summary(`ptr`: Pointer,`teamUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -907,8 +939,12 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_import_legacy_state(`ptr`: Pointer,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_join_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_legacy_import_completed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_reticulum_mobile_fn_method_node_list_active_checklists(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_list_announces(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_list_conversations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -947,6 +983,12 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_set_app_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_cell(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_row_style(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_status(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_set_log_level(`ptr`: Pointer,`level`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_set_saved_peers(`ptr`: Pointer,`peers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -969,6 +1011,8 @@ internal interface UniffiLib : Library {
     ): Pointer
     fun uniffi_reticulum_mobile_fn_method_node_trigger_sos(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_update_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_upsert_eam(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_reticulum_mobile_fn_method_node_upsert_event(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1093,6 +1137,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_eventsubscription_next(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_add_checklist_task_row(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_announce_now(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_broadcast_bytes(
@@ -1101,7 +1147,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_connect_peer(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_create_online_checklist(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_deactivate_sos(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_delete_checklist(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_delete_checklist_task_row(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_delete_eam(
     ): Short
@@ -1112,6 +1164,8 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_checksum_method_node_disconnect_peer(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_app_settings(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_get_checklist(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_eam_team_summary(
     ): Short
@@ -1135,7 +1189,11 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_import_legacy_state(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_join_checklist(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_legacy_import_completed(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_list_active_checklists(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_list_announces(
     ): Short
@@ -1175,6 +1233,12 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_set_app_settings(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_cell(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_row_style(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_status(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_set_log_level(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_set_saved_peers(
@@ -1196,6 +1260,8 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_checksum_method_node_subscribe_events(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_trigger_sos(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_update_checklist(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_upsert_eam(
     ): Short
@@ -1229,6 +1295,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_eventsubscription_next() != 41987.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_add_checklist_task_row() != 26991.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_announce_now() != 26026.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1241,7 +1310,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_connect_peer() != 14821.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_create_online_checklist() != 59506.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_deactivate_sos() != 39617.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_delete_checklist() != 60268.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_delete_checklist_task_row() != 36939.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_delete_eam() != 25624.toShort()) {
@@ -1257,6 +1335,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_app_settings() != 51365.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_get_checklist() != 43153.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_eam_team_summary() != 57243.toShort()) {
@@ -1292,7 +1373,13 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_import_legacy_state() != 10525.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_join_checklist() != 20150.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_legacy_import_completed() != 41545.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_list_active_checklists() != 41963.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_list_announces() != 5946.toShort()) {
@@ -1352,6 +1439,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_reticulum_mobile_checksum_method_node_set_app_settings() != 61606.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_cell() != 36005.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_row_style() != 26347.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_set_checklist_task_status() != 12812.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_set_log_level() != 54209.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1383,6 +1479,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_trigger_sos() != 4215.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_update_checklist() != 52196.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_upsert_eam() != 23046.toShort()) {
@@ -1484,6 +1583,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterInt: FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
+    }
+
+    override fun lower(value: Int): Int {
+        return value
+    }
+
+    override fun allocationSize(value: Int) = 4UL
+
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
     }
 }
 
@@ -2025,6 +2147,8 @@ public object FfiConverterTypeEventSubscription: FfiConverter<EventSubscription,
 
 public interface NodeInterface {
     
+    fun `addChecklistTaskRow`(`request`: ChecklistTaskRowAddRequest)
+    
     fun `announceNow`()
     
     fun `broadcastBytes`(`bytes`: List<kotlin.UByte>)
@@ -2033,7 +2157,13 @@ public interface NodeInterface {
     
     fun `connectPeer`(`destinationHex`: kotlin.String)
     
+    fun `createOnlineChecklist`(`request`: ChecklistCreateOnlineRequest)
+    
     fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord
+    
+    fun `deleteChecklist`(`checklistUid`: kotlin.String)
+    
+    fun `deleteChecklistTaskRow`(`request`: ChecklistTaskRowDeleteRequest)
     
     fun `deleteEam`(`callsign`: kotlin.String, `deletedAtMs`: kotlin.ULong)
     
@@ -2044,6 +2174,8 @@ public interface NodeInterface {
     fun `disconnectPeer`(`destinationHex`: kotlin.String)
     
     fun `getAppSettings`(): AppSettingsRecord?
+    
+    fun `getChecklist`(`checklistUid`: kotlin.String): ChecklistRecord?
     
     fun `getEamTeamSummary`(`teamUid`: kotlin.String): EamTeamSummaryRecord?
     
@@ -2067,7 +2199,11 @@ public interface NodeInterface {
     
     fun `importLegacyState`(`payload`: LegacyImportPayload)
     
+    fun `joinChecklist`(`checklistUid`: kotlin.String)
+    
     fun `legacyImportCompleted`(): kotlin.Boolean
+    
+    fun `listActiveChecklists`(`request`: ChecklistListActiveRequest?): List<ChecklistRecord>
     
     fun `listAnnounces`(): List<AnnounceRecord>
     
@@ -2107,6 +2243,12 @@ public interface NodeInterface {
     
     fun `setAppSettings`(`settings`: AppSettingsRecord)
     
+    fun `setChecklistTaskCell`(`request`: ChecklistTaskCellSetRequest)
+    
+    fun `setChecklistTaskRowStyle`(`request`: ChecklistTaskRowStyleSetRequest)
+    
+    fun `setChecklistTaskStatus`(`request`: ChecklistTaskStatusSetRequest)
+    
     fun `setLogLevel`(`level`: LogLevel)
     
     fun `setSavedPeers`(`peers`: List<SavedPeerRecord>)
@@ -2128,6 +2270,8 @@ public interface NodeInterface {
     fun `subscribeEvents`(): EventSubscription
     
     fun `triggerSos`(`source`: SosTriggerSource): SosStatusRecord
+    
+    fun `updateChecklist`(`request`: ChecklistUpdateRequest)
     
     fun `upsertEam`(`record`: EamProjectionRecord)
     
@@ -2225,6 +2369,18 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
 
     
+    @Throws(NodeException::class)override fun `addChecklistTaskRow`(`request`: ChecklistTaskRowAddRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_add_checklist_task_row(
+        it, FfiConverterTypeChecklistTaskRowAddRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(NodeException::class)override fun `announceNow`()
         = 
     callWithPointer {
@@ -2273,6 +2429,18 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
 
     
+    @Throws(NodeException::class)override fun `createOnlineChecklist`(`request`: ChecklistCreateOnlineRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_create_online_checklist(
+        it, FfiConverterTypeChecklistCreateOnlineRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(NodeException::class)override fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord {
             return FfiConverterTypeSosStatusRecord.lift(
     callWithPointer {
@@ -2283,6 +2451,30 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
+    
+
+    
+    @Throws(NodeException::class)override fun `deleteChecklist`(`checklistUid`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_checklist(
+        it, FfiConverterString.lower(`checklistUid`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(NodeException::class)override fun `deleteChecklistTaskRow`(`request`: ChecklistTaskRowDeleteRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_checklist_task_row(
+        it, FfiConverterTypeChecklistTaskRowDeleteRequest.lower(`request`),_status)
+}
+    }
+    
     
 
     
@@ -2340,6 +2532,19 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_app_settings(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `getChecklist`(`checklistUid`: kotlin.String): ChecklistRecord? {
+            return FfiConverterOptionalTypeChecklistRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_checklist(
+        it, FfiConverterString.lower(`checklistUid`),_status)
 }
     }
     )
@@ -2488,12 +2693,37 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
 
     
+    @Throws(NodeException::class)override fun `joinChecklist`(`checklistUid`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_join_checklist(
+        it, FfiConverterString.lower(`checklistUid`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(NodeException::class)override fun `legacyImportCompleted`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_legacy_import_completed(
         it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(NodeException::class)override fun `listActiveChecklists`(`request`: ChecklistListActiveRequest?): List<ChecklistRecord> {
+            return FfiConverterSequenceTypeChecklistRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_list_active_checklists(
+        it, FfiConverterOptionalTypeChecklistListActiveRequest.lower(`request`),_status)
 }
     }
     )
@@ -2737,6 +2967,42 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
     
 
+    
+    @Throws(NodeException::class)override fun `setChecklistTaskCell`(`request`: ChecklistTaskCellSetRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_cell(
+        it, FfiConverterTypeChecklistTaskCellSetRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(NodeException::class)override fun `setChecklistTaskRowStyle`(`request`: ChecklistTaskRowStyleSetRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_row_style(
+        it, FfiConverterTypeChecklistTaskRowStyleSetRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(NodeException::class)override fun `setChecklistTaskStatus`(`request`: ChecklistTaskStatusSetRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_status(
+        it, FfiConverterTypeChecklistTaskStatusSetRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
     override fun `setLogLevel`(`level`: LogLevel)
         = 
     callWithPointer {
@@ -2872,6 +3138,18 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     
 
     
+    @Throws(NodeException::class)override fun `updateChecklist`(`request`: ChecklistUpdateRequest)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_update_checklist(
+        it, FfiConverterTypeChecklistUpdateRequest.lower(`request`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(NodeException::class)override fun `upsertEam`(`record`: EamProjectionRecord)
         = 
     callWithPointer {
@@ -3001,7 +3279,8 @@ data class AppSettingsRecord (
     var `broadcast`: kotlin.Boolean, 
     var `announceIntervalSeconds`: kotlin.UInt, 
     var `telemetry`: TelemetrySettingsRecord, 
-    var `hub`: HubSettingsRecord
+    var `hub`: HubSettingsRecord, 
+    var `checklists`: ChecklistSettingsRecord
 ) {
     
     companion object
@@ -3021,6 +3300,7 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterUInt.read(buf),
             FfiConverterTypeTelemetrySettingsRecord.read(buf),
             FfiConverterTypeHubSettingsRecord.read(buf),
+            FfiConverterTypeChecklistSettingsRecord.read(buf),
         )
     }
 
@@ -3032,7 +3312,8 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterBoolean.allocationSize(value.`broadcast`) +
             FfiConverterUInt.allocationSize(value.`announceIntervalSeconds`) +
             FfiConverterTypeTelemetrySettingsRecord.allocationSize(value.`telemetry`) +
-            FfiConverterTypeHubSettingsRecord.allocationSize(value.`hub`)
+            FfiConverterTypeHubSettingsRecord.allocationSize(value.`hub`) +
+            FfiConverterTypeChecklistSettingsRecord.allocationSize(value.`checklists`)
     )
 
     override fun write(value: AppSettingsRecord, buf: ByteBuffer) {
@@ -3044,6 +3325,823 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterUInt.write(value.`announceIntervalSeconds`, buf)
             FfiConverterTypeTelemetrySettingsRecord.write(value.`telemetry`, buf)
             FfiConverterTypeHubSettingsRecord.write(value.`hub`, buf)
+            FfiConverterTypeChecklistSettingsRecord.write(value.`checklists`, buf)
+    }
+}
+
+
+
+data class ChecklistCellRecord (
+    var `cellUid`: kotlin.String, 
+    var `taskUid`: kotlin.String, 
+    var `columnUid`: kotlin.String, 
+    var `value`: kotlin.String?, 
+    var `updatedAt`: kotlin.String?, 
+    var `updatedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistCellRecord: FfiConverterRustBuffer<ChecklistCellRecord> {
+    override fun read(buf: ByteBuffer): ChecklistCellRecord {
+        return ChecklistCellRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistCellRecord) = (
+            FfiConverterString.allocationSize(value.`cellUid`) +
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterString.allocationSize(value.`columnUid`) +
+            FfiConverterOptionalString.allocationSize(value.`value`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistCellRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`cellUid`, buf)
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterString.write(value.`columnUid`, buf)
+            FfiConverterOptionalString.write(value.`value`, buf)
+            FfiConverterOptionalString.write(value.`updatedAt`, buf)
+            FfiConverterOptionalString.write(value.`updatedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistColumnRecord (
+    var `columnUid`: kotlin.String, 
+    var `columnName`: kotlin.String, 
+    var `displayOrder`: kotlin.UInt, 
+    var `columnType`: ChecklistColumnType, 
+    var `columnEditable`: kotlin.Boolean, 
+    var `backgroundColor`: kotlin.String?, 
+    var `textColor`: kotlin.String?, 
+    var `isRemovable`: kotlin.Boolean, 
+    var `systemKey`: ChecklistSystemColumnKey?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistColumnRecord: FfiConverterRustBuffer<ChecklistColumnRecord> {
+    override fun read(buf: ByteBuffer): ChecklistColumnRecord {
+        return ChecklistColumnRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterTypeChecklistColumnType.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalTypeChecklistSystemColumnKey.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistColumnRecord) = (
+            FfiConverterString.allocationSize(value.`columnUid`) +
+            FfiConverterString.allocationSize(value.`columnName`) +
+            FfiConverterUInt.allocationSize(value.`displayOrder`) +
+            FfiConverterTypeChecklistColumnType.allocationSize(value.`columnType`) +
+            FfiConverterBoolean.allocationSize(value.`columnEditable`) +
+            FfiConverterOptionalString.allocationSize(value.`backgroundColor`) +
+            FfiConverterOptionalString.allocationSize(value.`textColor`) +
+            FfiConverterBoolean.allocationSize(value.`isRemovable`) +
+            FfiConverterOptionalTypeChecklistSystemColumnKey.allocationSize(value.`systemKey`)
+    )
+
+    override fun write(value: ChecklistColumnRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`columnUid`, buf)
+            FfiConverterString.write(value.`columnName`, buf)
+            FfiConverterUInt.write(value.`displayOrder`, buf)
+            FfiConverterTypeChecklistColumnType.write(value.`columnType`, buf)
+            FfiConverterBoolean.write(value.`columnEditable`, buf)
+            FfiConverterOptionalString.write(value.`backgroundColor`, buf)
+            FfiConverterOptionalString.write(value.`textColor`, buf)
+            FfiConverterBoolean.write(value.`isRemovable`, buf)
+            FfiConverterOptionalTypeChecklistSystemColumnKey.write(value.`systemKey`, buf)
+    }
+}
+
+
+
+data class ChecklistCreateOnlineRequest (
+    var `checklistUid`: kotlin.String?, 
+    var `missionUid`: kotlin.String?, 
+    var `templateUid`: kotlin.String, 
+    var `name`: kotlin.String, 
+    var `description`: kotlin.String, 
+    var `startTime`: kotlin.String, 
+    var `createdByTeamMemberRnsIdentity`: kotlin.String?, 
+    var `createdByTeamMemberDisplayName`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistCreateOnlineRequest: FfiConverterRustBuffer<ChecklistCreateOnlineRequest> {
+    override fun read(buf: ByteBuffer): ChecklistCreateOnlineRequest {
+        return ChecklistCreateOnlineRequest(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistCreateOnlineRequest) = (
+            FfiConverterOptionalString.allocationSize(value.`checklistUid`) +
+            FfiConverterOptionalString.allocationSize(value.`missionUid`) +
+            FfiConverterString.allocationSize(value.`templateUid`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterString.allocationSize(value.`startTime`) +
+            FfiConverterOptionalString.allocationSize(value.`createdByTeamMemberRnsIdentity`) +
+            FfiConverterOptionalString.allocationSize(value.`createdByTeamMemberDisplayName`)
+    )
+
+    override fun write(value: ChecklistCreateOnlineRequest, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`checklistUid`, buf)
+            FfiConverterOptionalString.write(value.`missionUid`, buf)
+            FfiConverterString.write(value.`templateUid`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterString.write(value.`startTime`, buf)
+            FfiConverterOptionalString.write(value.`createdByTeamMemberRnsIdentity`, buf)
+            FfiConverterOptionalString.write(value.`createdByTeamMemberDisplayName`, buf)
+    }
+}
+
+
+
+data class ChecklistFeedPublicationRecord (
+    var `publicationUid`: kotlin.String, 
+    var `checklistUid`: kotlin.String, 
+    var `missionFeedUid`: kotlin.String, 
+    var `publishedAt`: kotlin.String?, 
+    var `publishedByTeamMemberRnsIdentity`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistFeedPublicationRecord: FfiConverterRustBuffer<ChecklistFeedPublicationRecord> {
+    override fun read(buf: ByteBuffer): ChecklistFeedPublicationRecord {
+        return ChecklistFeedPublicationRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistFeedPublicationRecord) = (
+            FfiConverterString.allocationSize(value.`publicationUid`) +
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterString.allocationSize(value.`missionFeedUid`) +
+            FfiConverterOptionalString.allocationSize(value.`publishedAt`) +
+            FfiConverterString.allocationSize(value.`publishedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistFeedPublicationRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`publicationUid`, buf)
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterString.write(value.`missionFeedUid`, buf)
+            FfiConverterOptionalString.write(value.`publishedAt`, buf)
+            FfiConverterString.write(value.`publishedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistListActiveRequest (
+    var `search`: kotlin.String?, 
+    var `sortBy`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistListActiveRequest: FfiConverterRustBuffer<ChecklistListActiveRequest> {
+    override fun read(buf: ByteBuffer): ChecklistListActiveRequest {
+        return ChecklistListActiveRequest(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistListActiveRequest) = (
+            FfiConverterOptionalString.allocationSize(value.`search`) +
+            FfiConverterOptionalString.allocationSize(value.`sortBy`)
+    )
+
+    override fun write(value: ChecklistListActiveRequest, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`search`, buf)
+            FfiConverterOptionalString.write(value.`sortBy`, buf)
+    }
+}
+
+
+
+data class ChecklistRecord (
+    var `uid`: kotlin.String, 
+    var `missionUid`: kotlin.String?, 
+    var `templateUid`: kotlin.String?, 
+    var `templateVersion`: kotlin.UInt?, 
+    var `templateName`: kotlin.String?, 
+    var `name`: kotlin.String, 
+    var `description`: kotlin.String, 
+    var `startTime`: kotlin.String?, 
+    var `mode`: ChecklistMode, 
+    var `syncState`: ChecklistSyncState, 
+    var `originType`: ChecklistOriginType, 
+    var `checklistStatus`: ChecklistTaskStatus, 
+    var `createdAt`: kotlin.String?, 
+    var `createdByTeamMemberRnsIdentity`: kotlin.String, 
+    var `createdByTeamMemberDisplayName`: kotlin.String?, 
+    var `updatedAt`: kotlin.String?, 
+    var `lastChangedByTeamMemberRnsIdentity`: kotlin.String?, 
+    var `deletedAt`: kotlin.String?, 
+    var `uploadedAt`: kotlin.String?, 
+    var `participantRnsIdentities`: List<kotlin.String>, 
+    var `expectedTaskCount`: kotlin.UInt?, 
+    var `progressPercent`: kotlin.Double, 
+    var `counts`: ChecklistStatusCounts, 
+    var `columns`: List<ChecklistColumnRecord>, 
+    var `tasks`: List<ChecklistTaskRecord>, 
+    var `feedPublications`: List<ChecklistFeedPublicationRecord>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistRecord: FfiConverterRustBuffer<ChecklistRecord> {
+    override fun read(buf: ByteBuffer): ChecklistRecord {
+        return ChecklistRecord(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeChecklistMode.read(buf),
+            FfiConverterTypeChecklistSyncState.read(buf),
+            FfiConverterTypeChecklistOriginType.read(buf),
+            FfiConverterTypeChecklistTaskStatus.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterDouble.read(buf),
+            FfiConverterTypeChecklistStatusCounts.read(buf),
+            FfiConverterSequenceTypeChecklistColumnRecord.read(buf),
+            FfiConverterSequenceTypeChecklistTaskRecord.read(buf),
+            FfiConverterSequenceTypeChecklistFeedPublicationRecord.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistRecord) = (
+            FfiConverterString.allocationSize(value.`uid`) +
+            FfiConverterOptionalString.allocationSize(value.`missionUid`) +
+            FfiConverterOptionalString.allocationSize(value.`templateUid`) +
+            FfiConverterOptionalUInt.allocationSize(value.`templateVersion`) +
+            FfiConverterOptionalString.allocationSize(value.`templateName`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`description`) +
+            FfiConverterOptionalString.allocationSize(value.`startTime`) +
+            FfiConverterTypeChecklistMode.allocationSize(value.`mode`) +
+            FfiConverterTypeChecklistSyncState.allocationSize(value.`syncState`) +
+            FfiConverterTypeChecklistOriginType.allocationSize(value.`originType`) +
+            FfiConverterTypeChecklistTaskStatus.allocationSize(value.`checklistStatus`) +
+            FfiConverterOptionalString.allocationSize(value.`createdAt`) +
+            FfiConverterString.allocationSize(value.`createdByTeamMemberRnsIdentity`) +
+            FfiConverterOptionalString.allocationSize(value.`createdByTeamMemberDisplayName`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`lastChangedByTeamMemberRnsIdentity`) +
+            FfiConverterOptionalString.allocationSize(value.`deletedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`uploadedAt`) +
+            FfiConverterSequenceString.allocationSize(value.`participantRnsIdentities`) +
+            FfiConverterOptionalUInt.allocationSize(value.`expectedTaskCount`) +
+            FfiConverterDouble.allocationSize(value.`progressPercent`) +
+            FfiConverterTypeChecklistStatusCounts.allocationSize(value.`counts`) +
+            FfiConverterSequenceTypeChecklistColumnRecord.allocationSize(value.`columns`) +
+            FfiConverterSequenceTypeChecklistTaskRecord.allocationSize(value.`tasks`) +
+            FfiConverterSequenceTypeChecklistFeedPublicationRecord.allocationSize(value.`feedPublications`)
+    )
+
+    override fun write(value: ChecklistRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`uid`, buf)
+            FfiConverterOptionalString.write(value.`missionUid`, buf)
+            FfiConverterOptionalString.write(value.`templateUid`, buf)
+            FfiConverterOptionalUInt.write(value.`templateVersion`, buf)
+            FfiConverterOptionalString.write(value.`templateName`, buf)
+            FfiConverterString.write(value.`name`, buf)
+            FfiConverterString.write(value.`description`, buf)
+            FfiConverterOptionalString.write(value.`startTime`, buf)
+            FfiConverterTypeChecklistMode.write(value.`mode`, buf)
+            FfiConverterTypeChecklistSyncState.write(value.`syncState`, buf)
+            FfiConverterTypeChecklistOriginType.write(value.`originType`, buf)
+            FfiConverterTypeChecklistTaskStatus.write(value.`checklistStatus`, buf)
+            FfiConverterOptionalString.write(value.`createdAt`, buf)
+            FfiConverterString.write(value.`createdByTeamMemberRnsIdentity`, buf)
+            FfiConverterOptionalString.write(value.`createdByTeamMemberDisplayName`, buf)
+            FfiConverterOptionalString.write(value.`updatedAt`, buf)
+            FfiConverterOptionalString.write(value.`lastChangedByTeamMemberRnsIdentity`, buf)
+            FfiConverterOptionalString.write(value.`deletedAt`, buf)
+            FfiConverterOptionalString.write(value.`uploadedAt`, buf)
+            FfiConverterSequenceString.write(value.`participantRnsIdentities`, buf)
+            FfiConverterOptionalUInt.write(value.`expectedTaskCount`, buf)
+            FfiConverterDouble.write(value.`progressPercent`, buf)
+            FfiConverterTypeChecklistStatusCounts.write(value.`counts`, buf)
+            FfiConverterSequenceTypeChecklistColumnRecord.write(value.`columns`, buf)
+            FfiConverterSequenceTypeChecklistTaskRecord.write(value.`tasks`, buf)
+            FfiConverterSequenceTypeChecklistFeedPublicationRecord.write(value.`feedPublications`, buf)
+    }
+}
+
+
+
+data class ChecklistSettingsRecord (
+    var `defaultTaskDueStepMinutes`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistSettingsRecord: FfiConverterRustBuffer<ChecklistSettingsRecord> {
+    override fun read(buf: ByteBuffer): ChecklistSettingsRecord {
+        return ChecklistSettingsRecord(
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistSettingsRecord) = (
+            FfiConverterUInt.allocationSize(value.`defaultTaskDueStepMinutes`)
+    )
+
+    override fun write(value: ChecklistSettingsRecord, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`defaultTaskDueStepMinutes`, buf)
+    }
+}
+
+
+
+data class ChecklistStatusCounts (
+    var `pendingCount`: kotlin.UInt, 
+    var `lateCount`: kotlin.UInt, 
+    var `completeCount`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistStatusCounts: FfiConverterRustBuffer<ChecklistStatusCounts> {
+    override fun read(buf: ByteBuffer): ChecklistStatusCounts {
+        return ChecklistStatusCounts(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistStatusCounts) = (
+            FfiConverterUInt.allocationSize(value.`pendingCount`) +
+            FfiConverterUInt.allocationSize(value.`lateCount`) +
+            FfiConverterUInt.allocationSize(value.`completeCount`)
+    )
+
+    override fun write(value: ChecklistStatusCounts, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`pendingCount`, buf)
+            FfiConverterUInt.write(value.`lateCount`, buf)
+            FfiConverterUInt.write(value.`completeCount`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskCellSetRequest (
+    var `checklistUid`: kotlin.String, 
+    var `taskUid`: kotlin.String, 
+    var `columnUid`: kotlin.String, 
+    var `value`: kotlin.String, 
+    var `updatedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskCellSetRequest: FfiConverterRustBuffer<ChecklistTaskCellSetRequest> {
+    override fun read(buf: ByteBuffer): ChecklistTaskCellSetRequest {
+        return ChecklistTaskCellSetRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskCellSetRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterString.allocationSize(value.`columnUid`) +
+            FfiConverterString.allocationSize(value.`value`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistTaskCellSetRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterString.write(value.`columnUid`, buf)
+            FfiConverterString.write(value.`value`, buf)
+            FfiConverterOptionalString.write(value.`updatedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskRecord (
+    var `taskUid`: kotlin.String, 
+    var `number`: kotlin.UInt, 
+    var `userStatus`: ChecklistUserTaskStatus, 
+    var `taskStatus`: ChecklistTaskStatus, 
+    var `isLate`: kotlin.Boolean, 
+    var `updatedAt`: kotlin.String?, 
+    var `deletedAt`: kotlin.String?, 
+    var `customStatus`: kotlin.Int?, 
+    var `dueRelativeMinutes`: kotlin.UInt?, 
+    var `dueDtg`: kotlin.String?, 
+    var `notes`: kotlin.String?, 
+    var `rowBackgroundColor`: kotlin.String?, 
+    var `lineBreakEnabled`: kotlin.Boolean, 
+    var `completedAt`: kotlin.String?, 
+    var `completedByTeamMemberRnsIdentity`: kotlin.String?, 
+    var `legacyValue`: kotlin.String?, 
+    var `cells`: List<ChecklistCellRecord>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskRecord: FfiConverterRustBuffer<ChecklistTaskRecord> {
+    override fun read(buf: ByteBuffer): ChecklistTaskRecord {
+        return ChecklistTaskRecord(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterTypeChecklistUserTaskStatus.read(buf),
+            FfiConverterTypeChecklistTaskStatus.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeChecklistCellRecord.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskRecord) = (
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterUInt.allocationSize(value.`number`) +
+            FfiConverterTypeChecklistUserTaskStatus.allocationSize(value.`userStatus`) +
+            FfiConverterTypeChecklistTaskStatus.allocationSize(value.`taskStatus`) +
+            FfiConverterBoolean.allocationSize(value.`isLate`) +
+            FfiConverterOptionalString.allocationSize(value.`updatedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`deletedAt`) +
+            FfiConverterOptionalInt.allocationSize(value.`customStatus`) +
+            FfiConverterOptionalUInt.allocationSize(value.`dueRelativeMinutes`) +
+            FfiConverterOptionalString.allocationSize(value.`dueDtg`) +
+            FfiConverterOptionalString.allocationSize(value.`notes`) +
+            FfiConverterOptionalString.allocationSize(value.`rowBackgroundColor`) +
+            FfiConverterBoolean.allocationSize(value.`lineBreakEnabled`) +
+            FfiConverterOptionalString.allocationSize(value.`completedAt`) +
+            FfiConverterOptionalString.allocationSize(value.`completedByTeamMemberRnsIdentity`) +
+            FfiConverterOptionalString.allocationSize(value.`legacyValue`) +
+            FfiConverterSequenceTypeChecklistCellRecord.allocationSize(value.`cells`)
+    )
+
+    override fun write(value: ChecklistTaskRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterUInt.write(value.`number`, buf)
+            FfiConverterTypeChecklistUserTaskStatus.write(value.`userStatus`, buf)
+            FfiConverterTypeChecklistTaskStatus.write(value.`taskStatus`, buf)
+            FfiConverterBoolean.write(value.`isLate`, buf)
+            FfiConverterOptionalString.write(value.`updatedAt`, buf)
+            FfiConverterOptionalString.write(value.`deletedAt`, buf)
+            FfiConverterOptionalInt.write(value.`customStatus`, buf)
+            FfiConverterOptionalUInt.write(value.`dueRelativeMinutes`, buf)
+            FfiConverterOptionalString.write(value.`dueDtg`, buf)
+            FfiConverterOptionalString.write(value.`notes`, buf)
+            FfiConverterOptionalString.write(value.`rowBackgroundColor`, buf)
+            FfiConverterBoolean.write(value.`lineBreakEnabled`, buf)
+            FfiConverterOptionalString.write(value.`completedAt`, buf)
+            FfiConverterOptionalString.write(value.`completedByTeamMemberRnsIdentity`, buf)
+            FfiConverterOptionalString.write(value.`legacyValue`, buf)
+            FfiConverterSequenceTypeChecklistCellRecord.write(value.`cells`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskRowAddRequest (
+    var `checklistUid`: kotlin.String, 
+    var `taskUid`: kotlin.String?, 
+    var `number`: kotlin.UInt, 
+    var `dueRelativeMinutes`: kotlin.UInt?, 
+    var `legacyValue`: kotlin.String?, 
+    var `changedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskRowAddRequest: FfiConverterRustBuffer<ChecklistTaskRowAddRequest> {
+    override fun read(buf: ByteBuffer): ChecklistTaskRowAddRequest {
+        return ChecklistTaskRowAddRequest(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalUInt.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskRowAddRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterOptionalString.allocationSize(value.`taskUid`) +
+            FfiConverterUInt.allocationSize(value.`number`) +
+            FfiConverterOptionalUInt.allocationSize(value.`dueRelativeMinutes`) +
+            FfiConverterOptionalString.allocationSize(value.`legacyValue`) +
+            FfiConverterOptionalString.allocationSize(value.`changedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistTaskRowAddRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterOptionalString.write(value.`taskUid`, buf)
+            FfiConverterUInt.write(value.`number`, buf)
+            FfiConverterOptionalUInt.write(value.`dueRelativeMinutes`, buf)
+            FfiConverterOptionalString.write(value.`legacyValue`, buf)
+            FfiConverterOptionalString.write(value.`changedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskRowDeleteRequest (
+    var `checklistUid`: kotlin.String, 
+    var `taskUid`: kotlin.String, 
+    var `changedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskRowDeleteRequest: FfiConverterRustBuffer<ChecklistTaskRowDeleteRequest> {
+    override fun read(buf: ByteBuffer): ChecklistTaskRowDeleteRequest {
+        return ChecklistTaskRowDeleteRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskRowDeleteRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterOptionalString.allocationSize(value.`changedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistTaskRowDeleteRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterOptionalString.write(value.`changedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskRowStyleSetRequest (
+    var `checklistUid`: kotlin.String, 
+    var `taskUid`: kotlin.String, 
+    var `rowBackgroundColor`: kotlin.String?, 
+    var `lineBreakEnabled`: kotlin.Boolean?, 
+    var `changedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskRowStyleSetRequest: FfiConverterRustBuffer<ChecklistTaskRowStyleSetRequest> {
+    override fun read(buf: ByteBuffer): ChecklistTaskRowStyleSetRequest {
+        return ChecklistTaskRowStyleSetRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskRowStyleSetRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterOptionalString.allocationSize(value.`rowBackgroundColor`) +
+            FfiConverterOptionalBoolean.allocationSize(value.`lineBreakEnabled`) +
+            FfiConverterOptionalString.allocationSize(value.`changedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistTaskRowStyleSetRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterOptionalString.write(value.`rowBackgroundColor`, buf)
+            FfiConverterOptionalBoolean.write(value.`lineBreakEnabled`, buf)
+            FfiConverterOptionalString.write(value.`changedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistTaskStatusSetRequest (
+    var `checklistUid`: kotlin.String, 
+    var `taskUid`: kotlin.String, 
+    var `userStatus`: ChecklistUserTaskStatus, 
+    var `changedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskStatusSetRequest: FfiConverterRustBuffer<ChecklistTaskStatusSetRequest> {
+    override fun read(buf: ByteBuffer): ChecklistTaskStatusSetRequest {
+        return ChecklistTaskStatusSetRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeChecklistUserTaskStatus.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistTaskStatusSetRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterString.allocationSize(value.`taskUid`) +
+            FfiConverterTypeChecklistUserTaskStatus.allocationSize(value.`userStatus`) +
+            FfiConverterOptionalString.allocationSize(value.`changedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistTaskStatusSetRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterString.write(value.`taskUid`, buf)
+            FfiConverterTypeChecklistUserTaskStatus.write(value.`userStatus`, buf)
+            FfiConverterOptionalString.write(value.`changedByTeamMemberRnsIdentity`, buf)
+    }
+}
+
+
+
+data class ChecklistUpdatePatch (
+    var `missionUid`: kotlin.String?, 
+    var `templateUid`: kotlin.String?, 
+    var `name`: kotlin.String?, 
+    var `description`: kotlin.String?, 
+    var `startTime`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistUpdatePatch: FfiConverterRustBuffer<ChecklistUpdatePatch> {
+    override fun read(buf: ByteBuffer): ChecklistUpdatePatch {
+        return ChecklistUpdatePatch(
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistUpdatePatch) = (
+            FfiConverterOptionalString.allocationSize(value.`missionUid`) +
+            FfiConverterOptionalString.allocationSize(value.`templateUid`) +
+            FfiConverterOptionalString.allocationSize(value.`name`) +
+            FfiConverterOptionalString.allocationSize(value.`description`) +
+            FfiConverterOptionalString.allocationSize(value.`startTime`)
+    )
+
+    override fun write(value: ChecklistUpdatePatch, buf: ByteBuffer) {
+            FfiConverterOptionalString.write(value.`missionUid`, buf)
+            FfiConverterOptionalString.write(value.`templateUid`, buf)
+            FfiConverterOptionalString.write(value.`name`, buf)
+            FfiConverterOptionalString.write(value.`description`, buf)
+            FfiConverterOptionalString.write(value.`startTime`, buf)
+    }
+}
+
+
+
+data class ChecklistUpdateRequest (
+    var `checklistUid`: kotlin.String, 
+    var `patch`: ChecklistUpdatePatch, 
+    var `changedByTeamMemberRnsIdentity`: kotlin.String?
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistUpdateRequest: FfiConverterRustBuffer<ChecklistUpdateRequest> {
+    override fun read(buf: ByteBuffer): ChecklistUpdateRequest {
+        return ChecklistUpdateRequest(
+            FfiConverterString.read(buf),
+            FfiConverterTypeChecklistUpdatePatch.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ChecklistUpdateRequest) = (
+            FfiConverterString.allocationSize(value.`checklistUid`) +
+            FfiConverterTypeChecklistUpdatePatch.allocationSize(value.`patch`) +
+            FfiConverterOptionalString.allocationSize(value.`changedByTeamMemberRnsIdentity`)
+    )
+
+    override fun write(value: ChecklistUpdateRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`checklistUid`, buf)
+            FfiConverterTypeChecklistUpdatePatch.write(value.`patch`, buf)
+            FfiConverterOptionalString.write(value.`changedByTeamMemberRnsIdentity`, buf)
     }
 }
 
@@ -4851,6 +5949,223 @@ public object FfiConverterTypeAnnounceClass: FfiConverterRustBuffer<AnnounceClas
 
 
 
+enum class ChecklistColumnType {
+    
+    SHORT_STRING,
+    LONG_STRING,
+    INTEGER,
+    ACTUAL_TIME,
+    RELATIVE_TIME;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistColumnType: FfiConverterRustBuffer<ChecklistColumnType> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistColumnType.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistColumnType) = 4UL
+
+    override fun write(value: ChecklistColumnType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistMode {
+    
+    ONLINE,
+    OFFLINE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistMode: FfiConverterRustBuffer<ChecklistMode> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistMode) = 4UL
+
+    override fun write(value: ChecklistMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistOriginType {
+    
+    RCH_TEMPLATE,
+    BLANK_TEMPLATE,
+    CSV_IMPORT,
+    EXISTING_TEMPLATE_CLONE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistOriginType: FfiConverterRustBuffer<ChecklistOriginType> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistOriginType.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistOriginType) = 4UL
+
+    override fun write(value: ChecklistOriginType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistSyncState {
+    
+    LOCAL_ONLY,
+    UPLOAD_PENDING,
+    SYNCED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistSyncState: FfiConverterRustBuffer<ChecklistSyncState> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistSyncState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistSyncState) = 4UL
+
+    override fun write(value: ChecklistSyncState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistSystemColumnKey {
+    
+    DUE_RELATIVE_DTG;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistSystemColumnKey: FfiConverterRustBuffer<ChecklistSystemColumnKey> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistSystemColumnKey.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistSystemColumnKey) = 4UL
+
+    override fun write(value: ChecklistSystemColumnKey, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistTaskStatus {
+    
+    PENDING,
+    COMPLETE,
+    COMPLETE_LATE,
+    LATE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistTaskStatus: FfiConverterRustBuffer<ChecklistTaskStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistTaskStatus.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistTaskStatus) = 4UL
+
+    override fun write(value: ChecklistTaskStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ChecklistUserTaskStatus {
+    
+    PENDING,
+    COMPLETE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeChecklistUserTaskStatus: FfiConverterRustBuffer<ChecklistUserTaskStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        ChecklistUserTaskStatus.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ChecklistUserTaskStatus) = 4UL
+
+    override fun write(value: ChecklistUserTaskStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class HubMode {
     
     AUTONOMOUS,
@@ -5772,6 +7087,8 @@ enum class ProjectionScope {
     PEERS,
     SYNC_STATUS,
     HUB_REGISTRATION,
+    CHECKLISTS,
+    CHECKLIST_DETAIL,
     EAMS,
     EVENTS,
     CONVERSATIONS,
@@ -6037,6 +7354,38 @@ public object FfiConverterOptionalUInt: FfiConverterRustBuffer<kotlin.UInt?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalInt: FfiConverterRustBuffer<kotlin.Int?> {
+    override fun read(buf: ByteBuffer): kotlin.Int? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterInt.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.Int?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterInt.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.Int?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterInt.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalULong: FfiConverterRustBuffer<kotlin.ULong?> {
     override fun read(buf: ByteBuffer): kotlin.ULong? {
         if (buf.get().toInt() == 0) {
@@ -6197,6 +7546,70 @@ public object FfiConverterOptionalTypeAppSettingsRecord: FfiConverterRustBuffer<
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeChecklistListActiveRequest: FfiConverterRustBuffer<ChecklistListActiveRequest?> {
+    override fun read(buf: ByteBuffer): ChecklistListActiveRequest? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeChecklistListActiveRequest.read(buf)
+    }
+
+    override fun allocationSize(value: ChecklistListActiveRequest?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeChecklistListActiveRequest.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ChecklistListActiveRequest?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeChecklistListActiveRequest.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeChecklistRecord: FfiConverterRustBuffer<ChecklistRecord?> {
+    override fun read(buf: ByteBuffer): ChecklistRecord? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeChecklistRecord.read(buf)
+    }
+
+    override fun allocationSize(value: ChecklistRecord?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeChecklistRecord.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ChecklistRecord?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeChecklistRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeEamSourceRecord: FfiConverterRustBuffer<EamSourceRecord?> {
     override fun read(buf: ByteBuffer): EamSourceRecord? {
         if (buf.get().toInt() == 0) {
@@ -6283,6 +7696,38 @@ public object FfiConverterOptionalTypeSosStatusRecord: FfiConverterRustBuffer<So
         } else {
             buf.put(1)
             FfiConverterTypeSosStatusRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeChecklistSystemColumnKey: FfiConverterRustBuffer<ChecklistSystemColumnKey?> {
+    override fun read(buf: ByteBuffer): ChecklistSystemColumnKey? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeChecklistSystemColumnKey.read(buf)
+    }
+
+    override fun allocationSize(value: ChecklistSystemColumnKey?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeChecklistSystemColumnKey.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ChecklistSystemColumnKey?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeChecklistSystemColumnKey.write(value, buf)
         }
     }
 }
@@ -6527,6 +7972,146 @@ public object FfiConverterSequenceTypeAnnounceRecord: FfiConverterRustBuffer<Lis
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeAnnounceRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChecklistCellRecord: FfiConverterRustBuffer<List<ChecklistCellRecord>> {
+    override fun read(buf: ByteBuffer): List<ChecklistCellRecord> {
+        val len = buf.getInt()
+        return List<ChecklistCellRecord>(len) {
+            FfiConverterTypeChecklistCellRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChecklistCellRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChecklistCellRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChecklistCellRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChecklistCellRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChecklistColumnRecord: FfiConverterRustBuffer<List<ChecklistColumnRecord>> {
+    override fun read(buf: ByteBuffer): List<ChecklistColumnRecord> {
+        val len = buf.getInt()
+        return List<ChecklistColumnRecord>(len) {
+            FfiConverterTypeChecklistColumnRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChecklistColumnRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChecklistColumnRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChecklistColumnRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChecklistColumnRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChecklistFeedPublicationRecord: FfiConverterRustBuffer<List<ChecklistFeedPublicationRecord>> {
+    override fun read(buf: ByteBuffer): List<ChecklistFeedPublicationRecord> {
+        val len = buf.getInt()
+        return List<ChecklistFeedPublicationRecord>(len) {
+            FfiConverterTypeChecklistFeedPublicationRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChecklistFeedPublicationRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChecklistFeedPublicationRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChecklistFeedPublicationRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChecklistFeedPublicationRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChecklistRecord: FfiConverterRustBuffer<List<ChecklistRecord>> {
+    override fun read(buf: ByteBuffer): List<ChecklistRecord> {
+        val len = buf.getInt()
+        return List<ChecklistRecord>(len) {
+            FfiConverterTypeChecklistRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChecklistRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChecklistRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChecklistRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChecklistRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeChecklistTaskRecord: FfiConverterRustBuffer<List<ChecklistTaskRecord>> {
+    override fun read(buf: ByteBuffer): List<ChecklistTaskRecord> {
+        val len = buf.getInt()
+        return List<ChecklistTaskRecord>(len) {
+            FfiConverterTypeChecklistTaskRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ChecklistTaskRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeChecklistTaskRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ChecklistTaskRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeChecklistTaskRecord.write(it, buf)
         }
     }
 }

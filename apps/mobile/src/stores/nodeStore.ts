@@ -138,6 +138,9 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,
   },
+  checklists: {
+    defaultTaskDueStepMinutes: 30,
+  },
   hub: {
     mode: "Autonomous",
     identityHash: "",
@@ -325,6 +328,18 @@ function normalizeTelemetrySettings(
   };
 }
 
+function normalizeChecklistSettings(
+  checklists: Partial<NodeUiSettings["checklists"]> | undefined,
+  base: NodeUiSettings["checklists"] = DEFAULT_SETTINGS.checklists,
+): NodeUiSettings["checklists"] {
+  const parsed = Math.trunc(Number(checklists?.defaultTaskDueStepMinutes ?? base.defaultTaskDueStepMinutes));
+  return {
+    ...base,
+    ...checklists,
+    defaultTaskDueStepMinutes: Number.isFinite(parsed) ? Math.max(1, parsed) : base.defaultTaskDueStepMinutes,
+  };
+}
+
 function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
   switch (String(value ?? "").trim()) {
     case "Connected":
@@ -352,6 +367,7 @@ function cloneDefaultSettings(): NodeUiSettings {
   return {
     ...DEFAULT_SETTINGS,
     telemetry: { ...DEFAULT_SETTINGS.telemetry },
+    checklists: { ...DEFAULT_SETTINGS.checklists },
     hub: { ...DEFAULT_SETTINGS.hub },
   };
 }
@@ -370,6 +386,9 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
       accuracyThresholdMeters: settings.telemetry.accuracyThresholdMeters,
       staleAfterMinutes: settings.telemetry.staleAfterMinutes,
       expireAfterMinutes: settings.telemetry.expireAfterMinutes,
+    },
+    checklists: {
+      defaultTaskDueStepMinutes: settings.checklists.defaultTaskDueStepMinutes,
     },
     hub: {
       mode: settings.hub.mode,
@@ -405,6 +424,7 @@ function normalizeAppSettingsRecord(
       tcpFallback,
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
+    checklists: normalizeChecklistSettings(runtimeSettings.checklists),
     hub: {
       ...DEFAULT_SETTINGS.hub,
       ...runtimeSettings.hub,
@@ -925,8 +945,9 @@ export const useNodeStore = defineStore("node", () => {
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
-    settings.telemetry = { ...next.telemetry };
-    settings.hub = { ...next.hub };
+  settings.telemetry = { ...next.telemetry };
+  settings.checklists = { ...next.checklists };
+  settings.hub = { ...next.hub };
     applyUiSettingsProjection(toUiSettingsProjection(next));
   }
 
