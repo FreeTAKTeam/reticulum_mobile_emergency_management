@@ -500,6 +500,7 @@ CSV template import:
 
 - CSV files can contain any number of columns.
 - A column named `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, or `Due Minutes` is treated as the deadline column.
+- Built-in checklist templates also include the `CompletedDTG` deadline column so late status can be calculated without importing a CSV.
 - Deadline values are relative to the checklist start DTG. Supported examples include `60`, `+60`, `+1h`, `+1 hour`, and `+01:00`.
 - If the CSV has no deadline column, REM creates `CompletedDTG` automatically and assigns deadlines using the configured default step, currently 30 minutes per row.
 - The deadline column is a system column and is not edited like a normal checklist cell.

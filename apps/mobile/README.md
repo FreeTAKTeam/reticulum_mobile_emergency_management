@@ -48,6 +48,7 @@ Checklist CSV upload creates a template only. The template becomes shared when t
 
 - CSV files may contain any number of normal task columns.
 - `CompletedDTG`, `Completed DTG`, `Due`, `DueRelativeDTG`, `Due Relative DTG`, `Due Relative Minutes`, and `Due Minutes` are treated as the relative deadline column.
+- Built-in templates include the same `CompletedDTG` system column, so late status is calculated consistently for built-in and imported templates.
 - Supported relative deadline examples: `60`, `+60`, `+1h`, `+1 hour`, and `+01:00`.
 - If no deadline column is present, REM creates `CompletedDTG` and uses the configured default step of 30 minutes per row.
 - A task is late when the checklist start DTG plus the row deadline is earlier than the current time, unless it was completed on time.
