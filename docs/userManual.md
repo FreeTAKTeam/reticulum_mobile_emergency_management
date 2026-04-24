@@ -107,7 +107,7 @@ The app uses a single shell across all main pages:
 - The top bar shows the app title, saved-peer and connected-peer count, and node readiness.
 - The main content area changes based on the selected page.
 - The bottom tab bar is the primary navigation.
-- The main tabs are `Dashboard`, `Inbox`, `Telemetry`, `Action Messages`, `Events`, `Peers`, and `Settings`.
+- The main tabs are `Dashboard`, `Action Messages`, `Events`, `Inbox`, `Checklists`, `Telemetry`, `Peers`, and `Settings`.
 
 If the top-right readiness indicator shows `Not Ready`, outbound features may be limited. In particular, events require a ready node before they can be sent. Action messages can still be saved locally and synced later. the two numbers indicate the number of discovered peers and the one that are saved
 
@@ -118,6 +118,7 @@ If the top-right readiness indicator shows `Not Ready`, outbound features may be
 Purpose:
 
 - Gives a readiness summary derived from all the stored Emergency Action Messages.
+- Shows checklist summary metrics below the Emergency Action Message area when checklist data exists.
 - Helps an operator see the overall status picture without opening each message.
 
 How it works:
@@ -125,6 +126,7 @@ How it works:
 - The `# MSG` badge shows the number of active action messages currently contributing to the dashboard.
 - Six readiness rings summarize `Security`, `Capability`, `Preparedness`, `Medical`, `Mobility`, and `Comms`.
 - Each ring shows a percentage and a color band that represents the average of that status across all active messages.
+- Checklist metrics summarize total, active, and late checklists from the Rust checklist projections.
 - `Announce` send information to the mesh  about the operator presence. Announces are sent periodically and this shoul be only used if necessary.
 - `Sync` requests to sync immediately messages send by peers while offline.
 
