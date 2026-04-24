@@ -467,13 +467,15 @@ dictionary ChecklistRecord {
   ChecklistSyncState sync_state;
   ChecklistOriginType origin_type;
   ChecklistTaskStatus checklist_status;
-  string? created_at;
-  string created_by_team_member_rns_identity;
-  string? updated_at;
+    string? created_at;
+    string created_by_team_member_rns_identity;
+    string? created_by_team_member_display_name;
+    string? updated_at;
   string? last_changed_by_team_member_rns_identity;
   string? deleted_at;
   string? uploaded_at;
   sequence<string> participant_rns_identities;
+  u32? expected_task_count;
   f64 progress_percent;
   ChecklistStatusCounts counts;
   sequence<ChecklistColumnRecord> columns;
@@ -492,9 +494,10 @@ dictionary ChecklistCreateOnlineRequest {
   string template_uid;
   string name;
   string description;
-  string start_time;
-  string? created_by_team_member_rns_identity;
-};
+    string start_time;
+    string? created_by_team_member_rns_identity;
+    string? created_by_team_member_display_name;
+  };
 
 dictionary ChecklistUpdatePatch {
   string? mission_uid;

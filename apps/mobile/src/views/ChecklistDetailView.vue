@@ -64,6 +64,7 @@ const isMutating = ref(false);
 const editingTaskId = ref<string | null>(null);
 const editingTaskValue = ref("");
 const cellDrafts = ref<Record<string, string>>({});
+const routeEditConsumed = ref(false);
 
 function taskStatusClass(status: ChecklistTaskStatus): string {
   return `task-${status}`;
@@ -129,11 +130,17 @@ function startTaskEdit(task: ChecklistTask): void {
   }
   editingTaskId.value = task.id;
   editingTaskValue.value = task.title;
+  cellDrafts.value = Object.fromEntries(
+    task.cells
+      .filter((cell) => cell.editable)
+      .map((cell) => [taskCellDraftKey(task, cell), cell.value]),
+  );
 }
 
 function cancelTaskEdit(): void {
   editingTaskId.value = null;
   editingTaskValue.value = "";
+  cellDrafts.value = {};
 }
 
 function taskCellDraftKey(task: ChecklistTask, cell: ChecklistTaskCell): string {
@@ -156,67 +163,65 @@ function taskCellHasDraft(task: ChecklistTask, cell: ChecklistTaskCell): boolean
   return taskCellDraftValue(task, cell) !== cell.value;
 }
 
-function clearTaskCellDraft(task: ChecklistTask, cell: ChecklistTaskCell): void {
-  const nextDrafts = { ...cellDrafts.value };
-  delete nextDrafts[taskCellDraftKey(task, cell)];
-  cellDrafts.value = nextDrafts;
+function isTaskEditing(task: ChecklistTask): boolean {
+  return editingTaskId.value === task.id;
 }
 
-async function saveTaskCell(task: ChecklistTask): Promise<void> {
+function editableTaskCells(task: ChecklistTask): ChecklistTaskCell[] {
+  return task.cells.filter((cell) => cell.columnUid !== task.primaryColumnUid);
+}
+
+function taskHasDraft(task: ChecklistTask): boolean {
+  if (editingTaskId.value !== task.id) {
+    return false;
+  }
+  if (editingTaskValue.value.trim() !== task.title) {
+    return true;
+  }
+  return task.cells.some((cell) => cell.editable && taskCellHasDraft(task, cell));
+}
+
+async function saveTaskRow(task: ChecklistTask): Promise<void> {
   if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
     return;
   }
-  const value = editingTaskValue.value.trim();
-  if (!value) {
+  const titleValue = editingTaskValue.value.trim();
+  if (!titleValue) {
     return;
   }
   isMutating.value = true;
   try {
-    await checklistsStore.setTaskCell({
-      checklistUid: checklistId.value,
-      taskUid: task.id,
-      columnUid: task.primaryColumnUid,
-      value,
-    });
+    if (titleValue !== task.title) {
+      await checklistsStore.setTaskCell({
+        checklistUid: checklistId.value,
+        taskUid: task.id,
+        columnUid: task.primaryColumnUid,
+        value: titleValue,
+      });
+    }
+    for (const cell of task.cells) {
+      if (!cell.editable || cell.columnUid === task.primaryColumnUid || !taskCellHasDraft(task, cell)) {
+        continue;
+      }
+      await checklistsStore.setTaskCell({
+        checklistUid: checklistId.value,
+        taskUid: task.id,
+        columnUid: cell.columnUid,
+        value: taskCellDraftValue(task, cell),
+      });
+    }
     cancelTaskEdit();
   } finally {
     isMutating.value = false;
   }
 }
 
-async function saveTaskCellDraft(task: ChecklistTask, cell: ChecklistTaskCell): Promise<void> {
-  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value || !cell.editable) {
+async function toggleTaskEdit(task: ChecklistTask): Promise<void> {
+  if (isTaskEditing(task)) {
+    await saveTaskRow(task);
     return;
   }
-  isMutating.value = true;
-  try {
-    await checklistsStore.setTaskCell({
-      checklistUid: checklistId.value,
-      taskUid: task.id,
-      columnUid: cell.columnUid,
-      value: taskCellDraftValue(task, cell),
-    });
-    clearTaskCellDraft(task, cell);
-  } finally {
-    isMutating.value = false;
-  }
-}
-
-async function toggleTaskStyle(task: ChecklistTask): Promise<void> {
-  if (!checklistId.value || !liveChecklistRuntimeRecord.value || isMutating.value) {
-    return;
-  }
-  isMutating.value = true;
-  try {
-    await checklistsStore.setTaskRowStyle({
-      checklistUid: checklistId.value,
-      taskUid: task.id,
-      rowBackgroundColor: task.rowBackgroundColor ? "" : "#10304f",
-      lineBreakEnabled: !task.lineBreakEnabled,
-    });
-  } finally {
-    isMutating.value = false;
-  }
+  startTaskEdit(task);
 }
 
 async function deleteTaskRow(task: ChecklistTask): Promise<void> {
@@ -262,6 +267,14 @@ watch(checklistId, (value) => {
     return;
   }
   void checklistsStore.refreshDetail(value);
+}, { immediate: true });
+
+watch([visibleTasks, () => route.query.edit], ([tasks, edit]) => {
+  if (routeEditConsumed.value || edit !== "1" || isTemplatePreview.value || tasks.length === 0) {
+    return;
+  }
+  routeEditConsumed.value = true;
+  startTaskEdit(tasks[0]);
 }, { immediate: true });
 
 onMounted(() => {
@@ -320,7 +333,14 @@ onMounted(() => {
 
           <div class="hero-copy">
             <h1>{{ checklistDetail.heroTitle }}</h1>
-            <p>{{ checklistDetail.heroSubtitle }}</p>
+            <div class="hero-meta" aria-label="Checklist metadata">
+              <p
+                v-for="line in checklistDetail.heroMetaLines"
+                :key="line"
+              >
+                {{ line }}
+              </p>
+            </div>
           </div>
 
           <div class="hero-ornament" aria-hidden="true">
@@ -385,7 +405,7 @@ onMounted(() => {
               <div class="task-copy">
                 <div class="task-copy-topline">
                   <div class="task-copy-heading">
-                    <template v-if="editingTaskId === task.id">
+                    <template v-if="isTaskEditing(task)">
                       <label class="task-edit-label" :for="`task-edit-${task.id}`">Task text</label>
                       <input
                         :id="`task-edit-${task.id}`"
@@ -393,7 +413,7 @@ onMounted(() => {
                         class="task-edit-input"
                         type="text"
                         :disabled="isMutating"
-                        @keyup.enter="saveTaskCell(task)"
+                        @keyup.enter="saveTaskRow(task)"
                         @keyup.esc="cancelTaskEdit"
                       />
                     </template>
@@ -425,17 +445,23 @@ onMounted(() => {
                   <span>{{ task.metaLabel }}</span>
                 </p>
 
-                <div v-if="!isTemplatePreview && task.cells.length > 0" class="task-cells">
+                <div
+                  v-if="!isTemplatePreview && editableTaskCells(task).length > 0"
+                  class="task-cells"
+                >
                   <div
-                    v-for="cell in task.cells"
+                    v-for="cell in editableTaskCells(task)"
                     :key="cell.columnUid"
                     class="task-cell"
                     :class="{ 'task-cell-readonly': !cell.editable }"
                   >
-                    <label class="task-cell-label" :for="`task-cell-${task.id}-${cell.columnUid}`">
+                    <label
+                      class="task-cell-label"
+                      :for="isTaskEditing(task) ? `task-cell-${task.id}-${cell.columnUid}` : undefined"
+                    >
                       {{ cell.label }}
                     </label>
-                    <div class="task-cell-control">
+                    <div v-if="isTaskEditing(task)" class="task-cell-control">
                       <input
                         :id="`task-cell-${task.id}-${cell.columnUid}`"
                         class="task-cell-input"
@@ -443,66 +469,45 @@ onMounted(() => {
                         :value="taskCellDraftValue(task, cell)"
                         :disabled="isMutating || !cell.editable"
                         @input="updateTaskCellDraft(task, cell, $event)"
-                        @keyup.enter="saveTaskCellDraft(task, cell)"
-                        @keyup.esc="clearTaskCellDraft(task, cell)"
+                        @keyup.enter="saveTaskRow(task)"
+                        @keyup.esc="cancelTaskEdit"
                       />
-                      <button
-                        type="button"
-                        class="task-action-button"
-                        :disabled="isMutating || !cell.editable || !taskCellHasDraft(task, cell)"
-                        @click="saveTaskCellDraft(task, cell)"
-                      >
-                        Save
-                      </button>
                     </div>
+                    <p v-else class="task-cell-value">{{ cell.value || "Not set" }}</p>
                   </div>
                 </div>
 
                 <div v-if="!isTemplatePreview" class="task-actions" aria-label="Task row actions">
-                  <template v-if="editingTaskId === task.id">
-                    <button
-                      type="button"
-                      class="task-action-button"
-                      :disabled="isMutating || !editingTaskValue.trim()"
-                      @click="saveTaskCell(task)"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      class="task-action-button"
-                      :disabled="isMutating"
-                      @click="cancelTaskEdit"
-                    >
-                      Cancel
-                    </button>
-                  </template>
-                  <template v-else>
-                    <button
-                      type="button"
-                      class="task-action-button"
-                      :disabled="isMutating"
-                      @click="startTaskEdit(task)"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      class="task-action-button"
-                      :disabled="isMutating"
-                      @click="toggleTaskStyle(task)"
-                    >
-                      Style
-                    </button>
-                    <button
-                      type="button"
-                      class="task-action-button task-action-danger"
-                      :disabled="isMutating"
-                      @click="deleteTaskRow(task)"
-                    >
-                      Delete
-                    </button>
-                  </template>
+                  <button
+                    type="button"
+                    class="task-icon-button task-icon-edit"
+                    :class="{ active: isTaskEditing(task), dirty: taskHasDraft(task) }"
+                    :aria-label="isTaskEditing(task) ? `Save ${task.title}` : `Edit ${task.title}`"
+                    :title="isTaskEditing(task) ? 'Save' : 'Edit'"
+                    :disabled="isMutating || (isTaskEditing(task) && !editingTaskValue.trim())"
+                    @click="toggleTaskEdit(task)"
+                  >
+                    <svg class="task-action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M12 20h9" />
+                      <path d="m16.5 3.5 4 4L8 20l-4 1 1-4z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    class="task-icon-button task-icon-delete"
+                    :aria-label="`Delete ${task.title}`"
+                    title="Delete"
+                    :disabled="isMutating"
+                    @click="deleteTaskRow(task)"
+                  >
+                    <svg class="task-action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M9 4h6" />
+                      <path d="M5 7h14" />
+                      <path d="M8 7v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7" />
+                      <path d="M10 10v7" />
+                      <path d="M14 10v7" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -590,12 +595,18 @@ onMounted(() => {
   text-transform: uppercase;
 }
 
-.hero-copy p {
+.hero-meta {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.34rem;
+}
+
+.hero-meta p {
   color: #2fa5ff;
   font-family: var(--font-ui);
   font-size: 0.84rem;
   letter-spacing: 0.12em;
-  margin: 0.28rem 0 0;
+  margin: 0;
   text-transform: uppercase;
 }
 
@@ -902,9 +913,8 @@ onMounted(() => {
 }
 
 .task-cell-control {
-  display: grid;
+  display: block;
   gap: 0.4rem;
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .task-cell-input {
@@ -916,6 +926,7 @@ onMounted(() => {
   font-size: 0.85rem;
   min-width: 0;
   padding: 0.38rem 0.55rem;
+  width: 100%;
 }
 
 .task-cell-input:focus {
@@ -927,13 +938,27 @@ onMounted(() => {
   opacity: 0.72;
 }
 
+.task-cell-value {
+  background: rgb(5 17 38 / 34%);
+  border: 1px solid rgb(73 173 255 / 16%);
+  border-radius: 10px;
+  color: #d7e8ff;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  line-height: 1.32;
+  margin: 0;
+  min-height: 2.15rem;
+  padding: 0.42rem 0.55rem;
+}
+
 .task-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+  justify-content: flex-end;
 }
 
-.task-action-button {
+.task-icon-button {
   --btn-bg: rgb(8 38 72 / 78%);
   --btn-bg-pressed: linear-gradient(180deg, rgb(199 241 255 / 96%), rgb(132 219 255 / 94%));
   --btn-border: rgb(73 173 255 / 46%);
@@ -942,22 +967,56 @@ onMounted(() => {
   --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%);
   --btn-color: #83c9ff;
   --btn-color-pressed: #063050;
+  align-items: center;
   background: var(--btn-bg);
   border: 1px solid var(--btn-border);
-  border-radius: 999px;
+  border-radius: 10px;
   box-shadow: var(--btn-shadow);
   color: var(--btn-color);
   cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  padding: 0.36rem 0.68rem;
-  text-transform: uppercase;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
 }
 
-.task-action-danger {
+.task-action-icon {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
+}
+
+.task-icon-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.task-icon-edit {
+  --btn-border: rgb(66 169 255 / 80%);
+  --btn-color: #61bbff;
+  box-shadow: 0 0 16px rgb(66 169 255 / 18%);
+}
+
+.task-icon-edit.active,
+.task-icon-edit.dirty {
+  --btn-bg: linear-gradient(180deg, rgb(199 241 255 / 96%), rgb(132 219 255 / 94%));
+  --btn-border: rgb(234 251 255 / 88%);
+  --btn-color: #063050;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 75%),
+    0 0 18px rgb(132 219 255 / 30%);
+}
+
+.task-icon-delete {
   --btn-border: rgb(255 100 117 / 48%);
   --btn-color: #ff8190;
+  --btn-bg: rgb(53 15 25 / 70%);
+  box-shadow: 0 0 16px rgb(255 72 104 / 18%);
 }
 
 .detail-pill {
@@ -1055,7 +1114,7 @@ onMounted(() => {
     font-size: 0.98rem;
   }
 
-  .hero-copy p {
+  .hero-meta p {
     font-size: 0.76rem;
     letter-spacing: 0.08em;
   }

@@ -6,14 +6,18 @@ import {
   type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import {
   notifyOperationalUpdateOnce,
   primeOperationalNotificationScope,
   truncateNotificationBody,
 } from "../services/operationalNotifications";
-import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
+import {
+  runtimeChecklistToUi,
+  runtimeTemplateToUi,
+  type ChecklistRecord as UiChecklistRecord,
+} from "../utils/checklists";
 import { useNodeStore } from "./nodeStore";
 
 type ProjectionClientCache = typeof globalThis & {
@@ -70,6 +74,34 @@ export const useChecklistsStore = defineStore("checklists", () => {
   function client(): ReticulumNodeClient {
     return getProjectionClient(nodeStore.settings.clientMode);
   }
+
+  function activeTaskCount(record: Pick<RuntimeChecklistRecord, "tasks">): number {
+    return record.tasks.filter((task) => !task.deletedAt && task.number > 0).length;
+  }
+
+  function projectedTaskTotal(record: RuntimeChecklistRecord): number {
+    const countedTasks =
+      record.counts.pendingCount + record.counts.lateCount + record.counts.completeCount;
+    const expectedTasks = typeof record.expectedTaskCount === "number" ? record.expectedTaskCount : 0;
+    const highestTaskNumber = record.tasks.reduce((highest, task) => Math.max(highest, task.number), 0);
+    return Math.max(activeTaskCount(record), countedTasks, expectedTasks, highestTaskNumber);
+  }
+
+  const liveUiRecords = computed<UiChecklistRecord[]>(() => live.value.map(runtimeChecklistToUi));
+  const templateUiRecords = computed<UiChecklistRecord[]>(() => templates.value.map(runtimeTemplateToUi));
+  const liveTaskTotal = computed(() =>
+    live.value
+      .filter((record) => !record.deletedAt)
+      .reduce((total, record) => total + projectedTaskTotal(record), 0),
+  );
+  const templateTaskTotal = computed(() =>
+    templates.value.reduce((total, record) => total + activeTaskCount(record), 0),
+  );
+  const dashboardSummary = computed(() => ({
+    total: liveUiRecords.value.length,
+    active: liveUiRecords.value.filter((record) => record.status === "active").length,
+    late: liveUiRecords.value.filter((record) => record.status === "late").length,
+  }));
 
   function setDetailLoading(checklistUid: string, value: boolean): void {
     loadingDetailIds.value = {
@@ -261,6 +293,14 @@ export const useChecklistsStore = defineStore("checklists", () => {
     await Promise.all([...trackedDetailIds].map((checklistUid) => refreshDetail(checklistUid)));
   }
 
+  async function refreshAfterMutation(checklistUid?: string): Promise<void> {
+    const normalizedUid = checklistUid?.trim();
+    await Promise.all([
+      refreshLive(),
+      normalizedUid ? refreshDetail(normalizedUid) : Promise.resolve(),
+    ]);
+  }
+
   function isRuntimeChecklistRecord(
     record: RuntimeChecklistDetailRecord | null | undefined,
   ): record is RuntimeChecklistRecord {
@@ -317,10 +357,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
       return;
     }
     await client().joinChecklist(checklistUid);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(checklistUid);
   }
 
   function init(): void {
@@ -347,9 +384,6 @@ export const useChecklistsStore = defineStore("checklists", () => {
       return;
     }
     replicationInitialized.value = true;
-    if (!supportsNativeNodeRuntime) {
-      return;
-    }
     const projectionClient = client();
     cleanups.push(projectionClient.on("projectionInvalidated", handleProjectionInvalidation));
     cleanups.push(projectionClient.on("statusChanged", () => {
@@ -384,8 +418,9 @@ export const useChecklistsStore = defineStore("checklists", () => {
       description: input.description.trim(),
       startTime: input.startTime.trim() || new Date().toISOString(),
       createdByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
+      createdByTeamMemberDisplayName: nodeStore.settings.displayName.trim() || undefined,
     });
-    await refreshLive();
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function updateChecklist(input: {
@@ -399,10 +434,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
     };
   }): Promise<void> {
     await client().updateChecklist(input);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function deleteChecklist(checklistUid: string): Promise<void> {
@@ -416,18 +448,12 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   async function uploadChecklist(checklistUid: string): Promise<void> {
     await client().uploadChecklist(checklistUid);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(checklistUid);
   }
 
   async function joinChecklist(checklistUid: string): Promise<void> {
     await client().joinChecklist(checklistUid);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(checklistUid);
   }
 
   async function setTaskStatus(input: {
@@ -442,10 +468,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
       userStatus: input.userStatus,
       changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
     });
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function addTaskRow(input: {
@@ -457,10 +480,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
   }): Promise<void> {
     await ensureJoined(input.checklistUid);
     await client().addChecklistTaskRow(input);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function deleteTaskRow(input: {
@@ -469,10 +489,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
   }): Promise<void> {
     await ensureJoined(input.checklistUid);
     await client().deleteChecklistTaskRow(input);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function setTaskRowStyle(input: {
@@ -482,11 +499,11 @@ export const useChecklistsStore = defineStore("checklists", () => {
     lineBreakEnabled?: boolean;
   }): Promise<void> {
     await ensureJoined(input.checklistUid);
-    await client().setChecklistTaskRowStyle(input);
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await client().setChecklistTaskRowStyle({
+      ...input,
+      changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
+    });
+    await refreshAfterMutation(input.checklistUid);
   }
 
   async function setTaskCell(input: {
@@ -500,15 +517,17 @@ export const useChecklistsStore = defineStore("checklists", () => {
       ...input,
       updatedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
     });
-    if (!supportsNativeNodeRuntime) {
-      await refreshDetail(input.checklistUid);
-      await refreshLive();
-    }
+    await refreshAfterMutation(input.checklistUid);
   }
 
   return {
     live,
     templates,
+    liveUiRecords,
+    templateUiRecords,
+    liveTaskTotal,
+    templateTaskTotal,
+    dashboardSummary,
     detailById,
     initialized,
     replicationInitialized,

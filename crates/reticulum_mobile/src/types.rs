@@ -762,12 +762,16 @@ pub struct ChecklistRecord {
     pub checklist_status: ChecklistTaskStatus,
     pub created_at: Option<String>,
     pub created_by_team_member_rns_identity: String,
+    #[serde(default)]
+    pub created_by_team_member_display_name: Option<String>,
     pub updated_at: Option<String>,
     #[serde(default)]
     pub last_changed_by_team_member_rns_identity: Option<String>,
     pub deleted_at: Option<String>,
     pub uploaded_at: Option<String>,
     pub participant_rns_identities: Vec<String>,
+    #[serde(default)]
+    pub expected_task_count: Option<u32>,
     pub progress_percent: f64,
     pub counts: ChecklistStatusCounts,
     pub columns: Vec<ChecklistColumnRecord>,
@@ -813,6 +817,7 @@ pub struct ChecklistCreateFromTemplateRequest {
     pub description: String,
     pub start_time: String,
     pub created_by_team_member_rns_identity: Option<String>,
+    pub created_by_team_member_display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -830,6 +835,7 @@ pub struct ChecklistCreateOnlineRequest {
     pub description: String,
     pub start_time: String,
     pub created_by_team_member_rns_identity: Option<String>,
+    pub created_by_team_member_display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

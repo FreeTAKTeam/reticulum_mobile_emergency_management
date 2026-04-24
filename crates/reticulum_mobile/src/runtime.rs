@@ -696,6 +696,7 @@ fn blank_checklist_record(
         checklist_status: ChecklistTaskStatus::Pending {},
         created_at: Some(timestamp.to_string()),
         created_by_team_member_rns_identity: source_identity.unwrap_or_default().to_string(),
+        created_by_team_member_display_name: None,
         updated_at: Some(timestamp.to_string()),
         last_changed_by_team_member_rns_identity: normalize_optional_string(source_identity),
         deleted_at: None,
@@ -703,6 +704,7 @@ fn blank_checklist_record(
         participant_rns_identities: source_identity
             .map(|value| vec![value.to_string()])
             .unwrap_or_default(),
+        expected_task_count: None,
         progress_percent: 0.0,
         counts: crate::types::ChecklistStatusCounts {
             pending_count: 0,
@@ -939,6 +941,15 @@ fn prepare_uploaded_snapshot(
         source_identity,
     );
     incoming.sync_state = ChecklistSyncState::Synced {};
+    if incoming.expected_task_count.is_none() {
+        incoming.expected_task_count = Some(
+            incoming
+                .tasks
+                .iter()
+                .filter(|task| task.deleted_at.is_none())
+                .count() as u32,
+        );
+    }
     normalize_checklist_record(&mut incoming);
     incoming
 }
@@ -1009,6 +1020,18 @@ fn merge_uploaded_checklist_snapshot(
         incoming.participant_rns_identities,
         source_identity,
     );
+    merged.expected_task_count = incoming
+        .expected_task_count
+        .or(existing.expected_task_count)
+        .or_else(|| {
+            Some(
+                merged
+                    .tasks
+                    .iter()
+                    .filter(|task| task.deleted_at.is_none())
+                    .count() as u32,
+            )
+        });
     merged.feed_publications =
         merge_uploaded_feed_publications(existing.feed_publications, incoming.feed_publications);
     set_checklist_last_changed_by(&mut merged, source_identity);
@@ -1305,6 +1328,11 @@ fn persist_received_checklist_if_present(
                         participants,
                         source_identity.as_deref(),
                     );
+                }
+                if let Some(total_tasks) =
+                    msgpack_get_named(args, &["total_tasks"]).and_then(msgpack_u64)
+                {
+                    checklist.expected_task_count = Some(total_tasks as u32);
                 }
                 if let Some(created_at) =
                     msgpack_get_named(args, &["created_at"]).and_then(msgpack_string)

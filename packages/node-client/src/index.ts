@@ -331,11 +331,13 @@ export interface ChecklistRecord {
   checklistStatus: ChecklistTaskStatus;
   createdAt?: string;
   createdByTeamMemberRnsIdentity: string;
+  createdByTeamMemberDisplayName?: string;
   updatedAt?: string;
   lastChangedByTeamMemberRnsIdentity?: string;
   deletedAt?: string;
   uploadedAt?: string;
   participantRnsIdentities: string[];
+  expectedTaskCount?: number;
   progressPercent: number;
   counts: ChecklistStatusCounts;
   columns: ChecklistColumnRecord[];
@@ -680,6 +682,7 @@ export interface ReticulumNodeClient {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void>;
   createOnlineChecklist(input: {
     checklistUid?: string;
@@ -689,6 +692,7 @@ export interface ReticulumNodeClient {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void>;
   updateChecklist(input: {
     checklistUid: string;
@@ -725,6 +729,7 @@ export interface ReticulumNodeClient {
     taskUid: string;
     rowBackgroundColor?: string;
     lineBreakEnabled?: boolean;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   setChecklistTaskCell(input: {
     checklistUid: string;
@@ -909,6 +914,7 @@ interface ReticulumNodePlugin {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void>;
   createOnlineChecklist(options: {
     checklistUid?: string;
@@ -918,6 +924,7 @@ interface ReticulumNodePlugin {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void>;
   updateChecklist(options: {
     checklistUid: string;
@@ -948,6 +955,7 @@ interface ReticulumNodePlugin {
     taskUid: string;
     rowBackgroundColor?: string;
     lineBreakEnabled?: boolean;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void>;
   setChecklistTaskCell(options: {
     checklistUid: string;
@@ -2184,6 +2192,11 @@ function toChecklistRecord(raw: Record<string, unknown>): ChecklistRecord {
     createdByTeamMemberRnsIdentity: String(
       raw.createdByTeamMemberRnsIdentity ?? raw.created_by_team_member_rns_identity ?? "",
     ),
+    createdByTeamMemberDisplayName: typeof raw.createdByTeamMemberDisplayName === "string"
+      ? raw.createdByTeamMemberDisplayName
+      : typeof raw.created_by_team_member_display_name === "string"
+        ? raw.created_by_team_member_display_name
+        : undefined,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : typeof raw.updated_at === "string" ? raw.updated_at : undefined,
     lastChangedByTeamMemberRnsIdentity: typeof raw.lastChangedByTeamMemberRnsIdentity === "string"
       ? raw.lastChangedByTeamMemberRnsIdentity
@@ -2197,6 +2210,7 @@ function toChecklistRecord(raw: Record<string, unknown>): ChecklistRecord {
       : Array.isArray(raw.participant_rns_identities)
         ? raw.participant_rns_identities.filter((value): value is string => typeof value === "string")
         : [],
+    expectedTaskCount: toOptionalNumber(raw.expectedTaskCount ?? raw.expected_task_count),
     progressPercent: Number(raw.progressPercent ?? raw.progress_percent ?? 0),
     counts: {
       pendingCount: Number(counts.pendingCount ?? counts.pending_count ?? 0),
@@ -2238,6 +2252,331 @@ function toChecklistTemplateRecord(raw: Record<string, unknown>): ChecklistTempl
       .filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === "object")
       .map(toChecklistTaskRecord),
   };
+}
+
+type ChecklistCreateInput = Parameters<ReticulumNodeClient["createChecklistFromTemplate"]>[0];
+type ChecklistUpdateInput = Parameters<ReticulumNodeClient["updateChecklist"]>[0];
+type ChecklistStatusInput = Parameters<ReticulumNodeClient["setChecklistTaskStatus"]>[0];
+type ChecklistRowAddInput = Parameters<ReticulumNodeClient["addChecklistTaskRow"]>[0];
+type ChecklistRowDeleteInput = Parameters<ReticulumNodeClient["deleteChecklistTaskRow"]>[0];
+type ChecklistRowStyleInput = Parameters<ReticulumNodeClient["setChecklistTaskRowStyle"]>[0];
+type ChecklistCellInput = Parameters<ReticulumNodeClient["setChecklistTaskCell"]>[0];
+
+function cloneChecklistRecord(record: ChecklistRecord): ChecklistRecord {
+  return JSON.parse(JSON.stringify(record)) as ChecklistRecord;
+}
+
+function cloneChecklistTemplateRecord(record: ChecklistTemplateRecord): ChecklistTemplateRecord {
+  return JSON.parse(JSON.stringify(record)) as ChecklistTemplateRecord;
+}
+
+function defaultChecklistColumns(): ChecklistColumnRecord[] {
+  return [
+    {
+      columnUid: "col-task",
+      columnName: "Task",
+      displayOrder: 0,
+      columnType: "SHORT_STRING",
+      columnEditable: true,
+      isRemovable: false,
+      systemKey: "task",
+    },
+    {
+      columnUid: "col-description",
+      columnName: "Detail",
+      displayOrder: 1,
+      columnType: "LONG_STRING",
+      columnEditable: true,
+      isRemovable: true,
+    },
+    {
+      columnUid: "col-owner",
+      columnName: "Owner",
+      displayOrder: 2,
+      columnType: "SHORT_STRING",
+      columnEditable: true,
+      isRemovable: true,
+    },
+  ];
+}
+
+function defaultChecklistTask(taskUid: string, number: number, title: string, detail: string): ChecklistTaskRecord {
+  const now = new Date().toISOString();
+  return {
+    taskUid,
+    number,
+    userStatus: "PENDING",
+    taskStatus: "PENDING",
+    isLate: false,
+    updatedAt: now,
+    legacyValue: title,
+    lineBreakEnabled: false,
+    cells: [
+      {
+        cellUid: `${taskUid}:col-task`,
+        taskUid,
+        columnUid: "col-task",
+        value: title,
+        updatedAt: now,
+      },
+      {
+        cellUid: `${taskUid}:col-description`,
+        taskUid,
+        columnUid: "col-description",
+        value: detail,
+        updatedAt: now,
+      },
+      {
+        cellUid: `${taskUid}:col-owner`,
+        taskUid,
+        columnUid: "col-owner",
+        value: "Unassigned",
+        updatedAt: now,
+      },
+    ],
+  };
+}
+
+function createDefaultChecklistTemplates(): ChecklistTemplateRecord[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      uid: "tmpl-web-autonomous-emergency",
+      name: "Autonomous Emergency Checklist",
+      description: "Browser visual debugging template",
+      version: 1,
+      originType: "RCH_TEMPLATE",
+      createdAt: now,
+      updatedAt: now,
+      columns: defaultChecklistColumns(),
+      tasks: [
+        defaultChecklistTask("tmpl-web-task-1", 1, "Confirm team readiness", "Verify operator, comms, and battery status."),
+        defaultChecklistTask("tmpl-web-task-2", 2, "Prepare evacuation route", "Confirm the primary route and one alternate."),
+        defaultChecklistTask("tmpl-web-task-3", 3, "Share situation update", "Broadcast current status to collaborating REM nodes."),
+      ],
+    },
+  ];
+}
+
+function normalizeInMemoryChecklist(record: ChecklistRecord): void {
+  const activeTasks = record.tasks.filter((task) => !task.deletedAt);
+  const pendingCount = activeTasks.filter((task) => task.taskStatus === "PENDING").length;
+  const lateCount = activeTasks.filter((task) => task.taskStatus === "LATE").length;
+  const completeCount = activeTasks.filter((task) =>
+    task.taskStatus === "COMPLETE" || task.taskStatus === "COMPLETE_LATE",
+  ).length;
+  record.counts = { pendingCount, lateCount, completeCount };
+  const total = activeTasks.length;
+  record.expectedTaskCount = Math.max(record.expectedTaskCount ?? 0, total);
+  record.progressPercent = total === 0 ? 0 : (completeCount * 100) / total;
+  record.checklistStatus =
+    lateCount > 0
+      ? "LATE"
+      : pendingCount > 0 || total === 0
+        ? "PENDING"
+        : "COMPLETE";
+}
+
+function emitChecklistInvalidations(
+  emitter: TypedEmitter<NodeClientEvents>,
+  checklistUid: string | undefined,
+  reason: string,
+): void {
+  const revision = Date.now();
+  emitter.emit("projectionInvalidated", {
+    scope: "Checklists",
+    revision,
+    updatedAtMs: revision,
+    reason,
+  });
+  if (checklistUid) {
+    emitter.emit("projectionInvalidated", {
+      scope: "ChecklistDetail",
+      key: checklistUid,
+      revision,
+      updatedAtMs: revision,
+      reason,
+    });
+  }
+}
+
+function findInMemoryChecklist(checklists: ChecklistRecord[], checklistUid: string): ChecklistRecord {
+  const checklist = checklists.find((item) => item.uid === checklistUid);
+  if (!checklist) {
+    throw new Error(`Checklist ${checklistUid} not found`);
+  }
+  return checklist;
+}
+
+function createInMemoryChecklistFromTemplate(
+  checklists: ChecklistRecord[],
+  templates: ChecklistTemplateRecord[],
+  status: NodeStatus,
+  input: ChecklistCreateInput,
+): string {
+  const template = templates.find((item) => item.uid === input.templateUid) ?? templates[0];
+  if (!template) {
+    throw new Error("Checklist template not found");
+  }
+  const now = new Date().toISOString();
+  const checklistUid = input.checklistUid?.trim() || `chk-web-${Date.now().toString(36)}`;
+  const creatorIdentity = input.createdByTeamMemberRnsIdentity?.trim() || status.identityHex;
+  const checklist: ChecklistRecord = {
+    uid: checklistUid,
+    missionUid: input.missionUid,
+    templateUid: template.uid,
+    templateVersion: template.version,
+    templateName: template.name,
+    name: input.name,
+    description: input.description,
+    startTime: input.startTime,
+    mode: "ONLINE",
+    syncState: "SYNCED",
+    originType: template.originType,
+    checklistStatus: "PENDING",
+    createdAt: now,
+    createdByTeamMemberRnsIdentity: creatorIdentity,
+    createdByTeamMemberDisplayName: input.createdByTeamMemberDisplayName,
+    updatedAt: now,
+    lastChangedByTeamMemberRnsIdentity: creatorIdentity,
+    participantRnsIdentities: creatorIdentity ? [creatorIdentity] : [],
+    expectedTaskCount: template.tasks.filter((task) => !task.deletedAt).length,
+    progressPercent: 0,
+    counts: { pendingCount: 0, lateCount: 0, completeCount: 0 },
+    columns: cloneChecklistTemplateRecord(template).columns,
+    tasks: cloneChecklistTemplateRecord(template).tasks.map((task) => ({
+      ...task,
+      taskUid: task.taskUid.replace(/^tmpl-web-/, `${checklistUid}-`),
+      cells: task.cells.map((cell) => ({
+        ...cell,
+        taskUid: cell.taskUid.replace(/^tmpl-web-/, `${checklistUid}-`),
+        cellUid: cell.cellUid.replace(/^tmpl-web-/, `${checklistUid}-`),
+      })),
+    })),
+    feedPublications: [],
+  };
+  for (const task of checklist.tasks) {
+    task.cells = task.cells.map((cell) => ({
+      ...cell,
+      taskUid: task.taskUid,
+      cellUid: `${task.taskUid}:${cell.columnUid}`,
+    }));
+  }
+  normalizeInMemoryChecklist(checklist);
+  checklists.push(checklist);
+  return checklist.uid;
+}
+
+function updateInMemoryChecklist(checklists: ChecklistRecord[], input: ChecklistUpdateInput, changedBy?: string): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  checklist.missionUid = input.patch.missionUid ?? checklist.missionUid;
+  checklist.templateUid = input.patch.templateUid ?? checklist.templateUid;
+  checklist.name = input.patch.name ?? checklist.name;
+  checklist.description = input.patch.description ?? checklist.description;
+  checklist.startTime = input.patch.startTime ?? checklist.startTime;
+  checklist.updatedAt = new Date().toISOString();
+  checklist.lastChangedByTeamMemberRnsIdentity = changedBy || checklist.lastChangedByTeamMemberRnsIdentity;
+}
+
+function setInMemoryTaskStatus(checklists: ChecklistRecord[], input: ChecklistStatusInput): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  const task = checklist.tasks.find((item) => item.taskUid === input.taskUid);
+  if (!task) {
+    throw new Error(`Checklist task ${input.taskUid} not found`);
+  }
+  const now = new Date().toISOString();
+  task.userStatus = input.userStatus;
+  task.taskStatus = input.userStatus === "COMPLETE" ? "COMPLETE" : "PENDING";
+  task.completedAt = input.userStatus === "COMPLETE" ? now : undefined;
+  task.completedByTeamMemberRnsIdentity =
+    input.userStatus === "COMPLETE" ? input.changedByTeamMemberRnsIdentity : undefined;
+  task.updatedAt = now;
+  checklist.updatedAt = now;
+  checklist.lastChangedByTeamMemberRnsIdentity = input.changedByTeamMemberRnsIdentity;
+  normalizeInMemoryChecklist(checklist);
+}
+
+function addInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRowAddInput): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  const now = new Date().toISOString();
+  const taskUid = input.taskUid?.trim() || `${checklist.uid}-task-${Date.now().toString(36)}`;
+  const title = input.legacyValue?.trim() || `Task ${input.number}`;
+  checklist.tasks.push({
+    taskUid,
+    number: input.number,
+    userStatus: "PENDING",
+    taskStatus: "PENDING",
+    isLate: false,
+    updatedAt: now,
+    dueRelativeMinutes: input.dueRelativeMinutes,
+    legacyValue: title,
+    lineBreakEnabled: false,
+    cells: checklist.columns.map((column) => ({
+      cellUid: `${taskUid}:${column.columnUid}`,
+      taskUid,
+      columnUid: column.columnUid,
+      value: column.columnUid === "col-task" ? title : "",
+      updatedAt: now,
+    })),
+  });
+  checklist.updatedAt = now;
+  checklist.expectedTaskCount = Math.max(checklist.expectedTaskCount ?? 0, checklist.tasks.length);
+  normalizeInMemoryChecklist(checklist);
+}
+
+function deleteInMemoryTaskRow(checklists: ChecklistRecord[], input: ChecklistRowDeleteInput, changedBy?: string): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  const now = new Date().toISOString();
+  const task = checklist.tasks.find((item) => item.taskUid === input.taskUid);
+  if (task) {
+    task.deletedAt = now;
+    task.updatedAt = now;
+  }
+  checklist.updatedAt = now;
+  checklist.lastChangedByTeamMemberRnsIdentity = changedBy || checklist.lastChangedByTeamMemberRnsIdentity;
+  normalizeInMemoryChecklist(checklist);
+}
+
+function setInMemoryTaskRowStyle(checklists: ChecklistRecord[], input: ChecklistRowStyleInput): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  const task = checklist.tasks.find((item) => item.taskUid === input.taskUid);
+  if (!task) {
+    throw new Error(`Checklist task ${input.taskUid} not found`);
+  }
+  const now = new Date().toISOString();
+  task.rowBackgroundColor = input.rowBackgroundColor;
+  task.lineBreakEnabled = input.lineBreakEnabled ?? task.lineBreakEnabled;
+  task.updatedAt = now;
+  checklist.updatedAt = now;
+  checklist.lastChangedByTeamMemberRnsIdentity = input.changedByTeamMemberRnsIdentity;
+}
+
+function setInMemoryTaskCell(checklists: ChecklistRecord[], input: ChecklistCellInput): void {
+  const checklist = findInMemoryChecklist(checklists, input.checklistUid);
+  const task = checklist.tasks.find((item) => item.taskUid === input.taskUid);
+  if (!task) {
+    throw new Error(`Checklist task ${input.taskUid} not found`);
+  }
+  const now = new Date().toISOString();
+  let cell = task.cells.find((item) => item.columnUid === input.columnUid);
+  if (!cell) {
+    cell = {
+      cellUid: `${task.taskUid}:${input.columnUid}`,
+      taskUid: task.taskUid,
+      columnUid: input.columnUid,
+    };
+    task.cells.push(cell);
+  }
+  cell.value = input.value;
+  cell.updatedAt = now;
+  cell.updatedByTeamMemberRnsIdentity = input.updatedByTeamMemberRnsIdentity;
+  if (input.columnUid === "col-task") {
+    task.legacyValue = input.value;
+  }
+  task.updatedAt = now;
+  checklist.updatedAt = now;
+  checklist.lastChangedByTeamMemberRnsIdentity = input.updatedByTeamMemberRnsIdentity;
+  normalizeInMemoryChecklist(checklist);
 }
 
 function toSosState(value: unknown): SosState {
@@ -2707,6 +3046,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void> {
     await this.ready();
     await this.plugin.createChecklistFromTemplate(input);
@@ -2720,6 +3060,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     description: string;
     startTime: string;
     createdByTeamMemberRnsIdentity?: string;
+    createdByTeamMemberDisplayName?: string;
   }): Promise<void> {
     await this.ready();
     await this.plugin.createOnlineChecklist(input);
@@ -2788,6 +3129,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     taskUid: string;
     rowBackgroundColor?: string;
     lineBreakEnabled?: boolean;
+    changedByTeamMemberRnsIdentity?: string;
   }): Promise<void> {
     await this.ready();
     await this.plugin.setChecklistTaskRowStyle(input);
@@ -2961,7 +3303,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
   private readonly checklists: ChecklistRecord[] = [];
-  private readonly checklistTemplates: ChecklistTemplateRecord[] = [];
+  private readonly checklistTemplates: ChecklistTemplateRecord[] = createDefaultChecklistTemplates();
   private sosSettings: SosSettingsRecord = { ...DEFAULT_SOS_SETTINGS };
   private sosStatus: SosStatusRecord = { ...DEFAULT_SOS_STATUS };
   private readonly sosAlerts: SosAlertRecord[] = [];
@@ -3227,41 +3569,91 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async listActiveChecklists(): Promise<ChecklistRecord[]> {
-    return [...this.checklists];
+  async listActiveChecklists(search?: string): Promise<ChecklistRecord[]> {
+    const needle = search?.trim().toLowerCase();
+    return this.checklists
+      .filter((item) => !item.deletedAt)
+      .filter((item) => !needle || item.name.toLowerCase().includes(needle))
+      .map(cloneChecklistRecord);
   }
 
   async getChecklist(checklistUid: string): Promise<ChecklistRecord | null> {
-    return this.checklists.find((item) => item.uid === checklistUid) ?? null;
+    const checklist = this.checklists.find((item) => item.uid === checklistUid && !item.deletedAt);
+    return checklist ? cloneChecklistRecord(checklist) : null;
   }
 
-  async listChecklistTemplates(): Promise<ChecklistTemplateRecord[]> {
-    return [...this.checklistTemplates];
+  async listChecklistTemplates(search?: string): Promise<ChecklistTemplateRecord[]> {
+    const needle = search?.trim().toLowerCase();
+    return this.checklistTemplates
+      .filter((item) => !needle || item.name.toLowerCase().includes(needle))
+      .map(cloneChecklistTemplateRecord);
   }
 
   async importChecklistTemplateCsv(): Promise<void> {}
 
-  async createChecklistFromTemplate(): Promise<void> {}
+  async createChecklistFromTemplate(input: ChecklistCreateInput): Promise<void> {
+    const uid = createInMemoryChecklistFromTemplate(this.checklists, this.checklistTemplates, this.status, input);
+    emitChecklistInvalidations(this.emitter, uid, "webChecklistCreate");
+  }
 
-  async createOnlineChecklist(): Promise<void> {}
+  async createOnlineChecklist(input: ChecklistCreateInput): Promise<void> {
+    await this.createChecklistFromTemplate(input);
+  }
 
-  async updateChecklist(): Promise<void> {}
+  async updateChecklist(input: ChecklistUpdateInput): Promise<void> {
+    updateInMemoryChecklist(this.checklists, input, this.status.identityHex);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistUpdate");
+  }
 
-  async deleteChecklist(): Promise<void> {}
+  async deleteChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    checklist.deletedAt = new Date().toISOString();
+    checklist.updatedAt = checklist.deletedAt;
+    checklist.lastChangedByTeamMemberRnsIdentity = this.status.identityHex;
+    emitChecklistInvalidations(this.emitter, checklistUid, "webChecklistDelete");
+  }
 
-  async joinChecklist(): Promise<void> {}
+  async joinChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    if (this.status.identityHex && !checklist.participantRnsIdentities.includes(this.status.identityHex)) {
+      checklist.participantRnsIdentities.push(this.status.identityHex);
+    }
+    checklist.updatedAt = new Date().toISOString();
+    checklist.lastChangedByTeamMemberRnsIdentity = this.status.identityHex;
+    emitChecklistInvalidations(this.emitter, checklistUid, "webChecklistJoin");
+  }
 
-  async uploadChecklist(): Promise<void> {}
+  async uploadChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    checklist.uploadedAt = new Date().toISOString();
+    checklist.syncState = "SYNCED";
+    emitChecklistInvalidations(this.emitter, checklistUid, "webChecklistUpload");
+  }
 
-  async setChecklistTaskStatus(): Promise<void> {}
+  async setChecklistTaskStatus(input: ChecklistStatusInput): Promise<void> {
+    setInMemoryTaskStatus(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskStatus");
+  }
 
-  async addChecklistTaskRow(): Promise<void> {}
+  async addChecklistTaskRow(input: ChecklistRowAddInput): Promise<void> {
+    addInMemoryTaskRow(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskAdd");
+  }
 
-  async deleteChecklistTaskRow(): Promise<void> {}
+  async deleteChecklistTaskRow(input: ChecklistRowDeleteInput): Promise<void> {
+    deleteInMemoryTaskRow(this.checklists, input, this.status.identityHex);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskDelete");
+  }
 
-  async setChecklistTaskRowStyle(): Promise<void> {}
+  async setChecklistTaskRowStyle(input: ChecklistRowStyleInput): Promise<void> {
+    setInMemoryTaskRowStyle(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskStyle");
+  }
 
-  async setChecklistTaskCell(): Promise<void> {}
+  async setChecklistTaskCell(input: ChecklistCellInput): Promise<void> {
+    setInMemoryTaskCell(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistTaskCell");
+  }
   async setSosPin(_pin?: string): Promise<void> {}
   async getSosStatus(): Promise<SosStatusRecord> { return { ...this.sosStatus }; }
   async triggerSos(source: SosTriggerSource = "Manual"): Promise<SosStatusRecord> {
@@ -3376,7 +3768,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
   private readonly checklists: ChecklistRecord[] = [];
-  private readonly checklistTemplates: ChecklistTemplateRecord[] = [];
+  private readonly checklistTemplates: ChecklistTemplateRecord[] = createDefaultChecklistTemplates();
   private sosSettings: SosSettingsRecord = { ...DEFAULT_SOS_SETTINGS };
   private sosStatus: SosStatusRecord = { ...DEFAULT_SOS_STATUS };
   private readonly sosAlerts: SosAlertRecord[] = [];
@@ -3701,41 +4093,91 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async listActiveChecklists(): Promise<ChecklistRecord[]> {
-    return [...this.checklists];
+  async listActiveChecklists(search?: string): Promise<ChecklistRecord[]> {
+    const needle = search?.trim().toLowerCase();
+    return this.checklists
+      .filter((item) => !item.deletedAt)
+      .filter((item) => !needle || item.name.toLowerCase().includes(needle))
+      .map(cloneChecklistRecord);
   }
 
   async getChecklist(checklistUid: string): Promise<ChecklistRecord | null> {
-    return this.checklists.find((item) => item.uid === checklistUid) ?? null;
+    const checklist = this.checklists.find((item) => item.uid === checklistUid && !item.deletedAt);
+    return checklist ? cloneChecklistRecord(checklist) : null;
   }
 
-  async listChecklistTemplates(): Promise<ChecklistTemplateRecord[]> {
-    return [...this.checklistTemplates];
+  async listChecklistTemplates(search?: string): Promise<ChecklistTemplateRecord[]> {
+    const needle = search?.trim().toLowerCase();
+    return this.checklistTemplates
+      .filter((item) => !needle || item.name.toLowerCase().includes(needle))
+      .map(cloneChecklistTemplateRecord);
   }
 
   async importChecklistTemplateCsv(): Promise<void> {}
 
-  async createChecklistFromTemplate(): Promise<void> {}
+  async createChecklistFromTemplate(input: ChecklistCreateInput): Promise<void> {
+    const uid = createInMemoryChecklistFromTemplate(this.checklists, this.checklistTemplates, this.status, input);
+    emitChecklistInvalidations(this.emitter, uid, "mockChecklistCreate");
+  }
 
-  async createOnlineChecklist(): Promise<void> {}
+  async createOnlineChecklist(input: ChecklistCreateInput): Promise<void> {
+    await this.createChecklistFromTemplate(input);
+  }
 
-  async updateChecklist(): Promise<void> {}
+  async updateChecklist(input: ChecklistUpdateInput): Promise<void> {
+    updateInMemoryChecklist(this.checklists, input, this.status.identityHex);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistUpdate");
+  }
 
-  async deleteChecklist(): Promise<void> {}
+  async deleteChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    checklist.deletedAt = new Date().toISOString();
+    checklist.updatedAt = checklist.deletedAt;
+    checklist.lastChangedByTeamMemberRnsIdentity = this.status.identityHex;
+    emitChecklistInvalidations(this.emitter, checklistUid, "mockChecklistDelete");
+  }
 
-  async joinChecklist(): Promise<void> {}
+  async joinChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    if (this.status.identityHex && !checklist.participantRnsIdentities.includes(this.status.identityHex)) {
+      checklist.participantRnsIdentities.push(this.status.identityHex);
+    }
+    checklist.updatedAt = new Date().toISOString();
+    checklist.lastChangedByTeamMemberRnsIdentity = this.status.identityHex;
+    emitChecklistInvalidations(this.emitter, checklistUid, "mockChecklistJoin");
+  }
 
-  async uploadChecklist(): Promise<void> {}
+  async uploadChecklist(checklistUid: string): Promise<void> {
+    const checklist = findInMemoryChecklist(this.checklists, checklistUid);
+    checklist.uploadedAt = new Date().toISOString();
+    checklist.syncState = "SYNCED";
+    emitChecklistInvalidations(this.emitter, checklistUid, "mockChecklistUpload");
+  }
 
-  async setChecklistTaskStatus(): Promise<void> {}
+  async setChecklistTaskStatus(input: ChecklistStatusInput): Promise<void> {
+    setInMemoryTaskStatus(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskStatus");
+  }
 
-  async addChecklistTaskRow(): Promise<void> {}
+  async addChecklistTaskRow(input: ChecklistRowAddInput): Promise<void> {
+    addInMemoryTaskRow(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskAdd");
+  }
 
-  async deleteChecklistTaskRow(): Promise<void> {}
+  async deleteChecklistTaskRow(input: ChecklistRowDeleteInput): Promise<void> {
+    deleteInMemoryTaskRow(this.checklists, input, this.status.identityHex);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskDelete");
+  }
 
-  async setChecklistTaskRowStyle(): Promise<void> {}
+  async setChecklistTaskRowStyle(input: ChecklistRowStyleInput): Promise<void> {
+    setInMemoryTaskRowStyle(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskStyle");
+  }
 
-  async setChecklistTaskCell(): Promise<void> {}
+  async setChecklistTaskCell(input: ChecklistCellInput): Promise<void> {
+    setInMemoryTaskCell(this.checklists, input);
+    emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistTaskCell");
+  }
   async setSosPin(_pin?: string): Promise<void> {}
   async getSosStatus(): Promise<SosStatusRecord> { return { ...this.sosStatus }; }
   async triggerSos(source: SosTriggerSource = "Manual"): Promise<SosStatusRecord> {

@@ -293,6 +293,7 @@ struct ChecklistCreateInput {
     description: String,
     start_time: String,
     created_by_team_member_rns_identity: Option<String>,
+    created_by_team_member_display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -874,6 +875,7 @@ fn to_checklist_create_request(input: ChecklistCreateInput) -> ChecklistCreateOn
         description: input.description,
         start_time: input.start_time,
         created_by_team_member_rns_identity: input.created_by_team_member_rns_identity,
+        created_by_team_member_display_name: input.created_by_team_member_display_name,
     }
 }
 
@@ -1336,11 +1338,13 @@ fn checklist_record_json(record: &ChecklistRecord) -> serde_json::Value {
         "checklistStatus": record.checklist_status.as_str(),
         "createdAt": record.created_at,
         "createdByTeamMemberRnsIdentity": record.created_by_team_member_rns_identity,
+        "createdByTeamMemberDisplayName": record.created_by_team_member_display_name,
         "updatedAt": record.updated_at,
         "lastChangedByTeamMemberRnsIdentity": record.last_changed_by_team_member_rns_identity,
         "deletedAt": record.deleted_at,
         "uploadedAt": record.uploaded_at,
         "participantRnsIdentities": record.participant_rns_identities,
+        "expectedTaskCount": record.expected_task_count,
         "progressPercent": record.progress_percent,
         "counts": {
             "pendingCount": record.counts.pending_count,
@@ -3002,6 +3006,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createCh
         description: payload.description,
         start_time: payload.start_time,
         created_by_team_member_rns_identity: payload.created_by_team_member_rns_identity,
+        created_by_team_member_display_name: payload.created_by_team_member_display_name,
     }) {
         Ok(_) => ok_result(),
         Err(err) => {

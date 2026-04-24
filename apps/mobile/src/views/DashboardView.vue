@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { storeToRefs } from "pinia";
+import { computed, onMounted } from "vue";
 
+import { useChecklistsStore } from "../stores/checklistsStore";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
@@ -11,6 +13,8 @@ import {
   type ActionMessageStatusField,
 } from "../utils/actionMessageStatus";
 
+const checklistsStore = useChecklistsStore();
+const { dashboardSummary } = storeToRefs(checklistsStore);
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
 
@@ -56,6 +60,31 @@ const ringMetrics = computed(() =>
     };
   }),
 );
+
+const checklistSummaryMetrics = computed(() => [
+  {
+    key: "total",
+    value: dashboardSummary.value.total,
+    label: "Total",
+    alert: false,
+  },
+  {
+    key: "active",
+    value: dashboardSummary.value.active,
+    label: "Active",
+    alert: false,
+  },
+  {
+    key: "late",
+    value: dashboardSummary.value.late,
+    label: "Late",
+    alert: true,
+  },
+]);
+
+onMounted(() => {
+  void checklistsStore.refreshLive();
+});
 </script>
 
 <template>
@@ -92,6 +121,21 @@ const ringMetrics = computed(() =>
           <p class="ring-value" :style="{ color: ring.color }">{{ ring.pct }}%</p>
           <p class="ring-label">{{ ring.label }}</p>
           <p class="ring-band">{{ ring.band }}</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Checklists</h2>
+      <div class="summary-grid">
+        <article
+          v-for="metric in checklistSummaryMetrics"
+          :key="metric.key"
+          class="summary-metric"
+          :class="{ 'summary-metric-alert': metric.alert }"
+        >
+          <p class="summary-value">{{ metric.value }}</p>
+          <p class="summary-label">{{ metric.label }}</p>
         </article>
       </div>
     </section>
@@ -248,6 +292,50 @@ svg {
   text-transform: uppercase;
 }
 
+.summary-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 0.75rem;
+}
+
+.summary-metric {
+  align-items: center;
+  background:
+    linear-gradient(145deg, rgb(18 35 68 / 92%), rgb(10 20 45 / 90%)),
+    radial-gradient(circle at 72% 10%, rgb(69 235 255 / 14%), transparent 36%);
+  border: 1px solid rgb(90 142 220 / 24%);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.08rem;
+  justify-items: center;
+  min-height: 114px;
+  padding: 0.85rem 0.45rem 0.72rem;
+}
+
+.summary-value {
+  color: #f0f7ff;
+  font-family: var(--font-ui);
+  font-size: clamp(2.45rem, 4.6vw, 3.3rem);
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+}
+
+.summary-label {
+  color: #88a5cf;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.09em;
+  margin: 0.13rem 0 0;
+  text-transform: uppercase;
+}
+
+.summary-metric-alert .summary-value,
+.summary-metric-alert .summary-label {
+  color: #ff6475;
+}
+
 @media (max-width: 720px) {
   h1 {
     font-size: 1.1rem;
@@ -266,6 +354,23 @@ svg {
 
   .ring-card {
     padding-inline: 0.32rem;
+  }
+
+  .summary-grid {
+    gap: 0.5rem;
+  }
+
+  .summary-metric {
+    min-height: 102px;
+    padding-inline: 0.32rem;
+  }
+
+  .summary-value {
+    font-size: clamp(2rem, 7vw, 2.5rem);
+  }
+
+  .summary-label {
+    font-size: 0.68rem;
   }
 
   svg {

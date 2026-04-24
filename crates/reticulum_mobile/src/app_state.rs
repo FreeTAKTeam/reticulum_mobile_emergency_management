@@ -702,6 +702,9 @@ impl AppStateStore {
                 .map(str::trim)
                 .unwrap_or_default()
                 .to_string(),
+            created_by_team_member_display_name: normalize_optional_string(
+                request.created_by_team_member_display_name.as_deref(),
+            ),
             updated_at: Some(timestamp),
             last_changed_by_team_member_rns_identity: changed_by,
             deleted_at: None,
@@ -713,6 +716,7 @@ impl AppStateStore {
                 .filter(|value| !value.is_empty())
                 .map(|value| vec![value.to_string()])
                 .unwrap_or_default(),
+            expected_task_count: Some(0),
             progress_percent: 0.0,
             counts: crate::types::ChecklistStatusCounts {
                 pending_count: 0,
@@ -762,6 +766,9 @@ impl AppStateStore {
             checklist_status: ChecklistTaskStatus::Pending {},
             created_at: Some(timestamp.clone()),
             created_by_team_member_rns_identity: created_by.clone(),
+            created_by_team_member_display_name: normalize_optional_string(
+                request.created_by_team_member_display_name.as_deref(),
+            ),
             updated_at: Some(timestamp),
             last_changed_by_team_member_rns_identity: normalize_optional_string(Some(
                 created_by.as_str(),
@@ -771,6 +778,13 @@ impl AppStateStore {
             participant_rns_identities: normalize_optional_string(Some(created_by.as_str()))
                 .map(|value| vec![value])
                 .unwrap_or_default(),
+            expected_task_count: Some(
+                template
+                    .tasks
+                    .iter()
+                    .filter(|task| task.deleted_at.is_none())
+                    .count() as u32,
+            ),
             progress_percent: 0.0,
             counts: crate::types::ChecklistStatusCounts {
                 pending_count: 0,
@@ -2475,6 +2489,9 @@ pub(crate) fn normalize_checklist_record(checklist: &mut ChecklistRecord) {
     checklist.counts.late_count = late_count;
     checklist.counts.complete_count = complete_count;
     let total = active_tasks.len() as u32;
+    if checklist.expected_task_count.is_none() {
+        checklist.expected_task_count = Some(total);
+    }
     checklist.progress_percent = if total == 0 {
         0.0
     } else {
@@ -2660,11 +2677,13 @@ mod tests {
             checklist_status: ChecklistTaskStatus::Pending {},
             created_at: Some("2026-04-22T12:00:00Z".to_string()),
             created_by_team_member_rns_identity: "abcd1234".to_string(),
+            created_by_team_member_display_name: Some("Alpha Operator".to_string()),
             updated_at: Some("2026-04-22T12:00:00Z".to_string()),
             last_changed_by_team_member_rns_identity: Some("abcd1234".to_string()),
             deleted_at: None,
             uploaded_at: None,
             participant_rns_identities: vec!["abcd1234".to_string()],
+            expected_task_count: Some(1),
             progress_percent: 0.0,
             counts: ChecklistStatusCounts {
                 pending_count: 1,
@@ -3150,6 +3169,7 @@ mod tests {
                 description: "Generated from imported template".to_string(),
                 start_time: "2026-04-23T12:00:00Z".to_string(),
                 created_by_team_member_rns_identity: Some("alpha".to_string()),
+                created_by_team_member_display_name: Some("Alpha Operator".to_string()),
             })
             .expect("create from template");
 

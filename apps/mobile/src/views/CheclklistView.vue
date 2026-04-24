@@ -1,12 +1,11 @@
 <script setup lang="ts">
+import { storeToRefs } from "pinia";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useChecklistsStore } from "../stores/checklistsStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
-  runtimeChecklistToUi,
-  runtimeTemplateToUi,
   type ChecklistFilter,
   type ChecklistSegment,
   type ChecklistStatus,
@@ -14,6 +13,12 @@ import {
 
 const nodeStore = useNodeStore();
 const checklistsStore = useChecklistsStore();
+const {
+  liveUiRecords,
+  templateUiRecords,
+  liveTaskTotal,
+  templateTaskTotal,
+} = storeToRefs(checklistsStore);
 const router = useRouter();
 const activeSegment = ref<ChecklistSegment>("live");
 const activeFilter = ref<ChecklistFilter>("all");
@@ -23,6 +28,7 @@ const selectedTemplateId = ref("");
 const importFileInput = ref<HTMLInputElement | null>(null);
 const isMutating = ref(false);
 const deletingChecklistIds = ref<string[]>([]);
+const isChecklistHelpVisible = ref(false);
 
 function createDefaultChecklistFormState(): {
   title: string;
@@ -41,10 +47,15 @@ function createDefaultChecklistFormState(): {
 const createForm = reactive(createDefaultChecklistFormState());
 const checklistRecords = computed(() =>
   activeSegment.value === "templates"
-    ? checklistsStore.templates.map(runtimeTemplateToUi)
-    : checklistsStore.live.map(runtimeChecklistToUi),
+    ? templateUiRecords.value
+    : liveUiRecords.value,
 );
-const templateRecords = computed(() => checklistsStore.templates.map(runtimeTemplateToUi));
+const templateRecords = computed(() => templateUiRecords.value);
+const displayedTaskTotal = computed(() =>
+  activeSegment.value === "templates"
+    ? templateTaskTotal.value
+    : liveTaskTotal.value,
+);
 const hasChecklistRecords = computed(() => checklistRecords.value.length > 0);
 const emptyStateTitle = computed(() =>
   activeSegment.value === "templates" ? "No checklist templates available." : "No checklists available.",
@@ -54,36 +65,6 @@ const emptyStateCopy = computed(() =>
     ? "The runtime has not loaded any checklist templates yet."
     : "The runtime has not loaded any checklist data yet.",
 );
-
-const summary = computed(() => {
-  const records = checklistRecords.value;
-  return {
-    total: records.length,
-    active: records.filter((record) => record.status === "active").length,
-    late: records.filter((record) => record.status === "late").length,
-  };
-});
-
-const summaryMetrics = computed(() => [
-  {
-    key: "total",
-    value: summary.value.total,
-    label: "Total",
-    alert: false,
-  },
-  {
-    key: "active",
-    value: summary.value.active,
-    label: "Active",
-    alert: false,
-  },
-  {
-    key: "late",
-    value: summary.value.late,
-    label: "Late",
-    alert: true,
-  },
-]);
 
 const filteredRecords = computed(() => {
   if (activeFilter.value === "all") {
@@ -115,16 +96,6 @@ async function requestSync(): Promise<void> {
   }
 }
 
-function statusLabel(status: ChecklistStatus): string {
-  if (status === "late") {
-    return "Late";
-  }
-  if (status === "completed") {
-    return "Completed";
-  }
-  return "Active";
-}
-
 function statusCardClass(status: ChecklistStatus): string {
   return `status-${status}`;
 }
@@ -142,6 +113,14 @@ function toggleCreateForm(): void {
     resetCreateForm();
   }
   isCreateFormVisible.value = !isCreateFormVisible.value;
+}
+
+function openChecklistHelp(): void {
+  isChecklistHelpVisible.value = true;
+}
+
+function closeChecklistHelp(): void {
+  isChecklistHelpVisible.value = false;
 }
 
 async function ensureChecklistData(segment?: ChecklistSegment): Promise<void> {
@@ -190,8 +169,12 @@ function toggleMetadata(checklistId: string): void {
   expandedChecklistIds.value = [...expandedChecklistIds.value, checklistId];
 }
 
-function openChecklist(checklistId: string): void {
-  void router.push({ name: "checlklist-detail", params: { checklistId } });
+function openChecklist(checklistId: string, edit = false): void {
+  void router.push({
+    name: "checlklist-detail",
+    params: { checklistId },
+    query: edit ? { edit: "1" } : undefined,
+  });
 }
 
 function isDeletingChecklist(checklistId: string): boolean {
@@ -251,6 +234,16 @@ onMounted(() => {
     <section class="segment-strip">
       <h2 class="segment-title">Checklists</h2>
       <div class="segment-actions">
+        <span class="badge"># {{ displayedTaskTotal }} TSK</span>
+        <button
+          type="button"
+          class="help-trigger"
+          aria-label="How checklists work"
+          title="How checklists work"
+          @click="openChecklistHelp"
+        >
+          ?
+        </button>
         <button
           type="button"
           class="sync-chip"
@@ -335,19 +328,40 @@ onMounted(() => {
       @change="handleTemplateUpload"
     />
 
-    <section v-if="hasChecklistRecords" class="summary-panel">
-      <div class="summary-grid">
-        <article
-          v-for="metric in summaryMetrics"
-          :key="metric.key"
-          class="summary-metric"
-          :class="{ 'summary-metric-alert': metric.alert }"
-        >
-          <p class="summary-value">{{ metric.value }}</p>
-          <p class="summary-label">{{ metric.label }}</p>
-        </article>
-      </div>
-    </section>
+    <div
+      v-if="isChecklistHelpVisible"
+      class="help-screen"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="checklist-help-title"
+      @click.self="closeChecklistHelp"
+    >
+      <section class="help-panel">
+        <div class="help-header">
+          <h2 id="checklist-help-title">How checklists work</h2>
+          <button
+            type="button"
+            class="help-close"
+            aria-label="Close checklist help"
+            @click="closeChecklistHelp"
+          >
+            x
+          </button>
+        </div>
+        <p>
+          Checklists are shared operational task lists. Creating one from a template publishes the checklist
+          to nearby REM nodes and then synchronizes the full task list over LXMF.
+        </p>
+        <p>
+          While a checklist is still receiving tasks, the card shows sync progress. Once every task is present,
+          the normal completion bar is shown.
+        </p>
+        <p>
+          Open a checklist to join, complete rows, edit task cells, add rows, or delete rows. Updates are saved
+          through Rust first and then replicated to peers.
+        </p>
+      </section>
+    </div>
 
     <section v-if="hasChecklistRecords" class="filter-row">
       <label class="filter-field">
@@ -383,21 +397,6 @@ onMounted(() => {
               :aria-label="`Open ${record.title}`"
               @click="openChecklist(record.id)"
             >
-              <div class="card-icon" aria-hidden="true">
-                <svg v-if="record.status === 'completed'" viewBox="0 0 24 24" fill="none">
-                  <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
-                  <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
-                  <path d="m9.5 13 2 2 4-5" />
-                </svg>
-                <svg v-else viewBox="0 0 24 24" fill="none">
-                  <path d="M8 4.5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
-                  <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z" />
-                  <path d="M9.5 10h5" />
-                  <path d="M9.5 13.5h5" />
-                  <path d="M9.5 17h5" />
-                </svg>
-              </div>
-
               <div class="card-heading">
                 <h2>{{ record.title }}</h2>
                 <p>{{ record.subtitle }}</p>
@@ -405,6 +404,18 @@ onMounted(() => {
             </button>
 
             <div class="card-top-actions">
+              <button
+                class="action edit"
+                type="button"
+                :aria-label="`Edit ${record.title}`"
+                title="Edit"
+                @click="openChecklist(record.id, true)"
+              >
+                <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="m16.5 3.5 4 4L8 20l-4 1 1-4z" />
+                </svg>
+              </button>
               <button
                 v-if="activeSegment === 'live'"
                 class="action delete"
@@ -422,10 +433,6 @@ onMounted(() => {
                   <path d="M14 11v5" />
                 </svg>
               </button>
-              <span class="status-pill" :class="statusCardClass(record.status)">
-                {{ statusLabel(record.status) }}
-              </span>
-              <span class="card-chevron" aria-hidden="true">&#8250;</span>
             </div>
           </div>
 
@@ -435,14 +442,30 @@ onMounted(() => {
             :aria-label="`Open ${record.title}`"
             @click="openChecklist(record.id)"
           >
-            <div class="progress-copy">
+            <div v-if="record.taskSync" class="progress-copy task-sync-copy">
+              <span>
+                <span class="task-sync-pulse" aria-hidden="true"></span>
+                {{ record.taskSync.label }}
+              </span>
+              <span>{{ record.taskSync.received }} / {{ record.taskSync.total }} tasks</span>
+            </div>
+
+            <div v-else class="progress-copy">
               <span>{{ record.progress }}% complete</span>
               <span>{{ record.statusCountLabel }}</span>
             </div>
 
             <div class="progress-track" aria-hidden="true">
-              <div class="progress-fill" :style="{ width: `${record.progress}%` }"></div>
+              <div
+                class="progress-fill"
+                :class="{ 'task-sync-fill': record.taskSync }"
+                :style="{ width: `${record.taskSync ? record.taskSync.progress : record.progress}%` }"
+              ></div>
             </div>
+
+            <p v-if="record.taskSync" class="task-sync-detail">
+              {{ record.taskSync.detail }}
+            </p>
           </button>
         </div>
 
@@ -472,32 +495,28 @@ onMounted(() => {
           v-show="isMetadataExpanded(record.id)"
           :id="`checklist-meta-${record.id}`"
         >
-          <div class="card-metadata">
-            <span class="metadata-item">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <div class="card-metadata" aria-label="Checklist metadata">
+            <span
+              v-for="(line, index) in record.metadataLines"
+              :key="`${record.id}-${index}-${line}`"
+              class="metadata-item"
+            >
+              <svg v-if="index === 0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M7 4v3" />
                 <path d="M17 4v3" />
                 <path d="M5 8h14" />
                 <path d="M6 6.5h12a1 1 0 0 1 1 1v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-10a1 1 0 0 1 1-1Z" />
               </svg>
-              {{ record.scheduledAt }}
-            </span>
-            <span class="metadata-divider" aria-hidden="true"></span>
-            <span class="metadata-item">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <svg v-else-if="index === 1" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 8v4l2.5 1.5" />
+                <path d="M20 12a8 8 0 1 1-2.35-5.65" />
+                <path d="M20 5v4h-4" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
                 <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
               </svg>
-              {{ record.teamLabel }}
-            </span>
-            <span class="metadata-divider" aria-hidden="true"></span>
-            <span class="metadata-item metadata-compatibility">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M4.5 12a7.5 7.5 0 0 1 15 0" />
-                <path d="M8 12a4 4 0 0 1 8 0" />
-                <circle cx="12" cy="12" r="1.5" />
-              </svg>
-              {{ record.compatibilityLabel }}
+              {{ line }}
             </span>
           </div>
         </section>
@@ -569,7 +588,6 @@ onMounted(() => {
   justify-content: flex-end;
 }
 
-.card-icon svg,
 .metadata-item svg,
 .utility-toggle svg {
   stroke: currentColor;
@@ -618,6 +636,20 @@ onMounted(() => {
 
 .sync-chip.busy {
   color: #d7efff;
+}
+
+.badge {
+  background: rgb(9 61 108 / 68%);
+  border: 1px solid rgb(73 173 255 / 62%);
+  border-radius: 999px;
+  color: #64beff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.92rem;
+  justify-content: center;
+  letter-spacing: 0.08em;
+  padding: 0.46rem 0.8rem;
+  text-transform: uppercase;
 }
 
 .utility-toggle {
@@ -747,51 +779,99 @@ onMounted(() => {
   color: #032748;
 }
 
-.summary-panel {
-  padding: 0.78rem 0.82rem;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.summary-metric {
+.help-close {
   align-items: center;
-  display: grid;
-  background:
-    linear-gradient(145deg, rgb(18 35 68 / 92%), rgb(10 20 45 / 90%)),
-    radial-gradient(circle at 72% 10%, rgb(69 235 255 / 14%), transparent 36%);
-  border: 1px solid rgb(90 142 220 / 24%);
-  border-radius: 14px;
-  gap: 0.08rem;
-  justify-items: center;
-  min-height: 114px;
-  padding: 0.85rem 0.45rem 0.72rem;
+  background: rgb(8 38 72 / 78%);
+  border: 1px solid rgb(73 173 255 / 62%);
+  border-radius: 999px;
+  box-shadow: 0 0 16px rgb(66 169 255 / 18%);
+  color: #8fdbff;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
 }
 
-.summary-value {
-  color: #f0f7ff;
-  font-family: var(--font-ui);
-  font-size: clamp(2.45rem, 4.6vw, 3.3rem);
+.help-trigger {
+  align-items: center;
+  background: rgb(8 28 58 / 92%);
+  border: 1px solid rgb(93 171 255 / 42%);
+  border-radius: 12px;
+  color: #8fdbff;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-headline);
+  font-size: 1.2rem;
   font-weight: 700;
+  height: 2.3rem;
+  justify-content: center;
   line-height: 1;
+  min-height: 0;
+  width: 2.3rem;
+}
+
+.help-trigger:hover,
+.help-trigger:focus-visible {
+  border-color: rgb(102 219 255 / 76%);
+  box-shadow: 0 0 0 1px rgb(9 55 95 / 75%), 0 0 20px rgb(40 178 255 / 18%);
+  color: #d8f8ff;
+}
+
+.help-close {
+  font-size: 1.25rem;
+  height: 2.15rem;
+  line-height: 1;
+  width: 2.15rem;
+}
+
+.help-screen {
+  align-items: center;
+  background: rgb(2 9 24 / 72%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: fixed;
+  z-index: 20;
+}
+
+.help-panel {
+  background:
+    linear-gradient(150deg, rgb(9 25 55 / 96%), rgb(7 16 37 / 98%)),
+    radial-gradient(circle at 10% 10%, rgb(13 152 255 / 18%), transparent 38%);
+  border: 1px solid rgb(74 120 193 / 44%);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgb(0 0 0 / 36%);
+  color: #cfe2ff;
+  display: grid;
+  gap: 0.85rem;
+  max-width: 34rem;
+  padding: 1.05rem;
+  width: min(100%, 34rem);
+}
+
+.help-header {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.help-panel h2 {
+  color: #f1f8ff;
+  font-family: var(--font-headline);
+  font-size: 1.3rem;
   margin: 0;
 }
 
-.summary-label {
-  color: #88a5cf;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.09em;
-  margin: 0.13rem 0 0;
-  text-transform: uppercase;
-}
-
-.summary-metric-alert .summary-value,
-.summary-metric-alert .summary-label {
-  color: #ff6475;
+.help-panel p {
+  color: #b8cdec;
+  font-family: var(--font-body);
+  line-height: 1.45;
+  margin: 0;
 }
 
 .filter-row {
@@ -835,22 +915,6 @@ onMounted(() => {
   transform: translateY(1px) scale(0.99);
 }
 
-.status-pill {
-  align-items: center;
-  background: rgb(8 29 61 / 88%);
-  border: 1px solid rgb(74 133 207 / 45%);
-  border-radius: 15px;
-  color: #91a8cf;
-  display: inline-flex;
-  font-family: var(--font-ui);
-  font-size: 0.8rem;
-  justify-content: center;
-  letter-spacing: 0.08em;
-  min-height: 0;
-  padding: 0.5rem 0.95rem;
-  text-transform: uppercase;
-}
-
 .checklist-list {
   display: grid;
   gap: 1rem;
@@ -887,15 +951,14 @@ onMounted(() => {
 
 .card-topline {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
 }
 
 .card-heading-action {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: block;
+  min-width: 0;
 }
 
 .card-progress-action {
@@ -903,31 +966,11 @@ onMounted(() => {
   gap: 1rem;
 }
 
-.card-icon {
-  align-items: center;
-  border: 1px solid rgb(74 190 255 / 90%);
-  border-radius: 12px;
-  color: #64beff;
-  display: inline-flex;
-  height: 52px;
-  justify-content: center;
-  width: 52px;
-}
-
-.card-icon svg {
-  height: 1.4rem;
-  width: 1.4rem;
-}
-
-.checklist-card.status-late .card-icon {
-  border-color: rgb(255 100 117 / 88%);
-  color: #ff6475;
-}
-
 .card-heading h2 {
   color: #f1f8ff;
   font-family: var(--font-headline);
   font-size: clamp(1.2rem, 2.3vw, 1.75rem);
+  line-height: 1.08;
   margin: 0;
   min-width: 0;
 }
@@ -942,7 +985,9 @@ onMounted(() => {
 .card-top-actions {
   align-items: center;
   display: inline-flex;
-  gap: 0.9rem;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
 .action {
@@ -979,32 +1024,23 @@ onMounted(() => {
   opacity: 0.55;
 }
 
-.status-pill.status-active,
+.edit {
+  background: rgb(11 39 84 / 80%);
+  border: 1px solid rgb(66 169 255 / 80%);
+  box-shadow: 0 0 16px rgb(66 169 255 / 24%);
+  color: #61bbff;
+}
+
 .checklist-card.status-active .progress-fill {
   color: #64beff;
 }
 
-.status-pill.status-late,
 .checklist-card.status-late .progress-fill {
-  border-color: rgb(255 100 117 / 58%);
   color: #ff6475;
 }
 
-.status-pill.status-completed,
 .checklist-card.status-completed .progress-fill {
   color: #8df3c1;
-}
-
-.status-pill.status-completed {
-  background: rgb(14 67 42 / 82%);
-  border-color: rgb(71 214 145 / 40%);
-}
-
-.card-chevron {
-  color: #839fc9;
-  font-family: var(--font-ui);
-  font-size: 2.25rem;
-  line-height: 1;
 }
 
 .progress-copy {
@@ -1048,6 +1084,36 @@ onMounted(() => {
 
 .checklist-card.status-completed .progress-fill {
   background: linear-gradient(90deg, #52dc9c, #2ebf7c);
+}
+
+.task-sync-copy span:first-child {
+  align-items: center;
+  color: #9ddcff;
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
+.task-sync-pulse {
+  background: #14f0ff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 0 rgb(20 240 255 / 44%);
+  height: 0.62rem;
+  width: 0.62rem;
+}
+
+.task-sync-pulse {
+  animation: task-sync-pulse 1.35s ease-out infinite;
+}
+
+.task-sync-fill {
+  background: linear-gradient(90deg, #16d5ff, #5de9ff);
+}
+
+.task-sync-detail {
+  color: #7f9fc8;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  margin: 0;
 }
 
 .card-footer {
@@ -1118,16 +1184,6 @@ onMounted(() => {
   width: 0.92rem;
 }
 
-.metadata-divider {
-  background: rgb(92 126 176 / 32%);
-  height: 1.25rem;
-  width: 1px;
-}
-
-.metadata-compatibility {
-  color: #2db7ff;
-}
-
 .empty-state {
   padding: 1.4rem;
 }
@@ -1167,34 +1223,12 @@ onMounted(() => {
     justify-content: flex-start;
   }
 
-  .summary-grid {
-    gap: 0.5rem;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .summary-metric {
-    min-height: 102px;
-    padding-inline: 0.32rem;
-  }
-
-  .summary-value {
-    font-size: clamp(2rem, 7vw, 2.5rem);
-  }
-
-  .summary-label {
-    font-size: 0.68rem;
-  }
-
   .filter-field {
     max-width: none;
   }
 
-  .card-topline {
-    grid-template-columns: 1fr;
-  }
-
   .card-top-actions {
-    justify-content: space-between;
+    justify-content: flex-end;
   }
 
   .card-metadata {
@@ -1207,8 +1241,19 @@ onMounted(() => {
     justify-content: flex-start;
   }
 
-  .metadata-divider {
-    display: none;
+}
+
+@keyframes task-sync-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(20 240 255 / 44%);
+  }
+
+  70% {
+    box-shadow: 0 0 0 0.45rem rgb(20 240 255 / 0%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(20 240 255 / 0%);
   }
 }
 </style>

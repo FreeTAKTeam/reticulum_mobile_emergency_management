@@ -18,9 +18,17 @@ export interface ChecklistRecord {
   status: ChecklistStatus;
   progress: number;
   statusCountLabel: string;
-  scheduledAt: string;
-  teamLabel: string;
-  compatibilityLabel: string;
+  taskSync?: ChecklistTaskSync;
+  metadataLines: string[];
+}
+
+export interface ChecklistTaskSync {
+  received: number;
+  total: number;
+  pending: number;
+  progress: number;
+  label: string;
+  detail: string;
 }
 
 export interface ChecklistTask {
@@ -47,6 +55,7 @@ export interface ChecklistDetail {
   id: string;
   heroTitle: string;
   heroSubtitle: string;
+  heroMetaLines: string[];
   progress: number;
   progressLabel: string;
   pendingLabel: string;
@@ -119,6 +128,45 @@ function runtimeChecklistCellsToUi(
   }));
 }
 
+function isHydratedChecklistTask(task: RuntimeChecklistTaskRecord): boolean {
+  return task.number > 0;
+}
+
+function checklistAuthorLabel(record: RuntimeChecklistRecord): string {
+  const authorDisplayName = (
+    record as RuntimeChecklistRecord & {
+      createdByTeamMemberDisplayName?: string;
+      createdByTeamMemberName?: string;
+      createdByDisplayName?: string;
+    }
+  ).createdByTeamMemberDisplayName ?? (
+    record as RuntimeChecklistRecord & {
+      createdByDisplayName?: string;
+    }
+  ).createdByDisplayName ?? (
+    record as RuntimeChecklistRecord & {
+      createdByTeamMemberName?: string;
+    }
+  ).createdByTeamMemberName;
+  return authorDisplayName?.trim() || "Original author pending";
+}
+
+function checklistMetadataLines(record: RuntimeChecklistRecord): string[] {
+  return [
+    `Created ${formatChecklistTimestamp(record.createdAt)}`,
+    `Updated ${formatChecklistTimestamp(record.updatedAt)}`,
+    checklistAuthorLabel(record),
+  ];
+}
+
+function templateMetadataLines(record: RuntimeChecklistTemplateRecord): string[] {
+  return [
+    `Created ${formatChecklistTimestamp(record.createdAt)}`,
+    `Updated ${formatChecklistTimestamp(record.updatedAt)}`,
+    record.originType === "CSV_IMPORT" ? "Imported template" : "REM template library",
+  ];
+}
+
 export function runtimeChecklistTaskToUi(
   task: RuntimeChecklistTaskRecord,
   columns: RuntimeChecklistColumnRecord[] = [],
@@ -161,6 +209,13 @@ export function runtimeChecklistTaskToUi(
 
 export function runtimeChecklistToUi(record: RuntimeChecklistRecord): ChecklistRecord {
   const status = checklistStatusFromRuntime(record.checklistStatus);
+  const receivedTasks = record.tasks.filter(isHydratedChecklistTask).length;
+  const countedTasks = record.counts.pendingCount + record.counts.lateCount + record.counts.completeCount;
+  const expectedTasks = typeof record.expectedTaskCount === "number" ? record.expectedTaskCount : 0;
+  const highestTaskNumber = record.tasks.reduce((highest, task) => Math.max(highest, task.number), 0);
+  const totalTasks = Math.max(receivedTasks, countedTasks, expectedTasks, highestTaskNumber);
+  const pendingTasks = Math.max(totalTasks - receivedTasks, 0);
+  const taskSyncProgress = totalTasks === 0 ? 100 : Math.round((receivedTasks * 100) / totalTasks);
   return {
     id: record.uid,
     title: record.name,
@@ -173,9 +228,17 @@ export function runtimeChecklistToUi(record: RuntimeChecklistRecord): ChecklistR
         : record.counts.lateCount > 0
           ? `${record.counts.lateCount} late`
           : `${record.counts.pendingCount} pending`,
-    scheduledAt: formatChecklistTimestamp(record.startTime ?? record.updatedAt),
-    teamLabel: record.missionUid ?? "Emergency Preparedness",
-    compatibilityLabel: record.templateName ?? "RCH compatible",
+    taskSync: totalTasks > 0 && pendingTasks > 0
+      ? {
+          received: receivedTasks,
+          total: totalTasks,
+          pending: pendingTasks,
+          progress: taskSyncProgress,
+          label: "Receiving tasks",
+          detail: `${pendingTasks} ${pendingTasks === 1 ? "task" : "tasks"} pending over LXMF`,
+        }
+      : undefined,
+    metadataLines: checklistMetadataLines(record),
   };
 }
 
@@ -187,9 +250,7 @@ export function runtimeTemplateToUi(record: RuntimeChecklistTemplateRecord): Che
     status: "active",
     progress: 0,
     statusCountLabel: `${record.tasks.length} tasks`,
-    scheduledAt: formatChecklistTimestamp(record.updatedAt),
-    teamLabel: "Template Library",
-    compatibilityLabel: record.originType === "CSV_IMPORT" ? "CSV template" : "Default REM template",
+    metadataLines: templateMetadataLines(record),
   };
 }
 
@@ -198,11 +259,14 @@ export function runtimeChecklistDetailToUi(record: RuntimeChecklistRecord): Chec
     id: record.uid,
     heroTitle: record.name,
     heroSubtitle: record.description || "Emergency preparedness checklist",
+    heroMetaLines: checklistMetadataLines(record),
     progress: Math.round(record.progressPercent),
     progressLabel: `${Math.round(record.progressPercent)}% complete`,
     pendingLabel: `${record.counts.pendingCount} pending | ${record.counts.lateCount} late | ${record.counts.completeCount} done`,
     tasksHeading: "Tasks",
-    tasks: record.tasks.map((task) => runtimeChecklistTaskToUi(task, record.columns)),
+    tasks: record.tasks
+      .filter((task) => !task.deletedAt)
+      .map((task) => runtimeChecklistTaskToUi(task, record.columns)),
   };
 }
 
@@ -211,10 +275,13 @@ export function runtimeTemplateDetailToUi(record: RuntimeChecklistTemplateRecord
     id: record.uid,
     heroTitle: record.name,
     heroSubtitle: record.description || "Checklist template",
+    heroMetaLines: templateMetadataLines(record),
     progress: 0,
     progressLabel: `${record.tasks.length} template tasks`,
     pendingLabel: "Template preview",
     tasksHeading: "Template Tasks",
-    tasks: record.tasks.map((task) => runtimeChecklistTaskToUi(task, record.columns)),
+    tasks: record.tasks
+      .filter((task) => !task.deletedAt)
+      .map((task) => runtimeChecklistTaskToUi(task, record.columns)),
   };
 }

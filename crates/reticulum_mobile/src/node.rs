@@ -1119,6 +1119,16 @@ fn append_checklist_create_snapshot_args(
             args.insert(key.to_string(), value.clone());
         }
     }
+    args.insert(
+        "total_tasks".to_string(),
+        JsonValue::from(checklist.expected_task_count.unwrap_or_else(|| {
+            checklist
+                .tasks
+                .iter()
+                .filter(|task| task.deleted_at.is_none())
+                .count() as u32
+        })),
+    );
     Ok(())
 }
 
@@ -2897,6 +2907,9 @@ impl Node {
                     start_time: request.start_time.clone(),
                     created_by_team_member_rns_identity: request
                         .created_by_team_member_rns_identity
+                        .clone(),
+                    created_by_team_member_display_name: request
+                        .created_by_team_member_display_name
                         .clone(),
                 };
                 let mut snapshot = inner
@@ -4977,11 +4990,13 @@ mod tests {
             checklist_status: crate::types::ChecklistTaskStatus::Pending {},
             created_at: Some("2026-04-23T12:00:00Z".to_string()),
             created_by_team_member_rns_identity: "peer-a".to_string(),
+            created_by_team_member_display_name: Some("Peer A".to_string()),
             updated_at: Some("2026-04-23T12:00:00Z".to_string()),
             last_changed_by_team_member_rns_identity: Some("peer-a".to_string()),
             deleted_at: None,
             uploaded_at: Some("2026-04-23T12:00:00Z".to_string()),
             participant_rns_identities: vec!["peer-a".to_string()],
+            expected_task_count: Some(1),
             progress_percent: 0.0,
             counts: crate::types::ChecklistStatusCounts {
                 pending_count: 1,
@@ -5037,6 +5052,9 @@ mod tests {
             created_by_team_member_rns_identity: Some(
                 checklist.created_by_team_member_rns_identity.clone(),
             ),
+            created_by_team_member_display_name: checklist
+                .created_by_team_member_display_name
+                .clone(),
         })
         .expect("create args");
         append_checklist_create_snapshot_args(&mut create_args, &checklist)
@@ -5050,6 +5068,10 @@ mod tests {
                 .get("columns")
                 .and_then(JsonValue::as_array)
                 .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            create_args.get("total_tasks").and_then(JsonValue::as_u64),
             Some(1)
         );
         assert!(create_args.get("tasks").is_none());
@@ -7532,6 +7554,7 @@ mod tests {
             description: "Shared run for Alpha".to_string(),
             start_time: "2026-04-22T12:00:00Z".to_string(),
             created_by_team_member_rns_identity: Some("abcd1234".to_string()),
+            created_by_team_member_display_name: None,
         })
         .expect("build create args");
 
@@ -7690,6 +7713,7 @@ mod tests {
             description: "Shared run for Alpha".to_string(),
             start_time: "2026-04-22T12:00:00Z".to_string(),
             created_by_team_member_rns_identity: None,
+            created_by_team_member_display_name: None,
         });
 
         assert!(matches!(result, Err(NodeError::InvalidConfig {})));
@@ -7717,6 +7741,7 @@ mod tests {
             description: "Shared run for Alpha".to_string(),
             start_time: "2026-04-22T12:00:00Z".to_string(),
             created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
         })
         .expect("create checklist");
 
@@ -7756,6 +7781,7 @@ mod tests {
             description: "Created first".to_string(),
             start_time: "2026-04-22T12:00:00Z".to_string(),
             created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
         })
         .expect("create older checklist");
         node.create_online_checklist(ChecklistCreateOnlineRequest {
@@ -7766,6 +7792,7 @@ mod tests {
             description: "Created second".to_string(),
             start_time: "2026-04-22T12:05:00Z".to_string(),
             created_by_team_member_rns_identity: Some("creator-identity".to_string()),
+            created_by_team_member_display_name: None,
         })
         .expect("create newer checklist");
 

@@ -1,0 +1,54 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - img "R.E.M. logo" [ref=e8]
+      - paragraph [ref=e9]: R.E.M.
+    - generic [ref=e10]:
+      - generic "Saved peers and connected saved peers" [ref=e11]: 0/0
+      - generic "App ready to send and receive events or messages." [ref=e12]: Ready
+  - main [ref=e13]:
+    - generic [ref=e14]:
+      - heading "Checklists" [level=1] [ref=e15]
+      - generic [ref=e16]:
+        - heading "Checklists" [level=2] [ref=e17]
+        - generic [ref=e18]:
+          - button "Sync" [ref=e19] [cursor=pointer]:
+            - generic [ref=e20]: Sync
+          - button "Create checklist" [ref=e21] [cursor=pointer]: +
+      - button "Choose File" [ref=e22]
+      - article [ref=e24]:
+        - heading "No checklists available." [level=2] [ref=e25]
+        - paragraph [ref=e26]: The runtime has not loaded any checklist data yet.
+  - navigation [ref=e27]:
+    - link "Dashboard" [ref=e28] [cursor=pointer]:
+      - /url: /dashboard
+      - img [ref=e30]
+      - generic [ref=e35]: Dashboard
+    - link "Action Messages" [ref=e36] [cursor=pointer]:
+      - /url: /messages
+      - img [ref=e38]
+      - generic [ref=e40]: Action Messages
+    - link "Events" [ref=e41] [cursor=pointer]:
+      - /url: /events
+      - img [ref=e43]
+      - generic [ref=e46]: Events
+    - link "Inbox" [ref=e47] [cursor=pointer]:
+      - /url: /inbox
+      - img [ref=e49]
+      - generic [ref=e52]: Inbox
+    - link "Checklists" [ref=e53] [cursor=pointer]:
+      - /url: /checlklist
+      - img [ref=e55]
+      - generic [ref=e59]: Checklists
+    - link "Telemetry" [ref=e60] [cursor=pointer]:
+      - /url: /telemetry
+      - img [ref=e62]
+      - generic [ref=e65]: Telemetry
+    - link "Peers" [ref=e66] [cursor=pointer]:
+      - /url: /peers
+      - img [ref=e68]
+      - generic [ref=e74]: Peers
+    - link "Settings" [ref=e75] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e77]
+      - generic [ref=e80]: Settings
