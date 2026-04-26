@@ -194,6 +194,23 @@ function normalizeRuntimeSettings(
       Number(value.announceIntervalSeconds ?? defaults.announceIntervalSeconds),
     ),
     telemetry: normalizeTelemetrySettings(value.telemetry, defaults.telemetry),
+    wearables: {
+      enabled: Boolean(value.wearables?.enabled ?? defaults.wearables.enabled),
+      staleTimeoutSeconds: Math.max(
+        1,
+        Number(value.wearables?.staleTimeoutSeconds ?? defaults.wearables.staleTimeoutSeconds),
+      ),
+      devices: Array.isArray(value.wearables?.devices)
+        ? value.wearables.devices
+            .map((device) => ({
+              deviceId: asTrimmedString(device.deviceId),
+              alias: asTrimmedString(device.alias) || undefined,
+              operatorRnsIdentity: asTrimmedString(device.operatorRnsIdentity) || undefined,
+              sensorType: "heart_rate_bpm" as const,
+            }))
+            .filter((device) => device.deviceId.length > 0)
+        : defaults.wearables.devices.map((device) => ({ ...device })),
+    },
     hub: {
       mode: HUB_MODES.has(hubMode as HubMode) ? (hubMode as HubMode) : defaults.hub.mode,
       identityHash: asTrimmedString(value.hub?.identityHash),

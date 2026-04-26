@@ -44,6 +44,7 @@ export type ProjectionScope =
   | "Conversations"
   | "Messages"
   | "Telemetry"
+  | "Wearables"
   | "Checklists"
   | "ChecklistDetail"
   | "Sos";
@@ -381,6 +382,22 @@ export interface ChecklistSettingsRecord {
   defaultTaskDueStepMinutes: number;
 }
 
+export type WearableSensorType = "heart_rate_bpm" | "battery_percent" | "step_count" | "location" | "unknown";
+export type WearableStatusKind = "Active" | "Stale" | "Offline" | "Unsupported";
+
+export interface WearableDeviceConfigRecord {
+  deviceId: string;
+  alias?: string;
+  operatorRnsIdentity?: string;
+  sensorType: WearableSensorType;
+}
+
+export interface WearableSettingsRecord {
+  enabled: boolean;
+  staleTimeoutSeconds: number;
+  devices: WearableDeviceConfigRecord[];
+}
+
 export interface AppSettingsRecord {
   displayName: string;
   autoConnectSaved: boolean;
@@ -391,6 +408,7 @@ export interface AppSettingsRecord {
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
   checklists: ChecklistSettingsRecord;
+  wearables: WearableSettingsRecord;
 }
 
 export interface SavedPeerRecord {
@@ -478,6 +496,56 @@ export interface TelemetryPositionRecord {
   speed?: number;
   accuracy?: number;
   updatedAt: number;
+}
+
+export interface WearableDevice {
+  deviceId: string;
+  deviceName?: string;
+  rssi?: number;
+  advertisedServices: string[];
+  bonded: boolean;
+  heartRateSupported: boolean;
+  connectionState: string;
+}
+
+export interface WearableSensorEvent {
+  type: string;
+  source: string;
+  deviceId: string;
+  deviceName?: string;
+  deviceModel?: string;
+  timestampMs: number;
+  sensorType: WearableSensorType;
+  value: number;
+  unit?: string;
+  confidence: number;
+  connectionState?: string;
+}
+
+export interface WearableStatusRecord {
+  deviceId: string;
+  deviceName?: string;
+  deviceModel?: string;
+  operatorRnsIdentity?: string;
+  sensorType: WearableSensorType;
+  value: number | string;
+  unit?: string;
+  confidence: number;
+  connectionState?: string;
+  lastSeenTimestampMs: number;
+  staleAfterMs: number;
+  status: WearableStatusKind;
+}
+
+export interface WearablePermissionState {
+  granted: boolean;
+  missing: string[];
+  androidApi?: number;
+}
+
+export interface WearableManagerStatus {
+  scanning: boolean;
+  items: WearableDevice[];
 }
 
 export interface SosSettingsRecord {
@@ -591,6 +659,7 @@ export interface OperationalSummary {
   eamCount: number;
   eventCount: number;
   telemetryCount: number;
+  wearableCount: number;
   activePropagationNodeHex?: string;
   updatedAtMs: number;
 }
@@ -631,6 +700,12 @@ export interface NodeClientEvents {
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
   operationalNotice: NodeOperationalNoticeEvent;
   projectionInvalidated: ProjectionInvalidationEvent;
+  wearableDeviceDiscovered: WearableDevice;
+  wearableConnectionChanged: WearableDevice;
+  wearableSensorEvent: WearableSensorEvent;
+  wearableScanStopped: { scanning: boolean; reason?: string };
+  wearableError: NodeErrorEvent;
+  wearableSensorUpdated: WearableStatusRecord;
   sosStatusChanged: { status: SosStatusRecord };
   sosAlertChanged: { alert: SosAlertRecord };
   sosTelemetryRequested: Record<string, never>;
@@ -755,6 +830,15 @@ export interface ReticulumNodeClient {
   getTelemetryPositions(): Promise<TelemetryPositionRecord[]>;
   recordLocalTelemetryFix(position: TelemetryPositionRecord): Promise<void>;
   deleteLocalTelemetry(callsign: string): Promise<void>;
+  getWearablePermissionState(): Promise<WearablePermissionState>;
+  requestWearablePermissions(): Promise<WearablePermissionState>;
+  startWearableScan(timeoutMs?: number): Promise<{ scanning: boolean; timeoutMs: number }>;
+  stopWearableScan(): Promise<{ scanning: boolean; reason?: string }>;
+  listBondedWearableDevices(): Promise<WearableDevice[]>;
+  connectWearable(deviceId: string): Promise<WearableDevice | null>;
+  disconnectWearable(): Promise<void>;
+  getWearableManagerStatus(): Promise<WearableManagerStatus>;
+  getWearableStatus(): Promise<WearableStatusRecord[]>;
   getSosSettings(): Promise<SosSettingsRecord>;
   setSosSettings(settings: SosSettingsRecord): Promise<void>;
   setSosPin(pin?: string): Promise<void>;
@@ -983,6 +1067,15 @@ interface ReticulumNodePlugin {
   getTelemetryPositions(): Promise<{ items: Record<string, unknown>[] }>;
   recordLocalTelemetryFix(options: { position: Record<string, unknown> }): Promise<void>;
   deleteLocalTelemetry(options: { callsign: string }): Promise<void>;
+  getWearablePermissionState(): Promise<Record<string, unknown>>;
+  requestWearablePermissions(): Promise<Record<string, unknown>>;
+  startWearableScan(options: { timeoutMs?: number }): Promise<Record<string, unknown>>;
+  stopWearableScan(): Promise<Record<string, unknown>>;
+  listBondedWearableDevices(): Promise<{ items: Record<string, unknown>[] }>;
+  connectWearable(options: { deviceId: string }): Promise<Record<string, unknown>>;
+  disconnectWearable(): Promise<Record<string, unknown>>;
+  getWearableManagerStatus(): Promise<Record<string, unknown>>;
+  getWearableStatus(): Promise<{ items: Record<string, unknown>[] }>;
   getSosSettings(): Promise<Record<string, unknown>>;
   setSosSettings(options: { settings: Record<string, unknown> }): Promise<void>;
   setSosPin(options: { pin?: string }): Promise<void>;
@@ -1735,6 +1828,68 @@ function normalizeHubMode(value: unknown): HubMode {
   }
 }
 
+function normalizeWearableSensorType(value: unknown): WearableSensorType {
+  switch (String(value ?? "").trim()) {
+    case "heart_rate_bpm":
+    case "HeartRateBpm":
+      return "heart_rate_bpm";
+    case "battery_percent":
+    case "BatteryPercent":
+      return "battery_percent";
+    case "step_count":
+    case "StepCount":
+      return "step_count";
+    case "location":
+    case "Location":
+      return "location";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeWearableStatusKind(value: unknown): WearableStatusKind {
+  switch (String(value ?? "").trim()) {
+    case "Active":
+      return "Active";
+    case "Stale":
+      return "Stale";
+    case "Offline":
+      return "Offline";
+    case "Unsupported":
+      return "Unsupported";
+    default:
+      return "Offline";
+  }
+}
+
+function toWearableDeviceConfigRecord(raw: Record<string, unknown>): WearableDeviceConfigRecord {
+  return {
+    deviceId: String(raw.deviceId ?? raw.device_id ?? ""),
+    alias: typeof raw.alias === "string" && raw.alias.trim() ? raw.alias.trim() : undefined,
+    operatorRnsIdentity:
+      typeof raw.operatorRnsIdentity === "string"
+        ? raw.operatorRnsIdentity.trim() || undefined
+        : typeof raw.operator_rns_identity === "string"
+          ? raw.operator_rns_identity.trim() || undefined
+          : undefined,
+    sensorType: normalizeWearableSensorType(raw.sensorType ?? raw.sensor_type ?? "heart_rate_bpm"),
+  };
+}
+
+function toWearableSettingsRecord(raw: Record<string, unknown>): WearableSettingsRecord {
+  const devices = Array.isArray(raw.devices)
+    ? raw.devices
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+        .map(toWearableDeviceConfigRecord)
+        .filter((device) => device.deviceId.trim().length > 0)
+    : [];
+  return {
+    enabled: Boolean(raw.enabled),
+    staleTimeoutSeconds: Math.max(1, Number(raw.staleTimeoutSeconds ?? raw.stale_timeout_seconds ?? 30)),
+    devices,
+  };
+}
+
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
   if (!raw || Object.keys(raw).length === 0) {
     return null;
@@ -1749,6 +1904,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   const telemetry = (raw.telemetry ?? {}) as Record<string, unknown>;
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
   const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
+  const wearables = (raw.wearables ?? {}) as Record<string, unknown>;
   const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
   return {
     displayName: String(raw.displayName ?? ""),
@@ -1776,6 +1932,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
         ? Math.max(1, defaultTaskDueStepMinutes)
         : 30,
     },
+    wearables: toWearableSettingsRecord(wearables),
   };
 }
 
@@ -2977,8 +3134,100 @@ function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary 
     eamCount: Number(raw.eamCount ?? 0),
     eventCount: Number(raw.eventCount ?? 0),
     telemetryCount: Number(raw.telemetryCount ?? 0),
+    wearableCount: Number(raw.wearableCount ?? 0),
     activePropagationNodeHex: toOptionalHex(raw.activePropagationNodeHex),
     updatedAtMs: Number(raw.updatedAtMs ?? Date.now()),
+  };
+}
+
+function toWearableDevice(raw: Record<string, unknown>): WearableDevice {
+  const services = Array.isArray(raw.advertisedServices)
+    ? raw.advertisedServices.map((entry) => String(entry))
+    : [];
+  return {
+    deviceId: String(raw.deviceId ?? raw.device_id ?? ""),
+    deviceName: typeof raw.deviceName === "string" ? raw.deviceName : undefined,
+    rssi: toOptionalNumber(raw.rssi),
+    advertisedServices: services,
+    bonded: Boolean(raw.bonded),
+    heartRateSupported: Boolean(raw.heartRateSupported ?? raw.heart_rate_supported),
+    connectionState: String(raw.connectionState ?? raw.connection_state ?? "DISCOVERED"),
+  };
+}
+
+function toWearableSensorEvent(raw: Record<string, unknown>): WearableSensorEvent {
+  return {
+    type: String(raw.type ?? "wearable.heart_rate"),
+    source: String(raw.source ?? "ble_gatt_standard_hr"),
+    deviceId: String(raw.deviceId ?? raw.device_id ?? ""),
+    deviceName:
+      typeof raw.deviceName === "string"
+        ? raw.deviceName
+        : typeof raw.device_name === "string"
+          ? raw.device_name
+          : undefined,
+    deviceModel:
+      typeof raw.deviceModel === "string"
+        ? raw.deviceModel
+        : typeof raw.device_model === "string"
+          ? raw.device_model
+          : undefined,
+    timestampMs: Number(raw.timestampMs ?? raw.timestamp_ms ?? Date.now()),
+    sensorType: normalizeWearableSensorType(raw.sensorType ?? raw.sensor_type),
+    value: Number(raw.value ?? 0),
+    unit: typeof raw.unit === "string" ? raw.unit : undefined,
+    confidence: Number(raw.confidence ?? 0),
+    connectionState:
+      typeof raw.connectionState === "string"
+        ? raw.connectionState
+        : typeof raw.connection_state === "string"
+          ? raw.connection_state
+          : undefined,
+  };
+}
+
+function toWearableStatusRecord(raw: Record<string, unknown>): WearableStatusRecord {
+  return {
+    deviceId: String(raw.deviceId ?? raw.device_id ?? ""),
+    deviceName:
+      typeof raw.deviceName === "string"
+        ? raw.deviceName
+        : typeof raw.device_name === "string"
+          ? raw.device_name
+          : undefined,
+    deviceModel:
+      typeof raw.deviceModel === "string"
+        ? raw.deviceModel
+        : typeof raw.device_model === "string"
+          ? raw.device_model
+          : undefined,
+    operatorRnsIdentity:
+      typeof raw.operatorRnsIdentity === "string"
+        ? raw.operatorRnsIdentity
+        : typeof raw.operator_rns_identity === "string"
+          ? raw.operator_rns_identity
+          : undefined,
+    sensorType: normalizeWearableSensorType(raw.sensorType ?? raw.sensor_type),
+    value: typeof raw.value === "number" || typeof raw.value === "string" ? raw.value : Number(raw.value ?? 0),
+    unit: typeof raw.unit === "string" ? raw.unit : undefined,
+    confidence: Number(raw.confidence ?? 0),
+    connectionState:
+      typeof raw.connectionState === "string"
+        ? raw.connectionState
+        : typeof raw.connection_state === "string"
+          ? raw.connection_state
+          : undefined,
+    lastSeenTimestampMs: Number(raw.lastSeenTimestampMs ?? raw.last_seen_timestamp_ms ?? 0),
+    staleAfterMs: Number(raw.staleAfterMs ?? raw.stale_after_ms ?? 30_000),
+    status: normalizeWearableStatusKind(raw.status),
+  };
+}
+
+function toWearablePermissionState(raw: Record<string, unknown>): WearablePermissionState {
+  return {
+    granted: Boolean(raw.granted),
+    missing: Array.isArray(raw.missing) ? raw.missing.map((entry) => String(entry)) : [],
+    androidApi: toOptionalNumber(raw.androidApi),
   };
 }
 
@@ -3049,6 +3298,15 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
       await register("operationalNotice", toOperationalNoticeEvent);
       await register("projectionInvalidated", toProjectionInvalidationEvent);
+      await register("wearableDeviceDiscovered", toWearableDevice);
+      await register("wearableConnectionChanged", toWearableDevice);
+      await register("wearableSensorEvent", toWearableSensorEvent);
+      await register("wearableScanStopped", (raw) => ({
+        scanning: Boolean(raw.scanning),
+        reason: typeof raw.reason === "string" ? raw.reason : undefined,
+      }));
+      await register("wearableError", toErrorEvent);
+      await register("wearableSensorUpdated", toWearableStatusRecord);
       await register("sosStatusChanged", (raw) => ({ status: toSosStatusRecord(raw) }));
       await register("sosAlertChanged", (raw) => ({ alert: toSosAlertRecord(raw) }));
       await register("sosTelemetryRequested", () => ({}));
@@ -3443,6 +3701,69 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.deleteLocalTelemetry({ callsign });
   }
 
+  async getWearablePermissionState(): Promise<WearablePermissionState> {
+    await this.ready();
+    return toWearablePermissionState(await this.plugin.getWearablePermissionState());
+  }
+
+  async requestWearablePermissions(): Promise<WearablePermissionState> {
+    await this.ready();
+    return toWearablePermissionState(await this.plugin.requestWearablePermissions());
+  }
+
+  async startWearableScan(timeoutMs = 15_000): Promise<{ scanning: boolean; timeoutMs: number }> {
+    await this.ready();
+    const result = await this.plugin.startWearableScan({ timeoutMs });
+    return {
+      scanning: Boolean(result.scanning),
+      timeoutMs: Number(result.timeoutMs ?? timeoutMs),
+    };
+  }
+
+  async stopWearableScan(): Promise<{ scanning: boolean; reason?: string }> {
+    await this.ready();
+    const result = await this.plugin.stopWearableScan();
+    return {
+      scanning: Boolean(result.scanning),
+      reason: typeof result.reason === "string" ? result.reason : undefined,
+    };
+  }
+
+  async listBondedWearableDevices(): Promise<WearableDevice[]> {
+    await this.ready();
+    const result = await this.plugin.listBondedWearableDevices();
+    return Array.isArray(result.items) ? result.items.map(toWearableDevice) : [];
+  }
+
+  async connectWearable(deviceId: string): Promise<WearableDevice | null> {
+    await this.ready();
+    const result = await this.plugin.connectWearable({ deviceId });
+    const device = result.device;
+    return device && typeof device === "object" && !Array.isArray(device)
+      ? toWearableDevice(device as Record<string, unknown>)
+      : null;
+  }
+
+  async disconnectWearable(): Promise<void> {
+    await this.ready();
+    await this.plugin.disconnectWearable();
+  }
+
+  async getWearableManagerStatus(): Promise<WearableManagerStatus> {
+    await this.ready();
+    const result = await this.plugin.getWearableManagerStatus();
+    return {
+      scanning: Boolean(result.scanning),
+      items: Array.isArray(result.items) ? result.items.map(toWearableDevice) : [],
+    };
+  }
+
+  async getWearableStatus(): Promise<WearableStatusRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getWearableStatus();
+    return Array.isArray(result.items) ? result.items.map(toWearableStatusRecord) : [];
+  }
+
   async getSosSettings(): Promise<SosSettingsRecord> {
     await this.ready();
     return toSosSettingsRecord(await this.plugin.getSosSettings());
@@ -3788,6 +4109,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       eamCount: 0,
       eventCount: 0,
       telemetryCount: 0,
+      wearableCount: 0,
       updatedAtMs: Date.now(),
     };
   }
@@ -3801,6 +4123,19 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
   async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
   async deleteLocalTelemetry(_callsign: string): Promise<void> {}
+  async getWearablePermissionState(): Promise<WearablePermissionState> { return { granted: false, missing: [] }; }
+  async requestWearablePermissions(): Promise<WearablePermissionState> { return { granted: false, missing: [] }; }
+  async startWearableScan(timeoutMs = 15_000): Promise<{ scanning: boolean; timeoutMs: number }> {
+    return { scanning: false, timeoutMs };
+  }
+  async stopWearableScan(): Promise<{ scanning: boolean; reason?: string }> {
+    return { scanning: false, reason: "unsupported" };
+  }
+  async listBondedWearableDevices(): Promise<WearableDevice[]> { return []; }
+  async connectWearable(_deviceId: string): Promise<WearableDevice | null> { return null; }
+  async disconnectWearable(): Promise<void> {}
+  async getWearableManagerStatus(): Promise<WearableManagerStatus> { return { scanning: false, items: [] }; }
+  async getWearableStatus(): Promise<WearableStatusRecord[]> { return []; }
 
   async getSosSettings(): Promise<SosSettingsRecord> { return { ...this.sosSettings }; }
   async setSosSettings(settings: SosSettingsRecord): Promise<void> {
@@ -4322,6 +4657,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       eamCount: 0,
       eventCount: 0,
       telemetryCount: 0,
+      wearableCount: 0,
       updatedAtMs: Date.now(),
     };
   }
@@ -4335,6 +4671,19 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }
   async recordLocalTelemetryFix(_position: TelemetryPositionRecord): Promise<void> {}
   async deleteLocalTelemetry(_callsign: string): Promise<void> {}
+  async getWearablePermissionState(): Promise<WearablePermissionState> { return { granted: false, missing: [] }; }
+  async requestWearablePermissions(): Promise<WearablePermissionState> { return { granted: false, missing: [] }; }
+  async startWearableScan(timeoutMs = 15_000): Promise<{ scanning: boolean; timeoutMs: number }> {
+    return { scanning: false, timeoutMs };
+  }
+  async stopWearableScan(): Promise<{ scanning: boolean; reason?: string }> {
+    return { scanning: false, reason: "unsupported" };
+  }
+  async listBondedWearableDevices(): Promise<WearableDevice[]> { return []; }
+  async connectWearable(_deviceId: string): Promise<WearableDevice | null> { return null; }
+  async disconnectWearable(): Promise<void> {}
+  async getWearableManagerStatus(): Promise<WearableManagerStatus> { return { scanning: false, items: [] }; }
+  async getWearableStatus(): Promise<WearableStatusRecord[]> { return []; }
 
   async getSosSettings(): Promise<SosSettingsRecord> { return { ...this.sosSettings }; }
   async setSosSettings(settings: SosSettingsRecord): Promise<void> {

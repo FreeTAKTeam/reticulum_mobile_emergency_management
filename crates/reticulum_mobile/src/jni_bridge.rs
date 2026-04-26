@@ -24,8 +24,11 @@ use crate::types::{
     PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
     SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord,
+    TelemetryPositionRecord, TelemetrySettingsRecord, WearableDeviceConfigRecord,
+    WearableSensorEvent, WearableSensorType, WearableSensorValue, WearableSettingsRecord,
+    WearableStatusKind, WearableStatusRecord,
 };
+use crate::wearables::DEFAULT_WEARABLE_STALE_TIMEOUT_SECONDS;
 
 const RESULT_OK: jint = 0;
 const RESULT_ERR: jint = 1;
@@ -146,12 +149,32 @@ struct AppSettingsInput {
     hub: HubSettingsInput,
     #[serde(default)]
     checklists: ChecklistSettingsInput,
+    #[serde(default)]
+    wearables: WearableSettingsInput,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChecklistSettingsInput {
     default_task_due_step_minutes: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WearableSettingsInput {
+    enabled: Option<bool>,
+    stale_timeout_seconds: Option<u32>,
+    #[serde(default)]
+    devices: Vec<WearableDeviceConfigInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WearableDeviceConfigInput {
+    device_id: String,
+    alias: Option<String>,
+    operator_rns_identity: Option<String>,
+    sensor_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -563,6 +586,29 @@ fn parse_log_level(value: Option<&str>) -> LogLevel {
     }
 }
 
+fn parse_wearable_sensor_type(value: &str) -> WearableSensorType {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "heart_rate_bpm" | "heartratebpm" | "heart-rate-bpm" => {
+            WearableSensorType::HeartRateBpm {}
+        }
+        "battery_percent" | "batterypercent" | "battery-percent" => {
+            WearableSensorType::BatteryPercent {}
+        }
+        "step_count" | "stepcount" | "step-count" => WearableSensorType::StepCount {},
+        "location" => WearableSensorType::Location {},
+        _ => WearableSensorType::Unknown {},
+    }
+}
+
+fn normalize_non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
     NodeConfig {
         name: input
@@ -801,6 +847,34 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
                 .default_task_due_step_minutes
                 .unwrap_or(crate::types::DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES)
                 .max(1),
+        },
+        wearables: WearableSettingsRecord {
+            enabled: input.wearables.enabled.unwrap_or(false),
+            stale_timeout_seconds: input
+                .wearables
+                .stale_timeout_seconds
+                .unwrap_or(DEFAULT_WEARABLE_STALE_TIMEOUT_SECONDS)
+                .max(1),
+            devices: input
+                .wearables
+                .devices
+                .into_iter()
+                .filter(|device| !device.device_id.trim().is_empty())
+                .map(|device| WearableDeviceConfigRecord {
+                    device_id: device.device_id.trim().to_string(),
+                    alias: device
+                        .alias
+                        .and_then(|value| normalize_non_empty_string(value.as_str())),
+                    operator_rns_identity: device
+                        .operator_rns_identity
+                        .and_then(|value| normalize_non_empty_string(value.as_str())),
+                    sensor_type: device
+                        .sensor_type
+                        .as_deref()
+                        .map(parse_wearable_sensor_type)
+                        .unwrap_or(WearableSensorType::HeartRateBpm {}),
+                })
+                .collect(),
         },
     }
 }
@@ -1112,6 +1186,39 @@ fn telemetry_settings_json(settings: &TelemetrySettingsRecord) -> serde_json::Va
     })
 }
 
+fn wearable_sensor_type_to_str(sensor_type: WearableSensorType) -> &'static str {
+    sensor_type.as_str()
+}
+
+fn wearable_status_kind_to_str(status: WearableStatusKind) -> &'static str {
+    status.as_str()
+}
+
+fn wearable_sensor_value_json(value: &WearableSensorValue) -> serde_json::Value {
+    match value {
+        WearableSensorValue::Integer(value) => json!(value),
+        WearableSensorValue::Float(value) => json!(value),
+        WearableSensorValue::Text(value) => json!(value),
+    }
+}
+
+fn wearable_device_config_json(device: &WearableDeviceConfigRecord) -> serde_json::Value {
+    json!({
+        "deviceId": device.device_id,
+        "alias": device.alias,
+        "operatorRnsIdentity": device.operator_rns_identity,
+        "sensorType": wearable_sensor_type_to_str(device.sensor_type)
+    })
+}
+
+fn wearable_settings_json(settings: &WearableSettingsRecord) -> serde_json::Value {
+    json!({
+        "enabled": settings.enabled,
+        "staleTimeoutSeconds": settings.stale_timeout_seconds,
+        "devices": settings.devices.iter().map(wearable_device_config_json).collect::<Vec<_>>()
+    })
+}
+
 fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
     json!({
         "displayName": settings.display_name,
@@ -1124,7 +1231,8 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "hub": hub_settings_json(&settings.hub),
         "checklists": {
             "defaultTaskDueStepMinutes": settings.checklists.default_task_due_step_minutes
-        }
+        },
+        "wearables": wearable_settings_json(&settings.wearables)
     })
 }
 
@@ -1416,6 +1524,23 @@ fn telemetry_position_json(record: &TelemetryPositionRecord) -> serde_json::Valu
     })
 }
 
+fn wearable_status_json(record: &WearableStatusRecord) -> serde_json::Value {
+    json!({
+        "deviceId": record.device_id,
+        "deviceName": record.device_name,
+        "deviceModel": record.device_model,
+        "operatorRnsIdentity": record.operator_rns_identity,
+        "sensorType": wearable_sensor_type_to_str(record.sensor_type),
+        "value": wearable_sensor_value_json(&record.value),
+        "unit": record.unit,
+        "confidence": record.confidence,
+        "connectionState": record.connection_state,
+        "lastSeenTimestampMs": record.last_seen_timestamp_ms,
+        "staleAfterMs": record.stale_after_ms,
+        "status": wearable_status_kind_to_str(record.status)
+    })
+}
+
 fn eam_team_summary_json(summary: &crate::types::EamTeamSummaryRecord) -> serde_json::Value {
     json!({
         "teamUid": summary.team_uid,
@@ -1441,6 +1566,7 @@ fn operational_summary_json(summary: &crate::types::OperationalSummary) -> serde
         "eamCount": summary.eam_count,
         "eventCount": summary.event_count,
         "telemetryCount": summary.telemetry_count,
+        "wearableCount": summary.wearable_count,
         "activePropagationNodeHex": summary.active_propagation_node_hex,
         "updatedAtMs": summary.updated_at_ms
     })
@@ -1576,6 +1702,7 @@ fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Conversations {} => "Conversations",
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
+        ProjectionScope::Wearables {} => "Wearables",
         ProjectionScope::Sos {} => "Sos",
     }
 }
@@ -1733,6 +1860,11 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "updatedAtMs": invalidation.updated_at_ms,
                 "reason": invalidation.reason
             }),
+        ),
+        NodeEvent::WearableSensorUpdated { status_json } => (
+            "wearableSensorUpdated",
+            serde_json::from_str::<Value>(&status_json)
+                .unwrap_or_else(|_| json!({ "statusJson": status_json })),
         ),
         NodeEvent::SosStatusChanged { status } => ("sosStatusChanged", sos_status_json(&status)),
         NodeEvent::SosAlertChanged { alert } => ("sosAlertChanged", sos_alert_json(&alert)),
@@ -3612,6 +3744,64 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelem
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getWearableStatusJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_wearable_status() {
+        Ok(items) => ok_json_result(
+            &mut env,
+            &json!({ "items": items.iter().map(wearable_status_json).collect::<Vec<_>>() }),
+        ),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_ingestWearableSensorEventJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: WearableSensorEvent = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid wearable sensor event payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.ingest_wearable_sensor_event(payload) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

@@ -39,6 +39,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import network.reticulum.emergency.wearables.BleWearableManager;
+import network.reticulum.emergency.wearables.WearableConnectionState;
+import network.reticulum.emergency.wearables.WearableDevice;
+import network.reticulum.emergency.wearables.WearableSensorEvent;
+import network.reticulum.emergency.wearables.WearableSensorListener;
+
 public final class ReticulumNodeService extends Service {
     public interface ServiceEventListener {
         void onNodeEvent(String eventName, JSObject payload);
@@ -69,6 +75,47 @@ public final class ReticulumNodeService extends Service {
     private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
     private final ExecutorService pollerExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final WearableSensorListener wearableEventListener = new WearableSensorListener() {
+        @Override
+        public void onDeviceDiscovered(WearableDevice device) {
+            final JSObject payload = new JSObject();
+            payload.put("device", device.toJson());
+            dispatchEventToListeners("wearableDeviceDiscovered", payload);
+        }
+
+        @Override
+        public void onConnectionStateChanged(WearableDevice device, WearableConnectionState state, String detail) {
+            final JSObject payload = new JSObject();
+            if (device != null) {
+                payload.put("device", device.toJson());
+                payload.put("deviceId", device.getDeviceId());
+                payload.put("deviceName", device.getName());
+            }
+            payload.put("connectionState", state.name());
+            payload.put("detail", detail);
+            dispatchEventToListeners("wearableConnectionChanged", payload);
+        }
+
+        @Override
+        public void onSensorEvent(WearableSensorEvent event) {
+            dispatchEventToListeners("wearableSensorEvent", event.toJson());
+        }
+
+        @Override
+        public void onScanStopped(String reason) {
+            final JSObject payload = new JSObject();
+            payload.put("reason", reason);
+            dispatchEventToListeners("wearableScanStopped", payload);
+        }
+
+        @Override
+        public void onWearableError(String code, String message) {
+            final JSObject payload = new JSObject();
+            payload.put("code", code);
+            payload.put("message", message);
+            dispatchEventToListeners("wearableError", payload);
+        }
+    };
 
     private SharedPreferences preferences;
     private String storageDir = "";
@@ -78,6 +125,7 @@ public final class ReticulumNodeService extends Service {
     private String latestSyncStatusJson = "";
     private String latestSosStatusJson = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
+    private BleWearableManager wearableManager;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenChecklistKeys = new HashSet<>();
@@ -92,6 +140,7 @@ public final class ReticulumNodeService extends Service {
         initializeBridgeStorage(storageDir);
         createNotificationChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
+        wearableManager = new BleWearableManager(this, wearableEventListener);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
         latestSosStatusJson = safeSosStatusJson();
@@ -131,6 +180,9 @@ public final class ReticulumNodeService extends Service {
         stopPoller();
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
+        }
+        if (wearableManager != null) {
+            wearableManager.close();
         }
         pollerExecutor.shutdownNow();
         super.onDestroy();
@@ -442,6 +494,38 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.deleteLocalTelemetryJson(payloadJson);
     }
 
+    public JSObject getWearablePermissionState() {
+        return ensureWearableManager().permissionState();
+    }
+
+    public JSObject startWearableScan(long timeoutMs) {
+        return ensureWearableManager().startScan(timeoutMs);
+    }
+
+    public JSObject stopWearableScan() {
+        return ensureWearableManager().stopScan("manual");
+    }
+
+    public JSObject listBondedWearableDevices() {
+        return ensureWearableManager().listBondedDevices();
+    }
+
+    public JSObject connectWearable(String deviceId) {
+        return ensureWearableManager().connect(deviceId);
+    }
+
+    public JSObject disconnectWearable() {
+        return ensureWearableManager().disconnect();
+    }
+
+    public JSObject getWearableManagerStatus() {
+        return ensureWearableManager().statusJson();
+    }
+
+    public synchronized String getWearableStatusJson() {
+        return nonEmptyJson(ReticulumBridge.getWearableStatusJson(), "{\"items\":[]}");
+    }
+
     public synchronized String getSosSettingsJson() {
         return nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}");
     }
@@ -582,6 +666,13 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
+    private BleWearableManager ensureWearableManager() {
+        if (wearableManager == null) {
+            wearableManager = new BleWearableManager(this, wearableEventListener);
+        }
+        return wearableManager;
+    }
+
     private void ensurePoller() {
         if (!pollerRunning.compareAndSet(false, true)) {
             return;
@@ -644,6 +735,10 @@ public final class ReticulumNodeService extends Service {
                 || "announceReceived".equals(eventName)
                 || "messageReceived".equals(eventName)
                 || "sosAlertChanged".equals(eventName)
+                || "wearableDeviceDiscovered".equals(eventName)
+                || "wearableConnectionChanged".equals(eventName)
+                || "wearableSensorEvent".equals(eventName)
+                || "wearableError".equals(eventName)
         ) {
             Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
         }

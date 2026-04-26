@@ -1,5 +1,6 @@
 package network.reticulum.emergency;
 
+import android.Manifest;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -12,10 +13,13 @@ import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONException;
 
@@ -24,10 +28,24 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-@CapacitorPlugin(name = "ReticulumNode")
+@CapacitorPlugin(
+    name = "ReticulumNode",
+    permissions = {
+        @Permission(
+            strings = { Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT },
+            alias = ReticulumNodePlugin.WEARABLE_BLUETOOTH_ALIAS
+        ),
+        @Permission(
+            strings = { Manifest.permission.ACCESS_FINE_LOCATION },
+            alias = ReticulumNodePlugin.WEARABLE_LOCATION_ALIAS
+        )
+    }
+)
 public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
+    static final String WEARABLE_BLUETOOTH_ALIAS = "wearableBluetooth";
+    static final String WEARABLE_LOCATION_ALIAS = "wearableLocation";
 
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
@@ -891,6 +909,88 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getWearablePermissionState(PluginCall call) {
+        runObjectServiceCall(call, "Failed to get wearable permission state.", ReticulumNodeService::getWearablePermissionState);
+    }
+
+    @PluginMethod
+    public void requestWearablePermissions(PluginCall call) {
+        final String alias = wearablePermissionAlias();
+        if (getPermissionState(alias) != PermissionState.GRANTED) {
+            requestPermissionForAlias(alias, call, "completeWearablePermissionRequest");
+            return;
+        }
+        getWearablePermissionState(call);
+    }
+
+    @PermissionCallback
+    private void completeWearablePermissionRequest(PluginCall call) {
+        getWearablePermissionState(call);
+    }
+
+    @PluginMethod
+    public void startWearableScan(PluginCall call) {
+        final long timeoutMs = call.getLong("timeoutMs", 15_000L);
+        runObjectServiceCall(
+            call,
+            "Failed to start wearable BLE scan.",
+            service -> service.startWearableScan(timeoutMs)
+        );
+    }
+
+    @PluginMethod
+    public void stopWearableScan(PluginCall call) {
+        runObjectServiceCall(call, "Failed to stop wearable BLE scan.", ReticulumNodeService::stopWearableScan);
+    }
+
+    @PluginMethod
+    public void listBondedWearableDevices(PluginCall call) {
+        runObjectServiceCall(
+            call,
+            "Failed to list bonded wearable devices.",
+            ReticulumNodeService::listBondedWearableDevices
+        );
+    }
+
+    @PluginMethod
+    public void connectWearable(PluginCall call) {
+        final String deviceId = call.getString("deviceId");
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            call.reject("deviceId is required.");
+            return;
+        }
+        runObjectServiceCall(
+            call,
+            "Failed to connect wearable device.",
+            service -> service.connectWearable(deviceId)
+        );
+    }
+
+    @PluginMethod
+    public void disconnectWearable(PluginCall call) {
+        runObjectServiceCall(call, "Failed to disconnect wearable device.", ReticulumNodeService::disconnectWearable);
+    }
+
+    @PluginMethod
+    public void getWearableManagerStatus(PluginCall call) {
+        runObjectServiceCall(
+            call,
+            "Failed to get wearable manager status.",
+            ReticulumNodeService::getWearableManagerStatus
+        );
+    }
+
+    @PluginMethod
+    public void getWearableStatus(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get wearable status.",
+            "Native wearable status JSON parse failed.",
+            ReticulumNodeService::getWearableStatusJson
+        );
+    }
+
+    @PluginMethod
     public void getSosSettings(PluginCall call) {
         runStringServiceCall(
             call,
@@ -1112,12 +1212,47 @@ public class ReticulumNodePlugin extends Plugin {
         });
     }
 
+    private void runObjectServiceCall(
+        PluginCall call,
+        String fallbackMessage,
+        ServiceObjectOperation operation
+    ) {
+        bridgeExecutor.execute(() -> {
+            try {
+                final ReticulumNodeService service = awaitService();
+                final JSObject payload = operation.run(service);
+                if (payload == null) {
+                    call.reject(fallbackMessage);
+                    return;
+                }
+                final String errorMessage = payload.getString("message");
+                if (payload.has("errorCode") && errorMessage != null && !errorMessage.isEmpty()) {
+                    call.reject(errorMessage, payload.getString("errorCode"));
+                    return;
+                }
+                call.resolve(payload);
+            } catch (Exception ex) {
+                call.reject(fallbackMessage, ex);
+            }
+        });
+    }
+
     private interface ServiceIntOperation {
         int run(ReticulumNodeService service) throws Exception;
     }
 
     private interface ServiceStringOperation {
         String run(ReticulumNodeService service) throws Exception;
+    }
+
+    private interface ServiceObjectOperation {
+        JSObject run(ReticulumNodeService service) throws Exception;
+    }
+
+    private String wearablePermissionAlias() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            ? WEARABLE_BLUETOOTH_ALIAS
+            : WEARABLE_LOCATION_ALIAS;
     }
 
     private void mirrorEventToLogcat(String eventName, JSObject payload) {
@@ -1133,6 +1268,10 @@ public class ReticulumNodePlugin extends Plugin {
                 || "packetReceived".equals(eventName)
                 || "packetSent".equals(eventName)
                 || "announceReceived".equals(eventName)
+                || "wearableDeviceDiscovered".equals(eventName)
+                || "wearableConnectionChanged".equals(eventName)
+                || "wearableSensorEvent".equals(eventName)
+                || "wearableError".equals(eventName)
         ) {
             Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
         }

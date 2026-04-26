@@ -1,10 +1,11 @@
 ﻿<script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef } from "vue";
+import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
 
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
+import { useWearablesStore } from "../stores/wearablesStore";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
@@ -16,6 +17,7 @@ interface KnownTcpServerOption {
 
 const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
+const wearablesStore = useWearablesStore();
 const sosCardRef = useTemplateRef<{
   saveSettings: () => Promise<void>;
   hasUnsavedChanges: () => boolean;
@@ -56,6 +58,9 @@ const form = reactive({
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
   telemetryStaleAfterMinutes: nodeStore.settings.telemetry.staleAfterMinutes,
   telemetryExpireAfterMinutes: nodeStore.settings.telemetry.expireAfterMinutes,
+  wearablesEnabled: nodeStore.settings.wearables.enabled,
+  wearableStaleTimeoutSeconds: nodeStore.settings.wearables.staleTimeoutSeconds,
+  wearableMappings: nodeStore.settings.wearables.devices.map((device) => ({ ...device })),
   hubMode: nodeStore.settings.hub.mode,
   hubIdentityHash: nodeStore.settings.hub.identityHash,
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
@@ -69,6 +74,10 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
+
+onMounted(() => {
+  void wearablesStore.init();
+});
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 
@@ -176,6 +185,24 @@ const telemetrySummary = computed(() => {
   return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
 
+const wearableSummary = computed(() => {
+  if (!form.wearablesEnabled) {
+    return "Disabled";
+  }
+  if (wearablesStore.latestHeartRate) {
+    return `${wearablesStore.latestHeartRate.value} bpm | ${wearablesStore.latestHeartRate.status}`;
+  }
+  return wearablesStore.scanning ? "Scanning" : `${wearablesStore.discoveredDevices.length} devices`;
+});
+
+const wearablePermissionText = computed(() =>
+  wearablesStore.permission.granted
+    ? "Granted"
+    : wearablesStore.permission.missing.length > 0
+      ? wearablesStore.permission.missing.join(", ")
+      : "Not requested",
+);
+
 const persistedTcpClients = computed(() =>
   [
     ...new Set(
@@ -208,6 +235,10 @@ const hasMainSettingsChanges = computed(() =>
     Math.max(1, Number(form.telemetryStaleAfterMinutes || 30)),
     Number(form.telemetryExpireAfterMinutes || 180),
   ) !== nodeStore.settings.telemetry.expireAfterMinutes
+  || form.wearablesEnabled !== nodeStore.settings.wearables.enabled
+  || Math.max(1, Number(form.wearableStaleTimeoutSeconds || 30))
+    !== nodeStore.settings.wearables.staleTimeoutSeconds
+  || JSON.stringify(form.wearableMappings) !== JSON.stringify(nodeStore.settings.wearables.devices)
   || form.hubMode !== nodeStore.settings.hub.mode
   || form.hubIdentityHash.trim() !== nodeStore.settings.hub.identityHash
   || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
@@ -315,6 +346,16 @@ async function applySettings(): Promise<void> {
           Number(form.telemetryExpireAfterMinutes || 180),
         ),
       },
+      wearables: {
+        enabled: form.wearablesEnabled,
+        staleTimeoutSeconds: Math.max(1, Number(form.wearableStaleTimeoutSeconds || 30)),
+        devices: form.wearableMappings.map((device) => ({
+          deviceId: device.deviceId,
+          alias: device.alias?.trim() || undefined,
+          operatorRnsIdentity: device.operatorRnsIdentity?.trim() || undefined,
+          sensorType: "heart_rate_bpm",
+        })),
+      },
       hub: {
         mode: form.hubMode,
         identityHash: form.hubIdentityHash.trim(),
@@ -338,6 +379,9 @@ async function applySettings(): Promise<void> {
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
   form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  form.wearablesEnabled = nodeStore.settings.wearables.enabled;
+  form.wearableStaleTimeoutSeconds = nodeStore.settings.wearables.staleTimeoutSeconds;
+  form.wearableMappings = nodeStore.settings.wearables.devices.map((device) => ({ ...device }));
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
@@ -348,6 +392,57 @@ async function applySettings(): Promise<void> {
           )
         ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
+}
+
+async function requestWearablePermissions(): Promise<void> {
+  try {
+    await wearablesStore.requestPermissions();
+  } catch (error: unknown) {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function startWearableScan(): Promise<void> {
+  try {
+    await wearablesStore.startScan();
+  } catch (error: unknown) {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function stopWearableScan(): Promise<void> {
+  await wearablesStore.stopScan().catch((error: unknown) => {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+  });
+}
+
+async function listBondedWearables(): Promise<void> {
+  await wearablesStore.listBondedDevices().catch((error: unknown) => {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+  });
+}
+
+async function connectWearable(deviceId: string): Promise<void> {
+  await wearablesStore.connect(deviceId).catch((error: unknown) => {
+    runtimeFeedback.value = error instanceof Error ? error.message : String(error);
+  });
+}
+
+function wearableOperator(deviceId: string): string {
+  return form.wearableMappings.find((mapping) => mapping.deviceId === deviceId)?.operatorRnsIdentity ?? "";
+}
+
+function setWearableOperator(deviceId: string, value: string): void {
+  const existing = form.wearableMappings.find((mapping) => mapping.deviceId === deviceId);
+  if (existing) {
+    existing.operatorRnsIdentity = value.trim() || undefined;
+    return;
+  }
+  form.wearableMappings.push({
+    deviceId,
+    operatorRnsIdentity: value.trim() || undefined,
+    sensorType: "heart_rate_bpm",
+  });
 }
 
 async function runNodeAction(
@@ -526,6 +621,70 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
 
         <p v-if="telemetryStore.telemetryError" class="feedback">{{ telemetryStore.telemetryError }}</p>
+      </div>
+    </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <h2>Wearables</h2>
+          <p>{{ wearableSummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.wearablesEnabled" type="checkbox" />
+            Enable BLE heart-rate wearables
+          </label>
+          <label>
+            Heart-rate stale timeout (seconds)
+            <input v-model.number="form.wearableStaleTimeoutSeconds" type="number" min="1" />
+          </label>
+          <label>
+            Android BLE permissions
+            <input :value="wearablePermissionText" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+        <div class="action-row">
+          <button type="button" @click="requestWearablePermissions">Permissions</button>
+          <button type="button" :disabled="wearablesStore.scanning" @click="startWearableScan">Scan</button>
+          <button type="button" :disabled="!wearablesStore.scanning" @click="stopWearableScan">Stop</button>
+          <button type="button" @click="listBondedWearables">Bonded</button>
+        </div>
+        <div v-if="wearablesStore.discoveredDevices.length" class="stack-list">
+          <article
+            v-for="device in wearablesStore.discoveredDevices"
+            :key="device.deviceId"
+            class="compact-card"
+          >
+            <div>
+              <strong>{{ device.deviceName || "Generic BLE Heart Rate Device" }}</strong>
+              <span>{{ device.connectionState }} | RSSI {{ device.rssi ?? "n/a" }}</span>
+            </div>
+            <label>
+              Operator RNS identity
+              <input
+                :value="wearableOperator(device.deviceId)"
+                type="text"
+                placeholder="Unassigned"
+                @input="setWearableOperator(device.deviceId, ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+            <button type="button" @click="connectWearable(device.deviceId)">Connect</button>
+          </article>
+        </div>
+        <div v-if="wearablesStore.wearableStatus.length" class="stack-list">
+          <article v-for="status in wearablesStore.wearableStatus" :key="`${status.deviceId}:${status.sensorType}`" class="compact-card">
+            <div>
+              <strong>{{ status.deviceName || "Generic BLE Heart Rate Device" }}</strong>
+              <span>{{ status.value }} {{ status.unit || "bpm" }} | {{ status.status }}</span>
+            </div>
+            <small>{{ status.operatorRnsIdentity || "Unassigned" }}</small>
+          </article>
+        </div>
+        <p v-if="wearablesStore.lastError" class="feedback">{{ wearablesStore.lastError }}</p>
       </div>
     </details>
 
@@ -1144,6 +1303,48 @@ button:disabled {
   margin: 0.58rem 0 0;
 }
 
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.stack-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+}
+
+.compact-card {
+  align-items: end;
+  background: rgb(7 20 44 / 72%);
+  border: 1px solid rgb(67 106 165 / 30%);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1.2fr) minmax(12rem, 1fr) auto;
+  padding: 0.62rem 0.72rem;
+}
+
+.compact-card strong,
+.compact-card span,
+.compact-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.compact-card strong {
+  color: #d5eaff;
+  font-family: var(--font-ui);
+}
+
+.compact-card span,
+.compact-card small {
+  color: #96afd5;
+  font-family: var(--font-body);
+}
+
 .hidden-input {
   display: none;
 }
@@ -1225,6 +1426,10 @@ button:disabled {
   .bootstrap-badge {
     justify-self: start;
     margin-left: 1.55rem;
+  }
+
+  .compact-card {
+    grid-template-columns: 1fr;
   }
 }
 </style>
