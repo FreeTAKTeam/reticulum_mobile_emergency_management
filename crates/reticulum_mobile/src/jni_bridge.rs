@@ -40,6 +40,12 @@ fn ensure_node(guard: &mut BridgeState) -> &Node {
     guard.node.get_or_insert_with(Node::new)
 }
 
+fn ensure_node_with_storage<'a>(guard: &'a mut BridgeState, storage_dir: Option<&str>) -> &'a Node {
+    guard
+        .node
+        .get_or_insert_with(|| Node::with_storage_dir(storage_dir))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LastError {
@@ -648,7 +654,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initiali
         }
     };
 
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_with_storage(&mut guard, storage_dir.as_deref());
     match node.initialize_storage(storage_dir.as_deref()) {
         Ok(()) => RESULT_OK,
         Err(err) => {

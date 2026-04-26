@@ -7,7 +7,7 @@ use crossbeam_channel as cb;
 use reticulum::destination::DestinationName;
 use rmpv::Value as MsgPackValue;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::mpsc;
 
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
@@ -52,6 +52,16 @@ fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), 
 
     tx.blocking_send(command)
         .map_err(|_| NodeError::NotRunning {})
+}
+
+fn build_node_runtime() -> Result<Runtime, NodeError> {
+    RuntimeBuilder::new_multi_thread()
+        .enable_io()
+        .enable_time()
+        .worker_threads(2)
+        .thread_name("rem-node")
+        .build()
+        .map_err(|_| NodeError::InternalError {})
 }
 
 fn latest_sos_telemetry(
@@ -1987,7 +1997,7 @@ impl Node {
         Self::with_storage_dir(None)
     }
 
-    fn with_storage_dir(storage_dir: Option<&str>) -> Self {
+    pub(crate) fn with_storage_dir(storage_dir: Option<&str>) -> Self {
         NodeLogger::install();
 
         let initial = NodeStatus {
@@ -2110,7 +2120,7 @@ impl Node {
             });
         }
 
-        let runtime = Runtime::new().map_err(|_| NodeError::InternalError {})?;
+        let runtime = build_node_runtime()?;
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
 
         runtime.spawn(run_node(
