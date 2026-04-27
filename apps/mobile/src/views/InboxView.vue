@@ -343,15 +343,53 @@ watch(
   <section class="view" :class="`pane-${mobilePane}`">
     <header class="view-header">
       <div class="header-actions">
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6h16" />
+            <path d="M4 12h16" />
+            <path d="M4 18h16" />
+          </svg>
+          <span>{{ conversationCount }} Threads</span>
+        </span>
         <button
-          class="create-toggle"
+          class="utility-chip peer-chip"
           type="button"
           aria-label="Select connected peer"
           :aria-expanded="isPeerPickerVisible"
           title="Select connected peer"
           @click="togglePeerPicker"
         >
-          +
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+            <circle cx="9.5" cy="7" r="3" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+          </svg>
+          <span>Connected Peers</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
+        <button
+          class="utility-chip search-button"
+          type="button"
+          aria-label="Search conversations"
+          title="Search conversations"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16 16 4 4" />
+          </svg>
+        </button>
+        <button
+          class="create-toggle utility-new"
+          type="button"
+          aria-label="Select connected peer"
+          :aria-expanded="isPeerPickerVisible"
+          title="Select connected peer"
+          @click="togglePeerPicker"
+        >
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </header>
@@ -433,10 +471,7 @@ watch(
 }
 
 .view-header {
-  align-items: baseline;
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
+  display: block;
 }
 
 .view-heading {
@@ -448,9 +483,10 @@ watch(
 
 .header-actions {
   align-items: center;
-  display: flex;
+  display: grid;
   flex-shrink: 0;
   gap: 0.55rem;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.34fr) minmax(2.9rem, 0.34fr) minmax(3.2rem, 0.34fr);
 }
 
 .view-title,
@@ -478,6 +514,58 @@ watch(
 
 .header-sync-line {
   color: #94add3;
+}
+
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 48%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.74rem, 1.8vw, 0.92rem);
+  font-weight: 700;
+  gap: 0.46rem;
+  justify-content: flex-start;
+  min-height: 2.75rem;
+  min-width: 0;
+  padding: 0.42rem 0.62rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.08rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.08rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peer-chip,
+.search-button {
+  cursor: pointer;
+}
+
+.peer-chip .chevron {
+  margin-left: auto;
+}
+
+.search-button {
+  justify-content: center;
+  padding-inline: 0;
 }
 
 .inbox-panel {
@@ -553,6 +641,19 @@ watch(
   padding: 0;
 }
 
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2vw, 0.98rem);
+  gap: 0.46rem;
+  height: auto;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 3.2rem;
+  padding: 0.42rem;
+}
+
 .peer-picker-form {
   align-items: center;
   display: grid;
@@ -617,6 +718,24 @@ watch(
 
   .view-header {
     align-items: center;
+  }
+
+  .header-actions {
+    gap: 0.42rem;
+    grid-template-columns: minmax(0, 0.98fr) minmax(0, 1.32fr) minmax(2.55rem, 0.32fr) minmax(2.8rem, 0.38fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.68rem;
+    gap: 0.32rem;
+    min-height: 2.48rem;
+    padding-inline: 0.38rem;
+  }
+
+  .utility-chip svg {
+    height: 0.92rem;
+    width: 0.92rem;
   }
 
   .peer-picker-form {

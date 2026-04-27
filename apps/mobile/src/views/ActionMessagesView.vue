@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
-import { useRouter } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
@@ -20,7 +19,6 @@ import {
 
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
-const router = useRouter();
 
 const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
@@ -94,10 +92,6 @@ function toggleCreateForm(): void {
     resetCreateForm();
   }
   isCreateFormVisible.value = !isCreateFormVisible.value;
-}
-
-function openHelp(): void {
-  router.push("/messages/help").catch(() => undefined);
 }
 
 function copyMessageStatuses(message: Pick<ActionMessage, ActionMessageStatusField>): void {
@@ -187,20 +181,29 @@ function deleteMessage(callsign: string): void {
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
-        <span v-if="messagesStore.draftCount > 0" class="badge badge-warning">
-          {{ messagesStore.draftCount }} Draft
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+            <path d="M4 12l8 4 8-4" />
+            <path d="M4 16l8 4 8-4" />
+          </svg>
+          <span>{{ messagesStore.activeCount }} MSG</span>
         </span>
         <button
-          class="help-trigger"
+          class="utility-chip filter-chip"
           type="button"
-          aria-label="Open status color help"
-          @click="openHelp"
+          aria-label="Filter action messages"
         >
-          ?
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
+          </svg>
+          <span>Filter: All</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
         </button>
         <button
-          class="create-toggle"
+          class="create-toggle utility-new"
           type="button"
           aria-label="Add message"
           :aria-expanded="isCreateFormVisible"
@@ -209,7 +212,7 @@ function deleteMessage(callsign: string): void {
           :title="canManageMessages ? 'Add message' : localSaveHint"
           @click="toggleCreateForm"
         >
-          +
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </header>
@@ -299,14 +302,14 @@ function deleteMessage(callsign: string): void {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: flex-end;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.35fr) minmax(3.2rem, 0.32fr);
 }
 
 h1 {
@@ -341,6 +344,57 @@ p {
   color: #ffd36e;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 58%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 20px rgb(33 153 255 / 8%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
+  font-weight: 700;
+  gap: 0.58rem;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.48rem 0.74rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.22rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.22rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-chip,
+.filter-chip {
+  justify-content: flex-start;
+}
+
+.filter-chip {
+  cursor: pointer;
+}
+
+.filter-chip .chevron {
+  margin-left: auto;
+}
+
 .sync-banner {
   background: rgb(34 45 77 / 62%);
   border: 1px solid rgb(105 141 214 / 35%);
@@ -364,6 +418,19 @@ p {
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.9rem, 2.35vw, 1.05rem);
+  gap: 0.58rem;
+  height: auto;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 3.2rem;
+  padding: 0.48rem;
 }
 
 .create-toggle:disabled,
@@ -488,14 +555,25 @@ p {
   }
 
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.55rem;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.34fr) minmax(2.8rem, 0.35fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.78rem;
+    gap: 0.38rem;
+    min-height: 2.7rem;
+    padding-inline: 0.46rem;
+  }
+
+  .utility-chip svg {
+    height: 1rem;
+    width: 1rem;
   }
 }
 </style>

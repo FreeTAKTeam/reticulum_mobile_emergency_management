@@ -163,7 +163,7 @@ const pageTitle = computed(() => {
     case "inbox":
       return "Chat";
     case "checlklist":
-      return "Checklists";
+      return "Tasks";
     case "checlklist-detail":
       return "Checklist Detail";
     case "message-status-help":

@@ -255,34 +255,45 @@ onMounted(() => {
 
     <section class="segment-strip">
       <div class="segment-actions">
-        <span class="badge"># {{ displayedTaskTotal }} TSK</span>
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+            <path d="M4 12l8 4 8-4" />
+            <path d="M4 16l8 4 8-4" />
+          </svg>
+          <span>{{ displayedTaskTotal }} Tasks</span>
+        </span>
+        <label class="utility-chip filter-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
+          </svg>
+          <span>Filter:</span>
+          <select
+            v-model="activeFilter"
+            class="header-filter-select"
+            aria-label="Checklist status filter"
+          >
+            <option
+              v-for="item in filterItems"
+              :key="item.value"
+              :value="item.value"
+            >
+              {{ item.label }}
+            </option>
+          </select>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </label>
         <button
           type="button"
-          class="help-trigger"
-          aria-label="How checklists work"
-          title="How checklists work"
-          @click="openChecklistHelp"
-        >
-          ?
-        </button>
-        <button
-          type="button"
-          class="sync-chip"
-          :disabled="isSyncing"
-          :class="{ busy: isSyncing }"
-          @click="requestSync"
-        >
-          <span>{{ isSyncing ? "Syncing" : "Sync" }}</span>
-        </button>
-        <button
-          type="button"
-          class="create-toggle"
+          class="create-toggle utility-new"
           aria-label="Create checklist"
           title="Create checklist"
           :aria-expanded="isCreateFormVisible"
           @click="toggleCreateForm"
         >
-          +
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </section>
@@ -382,25 +393,6 @@ onMounted(() => {
         </p>
       </section>
     </div>
-
-    <section v-if="hasChecklistRecords" class="filter-row">
-      <label class="filter-field">
-        <span class="filter-label">Filter</span>
-        <select
-          v-model="activeFilter"
-          class="filter-select"
-          aria-label="Checklist status filter"
-        >
-          <option
-            v-for="item in filterItems"
-            :key="item.value"
-            :value="item.value"
-          >
-            {{ item.label }}
-          </option>
-        </select>
-      </label>
-    </section>
 
     <section class="checklist-list">
       <article
@@ -601,11 +593,10 @@ onMounted(() => {
 
 .segment-actions {
   align-items: center;
-  display: flex;
+  display: grid;
   flex-shrink: 0;
-  gap: 0.55rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr) minmax(3.2rem, 0.32fr);
 }
 
 .metadata-item svg,
@@ -672,6 +663,76 @@ onMounted(() => {
   text-transform: uppercase;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 58%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 20px rgb(33 153 255 / 8%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
+  font-weight: 700;
+  gap: 0.58rem;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.48rem 0.74rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.22rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.22rem;
+}
+
+.utility-chip span {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-chip,
+.filter-chip {
+  justify-content: flex-start;
+}
+
+.filter-chip {
+  cursor: pointer;
+}
+
+.filter-chip .chevron {
+  margin-left: auto;
+}
+
+.header-filter-select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #c7dcff;
+  cursor: pointer;
+  flex: 1 1 auto;
+  font: inherit;
+  min-width: 0;
+  outline: 0;
+  padding: 0;
+}
+
+.header-filter-select option {
+  background: #061833;
+  color: #d1e9ff;
+}
+
 .utility-toggle {
   --btn-bg: rgb(7 20 44 / 84%);
   --btn-bg-pressed: linear-gradient(180deg, rgb(22 58 107 / 82%), rgb(8 24 52 / 96%));
@@ -727,6 +788,19 @@ onMounted(() => {
   min-height: 0;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.9rem, 2.35vw, 1.05rem);
+  gap: 0.58rem;
+  height: auto;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 3.2rem;
+  padding: 0.48rem;
 }
 
 .create-form {
@@ -1241,8 +1315,21 @@ onMounted(() => {
   }
 
   .segment-actions {
-    align-self: flex-end;
-    justify-content: flex-end;
+    gap: 0.55rem;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.34fr) minmax(2.8rem, 0.35fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.78rem;
+    gap: 0.38rem;
+    min-height: 2.7rem;
+    padding-inline: 0.46rem;
+  }
+
+  .utility-chip svg {
+    height: 1rem;
+    width: 1rem;
   }
 
   .sync-chip {

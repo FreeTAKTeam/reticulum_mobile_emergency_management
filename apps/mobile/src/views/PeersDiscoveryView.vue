@@ -115,36 +115,52 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
 
 <template>
   <section class="view">
-    <header>
+    <header class="view-header">
       <div class="header-actions">
+        <span class="utility-chip stat-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+            <circle cx="9.5" cy="7" r="3" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+          </svg>
+          <span>{{ nodeStore.savedPeerCount }} Saved</span>
+        </span>
+        <span class="utility-chip stat-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93" />
+            <path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07" />
+          </svg>
+          <span>{{ nodeStore.connectedPeerCount }} Connected</span>
+        </span>
+        <label class="utility-chip search-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m16 16 4 4" />
+          </svg>
+          <input
+            v-model="searchText"
+            type="search"
+            placeholder="Search Peers"
+            aria-label="Search peers"
+          />
+        </label>
         <button
           type="button"
-          class="badge badge-button"
+          class="utility-chip announce-chip"
           @click="
             runNodeAction(() => nodeStore.announceNow(), 'Announce requested.')
           "
         >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m3 11 14-6v14L3 13v-2Z" />
+            <path d="M17 9.5h2a2 2 0 0 1 0 4h-2" />
+            <path d="M6 13v5" />
+          </svg>
           Announce
-        </button>
-        <button
-          type="button"
-          class="badge badge-button"
-          @click="
-            runNodeAction(() => nodeStore.requestLxmfSync(), 'Sync requested.')
-          "
-        >
-          Sync
         </button>
       </div>
     </header>
-
-    <section class="panel controls">
-      <input
-        v-model="searchText"
-        type="search"
-        placeholder="Search destination, label, or announced name"
-      />
-    </section>
 
     <section class="panel">
       <h2>Discovered</h2>
@@ -251,9 +267,8 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
   gap: 1rem;
 }
 
-header {
-  display: flex;
-  justify-content: flex-end;
+.view-header {
+  display: block;
 }
 
 h1 {
@@ -262,7 +277,7 @@ h1 {
   margin: 0;
 }
 
-header p {
+.view-header p {
   color: #9cb3d6;
   font-family: var(--font-body);
   margin: 0.25rem 0 0;
@@ -270,8 +285,9 @@ header p {
 
 .header-actions {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: 0.55rem;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 0.92fr) minmax(0, 1.62fr) minmax(6.6rem, 0.86fr);
 }
 
 .badge {
@@ -311,15 +327,74 @@ header p {
   outline-offset: 2px;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 48%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.74rem, 1.8vw, 0.92rem);
+  font-weight: 700;
+  gap: 0.46rem;
+  justify-content: flex-start;
+  min-height: 2.75rem;
+  min-width: 0;
+  padding: 0.42rem 0.62rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.08rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.08rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-chip {
+  color: #7fa7d2;
+}
+
+.search-chip input {
+  background: transparent;
+  border: 0;
+  color: #d8ecff;
+  flex: 1 1 auto;
+  font: inherit;
+  min-width: 0;
+  outline: 0;
+  padding: 0;
+}
+
+.search-chip input::placeholder {
+  color: #7d92b5;
+}
+
+.announce-chip {
+  color: #29b9ff;
+  cursor: pointer;
+  justify-content: center;
+}
+
 .panel {
   background: rgb(9 24 52 / 86%);
   border: 1px solid rgb(72 114 184 / 33%);
   border-radius: 15px;
   padding: 0.9rem;
-}
-
-.controls input[type="search"] {
-  width: min(420px, 100%);
 }
 
 h2 {
@@ -502,7 +577,24 @@ textarea {
   }
 
   .header-actions {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr);
+  }
+
+  .search-chip,
+  .announce-chip {
+    grid-column: span 1;
+  }
+
+  .utility-chip {
+    font-size: 0.72rem;
+    gap: 0.34rem;
+    min-height: 2.55rem;
+    padding-inline: 0.42rem;
+  }
+
+  .utility-chip svg {
+    height: 0.95rem;
+    width: 0.95rem;
   }
 
   .saved-item {

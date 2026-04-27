@@ -219,6 +219,9 @@ const hasMainSettingsChanges = computed(() =>
 const hasUnsavedSettings = computed(
   () => hasMainSettingsChanges.value || Boolean(sosCardRef.value?.hasUnsavedChanges()),
 );
+const unsavedSettingsCount = computed(() =>
+  Number(hasMainSettingsChanges.value) + Number(Boolean(sosCardRef.value?.hasUnsavedChanges())),
+);
 
 function normalizeTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
@@ -404,9 +407,37 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <span class="badge">{{ nodeStore.status.running ? "Node Active" : "Node Offline" }}</span>
-        <button type="button" :disabled="!hasUnsavedSettings || savingSettings" @click="applySettings">
-          Save
+        <span class="settings-chip unsaved-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 4h6" />
+            <path d="M9 4a2 2 0 0 0-2 2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2a2 2 0 0 0-2-2" />
+            <path d="M8 11h8" />
+            <path d="M8 15h6" />
+          </svg>
+          <span>Unsaved: {{ unsavedSettingsCount }}</span>
+        </span>
+        <button type="button" class="settings-chip node-control-chip" aria-label="Node Control">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+          </svg>
+          <span>Node Control</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="settings-save"
+          :disabled="!hasUnsavedSettings || savingSettings"
+          @click="applySettings"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 4h12l2 2v14H5V4Z" />
+            <path d="M8 4v6h8V4" />
+            <path d="M8 20v-6h8v6" />
+          </svg>
+          <span>{{ savingSettings ? "Saving" : "Save" }}</span>
         </button>
       </div>
     </header>
@@ -825,14 +856,14 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: flex-end;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.72rem;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.55fr) minmax(6.8rem, 0.9fr);
 }
 
 h1 {
@@ -859,6 +890,83 @@ h1 {
   letter-spacing: 0.08em;
   padding: 0.42rem 0.75rem;
   text-transform: uppercase;
+}
+
+.settings-chip,
+.settings-save {
+  align-items: center;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.78rem, 1.9vw, 0.96rem);
+  font-weight: 700;
+  gap: 0.54rem;
+  justify-content: center;
+  min-height: 2.95rem;
+  min-width: 0;
+  padding: 0.46rem 0.72rem;
+  text-transform: none;
+}
+
+.settings-chip svg,
+.settings-save svg {
+  flex: 0 0 auto;
+  height: 1.14rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.14rem;
+}
+
+.settings-chip span,
+.settings-save span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unsaved-chip {
+  background: rgb(45 27 4 / 82%);
+  border: 1px solid rgb(251 161 38 / 74%);
+  color: #ffb13d;
+}
+
+.node-control-chip {
+  --btn-bg: rgb(7 25 54 / 84%);
+  --btn-border: rgb(73 173 255 / 52%);
+  --btn-color: #a7c7ee;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 52%);
+  color: #a7c7ee;
+  cursor: pointer;
+}
+
+.node-control-chip .chevron {
+  margin-left: auto;
+}
+
+.settings-save {
+  --btn-bg: linear-gradient(180deg, rgb(31 118 225 / 88%), rgb(17 72 167 / 92%));
+  --btn-border: rgb(73 173 255 / 66%);
+  --btn-color: #e3f5ff;
+  background: linear-gradient(180deg, rgb(31 118 225 / 88%), rgb(17 72 167 / 92%));
+  border: 1px solid rgb(73 173 255 / 66%);
+  color: #e3f5ff;
+  cursor: pointer;
+}
+
+.settings-save:disabled {
+  background: linear-gradient(180deg, rgb(33 111 214 / 55%), rgb(17 72 167 / 56%));
+  border-color: rgb(73 173 255 / 42%);
+  color: rgb(184 215 244 / 56%);
+  cursor: not-allowed;
+  opacity: 1;
+  transform: none;
 }
 
 .panel {
@@ -1204,14 +1312,26 @@ button:disabled {
 
 @media (max-width: 760px) {
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.48rem;
+    grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.42fr) minmax(5.8rem, 0.78fr);
+  }
+
+  .settings-chip,
+  .settings-save {
+    font-size: 0.72rem;
+    gap: 0.34rem;
+    min-height: 2.62rem;
+    padding-inline: 0.42rem;
+  }
+
+  .settings-chip svg,
+  .settings-save svg {
+    height: 0.98rem;
+    width: 0.98rem;
   }
 
   .server-option {

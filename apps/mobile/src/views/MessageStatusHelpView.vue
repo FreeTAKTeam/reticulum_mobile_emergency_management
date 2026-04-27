@@ -2,630 +2,808 @@
 import { RouterLink } from "vue-router";
 
 type StatusTone = "red" | "yellow" | "green" | "unknown";
+type LineIcon = "capability" | "medical" | "preparedness" | "security";
 
-interface HelpStatusBlock {
-  conditions: string[];
-  label: string;
+interface StatusDefinition {
+  body: string[];
+  heading: string;
   tone: StatusTone;
 }
 
 interface HelpLineSection {
+  icon: LineIcon;
+  label: string;
   line: string;
-  statuses: HelpStatusBlock[];
-  summary: string;
-  title: string;
+  statuses: StatusDefinition[];
 }
 
-const unknownTriggers = [
-  "You lack confirmed information.",
-  "Conditions are changing too rapidly to assess.",
-  "You are unable to perform proper evaluation (for example, poor visibility or comms limitations).",
-  "Reports are contradictory.",
-  "You are relaying second-hand information without confirmation.",
+const statusLegend: Array<{ tone: StatusTone; label: string; summary: string }> = [
+  { tone: "red", label: "Red", summary: "Critical" },
+  { tone: "yellow", label: "Yellow", summary: "Limited" },
+  { tone: "green", label: "Green", summary: "Adequate" },
+  { tone: "unknown", label: "Unknown", summary: "Not Confirmed" },
+];
+
+const rulePoints = [
+  "Use the lowest accurate color when unsure.",
+  "If conditions cannot be confirmed, select Unknown.",
+  "Reassess and resend if conditions change materially.",
 ];
 
 const operationalGuidance = [
-  "Always select the lowest accurate color when uncertain between two.",
-  "Reassess and resend the EAM if conditions materially change.",
+  "Always select the lowest accurate color when uncertain.",
+  "Reassess and resend the EAM if conditions change materially.",
   "Unknown status must be resolved as soon as practical.",
-  "Consistency across group members improves prioritization.",
-  "Color inflation reduces credibility and response efficiency.",
+  "Consistency across the team improves prioritization.",
+  "Color inflation reduces credibility and response effectiveness.",
 ];
 
 const lineSections: HelpLineSection[] = [
   {
-    line: "Line 3",
-    title: "Security Status",
-    summary: "Use this line to report the current threat picture around the location.",
+    icon: "security",
+    label: "Security",
+    line: "3",
     statuses: [
       {
-        label: "Red - Threats Imminent",
         tone: "red",
-        conditions: [
-          "Active hostile presence observed or confirmed.",
-          "Gunfire, violent activity, forced entry, or a credible immediate threat.",
-          "Perimeter compromised or under active surveillance by hostile actors.",
-          "Immediate defensive action required.",
-        ],
+        heading: "Threats Imminent",
+        body: ["Active hostile presence or credible threat."],
       },
       {
-        label: "Yellow - Not Secure but No Immediate Threat",
         tone: "yellow",
-        conditions: [
-          "Area unstable due to civil unrest, crime surge, or disaster impact.",
-          "Suspicious activity observed but not confirmed hostile.",
-          "Security perimeter incomplete or degraded.",
-          "You cannot guarantee the safety of the location.",
-        ],
+        heading: "Not Secure No Immediate Threat",
+        body: ["Area unstable or perimeter degraded."],
       },
       {
-        label: "Green - Secure",
         tone: "green",
-        conditions: [
-          "No active threats observed or reported.",
-          "Controlled access to the area.",
-          "Defensive posture in place.",
-          "Situational awareness maintained.",
-        ],
+        heading: "Secure",
+        body: ["No active threats.", "Controlled access."],
       },
       {
-        label: "Unknown",
         tone: "unknown",
-        conditions: [
-          "No visual confirmation.",
-          "No reliable reports.",
-          "Environmental conditions prevent assessment.",
-        ],
+        heading: "Not Confirmed",
+        body: ["No reliable information.", "Cannot assess."],
       },
     ],
   },
   {
-    line: "Line 4",
-    title: "Security Capability",
-    summary: "Describe the ability to defend the position right now, not what might be available later.",
+    icon: "capability",
+    label: "Capability",
+    line: "4",
     statuses: [
       {
-        label: "Red - No Defensive Capability",
         tone: "red",
-        conditions: [
-          "No weapons available.",
-          "No trained defenders.",
-          "Defensive tools are non-functional.",
-          "Outnumbered beyond realistic resistance.",
-        ],
+        heading: "No Defensive Capability",
+        body: ["No weapons, no trained defenders."],
       },
       {
-        label: "Yellow - Limited Capability",
         tone: "yellow",
-        conditions: [
-          "Limited ammunition or supplies.",
-          "Limited trained personnel.",
-          "Equipment partially functional.",
-          "Defensive capability sustainable only short-term.",
-        ],
+        heading: "Limited Capability",
+        body: ["Limited ammo or personnel.", "Short-term only."],
       },
       {
-        label: "Green - Fully Capable",
         tone: "green",
-        conditions: [
-          "Weapons available and functional.",
-          "Adequate ammunition.",
-          "Personnel prepared and positioned.",
-          "Defensive posture sustainable.",
-        ],
+        heading: "Fully Capable",
+        body: ["Weapons, ammo, and personnel ready."],
       },
       {
-        label: "Unknown",
         tone: "unknown",
-        conditions: [
-          "Inventory not confirmed.",
-          "Personnel availability unclear.",
-          "Equipment status unverified.",
-        ],
+        heading: "Not Confirmed",
+        body: ["Inventory or equipment status unclear."],
       },
     ],
   },
   {
-    line: "Line 5",
-    title: "Preparedness (Sustainment)",
-    summary: "Capture the current sustainment picture for food, water, fuel, power, and essential supplies.",
+    icon: "preparedness",
+    label: "Preparedness",
+    line: "5",
     statuses: [
       {
-        label: "Red - No Sustainment Supplies",
         tone: "red",
-        conditions: [
-          "Food or water is insufficient for 24 hours.",
-          "No fuel, power backup, or essential supplies.",
-          "Immediate resupply required.",
-        ],
+        heading: "No Sustainment Supplies",
+        body: ["Food, water, fuel, or power < 24 hrs."],
       },
       {
-        label: "Yellow - Limited Supplies",
         tone: "yellow",
-        conditions: [
-          "Supplies are available only for a short duration (less than one week).",
-          "Rationing is required.",
-          "Fuel or power is limited.",
-        ],
+        heading: "Limited Supplies",
+        body: ["Supplies available < 1 week."],
       },
       {
-        label: "Green - Adequate Supplies",
         tone: "green",
-        conditions: [
-          "Food, water, and power are sufficient for an extended period.",
-          "Medical kits are stocked.",
-          "Backup systems are operational.",
-        ],
+        heading: "Adequate Supplies",
+        body: ["Food, water, power, and essentials sufficient."],
       },
       {
-        label: "Unknown",
         tone: "unknown",
-        conditions: [
-          "Inventory has not been checked.",
-          "Storage is inaccessible.",
-          "Consumption rate is uncertain.",
-        ],
+        heading: "Not Confirmed",
+        body: ["Inventory not checked.", "Consumption rate unknown."],
       },
     ],
   },
   {
-    line: "Line 6",
-    title: "Medical Status",
-    summary: "Report the most severe current medical need affecting the group.",
+    icon: "medical",
+    label: "Medical",
+    line: "6",
     statuses: [
       {
-        label: "Red - Urgent Medical Need",
         tone: "red",
-        conditions: [
-          "Life-threatening injury.",
-          "Severe bleeding.",
-          "Respiratory distress.",
-          "Unstable vital signs.",
-          "Immediate evacuation required.",
-        ],
+        heading: "Urgent Medical Need",
+        body: ["Life-threatening injury or instability."],
       },
       {
-        label: "Yellow - Delayed Care Acceptable",
         tone: "yellow",
-        conditions: [
-          "Minor fractures.",
-          "Controlled bleeding.",
-          "Manageable illness.",
-          "Stable condition but still requires treatment.",
-        ],
+        heading: "Delayed Care Acceptable",
+        body: ["Minor injuries or stable conditions."],
       },
       {
-        label: "Green - No Medical Issue",
         tone: "green",
-        conditions: [
-          "No injuries.",
-          "No medical conditions requiring intervention.",
-          "All group members are stable.",
-        ],
+        heading: "No Medical Issue",
+        body: ["No injuries.", "All members stable."],
       },
       {
-        label: "Unknown",
         tone: "unknown",
-        conditions: [
-          "Full headcount not confirmed.",
-          "Individuals are unaccounted for.",
-          "Medical assessment is incomplete.",
-        ],
-      },
-    ],
-  },
-  {
-    line: "Line 7",
-    title: "Mobility Status",
-    summary: "Show the best confirmed movement option available to the group right now.",
-    statuses: [
-      {
-        label: "Red - No Movement Possible",
-        tone: "red",
-        conditions: [
-          "Vehicle is disabled.",
-          "Severe injury prevents movement.",
-          "Security threat prevents relocation.",
-          "Dependents cannot move safely.",
-        ],
-      },
-      {
-        label: "Yellow - Foot Movement Only",
-        tone: "yellow",
-        conditions: [
-          "Vehicles are unavailable.",
-          "Fuel is depleted.",
-          "Roadways are blocked.",
-          "Movement is possible but range and speed are limited.",
-        ],
-      },
-      {
-        label: "Green - Vehicular Movement Capable",
-        tone: "green",
-        conditions: [
-          "Vehicles are operational.",
-          "Adequate fuel is available.",
-          "Safe travel routes are identified.",
-        ],
-      },
-      {
-        label: "Unknown",
-        tone: "unknown",
-        conditions: [
-          "Vehicle status is unverified.",
-          "Route conditions are unknown.",
-          "Driver availability is uncertain.",
-        ],
-      },
-    ],
-  },
-  {
-    line: "Line 8",
-    title: "Communications Status",
-    summary: "Report communications depth and redundancy, not just whether a single radio is powered on.",
-    statuses: [
-      {
-        label: "Red - No Alternate Communications",
-        tone: "red",
-        conditions: [
-          "Only one communication method is available and it is failing.",
-          "No radio backup.",
-          "No mesh, repeater, or alternate channel.",
-        ],
-      },
-      {
-        label: "Yellow - Handheld (HT) Only",
-        tone: "yellow",
-        conditions: [
-          "Limited to a low-power radio.",
-          "Short-range capability.",
-          "Battery dependent without redundancy.",
-        ],
-      },
-      {
-        label: "Green - Mobile (50W) or Better",
-        tone: "green",
-        conditions: [
-          "High-power radio is available.",
-          "Multiple communication paths exist.",
-          "External antenna in use.",
-          "Backup power is available.",
-        ],
-      },
-      {
-        label: "Unknown",
-        tone: "unknown",
-        conditions: [
-          "Equipment status is not verified.",
-          "Channel viability is untested.",
-          "Interference is suspected but not confirmed.",
-        ],
+        heading: "Not Confirmed",
+        body: ["Headcount or assessment incomplete."],
       },
     ],
   },
 ];
+
+function statusLabel(tone: StatusTone): string {
+  if (tone === "red") {
+    return "RED";
+  }
+  if (tone === "yellow") {
+    return "YELLOW";
+  }
+  if (tone === "green") {
+    return "GREEN";
+  }
+  return "UNKNOWN";
+}
 </script>
 
 <template>
-  <section class="help-view">
-    <header class="help-hero">
-      <RouterLink to="/messages" class="back-link">Back to Messages</RouterLink>
-    </header>
-
-    <section class="intro-grid" aria-label="General guidance">
-      <article class="info-card">
-        <p class="card-kicker">General Rule</p>
-        <h2 class="card-title">Set the color for what is true now.</h2>
-        <p class="card-body">
-          A color must reflect present, verifiable conditions. Do not select a color based on
-          optimism, assumption, or anticipated improvement.
-        </p>
-        <p class="card-body">
-          If reliable information is missing, conflicting, or cannot be confirmed, select
-          "Unknown." "Unknown" is not a failure. It is an explicit indicator that verification is
-          required.
-        </p>
-      </article>
-
-      <article class="info-card">
-        <p class="card-kicker">When to Select "Unknown"</p>
-        <ul class="bullet-list">
-          <li v-for="item in unknownTriggers" :key="item" class="bullet-item">
-            {{ item }}
-          </li>
-        </ul>
-        <p class="card-note">
-          Unknown status should trigger follow-up assessment or prioritization by receiving parties.
-        </p>
-      </article>
+  <section class="status-help-view">
+    <section class="utility-row" aria-label="Status help controls">
+      <div class="utility-chip">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+          <path d="M4 12l8 4 8-4" />
+          <path d="M4 16l8 4 8-4" />
+        </svg>
+        <span>EAM Lines 3-8</span>
+      </div>
+      <div class="utility-chip filter-chip">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
+        </svg>
+        <span>Filter: All</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="m7 10 5 5 5-5" />
+        </svg>
+      </div>
+      <RouterLink to="/messages" class="utility-chip back-chip">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M15 6 9 12l6 6" />
+          <path d="M10 12h10" />
+        </svg>
+        <span>Messages</span>
+      </RouterLink>
     </section>
 
-    <section class="line-grid" aria-label="Status definitions by line">
-      <article v-for="section in lineSections" :key="section.line" class="line-card">
-        <header class="line-header">
-          <div>
-            <p class="line-label">{{ section.line }}</p>
-            <h2 class="line-title">{{ section.title }}</h2>
+    <section class="rule-panel" aria-label="Status color rule">
+      <div class="rule-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M12 10v7" />
+          <path d="M12 7h.01" />
+          <circle cx="12" cy="12" r="8.5" />
+        </svg>
+      </div>
+      <div class="rule-copy">
+        <h2>Set the color for what is true now.</h2>
+        <ul>
+          <li v-for="point in rulePoints" :key="point">{{ point }}</li>
+        </ul>
+      </div>
+      <ul class="status-legend" aria-label="Status legend">
+        <li v-for="item in statusLegend" :key="item.tone" :class="`legend-${item.tone}`">
+          <span class="legend-dot" aria-hidden="true"></span>
+          <strong>{{ item.label }}</strong>
+          <span>{{ item.summary }}</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="line-stack" aria-label="Status definitions by line">
+      <article v-for="section in lineSections" :key="section.line" class="line-panel">
+        <header class="line-title-row">
+          <div class="line-icon" aria-hidden="true">
+            <svg v-if="section.icon === 'security'" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3.5 19 6v5.4c0 4.2-2.8 7.8-7 9.1-4.2-1.3-7-4.9-7-9.1V6l7-2.5Z" />
+              <path d="M9 12.2 11 14l4-5" />
+            </svg>
+            <svg v-else-if="section.icon === 'capability'" viewBox="0 0 24 24" fill="none">
+              <path d="M12 3.5 19 6v5.4c0 4.2-2.8 7.8-7 9.1-4.2-1.3-7-4.9-7-9.1V6l7-2.5Z" />
+              <path d="m12 8.4 1.1 2.3 2.5.35-1.8 1.75.42 2.5L12 14.1l-2.22 1.2.42-2.5-1.8-1.75 2.5-.35L12 8.4Z" />
+            </svg>
+            <svg v-else-if="section.icon === 'preparedness'" viewBox="0 0 24 24" fill="none">
+              <path d="m4.5 8 7.5-4 7.5 4-7.5 4-7.5-4Z" />
+              <path d="M4.5 8v8l7.5 4 7.5-4V8" />
+              <path d="M12 12v8" />
+              <path d="M8 10.2v3.2l2 1.1v-3.2L8 10.2Z" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" fill="none">
+              <path d="M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6V4Z" />
+            </svg>
           </div>
-          <p class="line-summary">{{ section.summary }}</p>
+          <p class="line-label">{{ section.label }}</p>
         </header>
 
-        <div class="status-grid">
+        <div class="status-cards">
           <section
             v-for="status in section.statuses"
-            :key="`${section.line}-${status.label}`"
+            :key="`${section.line}-${status.tone}`"
             class="status-card"
-            :class="`status-card--${status.tone}`"
+            :class="`status-card-${status.tone}`"
           >
-            <h3 class="status-title">{{ status.label }}</h3>
-            <p class="status-heading">Conditions</p>
-            <ul class="bullet-list">
-              <li v-for="condition in status.conditions" :key="condition" class="bullet-item">
-                {{ condition }}
-              </li>
+            <h3>{{ statusLabel(status.tone) }}</h3>
+            <p class="status-heading">{{ status.heading }}</p>
+            <ul>
+              <li v-for="item in status.body" :key="item">{{ item }}</li>
             </ul>
           </section>
         </div>
       </article>
     </section>
 
-    <section class="guidance-card" aria-label="Operational guidance">
-      <p class="card-kicker">Operational Guidance</p>
-      <ol class="guidance-list">
-        <li v-for="item in operationalGuidance" :key="item" class="guidance-item">
-          {{ item }}
+    <section class="guidance-panel" aria-label="Operational guidance">
+      <div class="guidance-title">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M8 5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
+          <path d="M9.5 4h5a1 1 0 0 1 1 1v1h-7V5a1 1 0 0 1 1-1Z" />
+          <path d="m9.2 11 1 1 2-2" />
+          <path d="M14 11h2" />
+          <path d="m9.2 15 1 1 2-2" />
+          <path d="M14 15h2" />
+        </svg>
+        <h2>Operational Guidance</h2>
+      </div>
+      <ul class="guidance-list">
+        <li v-for="item in operationalGuidance" :key="item">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m9 6 6 6-6 6" />
+          </svg>
+          <span>{{ item }}</span>
         </li>
-      </ol>
+      </ul>
     </section>
   </section>
 </template>
 
 <style scoped>
-.help-view {
-  --help-panel: rgb(4 19 43 / 86%);
-  --help-panel-strong: rgb(3 15 36 / 92%);
-  --help-border: rgb(78 123 188 / 28%);
-  --help-border-strong: rgb(85 179 255 / 34%);
-  --help-text: #d5ecff;
-  --help-muted: #9cb8db;
-  --help-cyan: #8be5ff;
+.status-help-view {
+  --panel-bg: linear-gradient(155deg, rgb(6 25 55 / 92%), rgb(4 14 34 / 95%));
+  --panel-border: rgb(55 148 244 / 58%);
+  --cyan: #36b8ff;
+  --muted: #b9cae7;
+  --red: #ff3f34;
+  --yellow: #ffd022;
+  --green: #5ff238;
+  --unknown: #aeb8c9;
   display: grid;
   gap: 1rem;
-  padding-bottom: 0.2rem;
 }
 
-.help-hero,
-.info-card,
-.line-card,
-.guidance-card {
-  backdrop-filter: blur(12px);
-  background:
-    linear-gradient(160deg, rgb(8 35 74 / 48%), transparent 42%),
-    linear-gradient(180deg, var(--help-panel), var(--help-panel-strong));
-  border: 1px solid var(--help-border);
-  border-radius: 20px;
-  box-shadow: inset 0 1px 0 rgb(113 192 255 / 10%);
-}
-
-.help-hero {
-  align-items: center;
-  display: flex;
-  justify-content: flex-start;
-  padding: 0.8rem;
-}
-
-.hero-copy {
+.utility-row {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 0.95fr);
 }
 
-.hero-kicker,
-.card-kicker,
-.line-label {
-  color: var(--help-cyan);
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 20px rgb(33 153 255 / 8%);
+  color: #75c9ff;
+  display: flex;
   font-family: var(--font-ui);
-  font-size: 0.78rem;
-  letter-spacing: 0.12em;
-  margin: 0;
-  text-transform: uppercase;
+  font-size: clamp(0.9rem, 2.3vw, 1.12rem);
+  font-weight: 600;
+  gap: 0.7rem;
+  justify-content: center;
+  min-height: 3.05rem;
+  min-width: 0;
+  padding: 0.52rem 0.75rem;
+  text-decoration: none;
 }
 
-.hero-title,
-.card-title,
-.line-title {
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.22rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.22rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-chip {
+  justify-content: space-between;
+}
+
+.filter-chip span {
+  flex: 1;
+}
+
+.chevron {
+  margin-left: auto;
+}
+
+.back-chip {
+  color: #7ccaff;
+}
+
+.rule-panel,
+.line-panel,
+.guidance-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 rgb(190 235 255 / 7%),
+    0 0 28px rgb(36 142 255 / 8%);
+}
+
+.rule-panel {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: auto minmax(0, 1fr) minmax(13rem, 0.58fr);
+  padding: 1.05rem;
+}
+
+.rule-icon,
+.line-icon {
+  align-items: center;
+  background: rgb(10 39 82 / 72%);
+  border: 1px solid rgb(62 163 255 / 76%);
+  border-radius: 14px;
+  color: var(--cyan);
+  display: inline-flex;
+  justify-content: center;
+}
+
+.rule-icon {
+  height: 3.25rem;
+  width: 3.25rem;
+}
+
+.rule-icon svg,
+.line-icon svg,
+.guidance-title svg {
+  height: 68%;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 68%;
+}
+
+.rule-copy h2,
+.guidance-title h2 {
   color: #f5fbff;
   font-family: var(--font-headline);
-  letter-spacing: 0.01em;
+  font-size: clamp(1.05rem, 2.7vw, 1.45rem);
+  line-height: 1.1;
   margin: 0;
 }
 
-.hero-title {
-  font-size: clamp(1.35rem, 2.7vw, 2.45rem);
-  line-height: 1.05;
+.rule-copy ul,
+.status-card ul,
+.guidance-list {
+  margin: 0;
+  padding: 0;
 }
 
-.hero-subtitle,
-.card-body,
-.card-note,
-.line-summary,
-.status-heading,
-.bullet-item,
-.guidance-item {
-  color: var(--help-muted);
+.rule-copy ul {
+  color: var(--muted);
+  display: grid;
   font-family: var(--font-body);
+  gap: 0.28rem;
+  list-style-position: inside;
+  margin-top: 0.55rem;
+}
+
+.status-legend {
+  border-left: 1px solid rgb(86 139 201 / 40%);
+  display: grid;
+  gap: 0.42rem;
+  list-style: none;
   margin: 0;
+  padding: 0 0 0 1.05rem;
 }
 
-.hero-subtitle,
-.card-body,
-.card-note,
-.line-summary {
-  font-size: 0.97rem;
-  line-height: 1.6;
+.status-legend li {
+  align-items: center;
+  color: #ddeeff;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: auto minmax(4.7rem, auto) minmax(0, 1fr);
+  min-width: 0;
 }
 
-.back-link {
-  background: linear-gradient(110deg, #0ea6ff, #42f0ff);
-  border-radius: 12px;
-  color: #042a4e;
+.status-legend strong {
   font-family: var(--font-ui);
-  font-size: 0.8rem;
+  font-size: 1.04rem;
+  min-width: 0;
+}
+
+.status-legend span:last-child {
+  color: #e4eefc;
+  font-family: var(--font-body);
+  min-width: 0;
+}
+
+.legend-dot {
+  background: currentColor;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 2px rgb(0 0 0 / 44%) inset,
+    0 0 12px currentColor;
+  height: 1.1rem;
+  width: 1.1rem;
+}
+
+.status-legend .legend-red {
+  color: var(--red);
+}
+
+.status-legend .legend-yellow {
+  color: var(--yellow);
+}
+
+.status-legend .legend-green {
+  color: var(--green);
+}
+
+.status-legend .legend-unknown {
+  color: var(--unknown);
+}
+
+.status-legend li span:last-child {
+  color: #e4eefc;
+}
+
+.line-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.line-panel {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
+  padding: 0.85rem;
+}
+
+.line-title-row {
+  align-items: center;
+  border-bottom: 1px solid rgb(55 148 244 / 24%);
+  display: flex;
+  gap: 0.65rem;
+  min-width: 0;
+  padding-bottom: 0.75rem;
+}
+
+.line-label {
+  color: #7bd3ff;
+  font-family: var(--font-ui);
   font-weight: 700;
-  letter-spacing: 0.08em;
-  min-height: 2.5rem;
-  padding: 0.72rem 0.95rem;
-  text-decoration: none;
+  letter-spacing: 0.06em;
+  margin: 0;
   text-transform: uppercase;
 }
 
-.intro-grid {
+.line-icon {
+  flex: 0 0 auto;
+  height: 2.55rem;
+  width: 2.55rem;
+}
+
+.line-label {
+  color: #dcecff;
+  font-size: 1rem;
+  line-height: 1;
+  text-transform: none;
+}
+
+.status-cards {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.info-card,
-.guidance-card {
-  display: grid;
-  gap: 0.75rem;
-  padding: 1.1rem 1.15rem;
-}
-
-.card-title {
-  font-size: clamp(1.05rem, 2vw, 1.5rem);
-  line-height: 1.15;
-}
-
-.card-note {
-  border-top: 1px solid rgb(78 123 188 / 24%);
-  padding-top: 0.7rem;
-}
-
-.line-grid {
-  display: grid;
-  gap: 1rem;
-}
-
-.line-card {
-  display: grid;
-  gap: 0.95rem;
-  padding: 1.1rem;
-}
-
-.line-header {
-  align-items: end;
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 420px);
-}
-
-.line-title {
-  font-size: clamp(1.05rem, 2vw, 1.45rem);
-}
-
-.line-summary {
-  max-width: 42ch;
-  text-align: right;
-}
-
-.status-grid {
-  display: grid;
-  gap: 0.8rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 0.58rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
 }
 
 .status-card {
-  background: linear-gradient(180deg, rgb(10 23 51 / 96%), rgb(7 17 37 / 96%));
-  border: 1px solid rgb(72 103 154 / 24%);
-  border-radius: 16px;
+  background: linear-gradient(180deg, rgb(10 24 52 / 94%), rgb(5 17 39 / 94%));
+  border: 1px solid currentColor;
+  border-radius: 11px;
+  color: var(--unknown);
   display: grid;
-  gap: 0.55rem;
-  min-height: 100%;
-  padding: 0.95rem;
+  grid-template-rows: auto auto auto;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.status-card--red {
-  border-color: rgb(255 112 112 / 22%);
-  box-shadow: inset 0 1px 0 rgb(255 154 154 / 6%);
-}
-
-.status-card--yellow {
-  border-color: rgb(255 208 103 / 20%);
-  box-shadow: inset 0 1px 0 rgb(255 226 153 / 7%);
-}
-
-.status-card--green {
-  border-color: rgb(102 226 166 / 22%);
-  box-shadow: inset 0 1px 0 rgb(168 255 214 / 7%);
-}
-
-.status-card--unknown {
-  border-color: var(--help-border-strong);
-  box-shadow: inset 0 1px 0 rgb(139 229 255 / 7%);
-}
-
-.status-title {
-  color: var(--help-text);
-  font-family: var(--font-ui);
-  font-size: 0.96rem;
-  letter-spacing: 0.03em;
+.status-card h3 {
+  border-bottom: 1px solid currentColor;
+  color: currentColor;
+  font-family: var(--font-headline);
+  font-size: clamp(0.85rem, 2.4vw, 1.08rem);
+  line-height: 1;
   margin: 0;
+  padding: 0.62rem 0.48rem 0.48rem;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .status-heading {
-  color: #7dc2f5;
-  font-size: 0.78rem;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  color: #f4f8ff;
+  font-family: var(--font-headline);
+  font-size: clamp(0.74rem, 2.2vw, 0.98rem);
+  font-weight: 700;
+  line-height: 1.14;
+  margin: 0;
+  padding: 0.56rem 0.52rem 0.16rem;
+  text-align: center;
+  overflow-wrap: break-word;
 }
 
-.bullet-list,
+.status-card ul {
+  display: grid;
+  gap: 0.24rem;
+  list-style: none;
+  padding: 0.46rem 0.62rem 0.6rem;
+}
+
+.status-card li {
+  color: #d4e2f6;
+  font-family: var(--font-body);
+  font-size: clamp(0.68rem, 2vw, 0.86rem);
+  line-height: 1.22;
+  overflow-wrap: break-word;
+  padding-left: 0.72rem;
+  position: relative;
+}
+
+.status-card li::before {
+  color: currentColor;
+  content: ">";
+  font-family: var(--font-ui);
+  font-weight: 700;
+  left: 0;
+  position: absolute;
+  top: 0;
+}
+
+.status-card-red {
+  color: var(--red);
+}
+
+.status-card-yellow {
+  color: var(--yellow);
+}
+
+.status-card-green {
+  color: var(--green);
+}
+
+.status-card-unknown {
+  color: var(--unknown);
+}
+
+.guidance-panel {
+  align-items: center;
+  display: grid;
+  gap: 1.1rem;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  padding: 1rem;
+}
+
+.guidance-title {
+  align-items: center;
+  border-right: 1px solid rgb(55 148 244 / 24%);
+  color: #7bd3ff;
+  display: grid;
+  gap: 0.6rem;
+  justify-items: center;
+  padding-right: 1.05rem;
+  text-align: center;
+}
+
+.guidance-title svg {
+  height: 3.4rem;
+  width: 3.4rem;
+}
+
+.guidance-title h2 {
+  font-size: clamp(0.95rem, 2.3vw, 1.14rem);
+}
+
 .guidance-list {
   display: grid;
   gap: 0.45rem;
-  margin: 0;
-  padding-left: 1rem;
+  list-style: none;
 }
 
-.bullet-item,
-.guidance-item {
-  font-size: 0.94rem;
-  line-height: 1.45;
+.guidance-list li {
+  align-items: start;
+  border-bottom: 1px dashed rgb(95 166 238 / 24%);
+  color: #bdd7f8;
+  display: grid;
+  font-family: var(--font-body);
+  font-size: clamp(0.78rem, 2vw, 0.95rem);
+  gap: 0.55rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  line-height: 1.25;
+  padding-bottom: 0.34rem;
 }
 
-@media (max-width: 960px) {
-  .help-hero,
-  .line-header,
-  .status-grid,
-  .intro-grid {
-    grid-template-columns: 1fr;
+.guidance-list svg {
+  color: #78d2ff;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  width: 1rem;
+}
+
+@media (max-width: 900px) {
+  .rule-panel {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .line-summary {
-    max-width: none;
-    text-align: left;
+  .status-legend {
+    border-left: 0;
+    border-top: 1px solid rgb(86 139 201 / 40%);
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0.85rem 0 0;
   }
 }
 
 @media (max-width: 720px) {
-  .help-hero,
-  .info-card,
-  .line-card,
-  .guidance-card {
-    border-radius: 16px;
+  .status-help-view {
+    gap: 0.85rem;
+    margin-inline: -0.72rem;
   }
 
-  .help-hero {
-    align-items: stretch;
-    padding: 1rem;
+  .utility-row {
+    gap: 0.55rem;
+    grid-template-columns: minmax(0, 1.28fr) minmax(0, 1.08fr) minmax(0, 0.92fr);
   }
 
-  .back-link {
-    justify-self: start;
+  .utility-chip {
+    font-size: clamp(0.68rem, 3.15vw, 0.86rem);
+    gap: 0.32rem;
+    justify-content: center;
+    min-height: 2.95rem;
+    padding: 0.48rem 0.32rem;
+  }
+
+  .utility-chip svg {
+    height: 0.95rem;
+    width: 0.95rem;
+  }
+
+  .filter-chip {
+    gap: 0.24rem;
+  }
+
+  .status-legend {
+    gap: 0.5rem 0.42rem;
+  }
+
+  .status-legend li {
+    gap: 0.32rem;
+    grid-template-columns: auto minmax(0, 3.55rem) minmax(0, 1fr);
+  }
+
+  .status-legend strong,
+  .status-legend span:last-child {
+    font-size: 0.84rem;
+    line-height: 1.05;
+  }
+
+  .legend-dot {
+    height: 0.9rem;
+    width: 0.9rem;
+  }
+
+  .line-panel {
+    gap: 0.46rem;
+    padding: 0.56rem;
+  }
+
+  .line-title-row {
+    gap: 0.42rem;
+    padding-bottom: 0.42rem;
+  }
+
+  .line-icon {
+    border-radius: 9px;
+    height: 1.8rem;
+    width: 1.8rem;
+  }
+
+  .line-label {
+    font-size: 0.88rem;
+    line-height: 1;
+  }
+
+  .status-cards {
+    gap: 0.3rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .status-card {
-    padding: 0.85rem;
+    border-radius: 9px;
+  }
+
+  .status-card h3 {
+    font-size: clamp(0.62rem, 2.78vw, 0.78rem);
+    padding: 0.44rem 0.18rem 0.34rem;
+  }
+
+  .status-heading {
+    font-size: clamp(0.58rem, 2.54vw, 0.72rem);
+    padding: 0.4rem 0.22rem 0.08rem;
+  }
+
+  .status-card ul {
+    gap: 0.18rem;
+    padding: 0.34rem 0.32rem 0.42rem;
+  }
+
+  .status-card li {
+    font-size: clamp(0.55rem, 2.38vw, 0.68rem);
+    line-height: 1.16;
+    padding-left: 0.5rem;
+  }
+
+  .rule-panel,
+  .guidance-panel {
+    border-radius: 13px;
+  }
+
+  .guidance-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .guidance-title {
+    border-bottom: 1px solid rgb(55 148 244 / 24%);
+    border-right: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    justify-items: start;
+    padding: 0 0 0.75rem;
+    text-align: left;
   }
 }
 </style>

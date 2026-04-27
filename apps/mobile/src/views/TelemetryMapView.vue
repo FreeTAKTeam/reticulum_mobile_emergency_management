@@ -301,22 +301,11 @@ function syncSosTrails(): void {
   }
 }
 
-const lastUpdatedLabel = computed(() => {
-  const latest = telemetryStore.positions[0];
-  if (!latest) {
-    return "No telemetry received yet.";
-  }
-  const ageMs = Date.now() - latest.updatedAt;
-  if (ageMs < 60_000) {
-    return "Last update: < 1 min ago";
-  }
-  const minutes = Math.round(ageMs / 60_000);
-  return `Last update: ${minutes} min ago`;
-});
-
-const staleThresholdMinutesLabel = computed(() =>
-  Math.max(1, nodeStore.settings.telemetry.staleAfterMinutes),
+const liveTelemetryCount = computed(() =>
+  Math.max(0, telemetryStore.activePositions.length - telemetryStore.stalePositions.length),
 );
+const staleTelemetryCount = computed(() => telemetryStore.stalePositions.length);
+const sosAlertCount = computed(() => sosStore.alerts.length);
 
 onMounted(() => {
   if (!mapHost.value) {
@@ -388,10 +377,40 @@ onBeforeUnmount(() => {
 <template>
   <section class="telemetry-view">
     <div class="telemetry-legend">
-      <span>{{ lastUpdatedLabel }}</span>
-      <span><i class="dot live"></i> Live (&lt; {{ staleThresholdMinutesLabel }} min)</span>
-      <span><i class="dot stale"></i> Stale (&ge; {{ staleThresholdMinutesLabel }} min)</span>
-      <span><i class="dot sos"></i> SOS trail</span>
+      <span class="map-chip live-chip">
+        <span>{{ liveTelemetryCount }} Live</span>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 20v-5" />
+          <path d="M8 20h8" />
+          <path d="M8.5 11.5a5 5 0 1 1 7 0" />
+          <path d="M6 8a8 8 0 0 1 12 0" />
+        </svg>
+      </span>
+      <span class="map-chip stale-chip">
+        <span>Stale: {{ staleTelemetryCount }}</span>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 8v4l3 2" />
+        </svg>
+      </span>
+      <span class="map-chip sos-chip">
+        <span>SOS: {{ sosAlertCount }}</span>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4 21 20H3L12 4Z" />
+          <path d="M12 9v4" />
+          <path d="M12 16h.01" />
+        </svg>
+      </span>
+      <button class="map-chip layers-chip" type="button" aria-label="Map layers">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+          <path d="M4 12l8 4 8-4" />
+        </svg>
+        <span>Layers</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="m7 10 5 5 5-5" />
+        </svg>
+      </button>
     </div>
 
     <div ref="mapHost" class="map-container"></div>
@@ -419,31 +438,71 @@ onBeforeUnmount(() => {
 }
 
 .telemetry-legend {
-  color: #adc0dd;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 0.75rem;
-  gap: 0.9rem;
+  align-items: center;
+  display: grid;
+  gap: 0.72rem;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.12fr);
 }
 
-.dot {
-  border-radius: 999px;
-  display: inline-block;
-  height: 0.55rem;
-  margin-right: 0.3rem;
-  width: 0.55rem;
+.map-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 46%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.78rem, 1.9vw, 0.96rem);
+  font-weight: 700;
+  gap: 0.52rem;
+  justify-content: center;
+  min-height: 2.85rem;
+  min-width: 0;
+  padding: 0.42rem 0.66rem;
 }
 
-.dot.live {
-  background: #25d8b2;
+.map-chip svg {
+  flex: 0 0 auto;
+  height: 1.05rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.05rem;
 }
 
-.dot.stale {
-  background: #f9ae66;
+.map-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.dot.sos {
-  background: #ef4444;
+.live-chip {
+  border-color: rgb(67 218 157 / 48%);
+  color: #58f090;
+}
+
+.stale-chip {
+  border-color: rgb(225 159 79 / 48%);
+  color: #f7b860;
+}
+
+.sos-chip {
+  border-color: rgb(239 68 68 / 58%);
+  color: #ff5e64;
+}
+
+.layers-chip {
+  color: #8fcaff;
+  cursor: pointer;
+}
+
+.layers-chip .chevron {
+  margin-left: auto;
 }
 
 .map-container {
@@ -525,6 +584,23 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 780px) {
+  .telemetry-legend {
+    gap: 0.48rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .map-chip {
+    font-size: 0.72rem;
+    gap: 0.32rem;
+    min-height: 2.55rem;
+    padding-inline: 0.4rem;
+  }
+
+  .map-chip svg {
+    height: 0.9rem;
+    width: 0.9rem;
+  }
+
   .map-container {
     min-height: min(60dvh, 520px);
   }

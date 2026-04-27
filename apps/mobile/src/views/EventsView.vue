@@ -80,9 +80,25 @@ async function deleteEvent(uid: string): Promise<void> {
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <span class="badge"># {{ events.length }} EVT</span>
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+            <path d="M4 12l8 4 8-4" />
+            <path d="M4 16l8 4 8-4" />
+          </svg>
+          <span>{{ events.length }} EVT</span>
+        </span>
+        <button class="utility-chip filter-chip" type="button" aria-label="Filter events">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
+          </svg>
+          <span>Filter: Recent</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
         <button
-          class="create-toggle"
+          class="create-toggle utility-new"
           type="button"
           aria-label="Add event"
           :aria-expanded="isCreateFormVisible"
@@ -91,7 +107,7 @@ async function deleteEvent(uid: string): Promise<void> {
           :title="appReady ? 'Add event' : readinessHint"
           @click="toggleCreateForm"
         >
-          +
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </header>
@@ -164,14 +180,14 @@ async function deleteEvent(uid: string): Promise<void> {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: flex-end;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.35fr) minmax(3.2rem, 0.32fr);
 }
 
 h1 {
@@ -200,6 +216,56 @@ h1 {
   text-transform: uppercase;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 58%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 20px rgb(33 153 255 / 8%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
+  font-weight: 700;
+  gap: 0.58rem;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.48rem 0.74rem;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.22rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.22rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-chip,
+.filter-chip {
+  justify-content: flex-start;
+}
+
+.filter-chip {
+  cursor: pointer;
+}
+
+.filter-chip .chevron {
+  margin-left: auto;
+}
+
 .create-toggle {
   background: linear-gradient(110deg, #00a8ff, #14f0ff);
   border: 0;
@@ -213,6 +279,19 @@ h1 {
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.9rem, 2.35vw, 1.05rem);
+  gap: 0.58rem;
+  height: auto;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 3.2rem;
+  padding: 0.48rem;
 }
 
 .create-toggle:disabled,
@@ -344,14 +423,25 @@ h3 {
   }
 
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.55rem;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.34fr) minmax(2.8rem, 0.35fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.78rem;
+    gap: 0.38rem;
+    min-height: 2.7rem;
+    padding-inline: 0.46rem;
+  }
+
+  .utility-chip svg {
+    height: 1rem;
+    width: 1rem;
   }
 }
 </style>

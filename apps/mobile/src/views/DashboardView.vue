@@ -3,6 +3,7 @@ import { storeToRefs } from "pinia";
 import { computed, onMounted } from "vue";
 
 import { useChecklistsStore } from "../stores/checklistsStore";
+import { useEventsStore } from "../stores/eventsStore";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
@@ -15,6 +16,7 @@ import {
 
 const checklistsStore = useChecklistsStore();
 const { dashboardSummary } = storeToRefs(checklistsStore);
+const eventsStore = useEventsStore();
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
 
@@ -82,6 +84,21 @@ const checklistSummaryMetrics = computed(() => [
   },
 ]);
 
+const activitySummaryMetrics = computed(() => [
+  {
+    key: "messages",
+    value: messagesStore.activeCount,
+    label: "MSG",
+    alert: false,
+  },
+  {
+    key: "events",
+    value: eventsStore.records.length,
+    label: "EVN",
+    alert: false,
+  },
+]);
+
 onMounted(() => {
   void checklistsStore.refreshLive();
 });
@@ -91,9 +108,12 @@ onMounted(() => {
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
-        <button type="button" class="badge badge-button" @click="announceNow">Announce</button>
-        <button type="button" class="badge badge-button" @click="requestSync">Sync</button>
+        <button type="button" class="dashboard-chip action-chip" @click="announceNow">
+          Announce
+        </button>
+        <button type="button" class="dashboard-chip action-chip" @click="requestSync">
+          Sync
+        </button>
       </div>
     </header>
 
@@ -135,6 +155,21 @@ onMounted(() => {
         </article>
       </div>
     </section>
+
+    <section class="panel">
+      <h2>Activity</h2>
+      <div class="summary-grid activity-grid">
+        <article
+          v-for="metric in activitySummaryMetrics"
+          :key="metric.key"
+          class="summary-metric"
+          :class="{ 'summary-metric-alert': metric.alert }"
+        >
+          <p class="summary-value">{{ metric.value }}</p>
+          <p class="summary-label">{{ metric.label }}</p>
+        </article>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -146,14 +181,14 @@ onMounted(() => {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: flex-end;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 h1 {
@@ -203,6 +238,61 @@ h1 {
 .badge-button:focus-visible {
   outline: 2px solid rgb(111 219 255 / 70%);
   outline-offset: 2px;
+}
+
+.dashboard-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 48%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.76rem, 1.85vw, 0.95rem);
+  font-weight: 700;
+  gap: 0.48rem;
+  justify-content: center;
+  min-height: 2.85rem;
+  min-width: 0;
+  padding: 0.44rem 0.62rem;
+  text-transform: none;
+}
+
+.dashboard-chip svg {
+  flex: 0 0 auto;
+  height: 1.08rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.08rem;
+}
+
+.dashboard-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ready-chip {
+  border-color: rgb(65 227 106 / 48%);
+  color: #2fff73;
+}
+
+.ready-chip.offline {
+  border-color: rgb(255 196 76 / 55%);
+  color: #ffd36e;
+}
+
+.action-chip {
+  --btn-bg: rgb(7 25 54 / 84%);
+  --btn-border: rgb(73 173 255 / 48%);
+  --btn-color: #8fcaff;
+  cursor: pointer;
 }
 
 .panel {
@@ -295,6 +385,10 @@ svg {
   margin-top: 0.75rem;
 }
 
+.activity-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .summary-metric {
   align-items: center;
   background:
@@ -338,14 +432,28 @@ svg {
   }
 
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.5rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .action-chip {
+    grid-column: auto;
+  }
+
+  .dashboard-chip {
+    font-size: 0.62rem;
+    gap: 0.24rem;
+    min-height: 2.32rem;
+    padding-inline: 0.26rem;
+  }
+
+  .dashboard-chip svg {
+    height: 0.78rem;
+    width: 0.78rem;
   }
 
   .ring-card {
