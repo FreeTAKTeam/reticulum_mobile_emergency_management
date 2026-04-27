@@ -309,15 +309,6 @@ const lineSections: HelpLineSection[] = [
 <template>
   <section class="help-view">
     <header class="help-hero">
-      <div class="hero-copy">
-        <p class="hero-kicker">Field Reference</p>
-        <h1 class="hero-title">Help - Status Color Indicators</h1>
-        <p class="hero-subtitle">
-          Lines 3 through 8 use standardized color indicators for rapid visual assessment of
-          operational status inside the 9-Line Emergency Action Message (EAM). Colors are not
-          subjective and must reflect objective, current conditions at the time the EAM is sent.
-        </p>
-      </div>
       <RouterLink to="/messages" class="back-link">Back to Messages</RouterLink>
     </header>
 
@@ -417,11 +408,10 @@ const lineSections: HelpLineSection[] = [
 }
 
 .help-hero {
-  align-items: end;
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 1.25rem;
+  align-items: center;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.8rem;
 }
 
 .hero-copy {

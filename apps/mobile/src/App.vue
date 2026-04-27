@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import logoUrl from "./assets/rem-logo.png";
@@ -64,16 +64,120 @@ onMounted(async () => {
   }
 });
 
-const tabItems = [
+type AppIcon =
+  | "action-messages"
+  | "chat"
+  | "checklists"
+  | "dashboard"
+  | "events"
+  | "map"
+  | "more"
+  | "peers"
+  | "settings";
+
+interface NavigationItem {
+  path: string;
+  label: string;
+  icon: AppIcon;
+}
+
+const menuOpen = shallowRef(false);
+
+const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
-  { path: "/messages", label: "Action Messages", icon: "messages" },
+  { path: "/inbox", label: "Chat", icon: "chat" },
+  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/telemetry", label: "Map", icon: "map" },
+];
+
+const menuItems: NavigationItem[] = [
+  { path: "/inbox", label: "Chat", icon: "chat" },
+  { path: "/messages", label: "Action Messages", icon: "action-messages" },
   { path: "/events", label: "Events", icon: "events" },
-  { path: "/inbox", label: "Inbox", icon: "inbox" },
-  { path: "/checlklist", label: "Checklists", icon: "checklists" },
-  { path: "/telemetry", label: "Telemetry", icon: "telemetry" },
+  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
+
+const iconPaths: Record<AppIcon, string[]> = {
+  "action-messages": [
+    "M8 4.5h6l4 4v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z",
+    "M14 4.5v4h4",
+    "M9 12h6",
+    "M9 15.5h6",
+  ],
+  chat: [
+    "M6 7.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H11l-4 3v-3H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z",
+    "M8 11h8",
+    "M8 14h5",
+  ],
+  checklists: [
+    "M8 5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z",
+    "M9.5 4h5a1 1 0 0 1 1 1v1h-7V5a1 1 0 0 1 1-1Z",
+    "m9.5 11 1.5 1.5 3.5-3.5",
+    "M9.5 16h5",
+  ],
+  dashboard: [
+    "M5 5h5v5H5z",
+    "M14 5h5v8h-5z",
+    "M5 14h5v5H5z",
+    "M14 16h5v3h-5z",
+  ],
+  events: [
+    "M12 4.5 19 18.5H5z",
+    "M12 9v4",
+    "M12 16.2h.01",
+  ],
+  map: [
+    "M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z",
+    "M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z",
+  ],
+  more: [
+    "M5 7h14",
+    "M5 12h14",
+    "M5 17h14",
+  ],
+  peers: [
+    "M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z",
+    "M4.5 19a5 5 0 0 1 10 0",
+    "M16.5 10.5a2.5 2.5 0 1 0 0-5",
+    "M15.7 14.5a4.4 4.4 0 0 1 3.8 4.5",
+  ],
+  settings: [
+    "M5 7h10",
+    "M5 17h14",
+    "M15 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z",
+    "M9 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z",
+  ],
+};
+
+const pageTitle = computed(() => {
+  switch (route.name) {
+    case "dashboard":
+      return "Dashboard";
+    case "messages":
+      return "Action Messages";
+    case "events":
+      return "Events";
+    case "inbox":
+      return "Chat";
+    case "checlklist":
+      return "Checklists";
+    case "checlklist-detail":
+      return "Checklist Detail";
+    case "message-status-help":
+      return "Status Help";
+    case "peers":
+      return "Peers";
+    case "settings":
+      return "Settings";
+    case "telemetry":
+      return "Map";
+    default:
+      return "R.E.M.";
+  }
+});
 
 const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
 const runningTitle = computed(() =>
@@ -100,6 +204,31 @@ function isTabActive(path: string): boolean {
   }
   return route.path === path || route.path.startsWith(`${path}/`);
 }
+
+const moreRouteNames = new Set([
+  "messages",
+  "events",
+  "message-status-help",
+  "peers",
+  "settings",
+]);
+
+const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")));
+
+function toggleMenu(): void {
+  menuOpen.value = !menuOpen.value;
+}
+
+function closeMenu(): void {
+  menuOpen.value = false;
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    closeMenu();
+  },
+);
 </script>
 
 <template>
@@ -112,13 +241,14 @@ function isTabActive(path: string): boolean {
           </div>
           <p class="title">R.E.M.</p>
         </div>
+        <h1 class="page-title">{{ pageTitle }}</h1>
         <div class="mast-actions">
-            <span
-              class="peer-count"
-              data-testid="connected-peer-count"
-              aria-label="Saved peers and connected saved peers"
-              :title="connectedPeerCountTitle"
-            >
+          <span
+            class="peer-count"
+            data-testid="connected-peer-count"
+            aria-label="Saved peers and connected saved peers"
+            :title="connectedPeerCountTitle"
+          >
             {{ peerCountLabel }}
           </span>
           <span class="running" :class="{ pending: !nodeStore.ready }" :title="runningTitle">
@@ -131,9 +261,81 @@ function isTabActive(path: string): boolean {
         <RouterView />
       </main>
 
-      <nav class="tabs">
+      <div
+        v-if="menuOpen"
+        class="menu-backdrop"
+        aria-hidden="true"
+        @click="closeMenu"
+      ></div>
+
+      <aside
+        v-if="menuOpen"
+        class="tools-menu"
+        aria-label="More tools"
+      >
+        <div class="tools-rail" aria-hidden="true">
+          <span
+            v-for="item in menuItems.slice(0, 5)"
+            :key="`rail-${item.path}`"
+            class="tools-rail-icon"
+          >
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
+              <path
+                v-for="path in iconPaths[item.icon]"
+                :key="path"
+                :d="path"
+              />
+            </svg>
+          </span>
+          <button
+            type="button"
+            class="tools-close tools-close-rail"
+            aria-label="Close more tools"
+            @click="closeMenu"
+          >
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M6 6l12 12" />
+              <path d="M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <header class="tools-header">
+          <h2>Tools</h2>
+          <div class="tools-header-actions" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </header>
+
+        <div class="tools-grid">
+          <RouterLink
+            v-for="item in menuItems"
+            :key="`menu-${item.path}`"
+            :to="item.path"
+            class="tool-tile"
+            :class="{ active: isTabActive(item.path) }"
+            :aria-label="item.label"
+            :title="item.label"
+          >
+            <span class="tool-tile-icon" aria-hidden="true">
+              <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
+                <path
+                  v-for="path in iconPaths[item.icon]"
+                  :key="path"
+                  :d="path"
+                />
+              </svg>
+            </span>
+            <span class="tool-tile-label">{{ item.label }}</span>
+          </RouterLink>
+        </div>
+      </aside>
+
+      <nav class="tabs" aria-label="Primary navigation">
         <RouterLink
-          v-for="tab in tabItems"
+          v-for="tab in footerItems"
           :key="tab.path"
           :to="tab.path"
           class="tab"
@@ -142,101 +344,36 @@ function isTabActive(path: string): boolean {
           :title="tab.label"
         >
           <span class="tab-icon" aria-hidden="true">
-            <svg
-              v-if="tab.icon === 'inbox'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M5 6.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z" />
-              <path d="M3 10.5h5l1.8 2h4.4l1.8-2H21" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'messages'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
               <path
-                d="M6 7.5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H11l-4 3v-3H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z"
+                v-for="path in iconPaths[tab.icon]"
+                :key="path"
+                :d="path"
               />
-              <path d="M8 11h8" />
-              <path d="M8 14h5" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'events'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M8 4.5h6l4 4v10a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
-              <path d="M14 4.5v4h4" />
-              <path d="M9 12h6" />
-              <path d="M9 15.5h6" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'checklists'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M8 5h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" />
-              <path d="M9.5 4h5a1 1 0 0 1 1 1v1h-7V5a1 1 0 0 1 1-1Z" />
-              <path d="m9.5 11 1.5 1.5 3.5-3.5" />
-              <path d="M9.5 16h5" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'dashboard'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M5 5h5v5H5z" />
-              <path d="M14 5h5v8h-5z" />
-              <path d="M5 14h5v5H5z" />
-              <path d="M14 16h5v3h-5z" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'telemetry'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path
-                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
-              />
-              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
-            </svg>
-            <svg
-              v-else-if="tab.icon === 'settings'"
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M5 7h10" />
-              <path d="M5 17h14" />
-              <path d="M15 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
-              <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
-            </svg>
-            <svg
-              v-else
-              class="icon-svg"
-              viewBox="0 0 24 24"
-              fill="none"
-            >
-              <path d="M12 5v4" />
-              <path d="M12 15v4" />
-              <path d="M5 12h4" />
-              <path d="M15 12h4" />
-              <path d="M7.8 7.8l2.8 2.8" />
-              <path d="M13.4 13.4l2.8 2.8" />
-              <path d="M16.2 7.8l-2.8 2.8" />
-              <path d="M10.6 13.4l-2.8 2.8" />
-              <circle cx="12" cy="12" r="2.2" />
             </svg>
           </span>
-          <span class="sr-only">{{ tab.label }}</span>
+          <span class="tab-label">{{ tab.label }}</span>
         </RouterLink>
+        <button
+          type="button"
+          class="tab tab-more"
+          :class="{ active: moreActive }"
+          aria-label="More"
+          :aria-expanded="menuOpen"
+          title="More"
+          @click="toggleMenu"
+        >
+          <span class="tab-icon" aria-hidden="true">
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
+              <path
+                v-for="path in iconPaths.more"
+                :key="path"
+                :d="path"
+              />
+            </svg>
+          </span>
+          <span class="tab-label">More</span>
+        </button>
       </nav>
       <SosOverlay />
     </div>
@@ -271,7 +408,7 @@ function isTabActive(path: string): boolean {
 
 .app-shell {
   display: grid;
-  gap: 0.95rem;
+  gap: 0.72rem;
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   margin: 0 auto;
@@ -286,19 +423,21 @@ function isTabActive(path: string): boolean {
   backdrop-filter: blur(16px);
   background: linear-gradient(135deg, rgb(5 21 43 / 88%), rgb(6 27 52 / 62%));
   border: 1px solid rgb(74 137 214 / 28%);
-  border-radius: 18px;
+  border-radius: 15px;
   box-shadow:
     inset 0 1px 0 rgb(147 214 255 / 10%),
     0 18px 40px rgb(1 6 19 / 28%);
-  display: flex;
-  justify-content: space-between;
-  padding: 0.72rem 0.9rem;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: 0.48rem 0.62rem;
 }
 
 .brand {
   align-items: center;
   display: flex;
-  gap: 0.82rem;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .brand-mark-wrap {
@@ -307,36 +446,55 @@ function isTabActive(path: string): boolean {
     radial-gradient(circle at 30% 30%, rgb(114 232 255 / 16%), transparent 48%),
     linear-gradient(145deg, rgb(8 31 59 / 90%), rgb(6 18 39 / 96%));
   border: 1px solid rgb(104 200 255 / 24%);
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow:
     inset 0 1px 0 rgb(188 241 255 / 10%),
     0 12px 30px rgb(1 8 22 / 36%);
   display: inline-flex;
-  padding: 0.24rem;
+  padding: 0.16rem;
 }
 
 .brand-mark {
   display: block;
   filter: drop-shadow(0 0 18px rgb(80 212 255 / 16%));
-  height: 3.05rem;
-  width: 3.05rem;
+  height: 2.08rem;
+  width: 2.08rem;
 }
 
 .title {
   color: #f3fbff;
   font-family: var(--font-headline);
-  font-size: clamp(1.28rem, 1.8vw, 1.72rem);
-  letter-spacing: 0.22em;
+  font-size: clamp(0.98rem, 1.3vw, 1.22rem);
+  letter-spacing: 0.15em;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.page-title {
+  color: #f5fbff;
+  font-family: var(--font-headline);
+  font-size: clamp(1.16rem, 2.3vw, 1.75rem);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  margin: 0;
+  max-width: min(38vw, 28rem);
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mast-actions {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
+  flex-wrap: nowrap;
+  gap: 0.42rem;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .peer-count {
@@ -347,11 +505,11 @@ function isTabActive(path: string): boolean {
   color: #d7efff;
   display: inline-flex;
   font-family: var(--font-ui);
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   justify-content: center;
-  min-width: 2rem;
-  padding: 0.28rem 0.52rem;
+  min-width: 1.8rem;
+  padding: 0.22rem 0.45rem;
   box-shadow: inset 0 1px 0 rgb(211 241 255 / 8%);
 }
 
@@ -361,9 +519,9 @@ function isTabActive(path: string): boolean {
   border-radius: 999px;
   color: #6ac1ff;
   font-family: var(--font-ui);
-  font-size: 0.74rem;
+  font-size: 0.66rem;
   letter-spacing: 0.09em;
-  padding: 0.3rem 0.62rem;
+  padding: 0.23rem 0.5rem;
   box-shadow: inset 0 1px 0 rgb(211 241 255 / 8%);
   text-transform: uppercase;
 }
@@ -384,39 +542,194 @@ function isTabActive(path: string): boolean {
   scrollbar-gutter: stable both-edges;
 }
 
+.menu-backdrop {
+  background: rgb(0 4 12 / 36%);
+  inset: 0;
+  position: fixed;
+  z-index: 8;
+}
+
+.tools-menu {
+  backdrop-filter: blur(14px);
+  background:
+    linear-gradient(145deg, rgb(3 11 26 / 95%), rgb(4 17 37 / 94%)),
+    radial-gradient(circle at 22% 0%, rgb(59 177 255 / 20%), transparent 42%);
+  border: 1px solid rgb(83 138 205 / 34%);
+  border-radius: 16px;
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px) + 0.75rem);
+  box-shadow:
+    inset 0 1px 0 rgb(177 229 255 / 8%),
+    0 22px 48px rgb(0 0 0 / 46%);
+  max-height: min(70dvh, 560px);
+  overflow: hidden;
+  position: absolute;
+  right: 0;
+  width: min(27rem, calc(100vw - 1.2rem));
+  z-index: 12;
+}
+
+.tools-rail {
+  align-items: center;
+  background: rgb(2 8 18 / 82%);
+  border-bottom: 1px solid rgb(89 126 181 / 26%);
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  min-height: 3.2rem;
+}
+
+.tools-rail-icon,
+.tools-close {
+  align-items: center;
+  color: #dff3ff;
+  display: inline-flex;
+  height: 3.2rem;
+  justify-content: center;
+  width: 100%;
+}
+
+.tools-rail-icon .icon-svg,
+.tools-close .icon-svg {
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.tools-close {
+  --btn-bg: transparent;
+  --btn-bg-pressed: rgb(22 52 83 / 92%);
+  --btn-border: transparent;
+  --btn-border-pressed: rgb(122 210 255 / 42%);
+  --btn-shadow: none;
+  --btn-shadow-pressed: inset 0 0 0 1px rgb(122 210 255 / 20%);
+  --btn-color: #dff3ff;
+  --btn-color-pressed: #f4fbff;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tools-header {
+  align-items: center;
+  background: rgb(2 8 18 / 58%);
+  border-bottom: 1px solid rgb(89 126 181 / 26%);
+  display: flex;
+  justify-content: space-between;
+  min-height: 3.4rem;
+  padding: 0 1rem;
+}
+
+.tools-header h2 {
+  color: #f2f8ff;
+  font-family: var(--font-headline);
+  font-size: 1.45rem;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.tools-header-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.58rem;
+}
+
+.tools-header-actions span {
+  background: #b9e9ff;
+  border-radius: 999px;
+  box-shadow: 0 0 12px rgb(100 190 255 / 26%);
+  display: inline-block;
+  height: 0.42rem;
+  width: 0.42rem;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.tool-tile {
+  align-items: center;
+  aspect-ratio: 1 / 0.88;
+  border-bottom: 1px solid rgb(165 207 255 / 22%);
+  border-right: 1px solid rgb(165 207 255 / 22%);
+  color: #d8ecff;
+  display: grid;
+  gap: 0.38rem;
+  justify-items: center;
+  min-height: 6.4rem;
+  padding: 0.76rem 0.5rem;
+  text-align: center;
+  text-decoration: none;
+}
+
+.tool-tile:nth-child(3n) {
+  border-right: 0;
+}
+
+.tool-tile.active {
+  background:
+    linear-gradient(180deg, rgb(32 140 219 / 28%), rgb(5 28 61 / 56%));
+  color: #70d8ff;
+}
+
+.tool-tile:focus-visible {
+  outline: 2px solid rgb(116 218 255 / 72%);
+  outline-offset: -3px;
+}
+
+.tool-tile-icon {
+  align-items: center;
+  color: currentColor;
+  display: inline-flex;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+
+.tool-tile-label {
+  color: currentColor;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.8vw, 1.02rem);
+  font-weight: 600;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
 .tabs {
   align-self: end;
   backdrop-filter: blur(9px);
   background: rgb(3 13 33 / 84%);
   border: 1px solid rgb(63 99 157 / 37%);
-  border-radius: 13px;
+  border-radius: 15px;
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.18rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   max-width: 100%;
+  padding: 0.28rem;
 }
 
 .tab {
   align-items: center;
-  border-right: 1px solid rgb(60 101 160 / 20%);
+  background: transparent;
+  border: 0;
   color: #8ea5ca;
+  cursor: pointer;
   display: grid;
+  font: inherit;
+  gap: 0.18rem;
   justify-items: center;
-  min-height: 50px;
-  padding: 0.35rem;
+  min-height: 54px;
+  padding: 0.34rem 0.22rem;
   position: relative;
   text-decoration: none;
-}
-
-.tab:last-child {
-  border-right: 0;
 }
 
 .tab-icon {
   align-items: center;
   display: inline-flex;
-  height: 1.45rem;
+  height: 1.35rem;
   justify-content: center;
-  width: 1.45rem;
+  width: 1.35rem;
 }
 
 .icon-svg {
@@ -429,8 +742,24 @@ function isTabActive(path: string): boolean {
 }
 
 .tab.active {
-  color: #54ceff;
-  text-shadow: 0 0 16px rgb(84 206 255 / 40%);
+  background: linear-gradient(180deg, #32baff, #1597ee);
+  border: 1px solid rgb(191 238 255 / 62%);
+  border-radius: 13px;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 34%),
+    0 0 18px rgb(50 186 255 / 28%);
+  color: #03192f;
+  text-shadow: none;
+}
+
+.tab-label {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sr-only {
@@ -453,46 +782,65 @@ function isTabActive(path: string): boolean {
   }
 
   .masthead {
-    gap: 0.6rem;
-    padding: 0.62rem 0.72rem;
+    gap: 0.42rem;
+    grid-template-columns: minmax(0, 0.72fr) minmax(0, auto) minmax(0, 0.86fr);
+    padding: 0.42rem 0.5rem;
   }
 
   .brand {
-    flex: 1;
-    gap: 0.55rem;
+    gap: 0.38rem;
     min-width: 0;
   }
 
   .brand-mark {
-    height: 2.5rem;
-    width: 2.5rem;
+    height: 1.82rem;
+    width: 1.82rem;
   }
 
   .title {
-    font-size: 1.12rem;
-    letter-spacing: 0.16em;
+    font-size: 0.86rem;
+    letter-spacing: 0.12em;
   }
 
-  .masthead {
-    align-items: center;
-    flex-direction: row;
+  .page-title {
+    font-size: 1.12rem;
+    max-width: 34vw;
   }
 
   .mast-actions {
-    flex-shrink: 0;
-    flex-wrap: nowrap;
-    gap: 0.45rem;
-    width: auto;
+    gap: 0.34rem;
   }
 
   .peer-count {
-    min-width: 1.8rem;
-    padding: 0.25rem 0.48rem;
+    font-size: 0.66rem;
+    min-width: 1.62rem;
+    padding: 0.19rem 0.38rem;
   }
 
   .running {
+    font-size: 0.61rem;
+    padding: 0.2rem 0.42rem;
+  }
+
+  .tools-menu {
+    bottom: calc(61px + env(safe-area-inset-bottom, 0px) + 0.55rem);
+    width: min(25.5rem, calc(100vw - 1.2rem));
+  }
+
+  .tool-tile {
+    min-height: 5.9rem;
+  }
+
+  .tabs {
+    padding: 0.24rem;
+  }
+
+  .tab {
+    min-height: 52px;
+  }
+
+  .tab-label {
     font-size: 0.68rem;
-    padding: 0.28rem 0.52rem;
   }
 }
 </style>

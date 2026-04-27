@@ -342,12 +342,6 @@ watch(
 <template>
   <section class="view" :class="`pane-${mobilePane}`">
     <header class="view-header">
-      <div class="view-heading">
-        <h1 class="view-title">Inbox</h1>
-        <p class="sync-line header-sync-line">
-          Sync status: <strong>{{ syncStatusLabel }}</strong>
-        </p>
-      </div>
       <div class="header-actions">
         <button
           class="create-toggle"
@@ -442,7 +436,7 @@ watch(
   align-items: baseline;
   display: flex;
   gap: 1rem;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .view-heading {

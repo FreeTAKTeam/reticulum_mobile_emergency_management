@@ -186,10 +186,6 @@ function deleteMessage(callsign: string): void {
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Emergency Action Messages</h1>
-        <p>Status updates from field members.</p>
-      </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
         <span v-if="messagesStore.draftCount > 0" class="badge badge-warning">
@@ -304,7 +300,7 @@ function deleteMessage(callsign: string): void {
 .view-header {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .header-actions {

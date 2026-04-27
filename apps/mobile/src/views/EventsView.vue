@@ -79,10 +79,6 @@ async function deleteEvent(uid: string): Promise<void> {
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Events</h1>
-        <p>Replicated Logs feed.</p>
-      </div>
       <div class="header-actions">
         <span class="badge"># {{ events.length }} EVT</span>
         <button
@@ -169,7 +165,7 @@ async function deleteEvent(uid: string): Promise<void> {
 .view-header {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .header-actions {

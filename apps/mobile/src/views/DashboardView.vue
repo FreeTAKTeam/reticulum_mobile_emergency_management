@@ -90,10 +90,6 @@ onMounted(() => {
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Emergency Ops Dashboard</h1>
-        <p>Readiness from All messages.</p>
-      </div>
       <div class="header-actions">
         <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
         <button type="button" class="badge badge-button" @click="announceNow">Announce</button>
@@ -151,7 +147,7 @@ onMounted(() => {
 .view-header {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .header-actions {

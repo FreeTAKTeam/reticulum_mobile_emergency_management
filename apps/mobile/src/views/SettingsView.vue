@@ -403,10 +403,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Settings</h1>
-        <p>Node runtime, saved peers, and directory source controls.</p>
-      </div>
       <div class="header-actions">
         <span class="badge">{{ nodeStore.status.running ? "Node Active" : "Node Offline" }}</span>
         <button type="button" :disabled="!hasUnsavedSettings || savingSettings" @click="applySettings">
@@ -830,7 +826,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 .view-header {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .header-actions {

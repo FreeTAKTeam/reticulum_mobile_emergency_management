@@ -254,7 +254,6 @@ onMounted(() => {
     <h1 class="sr-only">Checklists</h1>
 
     <section class="segment-strip">
-      <h2 class="segment-title">Checklists</h2>
       <div class="segment-actions">
         <span class="badge"># {{ displayedTaskTotal }} TSK</span>
         <button

@@ -387,12 +387,8 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="telemetry-view">
-    <header class="telemetry-header">
-      <h1>Telemetry Map</h1>
-      <p>{{ lastUpdatedLabel }}</p>
-    </header>
-
     <div class="telemetry-legend">
+      <span>{{ lastUpdatedLabel }}</span>
       <span><i class="dot live"></i> Live (&lt; {{ staleThresholdMinutesLabel }} min)</span>
       <span><i class="dot stale"></i> Stale (&ge; {{ staleThresholdMinutesLabel }} min)</span>
       <span><i class="dot sos"></i> SOS trail</span>
@@ -406,7 +402,7 @@ onBeforeUnmount(() => {
 .telemetry-view {
   display: grid;
   gap: 0.75rem;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 100%;
 }
 

@@ -116,10 +116,6 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
 <template>
   <section class="view">
     <header>
-      <h1>Peers &amp; Discovery</h1>
-      <p>
-        Select your mesh Team.
-      </p>
       <div class="header-actions">
         <button
           type="button"
@@ -255,6 +251,11 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
   gap: 1rem;
 }
 
+header {
+  display: flex;
+  justify-content: flex-end;
+}
+
 h1 {
   font-family: var(--font-headline);
   font-size: clamp(1.4rem, 3vw, 2.4rem);
@@ -271,7 +272,6 @@ header p {
   align-items: center;
   display: flex;
   gap: 0.55rem;
-  margin-top: 0.7rem;
 }
 
 .badge {
