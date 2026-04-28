@@ -13,6 +13,7 @@ mod sos;
 mod sos_detector;
 mod sos_fields;
 mod types;
+mod wearables;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
@@ -34,7 +35,8 @@ pub use types::{
     SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
-    TelemetrySettingsRecord,
+    TelemetrySettingsRecord, WearableDeviceConfigRecord, WearableSensorEvent, WearableSensorType,
+    WearableSensorValue, WearableSettingsRecord, WearableStatusKind, WearableStatusRecord,
 };
 
 pub fn healthcheck() -> String {

@@ -18,6 +18,7 @@ use crate::types::{
     EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
     SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
+    WearableSensorType, WearableSettingsRecord, WearableStatusRecord,
     DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
 };
 
@@ -184,6 +185,13 @@ impl AppStateStore {
                 CREATE TABLE IF NOT EXISTS telemetry_positions (
                     callsign_key TEXT PRIMARY KEY,
                     updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS wearable_status (
+                    device_sensor_key TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    sensor_type TEXT NOT NULL,
+                    last_seen_timestamp_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS sos_settings (
@@ -1440,6 +1448,35 @@ impl AppStateStore {
         Ok(invalidation)
     }
 
+    pub fn get_wearable_status(&self) -> Result<Vec<WearableStatusRecord>, NodeError> {
+        query_json_records(
+            &self.connect()?,
+            "SELECT json FROM wearable_status ORDER BY last_seen_timestamp_ms DESC",
+        )
+    }
+
+    pub fn upsert_wearable_status(
+        &self,
+        status: &WearableStatusRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_wearable_status_tx(&transaction, status)?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::Wearables {},
+            Some(wearable_status_key(
+                status.device_id.as_str(),
+                status.sensor_type,
+            )),
+            Some("wearable-upserted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
     pub fn get_sos_settings(&self) -> Result<Option<SosSettingsRecord>, NodeError> {
         let connection = self.connect()?;
         let raw: Option<String> = connection
@@ -1909,6 +1946,39 @@ impl AppStateStore {
                 params![
                     position.callsign.to_ascii_lowercase(),
                     position.updated_at_ms as i64,
+                    json
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    fn write_wearable_status_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        status: &WearableStatusRecord,
+    ) -> Result<(), NodeError> {
+        let json = serialize_json(status)?;
+        transaction
+            .execute(
+                "INSERT INTO wearable_status (
+                    device_sensor_key,
+                    device_id,
+                    sensor_type,
+                    last_seen_timestamp_ms,
+                    json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(device_sensor_key) DO UPDATE SET
+                    device_id = excluded.device_id,
+                    sensor_type = excluded.sensor_type,
+                    last_seen_timestamp_ms = excluded.last_seen_timestamp_ms,
+                    json = excluded.json",
+                params![
+                    wearable_status_key(status.device_id.as_str(), status.sensor_type),
+                    status.device_id.as_str(),
+                    status.sensor_type.as_str(),
+                    status.last_seen_timestamp_ms,
                     json
                 ],
             )
@@ -2606,8 +2676,13 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Conversations {} => "Conversations",
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
+        ProjectionScope::Wearables {} => "Wearables",
         ProjectionScope::Sos {} => "Sos",
     }
+}
+
+fn wearable_status_key(device_id: &str, sensor_type: WearableSensorType) -> String {
+    format!("{device_id}:{}", sensor_type.as_str())
 }
 
 pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
@@ -2943,6 +3018,7 @@ mod tests {
             checklists: ChecklistSettingsRecord {
                 default_task_due_step_minutes,
             },
+            wearables: WearableSettingsRecord::default(),
         }
     }
 

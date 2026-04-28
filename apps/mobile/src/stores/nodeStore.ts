@@ -107,6 +107,7 @@ const EMPTY_OPERATIONAL_SUMMARY = {
   eamCount: 0,
   eventCount: 0,
   telemetryCount: 0,
+  wearableCount: 0,
   updatedAtMs: 0,
 };
 
@@ -137,6 +138,11 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     accuracyThresholdMeters: undefined,
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,
+  },
+  wearables: {
+    enabled: false,
+    staleTimeoutSeconds: 30,
+    devices: [],
   },
   checklists: {
     defaultTaskDueStepMinutes: 30,
@@ -340,6 +346,27 @@ function normalizeChecklistSettings(
   };
 }
 
+function normalizeWearableSettings(
+  wearables: Partial<NodeUiSettings["wearables"]> | undefined,
+  base: NodeUiSettings["wearables"] = DEFAULT_SETTINGS.wearables,
+): NodeUiSettings["wearables"] {
+  const devices = Array.isArray(wearables?.devices)
+    ? wearables.devices
+        .map((device) => ({
+          deviceId: asTrimmedString(device.deviceId),
+          alias: asTrimmedString(device.alias) || undefined,
+          operatorRnsIdentity: asTrimmedString(device.operatorRnsIdentity) || undefined,
+          sensorType: "heart_rate_bpm" as const,
+        }))
+        .filter((device) => device.deviceId.length > 0)
+    : [...base.devices];
+  return {
+    enabled: Boolean(wearables?.enabled ?? base.enabled),
+    staleTimeoutSeconds: Math.max(1, Number(wearables?.staleTimeoutSeconds ?? base.staleTimeoutSeconds)),
+    devices,
+  };
+}
+
 function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
   switch (String(value ?? "").trim()) {
     case "Connected":
@@ -367,6 +394,10 @@ function cloneDefaultSettings(): NodeUiSettings {
   return {
     ...DEFAULT_SETTINGS,
     telemetry: { ...DEFAULT_SETTINGS.telemetry },
+    wearables: {
+      ...DEFAULT_SETTINGS.wearables,
+      devices: DEFAULT_SETTINGS.wearables.devices.map((device) => ({ ...device })),
+    },
     checklists: { ...DEFAULT_SETTINGS.checklists },
     hub: { ...DEFAULT_SETTINGS.hub },
   };
@@ -389,6 +420,16 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
     },
     checklists: {
       defaultTaskDueStepMinutes: settings.checklists.defaultTaskDueStepMinutes,
+    },
+    wearables: {
+      enabled: settings.wearables.enabled,
+      staleTimeoutSeconds: settings.wearables.staleTimeoutSeconds,
+      devices: settings.wearables.devices.map((device) => ({
+        deviceId: device.deviceId,
+        alias: device.alias,
+        operatorRnsIdentity: device.operatorRnsIdentity,
+        sensorType: "heart_rate_bpm",
+      })),
     },
     hub: {
       mode: settings.hub.mode,
@@ -424,6 +465,7 @@ function normalizeAppSettingsRecord(
       tcpFallback,
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
+    wearables: normalizeWearableSettings(runtimeSettings.wearables),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
     hub: {
       ...DEFAULT_SETTINGS.hub,
@@ -945,9 +987,13 @@ export const useNodeStore = defineStore("node", () => {
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
-  settings.telemetry = { ...next.telemetry };
-  settings.checklists = { ...next.checklists };
-  settings.hub = { ...next.hub };
+    settings.telemetry = { ...next.telemetry };
+    settings.wearables = {
+      ...next.wearables,
+      devices: next.wearables.devices.map((device) => ({ ...device })),
+    };
+    settings.checklists = { ...next.checklists };
+    settings.hub = { ...next.hub };
     applyUiSettingsProjection(toUiSettingsProjection(next));
   }
 
@@ -2162,6 +2208,9 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (next.telemetry) {
       settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
+    }
+    if (next.wearables) {
+      settings.wearables = normalizeWearableSettings(next.wearables, settings.wearables);
     }
     if (next.hub) {
       const previousHubMode = settings.hub.mode;
