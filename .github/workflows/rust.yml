@@ -19,7 +19,9 @@ jobs:
     - uses: actions/checkout@v4
       with:
         repository: FreeTAKTeam/LXMF-rs
-        path: ../LXMF-rs
+        path: LXMF-rs
+    - name: Link LXMF dependency path
+      run: ln -s "$GITHUB_WORKSPACE/LXMF-rs" "$GITHUB_WORKSPACE/../LXMF-rs"
     - name: Build
       run: cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
     - name: Run tests
