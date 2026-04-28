@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   telemetry: "reticulum.mobile.telemetry.v1",
   settings: "reticulum.mobile.settings.v1",
   savedPeers: "reticulum.mobile.savedPeers.v1",
+  setupWizard: "reticulum.mobile.setupWizard.v1",
 } as const;
 
 export interface ActionMessageSeed {
@@ -125,6 +126,7 @@ interface StorageSeed {
   telemetry?: TelemetrySeed[];
   settings?: SettingsSeed;
   savedPeers?: SavedPeerSeed[];
+  setupWizardCompleted?: boolean;
 }
 
 export const defaultSettings: SettingsSeed = {
@@ -174,6 +176,15 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
       if (payload.savedPeers) {
         window.localStorage.setItem(keys.savedPeers, JSON.stringify(payload.savedPeers));
       }
+
+      window.localStorage.setItem(
+        keys.setupWizard,
+        JSON.stringify({
+          completed: payload.setupWizardCompleted,
+          completedAt: payload.setupWizardCompleted ? Date.now() : undefined,
+          lastOpenedAt: payload.setupWizardCompleted ? Date.now() : undefined,
+        }),
+      );
     },
     {
       keys: STORAGE_KEYS,
@@ -183,6 +194,7 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
         telemetry: seed.telemetry,
         settings: seed.settings,
         savedPeers: seed.savedPeers,
+        setupWizardCompleted: seed.setupWizardCompleted ?? true,
       },
     },
   );
@@ -190,5 +202,5 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
 
 export async function gotoApp(page: Page, path: string): Promise<void> {
   await page.goto(path);
-  await expect(page.locator("main h1").first()).toBeVisible();
+  await expect(page.locator("main h1, header h1").first()).toBeVisible();
 }

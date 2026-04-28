@@ -64,6 +64,28 @@ async function ensureNotificationsReady(): Promise<boolean> {
   return initState;
 }
 
+export async function checkNotificationPermission(): Promise<boolean> {
+  if (!isNotificationRuntimeSupported()) {
+    return false;
+  }
+
+  const permission = await LocalNotifications.checkPermissions().catch(() => ({ display: "denied" }));
+  return permission.display === "granted";
+}
+
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (!isNotificationRuntimeSupported()) {
+    return false;
+  }
+
+  const permission = await LocalNotifications.requestPermissions().catch(() => ({ display: "denied" }));
+  if (permission.display !== "granted") {
+    return false;
+  }
+  initState = Promise.resolve(true);
+  return true;
+}
+
 function notificationTargetFromExtra(extra: unknown): NotificationNavigationTarget | null {
   if (!extra || typeof extra !== "object") {
     return null;

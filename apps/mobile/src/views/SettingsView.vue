@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, reactive, ref, useTemplateRef } from "vue";
+import { useRouter } from "vue-router";
 
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
@@ -15,6 +16,7 @@ interface KnownTcpServerOption {
 }
 
 const nodeStore = useNodeStore();
+const router = useRouter();
 const telemetryStore = useTelemetryStore();
 const sosCardRef = useTemplateRef<{
   saveSettings: () => Promise<void>;
@@ -26,7 +28,7 @@ const savingSettings = ref(false);
 const aboutItems = [
   {
     label: "Application name",
-    value: "R.E.M. (Reticulum Emergency Messages)",
+    value: "R.E.M. (Reticulum Emergency Manager)",
   },
   {
     label: "Description",
@@ -393,6 +395,13 @@ function openPeerListFilePicker(): void {
   peerListFileInput.value?.click();
 }
 
+async function runSetupWizard(): Promise<void> {
+  await router.push({
+    path: "/setup",
+    query: { source: "settings" },
+  });
+}
+
 async function onPeerListFileSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -425,6 +434,24 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="m7 10 5 5 5-5" />
           </svg>
+        </button>
+        <button
+          type="button"
+          class="settings-chip setup-chip"
+          aria-label="Run setup wizard"
+          @click="runSetupWizard"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3v5" />
+            <path d="M12 16v5" />
+            <path d="M4 12h5" />
+            <path d="M15 12h5" />
+            <path d="M7.8 7.8l2.2 2.2" />
+            <path d="M14 14l2.2 2.2" />
+            <path d="M16.2 7.8 14 10" />
+            <path d="M10 14l-2.2 2.2" />
+          </svg>
+          <span>Setup Wizard</span>
         </button>
         <button
           type="button"
@@ -863,7 +890,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
   align-items: center;
   display: grid;
   gap: 0.72rem;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.55fr) minmax(6.8rem, 0.9fr);
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr) minmax(0, 1.12fr) minmax(6.8rem, 0.9fr);
 }
 
 h1 {
@@ -943,6 +970,16 @@ h1 {
   background: rgb(7 25 54 / 84%);
   border: 1px solid rgb(73 173 255 / 52%);
   color: #a7c7ee;
+  cursor: pointer;
+}
+
+.setup-chip {
+  --btn-bg: rgb(8 39 74 / 84%);
+  --btn-border: rgb(92 205 255 / 50%);
+  --btn-color: #8ee6ff;
+  background: rgb(8 39 74 / 84%);
+  border: 1px solid rgb(92 205 255 / 50%);
+  color: #8ee6ff;
   cursor: pointer;
 }
 
@@ -1317,7 +1354,7 @@ button:disabled {
 
   .header-actions {
     gap: 0.48rem;
-    grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.42fr) minmax(5.8rem, 0.78fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .settings-chip,

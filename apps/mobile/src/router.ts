@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import ActionMessagesView from "./views/ActionMessagesView.vue";
+import BioSensorsView from "./views/BioSensorsView.vue";
 import CheclklistView from "./views/CheclklistView.vue";
 import ChecklistDetailView from "./views/ChecklistDetailView.vue";
 import DashboardView from "./views/DashboardView.vue";
@@ -8,6 +9,7 @@ import InboxView from "./views/InboxView.vue";
 import MessageStatusHelpView from "./views/MessageStatusHelpView.vue";
 import PeersDiscoveryView from "./views/PeersDiscoveryView.vue";
 import SettingsView from "./views/SettingsView.vue";
+import SetupWizardView from "./views/SetupWizardView.vue";
 import TelemetryMapView from "./views/TelemetryMapView.vue";
 
 const routes = [
@@ -58,9 +60,19 @@ const routes = [
     component: SettingsView,
   },
   {
+    path: "/setup",
+    name: "setup",
+    component: SetupWizardView,
+  },
+  {
     path: "/peers",
     name: "peers",
     component: PeersDiscoveryView,
+  },
+  {
+    path: "/bio-sensors",
+    name: "bio-sensors",
+    component: BioSensorsView,
   },
   {
     path: "/telemetry",

@@ -12,6 +12,7 @@ import { useMessagesStore } from "./stores/messagesStore";
 import { useSosStore } from "./stores/sosStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
+import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -42,7 +43,10 @@ registerNotificationNavigationHandler(async (target) => {
 
 onMounted(async () => {
   try {
-    await initAppNotifications();
+    const setupCompleted = hasCompletedSetupWizard();
+    if (setupCompleted) {
+      await initAppNotifications();
+    }
     await nodeStore.init();
     await messagingStore.init();
     await nodeStore.startNode();
@@ -58,7 +62,12 @@ onMounted(async () => {
     eventsStore.initReplication();
     checklistsStore.initReplication();
     telemetryStore.initReplication();
-    await telemetryStore.requestStartupPermission();
+    if (setupCompleted && nodeStore.settings.telemetry.enabled) {
+      await telemetryStore.requestStartupPermission();
+    }
+    if (!setupCompleted && route.path !== "/setup") {
+      await router.replace("/setup");
+    }
   } catch (error: unknown) {
     nodeStore.lastError = error instanceof Error ? error.message : String(error);
   }
@@ -71,6 +80,7 @@ type AppIcon =
   | "dashboard"
   | "events"
   | "map"
+  | "bio-sensors"
   | "more"
   | "peers"
   | "settings";
@@ -97,6 +107,7 @@ const menuItems: NavigationItem[] = [
   { path: "/checlklist", label: "Tasks", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
+  { path: "/bio-sensors", label: "Bio Sensors", icon: "bio-sensors" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -132,6 +143,11 @@ const iconPaths: Record<AppIcon, string[]> = {
   map: [
     "M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z",
     "M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z",
+  ],
+  "bio-sensors": [
+    "M5 12h3l1.5-4 4 9 2-5H19",
+    "M4 19h16",
+    "M6 5h12",
   ],
   more: [
     "M5 7h14",
@@ -170,8 +186,12 @@ const pageTitle = computed(() => {
       return "Status Help";
     case "peers":
       return "Peers";
+    case "bio-sensors":
+      return "Bio Sensors";
     case "settings":
       return "Settings";
+    case "setup":
+      return "Setup";
     case "telemetry":
       return "Map";
     default:
@@ -210,10 +230,12 @@ const moreRouteNames = new Set([
   "events",
   "message-status-help",
   "peers",
+  "bio-sensors",
   "settings",
 ]);
 
 const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")));
+const setupActive = computed(() => route.name === "setup");
 
 function toggleMenu(): void {
   menuOpen.value = !menuOpen.value;
@@ -233,8 +255,8 @@ watch(
 
 <template>
   <div class="app-bg">
-    <div class="app-shell">
-      <header class="masthead">
+    <div class="app-shell" :class="{ 'setup-mode': setupActive }">
+      <header v-if="!setupActive" class="masthead">
         <div class="brand">
           <div class="brand-mark-wrap">
             <img class="brand-mark" :src="logoUrl" alt="R.E.M. logo" />
@@ -257,19 +279,19 @@ watch(
         </div>
       </header>
 
-      <main class="content">
+      <main class="content" :class="{ 'setup-content': setupActive }">
         <RouterView />
       </main>
 
       <div
-        v-if="menuOpen"
+        v-if="menuOpen && !setupActive"
         class="menu-backdrop"
         aria-hidden="true"
         @click="closeMenu"
       ></div>
 
       <aside
-        v-if="menuOpen"
+        v-if="menuOpen && !setupActive"
         class="tools-menu"
         aria-label="More tools"
       >
@@ -333,7 +355,7 @@ watch(
         </div>
       </aside>
 
-      <nav class="tabs" aria-label="Primary navigation">
+      <nav v-if="!setupActive" class="tabs" aria-label="Primary navigation">
         <RouterLink
           v-for="tab in footerItems"
           :key="tab.path"
@@ -375,7 +397,7 @@ watch(
           <span class="tab-label">More</span>
         </button>
       </nav>
-      <SosOverlay />
+      <SosOverlay v-if="!setupActive" />
     </div>
   </div>
 </template>
@@ -416,6 +438,11 @@ watch(
   min-height: 0;
   position: relative;
   z-index: 1;
+}
+
+.app-shell.setup-mode {
+  grid-template-rows: minmax(0, 1fr);
+  max-width: 980px;
 }
 
 .masthead {
@@ -540,6 +567,11 @@ watch(
   padding-bottom: 0.2rem;
   padding-right: 0.15rem;
   scrollbar-gutter: stable both-edges;
+}
+
+.content.setup-content {
+  padding: 0;
+  scrollbar-gutter: stable;
 }
 
 .menu-backdrop {
