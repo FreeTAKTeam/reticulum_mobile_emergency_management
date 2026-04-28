@@ -16,6 +16,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        repository: FreeTAKTeam/LXMF-rs
+        path: ../LXMF-rs
     - name: Build
       run: cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
     - name: Run tests
