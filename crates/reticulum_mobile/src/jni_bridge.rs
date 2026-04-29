@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::node::{EventSubscription, Node};
 use crate::types::{
     AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
+    ChecklistDeleteRequest, ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
     ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
     ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
@@ -300,6 +300,14 @@ struct ChecklistUidInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChecklistDeleteInput {
+    checklist_uid: String,
+    #[serde(default)]
+    delete_remote: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChecklistCreateInput {
     checklist_uid: Option<String>,
     mission_uid: Option<String>,
@@ -460,6 +468,18 @@ struct SosTelemetryInput {
     battery_percent: Option<f64>,
     battery_charging: Option<bool>,
     updated_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SosAudioInput {
+    audio_id: String,
+    incident_id: String,
+    source_hex: String,
+    path: String,
+    mime_type: String,
+    duration_seconds: u32,
+    created_at_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1222,6 +1242,18 @@ fn sos_audio_json(audio: &SosAudioRecord) -> serde_json::Value {
     })
 }
 
+fn to_sos_audio_record(input: SosAudioInput) -> SosAudioRecord {
+    SosAudioRecord {
+        audio_id: input.audio_id,
+        incident_id: input.incident_id,
+        source_hex: input.source_hex,
+        path: input.path,
+        mime_type: input.mime_type,
+        duration_seconds: input.duration_seconds,
+        created_at_ms: input.created_at_ms,
+    }
+}
+
 fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
     json!({
         "destination": peer.destination_hex,
@@ -1475,14 +1507,6 @@ fn send_mode_from_input(send_mode: Option<&str>, use_propagation_node: bool) -> 
         "DirectOnly" => SendMode::DirectOnly {},
         "PropagationOnly" => SendMode::PropagationOnly {},
         _ => SendMode::Auto {},
-    }
-}
-
-fn send_mode_to_str(mode: SendMode) -> &'static str {
-    match mode {
-        SendMode::Auto {} => "Auto",
-        SendMode::DirectOnly {} => "DirectOnly",
-        SendMode::PropagationOnly {} => "PropagationOnly",
     }
 }
 
@@ -2886,7 +2910,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
             return ptr::null_mut();
         }
     };
-    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+    let payload: ChecklistDeleteInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
             set_last_error(
@@ -3119,7 +3143,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+    let payload: ChecklistDeleteInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
             return err_result(
@@ -3133,7 +3157,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node(&mut guard);
-    match node.delete_checklist(payload.checklist_uid) {
+    match node.delete_checklist(ChecklistDeleteRequest {
+        checklist_uid: payload.checklist_uid,
+        delete_remote: payload.delete_remote,
+    }) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);
@@ -4050,6 +4077,34 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosA
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordSosAudioJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SosAudioInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid SOS audio payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.record_sos_audio(to_sos_audio_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

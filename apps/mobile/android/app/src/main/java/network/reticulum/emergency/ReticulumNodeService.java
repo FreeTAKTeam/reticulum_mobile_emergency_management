@@ -497,6 +497,10 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.listSosAudioJson(), "{\"items\":[]}");
     }
 
+    public synchronized int recordSosAudioJson(String payloadJson) {
+        return ReticulumBridge.recordSosAudioJson(payloadJson);
+    }
+
     public synchronized int setAnnounceCapabilities(String capabilityString) {
         return ReticulumBridge.setAnnounceCapabilities(capabilityString);
     }

@@ -24,8 +24,8 @@ use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
     AnnounceRecord, AppSettingsRecord, ChecklistCreateFromTemplateRequest,
-    ChecklistCreateOnlineRequest, ChecklistListActiveRequest, ChecklistRecord,
-    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+    ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
+    ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
@@ -207,6 +207,8 @@ struct MissionReplicationTarget {
     app_destination_hex: String,
     send_mode: SendMode,
 }
+
+type ScheduledMissionSend = (String, Vec<u8>, Vec<u8>, SendMode);
 
 fn effective_hub_mode(
     configured_mode: HubMode,
@@ -1030,6 +1032,38 @@ fn build_checklist_replication_payload(
     args: &JsonMap<String, JsonValue>,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     build_checklist_replication_payload_with_command_id(status, target, command_type, args, None)
+}
+
+fn build_checklist_delete_replication_sends(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    checklist_uid: &str,
+    delete_remote: bool,
+) -> Result<Vec<ScheduledMissionSend>, NodeError> {
+    if !delete_remote {
+        return Ok(Vec::new());
+    }
+
+    let replication_targets = build_runtime_mission_replication_targets(
+        status,
+        peers,
+        saved_peers,
+        active_propagation_node_hex,
+        active_config,
+        hub_directory_snapshot,
+    )?;
+    let args = checklist_uid_args_json(checklist_uid);
+    let mut scheduled_sends = Vec::new();
+    for target in replication_targets {
+        let (body, fields) =
+            build_checklist_replication_payload(status, &target, "checklist.delete", &args)?;
+        scheduled_sends.push((target.app_destination_hex, body, fields, target.send_mode));
+    }
+    Ok(scheduled_sends)
 }
 
 fn build_checklist_replication_payload_with_command_id(
@@ -2585,39 +2619,87 @@ impl Node {
     }
 
     pub fn list_peers(&self) -> Result<Vec<PeerRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        inner
-            .peers_snapshot
-            .lock()
-            .map(|guard| guard.clone())
-            .map_err(|_| NodeError::InternalError {})
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                return inner
+                    .peers_snapshot
+                    .lock()
+                    .map(|guard| guard.clone())
+                    .map_err(|_| NodeError::InternalError {});
+            }
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::ListPeers { resp: resp_tx },
+        )?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let peers = inner
-            .peers_snapshot
-            .lock()
-            .map_err(|_| NodeError::InternalError {})?
-            .clone();
-        let resolver = conversation_peer_resolver(&peers);
-        inner.app_state.list_conversations_resolved(&resolver)
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let resolver = conversation_peer_resolver(&peers);
+                return inner.app_state.list_conversations_resolved(&resolver);
+            }
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::ListConversations { resp: resp_tx },
+        )?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn list_messages(
         &self,
         conversation_id: Option<String>,
     ) -> Result<Vec<MessageRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let peers = inner
-            .peers_snapshot
-            .lock()
-            .map_err(|_| NodeError::InternalError {})?
-            .clone();
-        let resolver = conversation_peer_resolver(&peers);
-        inner
-            .app_state
-            .list_messages_resolved(conversation_id.as_deref(), &resolver)
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let resolver = conversation_peer_resolver(&peers);
+                return inner
+                    .app_state
+                    .list_messages_resolved(conversation_id.as_deref(), &resolver);
+            }
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::ListMessages {
+                conversation_id,
+                resp: resp_tx,
+            },
+        )?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn delete_conversation(&self, conversation_id: String) -> Result<(), NodeError> {
@@ -2638,12 +2720,27 @@ impl Node {
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        inner
-            .sync_status_snapshot
-            .lock()
-            .map(|guard| guard.clone())
-            .map_err(|_| NodeError::InternalError {})
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                return inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map(|guard| guard.clone())
+                    .map_err(|_| NodeError::InternalError {});
+            }
+        };
+
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::GetLxmfSyncStatus { resp: resp_tx },
+        )?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn list_telemetry_destinations(&self) -> Result<Vec<String>, NodeError> {
@@ -3325,8 +3422,8 @@ impl Node {
         Ok(())
     }
 
-    pub fn delete_checklist(&self, checklist_uid: String) -> Result<(), NodeError> {
-        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+    pub fn delete_checklist(&self, request: ChecklistDeleteRequest) -> Result<(), NodeError> {
+        let mut scheduled_sends = Vec::<ScheduledMissionSend>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let status = inner
@@ -3334,7 +3431,7 @@ impl Node {
                 .lock()
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
-            let normalized_uid = checklist_uid.trim().to_string();
+            let normalized_uid = request.checklist_uid.trim().to_string();
             let invalidations = inner.app_state.delete_checklist_with_actor(
                 normalized_uid.as_str(),
                 Some(status.identity_hex.as_str()),
@@ -3343,7 +3440,7 @@ impl Node {
                 emit_projection_invalidation(&inner.bus, invalidation);
             }
 
-            if inner.cmd_tx.is_some() {
+            if inner.cmd_tx.is_some() && request.delete_remote {
                 let peers = inner
                     .peers_snapshot
                     .lock()
@@ -3360,35 +3457,22 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                match build_checklist_delete_replication_sends(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
-                let args = checklist_uid_args_json(normalized_uid.as_str());
-                for target in replication_targets {
-                    match build_checklist_replication_payload(
-                        &status,
-                        &target,
-                        "checklist.delete",
-                        &args,
-                    ) {
-                        Ok((body, fields)) => scheduled_sends.push((
-                            target.app_destination_hex.clone(),
-                            body,
-                            fields,
-                            target.send_mode,
-                        )),
-                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                    normalized_uid.as_str(),
+                    request.delete_remote,
+                ) {
+                    Ok(sends) => scheduled_sends = sends,
+                    Err(err) => {
+                        inner.bus.emit(NodeEvent::Error {
                             code: "InvalidConfig".to_string(),
-                            message: format!(
-                                "checklist replication skipped destination={} command={} reason={}",
-                                target.app_destination_hex, "checklist.delete", err
-                            ),
-                        }),
+                            message: format!("checklist delete replication skipped reason={err}"),
+                        });
                     }
                 }
             }
@@ -4373,6 +4457,13 @@ impl Node {
     pub fn list_sos_audio(&self) -> Result<Vec<SosAudioRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.list_sos_audio()
+    }
+
+    pub fn record_sos_audio(&self, audio: SosAudioRecord) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner.app_state.upsert_sos_audio(&audio)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
     }
 
     pub fn submit_sos_device_telemetry(
@@ -7630,6 +7721,105 @@ mod tests {
         assert_eq!(
             patch.get("start_time").and_then(JsonValue::as_str),
             Some("")
+        );
+    }
+
+    #[test]
+    fn checklist_delete_replication_respects_local_only_flag() {
+        let status = build_status_for_tests();
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-peer".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        )];
+
+        let scheduled = build_checklist_delete_replication_sends(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            None,
+            None,
+            None,
+            "chk-001",
+            false,
+        )
+        .expect("local delete should be valid");
+
+        assert!(scheduled.is_empty());
+    }
+
+    #[test]
+    fn checklist_delete_replication_payload_uses_supported_command() {
+        let status = build_status_for_tests();
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-peer".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        )];
+
+        let scheduled = build_checklist_delete_replication_sends(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            None,
+            None,
+            None,
+            "chk-001",
+            true,
+        )
+        .expect("remote delete should build payload");
+
+        assert_eq!(scheduled.len(), 1);
+        let (destination_hex, body, fields, send_mode) = &scheduled[0];
+        assert_eq!(destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert!(matches!(send_mode, SendMode::Auto {}));
+        assert_eq!(
+            String::from_utf8_lossy(body.as_slice()),
+            "Checklist checklist.delete chk-001"
+        );
+
+        let fields = rmp_serde::from_slice::<MsgPackValue>(fields.as_slice()).expect("fields");
+        let commands = fields
+            .as_map()
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
+                    .and_then(|(_, value)| value.as_array())
+            })
+            .expect("commands");
+        let command = commands[0].as_map().expect("command map");
+        assert_eq!(
+            command
+                .iter()
+                .find(|(key, _)| key.as_str() == Some("command_type"))
+                .and_then(|(_, value)| value.as_str()),
+            Some("checklist.delete")
+        );
+        let args = command
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("args"))
+            .and_then(|(_, value)| value.as_map())
+            .expect("args");
+        assert_eq!(
+            args.iter()
+                .find(|(key, _)| key.as_str() == Some("checklist_uid"))
+                .and_then(|(_, value)| value.as_str()),
+            Some("chk-001")
         );
     }
 

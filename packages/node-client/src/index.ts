@@ -639,6 +639,10 @@ export interface NodeClientEvents {
   error: NodeErrorEvent;
 }
 
+export type ChecklistDeleteOptions = {
+  deleteRemote?: boolean;
+};
+
 export interface ReticulumNodeClient {
   start(config: NodeConfig): Promise<void>;
   stop(): Promise<void>;
@@ -709,7 +713,7 @@ export interface ReticulumNodeClient {
       startTime?: string;
     };
   }): Promise<void>;
-  deleteChecklist(checklistUid: string): Promise<void>;
+  deleteChecklist(checklistUid: string, options?: ChecklistDeleteOptions): Promise<void>;
   joinChecklist(checklistUid: string): Promise<void>;
   uploadChecklist(checklistUid: string): Promise<void>;
   setChecklistTaskStatus(input: {
@@ -765,6 +769,7 @@ export interface ReticulumNodeClient {
   listSosAlerts(): Promise<SosAlertRecord[]>;
   listSosLocations(): Promise<SosLocationRecord[]>;
   listSosAudio(): Promise<SosAudioRecord[]>;
+  recordSosAudio(audio: SosAudioRecord): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -937,7 +942,7 @@ interface ReticulumNodePlugin {
     checklistUid: string;
     patch: Record<string, unknown>;
   }): Promise<void>;
-  deleteChecklist(options: { checklistUid: string }): Promise<void>;
+  deleteChecklist(options: { checklistUid: string; deleteRemote?: boolean }): Promise<void>;
   joinChecklist(options: { checklistUid: string }): Promise<void>;
   uploadChecklist(options: { checklistUid: string }): Promise<void>;
   setChecklistTaskStatus(options: {
@@ -993,6 +998,7 @@ interface ReticulumNodePlugin {
   listSosAlerts(): Promise<{ items: Record<string, unknown>[] }>;
   listSosLocations(): Promise<{ items: Record<string, unknown>[] }>;
   listSosAudio(): Promise<{ items: Record<string, unknown>[] }>;
+  recordSosAudio(options: Record<string, unknown>): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -2940,6 +2946,18 @@ function toSosAudioRecord(raw: Record<string, unknown>): SosAudioRecord {
   };
 }
 
+function sosAudioToPlugin(audio: SosAudioRecord): Record<string, unknown> {
+  return {
+    audioId: audio.audioId,
+    incidentId: audio.incidentId,
+    sourceHex: audio.sourceHex,
+    path: audio.path,
+    mimeType: audio.mimeType,
+    durationSeconds: audio.durationSeconds,
+    createdAtMs: audio.createdAtMs,
+  };
+}
+
 function sosSettingsToPlugin(settings: SosSettingsRecord): Record<string, unknown> {
   return {
     enabled: settings.enabled,
@@ -3322,9 +3340,12 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.updateChecklist(input);
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, options: ChecklistDeleteOptions = {}): Promise<void> {
     await this.ready();
-    await this.plugin.deleteChecklist({ checklistUid });
+    await this.plugin.deleteChecklist({
+      checklistUid,
+      deleteRemote: options.deleteRemote ?? false,
+    });
   }
 
   async joinChecklist(checklistUid: string): Promise<void> {
@@ -3494,6 +3515,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const result = await this.plugin.listSosAudio();
     return Array.isArray(result.items) ? result.items.map(toSosAudioRecord) : [];
+  }
+
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.recordSosAudio(sosAudioToPlugin(audio));
   }
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
@@ -3859,7 +3885,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -3932,6 +3958,14 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
@@ -4393,7 +4427,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -4466,6 +4500,14 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });

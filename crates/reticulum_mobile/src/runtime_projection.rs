@@ -14,7 +14,7 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
 };
 
-const PERSIST_FILENAME: &str = "runtime_projection.json";
+pub(crate) const PERSIST_FILENAME: &str = "runtime_projection.json";
 const INVALIDATION_DEBOUNCE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -651,13 +651,7 @@ impl RuntimeProjectionJournal {
         true
     }
 
-    pub(crate) fn current_sync_status(&self) -> Option<SyncStatus> {
-        self.snapshot
-            .lock()
-            .ok()
-            .map(|snapshot| runtime_sync_from_persisted(snapshot.sync_status.clone()))
-    }
-
+    #[cfg(test)]
     pub(crate) fn current_peers(&self) -> Option<Vec<PeerRecord>> {
         self.snapshot.lock().ok().map(|snapshot| {
             snapshot
@@ -665,17 +659,6 @@ impl RuntimeProjectionJournal {
                 .clone()
                 .into_iter()
                 .map(runtime_peer_from_persisted)
-                .collect::<Vec<_>>()
-        })
-    }
-
-    pub(crate) fn current_messages(&self) -> Option<Vec<MessageRecord>> {
-        self.snapshot.lock().ok().map(|snapshot| {
-            snapshot
-                .messages
-                .clone()
-                .into_iter()
-                .map(runtime_message_from_persisted)
                 .collect::<Vec<_>>()
         })
     }

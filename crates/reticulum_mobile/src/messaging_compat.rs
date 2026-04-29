@@ -535,12 +535,6 @@ impl MessagingStore {
         peers
     }
 
-    pub fn peer_for_identity(&self, identity_hex: &str) -> Option<PeerRecord> {
-        self.list_peers()
-            .into_iter()
-            .find(|peer| peer.identity_hex.as_deref() == Some(identity_hex))
-    }
-
     pub fn app_destination_for_identity(&self, identity_hex: &str) -> Option<String> {
         let normalized = normalize_hex(identity_hex);
         if normalized.is_empty() {

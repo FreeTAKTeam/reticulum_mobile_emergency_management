@@ -438,8 +438,13 @@ export const useChecklistsStore = defineStore("checklists", () => {
     await refreshAfterMutation(input.checklistUid);
   }
 
-  async function deleteChecklist(checklistUid: string): Promise<void> {
-    await client().deleteChecklist(checklistUid);
+  async function deleteChecklist(
+    checklistUid: string,
+    options: { deleteRemote?: boolean } = {},
+  ): Promise<void> {
+    await client().deleteChecklist(checklistUid, {
+      deleteRemote: options.deleteRemote ?? false,
+    });
     await refreshLive();
     detailById.value = {
       ...detailById.value,

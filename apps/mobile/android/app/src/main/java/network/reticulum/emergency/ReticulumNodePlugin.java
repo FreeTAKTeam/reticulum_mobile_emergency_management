@@ -665,6 +665,7 @@ public class ReticulumNodePlugin extends Plugin {
         }
         final JSObject payload = new JSObject();
         payload.put("checklistUid", checklistUid);
+        payload.put("deleteRemote", Boolean.TRUE.equals(call.getBoolean("deleteRemote")));
         runIntServiceCall(
             call,
             "Failed to delete checklist.",
@@ -992,6 +993,23 @@ public class ReticulumNodePlugin extends Plugin {
             "Failed to list SOS audio.",
             "Native SOS audio JSON parse failed.",
             ReticulumNodeService::listSosAudioJson
+        );
+    }
+
+    @PluginMethod
+    public void recordSosAudio(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("audioId", call.getString("audioId"));
+        payload.put("incidentId", call.getString("incidentId"));
+        payload.put("sourceHex", call.getString("sourceHex"));
+        payload.put("path", call.getString("path"));
+        payload.put("mimeType", call.getString("mimeType"));
+        payload.put("durationSeconds", call.getInt("durationSeconds"));
+        payload.put("createdAtMs", call.getLong("createdAtMs"));
+        runIntServiceCall(
+            call,
+            "Failed to record SOS audio.",
+            service -> service.recordSosAudioJson(payload.toString())
         );
     }
 

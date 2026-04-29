@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::announce_compat::{
@@ -19,7 +19,6 @@ use log::{debug, info};
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
 use rand_core::OsRng;
-use regex::Regex;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
 use reticulum::hash::AddressHash;
@@ -753,6 +752,31 @@ fn should_apply_inbound_checklist_create(
             .is_some_and(|deleted_at| !incoming_timestamp_is_newer(Some(deleted_at), timestamp))
 }
 
+fn checklist_delete_record_from_command(
+    existing: Option<ChecklistRecord>,
+    checklist_uid: &str,
+    timestamp: &str,
+    source_identity: Option<&str>,
+) -> Option<ChecklistRecord> {
+    if existing.as_ref().is_some_and(|checklist| {
+        !incoming_timestamp_is_newer(checklist.updated_at.as_deref(), timestamp)
+            || checklist
+                .deleted_at
+                .as_deref()
+                .is_some_and(|deleted_at| !incoming_timestamp_is_newer(Some(deleted_at), timestamp))
+    }) {
+        return None;
+    }
+
+    let mut checklist =
+        existing.unwrap_or_else(|| blank_checklist_record(checklist_uid, timestamp, None));
+    checklist.deleted_at = Some(timestamp.to_string());
+    checklist.updated_at = Some(timestamp.to_string());
+    set_checklist_last_changed_by(&mut checklist, source_identity);
+    normalize_checklist_record(&mut checklist);
+    Some(checklist)
+}
+
 fn timestamp_is_newer(left: Option<&str>, right: Option<&str>) -> bool {
     match (
         left.and_then(parse_rfc3339_sort_key),
@@ -1469,28 +1493,18 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let existing = state
-                    .app_state
-                    .get_checklist_any(checklist_uid.as_str())
-                    .ok()
-                    .flatten();
-                if existing.as_ref().is_some_and(|checklist| {
-                    !incoming_timestamp_is_newer(
-                        checklist.updated_at.as_deref(),
-                        timestamp.as_str(),
-                    ) || checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
-                        !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
-                    })
-                }) {
+                let Some(checklist) = checklist_delete_record_from_command(
+                    state
+                        .app_state
+                        .get_checklist_any(checklist_uid.as_str())
+                        .ok()
+                        .flatten(),
+                    checklist_uid.as_str(),
+                    timestamp.as_str(),
+                    source_identity.as_deref(),
+                ) else {
                     continue;
-                }
-                let mut checklist = existing.unwrap_or_else(|| {
-                    blank_checklist_record(checklist_uid.as_str(), timestamp.as_str(), None)
-                });
-                checklist.deleted_at = Some(timestamp.clone());
-                checklist.updated_at = Some(timestamp.clone());
-                set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
-                normalize_checklist_record(&mut checklist);
+                };
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
             }
             "checklist.task.row.add" => {
@@ -1967,13 +1981,10 @@ struct EamUpsertCommandArgs {
 
 #[derive(Debug, Deserialize)]
 struct MissionCommandEnvelope<T> {
-    command_id: String,
     source: MissionWireSource,
     timestamp: String,
     command_type: String,
     args: T,
-    correlation_id: Option<String>,
-    topics: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2358,36 +2369,6 @@ fn emit_operational_notice(bus: &EventBus, level: LogLevel, message: impl Into<S
     });
 }
 
-fn join_url(base: &str, path: &str) -> Result<String, NodeError> {
-    let base = base.trim();
-    if base.is_empty() {
-        return Err(NodeError::InvalidConfig {});
-    }
-    let base = base.trim_end_matches('/');
-    let path = path.trim_start_matches('/');
-    Ok(format!("{base}/{path}"))
-}
-
-fn extract_hex_destinations(text: &str) -> Vec<String> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)(?:^|[^0-9a-f])([0-9a-f]{32})(?:$|[^0-9a-f])").expect("regex")
-    });
-
-    let mut seen = HashSet::<String>::new();
-    let mut out = Vec::new();
-    for caps in re.captures_iter(text) {
-        let Some(m) = caps.get(1) else {
-            continue;
-        };
-        let value = m.as_str().to_ascii_lowercase();
-        if seen.insert(value.clone()) {
-            out.push(value);
-        }
-    }
-    out
-}
-
 fn send_outcome_to_udl(outcome: RnsSendOutcome) -> SendOutcome {
     match outcome {
         RnsSendOutcome::SentDirect => SendOutcome::SentDirect {},
@@ -2645,9 +2626,6 @@ struct PendingLxmfDelivery {
     command_id: Option<String>,
     command_type: Option<String>,
     event_uid: Option<String>,
-    eam_uid: Option<String>,
-    team_member_uid: Option<String>,
-    team_uid: Option<String>,
     mission_uid: Option<String>,
     method: LxmfDeliveryMethod,
     representation: LxmfDeliveryRepresentation,
@@ -2676,7 +2654,6 @@ pub(crate) struct LxmfSendReport {
     pub(crate) resolved_destination_hex: String,
     pub(crate) metadata: Option<MissionSyncMetadata>,
     pub(crate) track_delivery_timeout: bool,
-    pub(crate) used_resource: bool,
     pub(crate) used_propagation_node: bool,
     pub(crate) method: LxmfDeliveryMethod,
     pub(crate) representation: LxmfDeliveryRepresentation,
@@ -2888,16 +2865,6 @@ fn conversation_id_for(destination_hex: &str) -> String {
     sdkmsg::MessagingStore::conversation_id_for(destination_hex)
 }
 
-async fn connected_destination_hexes(state: &NodeRuntimeState) -> Vec<String> {
-    state
-        .connected_peers
-        .lock()
-        .await
-        .iter()
-        .map(address_hash_to_hex)
-        .collect::<Vec<_>>()
-}
-
 fn app_data_from_hub_directory_capabilities(capabilities: &[String]) -> Option<String> {
     (!capabilities.is_empty()).then(|| capabilities.join(","))
 }
@@ -3017,7 +2984,7 @@ fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
     storage_dir
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|dir| PathBuf::from(dir).join("runtime_projection.json"))
+        .map(|dir| PathBuf::from(dir).join(runtime_projection::PERSIST_FILENAME))
 }
 
 fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord) {
@@ -3604,7 +3571,6 @@ struct NodeRuntimeState {
     app_destination_hex: String,
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
-    connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
@@ -3854,7 +3820,11 @@ async fn send_lxmf_message(
         resolved_destination_hex: address_hash_to_hex(&remote_desc.address_hash),
         metadata,
         track_delivery_timeout: true,
-        used_resource: false,
+        used_propagation_node: false,
+        method: LxmfDeliveryMethod::Direct {},
+        representation: LxmfDeliveryRepresentation::Packet {},
+        relay_destination_hex: None,
+        fallback_stage: None,
         receipt_hash_hex: Some(receipt_hash_hex),
     })
 }
@@ -3875,9 +3845,6 @@ async fn register_pending_lxmf_delivery(
         command_id: metadata.command_id.clone(),
         command_type: metadata.command_type.clone(),
         event_uid: metadata.event_uid.clone(),
-        eam_uid: metadata.eam_uid.clone(),
-        team_member_uid: metadata.team_member_uid.clone(),
-        team_uid: metadata.team_uid.clone(),
         mission_uid: metadata.mission_uid.clone(),
         method: report.method,
         representation: report.representation,
@@ -4795,7 +4762,6 @@ pub async fn run_node(
         app_destination_hex,
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
-        connected_peers: connected_peers.clone(),
         peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
@@ -6325,6 +6291,51 @@ mod tests {
             Some(&existing),
             "2026-04-22T12:00:00.000000000Z",
         ));
+    }
+
+    #[test]
+    fn inbound_delete_marks_existing_checklist_deleted() {
+        let existing = checklist_test_record(
+            "2026-04-22T12:00:00.000000000Z",
+            checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:00:00.000000000Z"),
+        );
+
+        let deleted = checklist_delete_record_from_command(
+            Some(existing),
+            "chk-merge",
+            "2026-04-22T12:00:01.000000000Z",
+            Some("peer-delete"),
+        )
+        .expect("newer delete should apply");
+
+        assert_eq!(
+            deleted.deleted_at.as_deref(),
+            Some("2026-04-22T12:00:01.000000000Z")
+        );
+        assert_eq!(
+            deleted.updated_at.as_deref(),
+            Some("2026-04-22T12:00:01.000000000Z")
+        );
+        assert_eq!(
+            deleted.last_changed_by_team_member_rns_identity.as_deref(),
+            Some("peer-delete")
+        );
+    }
+
+    #[test]
+    fn inbound_delete_ignores_stale_timestamp() {
+        let existing = checklist_test_record(
+            "2026-04-22T12:00:02.000000000Z",
+            checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:00:02.000000000Z"),
+        );
+
+        assert!(checklist_delete_record_from_command(
+            Some(existing),
+            "chk-merge",
+            "2026-04-22T12:00:01.000000000Z",
+            Some("peer-delete"),
+        )
+        .is_none());
     }
 
     fn checklist_test_column(column_uid: &str) -> ChecklistColumnRecord {

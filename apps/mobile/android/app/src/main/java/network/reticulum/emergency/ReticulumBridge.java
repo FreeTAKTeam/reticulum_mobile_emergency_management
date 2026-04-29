@@ -74,6 +74,7 @@ public final class ReticulumBridge {
     public static native String listSosAlertsJson();
     public static native String listSosLocationsJson();
     public static native String listSosAudioJson();
+    public static native int recordSosAudioJson(String payloadJson);
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();

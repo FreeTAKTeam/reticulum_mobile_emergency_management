@@ -19,6 +19,7 @@ import {
   type NodeStatus,
   type PeerChangedEvent,
   type ReticulumNodeClient,
+  type SosAudioRecord,
   type StatusChangedEvent,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
@@ -2719,6 +2720,10 @@ export const useNodeStore = defineStore("node", () => {
     return requireClient("List SOS audio failed").listSosAudio();
   }
 
+  async function recordSosAudio(audio: SosAudioRecord) {
+    return requireClient("Record SOS audio failed").recordSosAudio(audio);
+  }
+
   async function announceNow(): Promise<void> {
     if (!client.value) {
       return;
@@ -2881,6 +2886,7 @@ export const useNodeStore = defineStore("node", () => {
     listSosAlerts,
     listSosLocations,
     listSosAudio,
+    recordSosAudio,
     setActivePropagationNode,
     requestLxmfSync,
     broadcastBytes,
