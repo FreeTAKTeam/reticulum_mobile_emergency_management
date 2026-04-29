@@ -11,4 +11,7 @@ pub use messages::{
     PLUGIN_LXMF_FIELD_KEY,
 };
 pub use permissions::PluginPermissions;
-pub use registry::{PluginRegistry, PluginRegistryError, PluginState, RegisteredPlugin};
+pub use registry::{
+    PersistedPluginRegistry, PersistedPluginState, PluginRegistry, PluginRegistryError,
+    PluginState, RegisteredPlugin,
+};

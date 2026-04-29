@@ -245,6 +245,51 @@ fn registry_enable_disable_updates_state_without_granting_permissions() {
 }
 
 #[test]
+fn registry_persists_state_and_granted_permissions_separately() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+
+    registry
+        .enable("rem.plugin.example_status")
+        .expect("enable succeeds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_send = true;
+            permissions.storage_plugin = true;
+        })
+        .expect("grant succeeds");
+
+    let persisted = registry.to_persisted_state();
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut restored = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    restored.apply_persisted_state(&persisted);
+    let plugin = restored
+        .get("rem.plugin.example_status")
+        .expect("plugin is restored");
+
+    assert_eq!(plugin.state, PluginState::Enabled);
+    assert!(plugin.granted_permissions.lxmf_send);
+    assert!(plugin.granted_permissions.storage_plugin);
+}
+
+#[test]
+fn registry_does_not_restore_grants_for_undeclared_permissions() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.messages_write = true;
+        })
+        .expect("grant succeeds");
+
+    let plugin = registry
+        .get("rem.plugin.example_status")
+        .expect("plugin exists");
+    assert!(!plugin.granted_permissions.messages_write);
+}
+
+#[test]
 fn installer_copies_valid_package_disabled_by_default() {
     let package_dir = TestTempDir::new("package");
     let install_root = TestTempDir::new("install-root");
