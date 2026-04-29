@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RemPluginHostApi {
+    pub abi_major: u16,
+    pub abi_minor: u16,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemPluginAbiVersion {
     pub major: u16,

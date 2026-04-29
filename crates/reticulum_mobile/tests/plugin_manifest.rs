@@ -1,12 +1,13 @@
 use reticulum_mobile::plugins::{
-    PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError,
-    PluginLoader, PluginLoaderError, PluginLxmfMessage, PluginLxmfMessageError, PluginManifest,
-    PluginManifestError, PluginRegistry, PluginRegistryError, PluginState, RemPluginStatusCode,
-    REM_PLUGIN_ABI_VERSION,
+    NativePluginLibrary, NativePluginLoadError, PluginCatalog, PluginHostApi, PluginHostError,
+    PluginInstaller, PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
+    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
+    PluginRegistryError, PluginState, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
 };
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const VALID_MANIFEST: &str = r#"
@@ -89,6 +90,105 @@ fn write_valid_package(package_dir: &Path) {
     );
 }
 
+fn test_dynamic_library_name() -> String {
+    format!(
+        "{}example_status_plugin.{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_EXTENSION
+    )
+}
+
+fn compile_test_plugin_library(plugin_dir: &Path, metadata_id: &str, init_status: i32) -> PathBuf {
+    let library_relative_path = format!("logic/android/arm64-v8a/{}", test_dynamic_library_name());
+    let library_path = plugin_dir.join(library_relative_path);
+    let source_path = plugin_dir.join("example_status_plugin.rs");
+    if let Some(parent) = library_path.parent() {
+        fs::create_dir_all(parent).expect("library parent exists");
+    }
+    fs::write(
+        source_path.as_path(),
+        format!(
+            r#"
+#[repr(C)]
+pub struct RemPluginHostApi {{
+    pub abi_major: u16,
+    pub abi_minor: u16,
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_metadata() -> *const std::os::raw::c_char {{
+    b"{{\"id\":\"{metadata_id}\",\"name\":\"Example Status Plugin\",\"version\":\"0.1.0\",\"rem_api_version\":\">=1.0.0,<2.0.0\",\"abi_major\":1,\"abi_minor\":0}}\0".as_ptr() as *const std::os::raw::c_char
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_init(_host: *const RemPluginHostApi) -> i32 {{
+    {init_status}
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_start() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_stop() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_handle_event(_event: *const std::os::raw::c_char) -> i32 {{
+    0
+}}
+"#
+        ),
+    )
+    .expect("test plugin source is written");
+
+    let output = Command::new("rustc")
+        .arg("--crate-type")
+        .arg("cdylib")
+        .arg(source_path.as_path())
+        .arg("-o")
+        .arg(library_path.as_path())
+        .output()
+        .expect("rustc can be launched");
+    assert!(
+        output.status.success(),
+        "test plugin compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(output.stdout.as_slice()),
+        String::from_utf8_lossy(output.stderr.as_slice())
+    );
+    library_path
+}
+
+fn write_dynamic_plugin_manifest(plugin_dir: &Path, library_path: &Path) {
+    let relative_path = library_path
+        .strip_prefix(plugin_dir)
+        .expect("library is inside plugin dir")
+        .to_string_lossy()
+        .replace('\\', "/");
+    write_package_file(
+        plugin_dir,
+        "plugin.toml",
+        VALID_MANIFEST
+            .replace(
+                "logic/android/arm64-v8a/libexample_status_plugin.so",
+                relative_path.as_str(),
+            )
+            .as_bytes(),
+    );
+    write_package_file(
+        plugin_dir,
+        "ui/settings.schema.json",
+        br#"{"type":"object"}"#,
+    );
+    write_package_file(
+        plugin_dir,
+        "schemas/status_test.schema.json",
+        br#"{"type":"object"}"#,
+    );
+}
+
 #[test]
 fn parses_android_manifest_with_settings_and_lxmf_message_descriptor() {
     let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
@@ -128,6 +228,112 @@ fn c_abi_version_and_status_codes_are_stable() {
     assert_eq!(RemPluginStatusCode::Error as i32, 1);
     assert_eq!(RemPluginStatusCode::PermissionDenied as i32, 2);
     assert_eq!(RemPluginStatusCode::UnsupportedApi as i32, 3);
+}
+
+#[test]
+fn native_loader_loads_test_plugin_and_calls_lifecycle() {
+    let install_root = TestTempDir::new("native-loader-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        RemPluginStatusCode::Ok as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("plugin discovery completes");
+    let candidate = report.candidates.first().expect("plugin is discovered");
+
+    let plugin = NativePluginLibrary::load(candidate).expect("native plugin loads");
+    assert_eq!(plugin.metadata().id.as_str(), "rem.plugin.example_status");
+    plugin.initialize().expect("plugin init succeeds");
+    plugin.start().expect("plugin starts");
+    plugin
+        .handle_event_json(r#"{"topic":"rem.plugin.started","payload":{}}"#)
+        .expect("plugin handles event");
+    plugin.stop().expect("plugin stops");
+}
+
+#[test]
+fn native_loader_rejects_metadata_id_mismatch() {
+    let install_root = TestTempDir::new("native-loader-metadata-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.other",
+        RemPluginStatusCode::Ok as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("plugin discovery completes");
+    let candidate = report.candidates.first().expect("plugin is discovered");
+    let err = NativePluginLibrary::load(candidate).expect_err("metadata mismatch is rejected");
+
+    assert!(matches!(
+        err,
+        NativePluginLoadError::MetadataIdMismatch { .. }
+    ));
+}
+
+#[test]
+fn native_loader_reports_init_failure() {
+    let install_root = TestTempDir::new("native-loader-init-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        RemPluginStatusCode::Error as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("plugin discovery completes");
+    let candidate = report.candidates.first().expect("plugin is discovered");
+    let plugin = NativePluginLibrary::load(candidate).expect("native plugin loads");
+    let err = plugin.initialize().expect_err("init failure is reported");
+
+    assert!(matches!(
+        err,
+        NativePluginLoadError::PluginCallFailed {
+            entrypoint: "init",
+            status: RemPluginStatusCode::Error
+        }
+    ));
+}
+
+#[test]
+fn native_loader_rejects_invalid_status_code() {
+    let install_root = TestTempDir::new("native-loader-status-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path =
+        compile_test_plugin_library(plugin_dir.as_path(), "rem.plugin.example_status", 99);
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("plugin discovery completes");
+    let candidate = report.candidates.first().expect("plugin is discovered");
+    let plugin = NativePluginLibrary::load(candidate).expect("native plugin loads");
+    let err = plugin
+        .initialize()
+        .expect_err("invalid status code is reported");
+
+    assert!(matches!(
+        err,
+        NativePluginLoadError::InvalidStatusCode {
+            entrypoint: "init",
+            status: 99
+        }
+    ));
 }
 
 #[test]

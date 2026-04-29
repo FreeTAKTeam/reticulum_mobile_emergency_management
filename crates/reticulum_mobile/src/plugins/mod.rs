@@ -1,4 +1,5 @@
 mod abi;
+mod abi_c;
 mod catalog;
 mod host_api;
 mod installer;
@@ -9,8 +10,10 @@ mod permissions;
 mod registry;
 
 pub use abi::{
-    PluginEntrypoints, RemPluginAbiVersion, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
+    PluginEntrypoints, RemPluginAbiVersion, RemPluginHostApi, RemPluginStatusCode,
+    REM_PLUGIN_ABI_VERSION,
 };
+pub use abi_c::{NativePluginLibrary, NativePluginLoadError, NativePluginMetadata};
 pub use catalog::{
     InstalledPluginDescriptor, InstalledPluginSettingsDescriptor, PluginCatalog,
     PluginCatalogDiagnostic, PluginCatalogError, PluginCatalogReport,
