@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use super::manifest::PluginManifestError;
 use super::PluginManifest;
+use crate::types::SendMode;
 
 pub const PLUGIN_LXMF_FIELD_KEY: &str = "rem.plugin.message";
 
@@ -58,6 +59,18 @@ pub struct PluginLxmfMessage {
     pub payload: JsonValue,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PluginLxmfOutboundRequest {
+    pub plugin_id: String,
+    pub destination_hex: String,
+    pub message_name: String,
+    pub wire_type: String,
+    pub body_utf8: String,
+    pub title: Option<String>,
+    pub fields_bytes: Vec<u8>,
+    pub send_mode: SendMode,
+}
+
 impl PluginLxmfMessage {
     pub fn new(
         manifest: &PluginManifest,
@@ -97,6 +110,26 @@ impl PluginLxmfMessage {
             }
         });
         rmp_serde::to_vec(&fields).map_err(|_| PluginLxmfMessageError::EncodeFields)
+    }
+
+    pub fn into_outbound_request(
+        self,
+        destination_hex: impl Into<String>,
+        body_utf8: impl Into<String>,
+        title: Option<String>,
+        send_mode: SendMode,
+    ) -> Result<PluginLxmfOutboundRequest, PluginLxmfMessageError> {
+        let fields_bytes = self.to_fields_bytes()?;
+        Ok(PluginLxmfOutboundRequest {
+            plugin_id: self.plugin_id,
+            destination_hex: destination_hex.into(),
+            message_name: self.message_name,
+            wire_type: self.wire_type,
+            body_utf8: body_utf8.into(),
+            title,
+            fields_bytes,
+            send_mode,
+        })
     }
 
     pub fn try_plugin_id_from_fields_bytes(

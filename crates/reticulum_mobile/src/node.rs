@@ -15,7 +15,7 @@ use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
-use crate::plugins::{PluginCatalog, PluginCatalogReport};
+use crate::plugins::{PluginCatalog, PluginCatalogReport, PluginLxmfOutboundRequest};
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
     active_status, compose_sos_body, countdown_status, default_sos_settings, idle_status,
@@ -2494,6 +2494,18 @@ impl Node {
         resp_rx
             .recv_timeout(SEND_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn send_plugin_lxmf_outbound(
+        &self,
+        request: PluginLxmfOutboundRequest,
+    ) -> Result<(), NodeError> {
+        self.send_bytes_sync(
+            request.destination_hex,
+            request.body_utf8.into_bytes(),
+            Some(request.fields_bytes),
+            request.send_mode,
+        )
     }
 
     pub fn retry_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {

@@ -5,6 +5,7 @@ use reticulum_mobile::plugins::{
     PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginPermissions, PluginRegistry,
     PluginRegistryError, PluginState, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
 };
+use reticulum_mobile::SendMode;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
@@ -762,6 +763,78 @@ fn host_api_builds_lxmf_message_for_granted_declared_message() {
         "plugin.rem.plugin.example_status.status_test"
     );
     assert_eq!(host.queued_lxmf_messages().len(), 1);
+}
+
+#[test]
+fn host_api_builds_outbound_lxmf_request_for_granted_plugin_message() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_send = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    let request = host
+        .request_lxmf_send_to(
+            "rem.plugin.example_status",
+            "aabbccddeeff00112233445566778899",
+            "status_test",
+            json!({ "status": "ok" }),
+            "Status test from example plug-in",
+            Some("Status Test".to_string()),
+            SendMode::PropagationOnly {},
+        )
+        .expect("request builds");
+
+    assert_eq!(
+        request.destination_hex.as_str(),
+        "aabbccddeeff00112233445566778899"
+    );
+    assert_eq!(
+        request.wire_type.as_str(),
+        "plugin.rem.plugin.example_status.status_test"
+    );
+    assert_eq!(
+        request.body_utf8.as_str(),
+        "Status test from example plug-in"
+    );
+    assert!(matches!(request.send_mode, SendMode::PropagationOnly {}));
+    assert_eq!(host.queued_lxmf_outbound_requests().len(), 1);
+
+    let decoded = PluginLxmfMessage::from_fields_bytes(
+        &PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses"),
+        request.fields_bytes.as_slice(),
+    )
+    .expect("fields decode");
+    assert_eq!(decoded.payload["status"], "ok");
+}
+
+#[test]
+fn host_api_drains_queued_outbound_lxmf_requests() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_send = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    host.request_lxmf_send_to(
+        "rem.plugin.example_status",
+        "aabbccddeeff00112233445566778899",
+        "status_test",
+        json!({ "status": "ok" }),
+        "Status test from example plug-in",
+        None,
+        SendMode::Auto {},
+    )
+    .expect("request builds");
+
+    assert_eq!(host.drain_queued_lxmf_outbound_requests().len(), 1);
+    assert!(host.queued_lxmf_outbound_requests().is_empty());
 }
 
 #[test]

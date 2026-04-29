@@ -3,7 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 
-use super::{PluginLxmfMessage, PluginLxmfMessageError, PluginRegistry, RegisteredPlugin};
+use super::{
+    PluginLxmfMessage, PluginLxmfMessageError, PluginLxmfOutboundRequest, PluginRegistry,
+    RegisteredPlugin,
+};
+use crate::types::SendMode;
 
 #[derive(Debug, Error)]
 pub enum PluginHostError {
@@ -29,6 +33,7 @@ pub struct PluginHostApi {
     registry: PluginRegistry,
     plugin_storage: BTreeMap<(String, String), JsonValue>,
     queued_lxmf_messages: Vec<PluginLxmfMessage>,
+    queued_lxmf_outbound: Vec<PluginLxmfOutboundRequest>,
     received_lxmf_messages: BTreeMap<String, Vec<PluginLxmfMessage>>,
     subscriptions: BTreeMap<String, BTreeSet<String>>,
     event_inboxes: BTreeMap<String, Vec<PluginEvent>>,
@@ -40,6 +45,7 @@ impl PluginHostApi {
             registry,
             plugin_storage: BTreeMap::new(),
             queued_lxmf_messages: Vec::new(),
+            queued_lxmf_outbound: Vec::new(),
             received_lxmf_messages: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             event_inboxes: BTreeMap::new(),
@@ -83,8 +89,34 @@ impl PluginHostApi {
         Ok(message)
     }
 
+    pub fn request_lxmf_send_to(
+        &mut self,
+        plugin_id: &str,
+        destination_hex: &str,
+        message_name: &str,
+        payload: JsonValue,
+        body_utf8: &str,
+        title: Option<String>,
+        send_mode: SendMode,
+    ) -> Result<PluginLxmfOutboundRequest, PluginHostError> {
+        self.require_permission(plugin_id, "lxmf.send")?;
+        let plugin = self.require_plugin(plugin_id)?;
+        let request = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?
+            .into_outbound_request(destination_hex, body_utf8, title, send_mode)?;
+        self.queued_lxmf_outbound.push(request.clone());
+        Ok(request)
+    }
+
     pub fn queued_lxmf_messages(&self) -> &[PluginLxmfMessage] {
         self.queued_lxmf_messages.as_slice()
+    }
+
+    pub fn queued_lxmf_outbound_requests(&self) -> &[PluginLxmfOutboundRequest] {
+        self.queued_lxmf_outbound.as_slice()
+    }
+
+    pub fn drain_queued_lxmf_outbound_requests(&mut self) -> Vec<PluginLxmfOutboundRequest> {
+        std::mem::take(&mut self.queued_lxmf_outbound)
     }
 
     pub fn receive_lxmf_fields(
