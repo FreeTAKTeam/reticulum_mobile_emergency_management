@@ -16,7 +16,8 @@ use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::plugins::{
-    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginLxmfOutboundRequest,
+    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginLoader,
+    PluginLxmfOutboundRequest, PluginPermissions, PluginRegistry,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -2606,6 +2607,64 @@ impl Node {
             .map_err(|_| NodeError::IoError {})?;
         PluginCatalog::new(install_root)
             .list_installed_plugins_with_state(android_abi, Some(&persisted))
+            .map_err(|_| NodeError::IoError {})
+    }
+
+    pub fn set_plugin_enabled(
+        &self,
+        android_abi: &str,
+        plugin_id: &str,
+        enabled: bool,
+    ) -> Result<(), NodeError> {
+        self.update_persisted_plugin_registry(android_abi, |registry| {
+            if enabled {
+                registry.enable(plugin_id)
+            } else {
+                registry.disable(plugin_id)
+            }
+        })
+    }
+
+    pub fn grant_plugin_permissions(
+        &self,
+        android_abi: &str,
+        plugin_id: &str,
+        granted_permissions: PluginPermissions,
+    ) -> Result<(), NodeError> {
+        self.update_persisted_plugin_registry(android_abi, |registry| {
+            registry.grant_permissions(plugin_id, |permissions| {
+                *permissions = granted_permissions;
+            })
+        })
+    }
+
+    fn update_persisted_plugin_registry(
+        &self,
+        android_abi: &str,
+        update: impl FnOnce(&mut PluginRegistry) -> Result<(), crate::plugins::PluginRegistryError>,
+    ) -> Result<(), NodeError> {
+        let install_root = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.app_state.storage_dir().join("plugins")
+        };
+        let registry_path = install_root.join("registry.json");
+        let discovery = PluginLoader::new(install_root.as_path())
+            .discover_installed_plugins(android_abi)
+            .map_err(|_| NodeError::IoError {})?;
+        let persisted = PersistedPluginRegistry::load_from_path(registry_path.as_path())
+            .map_err(|_| NodeError::IoError {})?;
+        let manifests = discovery
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.manifest)
+            .collect();
+        let mut registry =
+            PluginRegistry::from_manifests(manifests).map_err(|_| NodeError::InvalidConfig {})?;
+        registry.apply_persisted_state(&persisted);
+        update(&mut registry).map_err(|_| NodeError::InvalidConfig {})?;
+        registry
+            .to_persisted_state()
+            .save_to_path(registry_path.as_path())
             .map_err(|_| NodeError::IoError {})
     }
 

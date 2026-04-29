@@ -423,6 +423,42 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setPluginEnabled(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final boolean enabled = call.getBoolean("enabled", false);
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("enabled", enabled);
+        runIntServiceCall(
+            call,
+            "Failed to update plug-in state.",
+            service -> service.setPluginEnabledJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void grantPluginPermissions(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final JSObject permissions = call.getObject("permissions", new JSObject());
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("permissions", permissions);
+        runIntServiceCall(
+            call,
+            "Failed to update plug-in permissions.",
+            service -> service.grantPluginPermissionsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void listPeers(PluginCall call) {
         runStringServiceCall(
             call,

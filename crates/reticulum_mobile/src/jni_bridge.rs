@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
+use crate::plugins::PluginPermissions;
 use crate::types::{
     AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
     ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
@@ -102,6 +103,53 @@ struct MessageIdInput {
 #[serde(rename_all = "camelCase")]
 struct OptionalDestinationInput {
     destination_hex: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginEnabledInput {
+    plugin_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginPermissionsInput {
+    #[serde(default)]
+    storage_plugin: bool,
+    #[serde(default)]
+    storage_shared: bool,
+    #[serde(default)]
+    messages_read: bool,
+    #[serde(default)]
+    messages_write: bool,
+    #[serde(default)]
+    lxmf_send: bool,
+    #[serde(default)]
+    lxmf_receive: bool,
+    #[serde(default)]
+    notifications_raise: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginPermissionsGrantInput {
+    plugin_id: String,
+    permissions: PluginPermissionsInput,
+}
+
+impl From<PluginPermissionsInput> for PluginPermissions {
+    fn from(value: PluginPermissionsInput) -> Self {
+        Self {
+            storage_plugin: value.storage_plugin,
+            storage_shared: value.storage_shared,
+            messages_read: value.messages_read,
+            messages_write: value.messages_write,
+            lxmf_send: value.lxmf_send,
+            lxmf_receive: value.lxmf_receive,
+            notifications_raise: value.notifications_raise,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2419,6 +2467,86 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getPlugi
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setPluginEnabledJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginEnabledInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in enabled payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_plugin_enabled(abi.as_str(), payload.plugin_id.as_str(), payload.enabled) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_grantPluginPermissionsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginPermissionsGrantInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in permissions payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.grant_plugin_permissions(
+        abi.as_str(),
+        payload.plugin_id.as_str(),
+        payload.permissions.into(),
+    ) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

@@ -717,6 +717,8 @@ export interface ReticulumNodeClient {
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
   listPlugins(): Promise<PluginCatalogReport>;
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
+  grantPluginPermissions(pluginId: string, permissions: PluginPermissionsRecord): Promise<void>;
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
@@ -952,6 +954,11 @@ interface ReticulumNodePlugin {
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
   getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
+  setPluginEnabled(options: { pluginId: string; enabled: boolean }): Promise<void>;
+  grantPluginPermissions(options: {
+    pluginId: string;
+    permissions: Record<string, unknown>;
+  }): Promise<void>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
@@ -1781,6 +1788,20 @@ function toPluginPermissionsRecord(raw: Record<string, unknown>): PluginPermissi
     lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),
     lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
     notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
+  };
+}
+
+function pluginPermissionsRecordToPlugin(
+  permissions: PluginPermissionsRecord,
+): Record<string, unknown> {
+  return {
+    storagePlugin: permissions.storagePlugin,
+    storageShared: permissions.storageShared,
+    messagesRead: permissions.messagesRead,
+    messagesWrite: permissions.messagesWrite,
+    lxmfSend: permissions.lxmfSend,
+    lxmfReceive: permissions.lxmfReceive,
+    notificationsRaise: permissions.notificationsRaise,
   };
 }
 
@@ -3363,6 +3384,22 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toPluginCatalogReport(await this.plugin.getPlugins());
   }
 
+  async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    await this.ready();
+    await this.plugin.setPluginEnabled({ pluginId, enabled });
+  }
+
+  async grantPluginPermissions(
+    pluginId: string,
+    permissions: PluginPermissionsRecord,
+  ): Promise<void> {
+    await this.ready();
+    await this.plugin.grantPluginPermissions({
+      pluginId,
+      permissions: pluginPermissionsRecordToPlugin(permissions),
+    });
+  }
+
   async listPeers(): Promise<PeerRecord[]> {
     await this.ready();
     const result = await this.plugin.listPeers();
@@ -3919,6 +3956,13 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { items: [], errors: [] };
   }
 
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+
+  async grantPluginPermissions(
+    _pluginId: string,
+    _permissions: PluginPermissionsRecord,
+  ): Promise<void> {}
+
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
   }
@@ -4456,6 +4500,13 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listPlugins(): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
+
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+
+  async grantPluginPermissions(
+    _pluginId: string,
+    _permissions: PluginPermissionsRecord,
+  ): Promise<void> {}
 
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
