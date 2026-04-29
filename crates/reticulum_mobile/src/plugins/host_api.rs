@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value as JsonValue;
 use thiserror::Error;
 
-use super::{PluginLxmfMessage, PluginLxmfMessageError, PluginRegistry};
+use super::{PluginLxmfMessage, PluginLxmfMessageError, PluginRegistry, RegisteredPlugin};
 
 #[derive(Debug, Error)]
 pub enum PluginHostError {
@@ -18,11 +18,19 @@ pub enum PluginHostError {
     LxmfMessage(#[from] PluginLxmfMessageError),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginEvent {
+    pub topic: String,
+    pub payload: JsonValue,
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginHostApi {
     registry: PluginRegistry,
     plugin_storage: BTreeMap<(String, String), JsonValue>,
     queued_lxmf_messages: Vec<PluginLxmfMessage>,
+    subscriptions: BTreeMap<String, BTreeSet<String>>,
+    event_inboxes: BTreeMap<String, Vec<PluginEvent>>,
 }
 
 impl PluginHostApi {
@@ -31,6 +39,8 @@ impl PluginHostApi {
             registry,
             plugin_storage: BTreeMap::new(),
             queued_lxmf_messages: Vec::new(),
+            subscriptions: BTreeMap::new(),
+            event_inboxes: BTreeMap::new(),
         }
     }
 
@@ -65,12 +75,7 @@ impl PluginHostApi {
         payload: JsonValue,
     ) -> Result<PluginLxmfMessage, PluginHostError> {
         self.require_permission(plugin_id, "lxmf.send")?;
-        let plugin =
-            self.registry
-                .get(plugin_id)
-                .ok_or_else(|| PluginHostError::PluginNotFound {
-                    plugin_id: plugin_id.to_string(),
-                })?;
+        let plugin = self.require_plugin(plugin_id)?;
         let message = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?;
         self.queued_lxmf_messages.push(message.clone());
         Ok(message)
@@ -80,17 +85,58 @@ impl PluginHostApi {
         self.queued_lxmf_messages.as_slice()
     }
 
+    pub fn subscribe(&mut self, plugin_id: &str, topic: &str) -> Result<(), PluginHostError> {
+        if let Some(permission) = permission_for_topic(topic) {
+            self.require_permission(plugin_id, permission)?;
+        } else {
+            self.require_plugin(plugin_id)?;
+        }
+        self.subscriptions
+            .entry(plugin_id.to_string())
+            .or_default()
+            .insert(topic.to_string());
+        Ok(())
+    }
+
+    pub fn deliver_event(
+        &mut self,
+        topic: &str,
+        payload: JsonValue,
+    ) -> Result<(), PluginHostError> {
+        let plugin_ids = self
+            .subscriptions
+            .iter()
+            .filter_map(|(plugin_id, topics)| topics.contains(topic).then_some(plugin_id.clone()))
+            .collect::<Vec<_>>();
+
+        for plugin_id in plugin_ids {
+            if let Some(permission) = permission_for_topic(topic) {
+                self.require_permission(plugin_id.as_str(), permission)?;
+            }
+            self.event_inboxes
+                .entry(plugin_id)
+                .or_default()
+                .push(PluginEvent {
+                    topic: topic.to_string(),
+                    payload: payload.clone(),
+                });
+        }
+        Ok(())
+    }
+
+    pub fn plugin_events(&self, plugin_id: &str) -> &[PluginEvent] {
+        self.event_inboxes
+            .get(plugin_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
     fn require_permission(
         &self,
         plugin_id: &str,
         permission: &'static str,
     ) -> Result<(), PluginHostError> {
-        let plugin =
-            self.registry
-                .get(plugin_id)
-                .ok_or_else(|| PluginHostError::PluginNotFound {
-                    plugin_id: plugin_id.to_string(),
-                })?;
+        let plugin = self.require_plugin(plugin_id)?;
         let allowed = match permission {
             "storage.plugin" => {
                 plugin.manifest.permissions.storage_plugin
@@ -98,6 +144,10 @@ impl PluginHostApi {
             }
             "lxmf.send" => {
                 plugin.manifest.permissions.lxmf_send && plugin.granted_permissions.lxmf_send
+            }
+            "messages.read" => {
+                plugin.manifest.permissions.messages_read
+                    && plugin.granted_permissions.messages_read
             }
             _ => false,
         };
@@ -108,5 +158,20 @@ impl PluginHostApi {
             plugin_id: plugin_id.to_string(),
             permission,
         })
+    }
+
+    fn require_plugin(&self, plugin_id: &str) -> Result<&RegisteredPlugin, PluginHostError> {
+        self.registry
+            .get(plugin_id)
+            .ok_or_else(|| PluginHostError::PluginNotFound {
+                plugin_id: plugin_id.to_string(),
+            })
+    }
+}
+
+fn permission_for_topic(topic: &str) -> Option<&'static str> {
+    match topic {
+        "rem.message.received" | "rem.message.sent" => Some("messages.read"),
+        _ => None,
     }
 }

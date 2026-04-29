@@ -380,6 +380,56 @@ fn host_api_builds_lxmf_message_for_granted_declared_message() {
 }
 
 #[test]
+fn host_api_denies_message_subscription_without_grant() {
+    let manifest = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "lxmf_receive = true",
+        "lxmf_receive = true\nmessages_read = true",
+    ))
+    .expect("manifest parses");
+    let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    let mut host = PluginHostApi::new(registry);
+
+    let err = host
+        .subscribe("rem.plugin.example_status", "rem.message.received")
+        .expect_err("ungranted message read is denied");
+
+    assert!(matches!(
+        err,
+        PluginHostError::PermissionDenied {
+            permission: "messages.read",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn host_api_delivers_events_only_to_subscribed_granted_plugins() {
+    let manifest = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "lxmf_receive = true",
+        "lxmf_receive = true\nmessages_read = true",
+    ))
+    .expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.messages_read = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    host.subscribe("rem.plugin.example_status", "rem.message.received")
+        .expect("subscription succeeds");
+    host.deliver_event("rem.message.received", json!({ "body": "hello" }))
+        .expect("event delivery succeeds");
+    host.deliver_event("rem.telemetry.updated", json!({ "callsign": "alpha" }))
+        .expect("unsubscribed event is ignored");
+
+    let inbox = host.plugin_events("rem.plugin.example_status");
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].topic.as_str(), "rem.message.received");
+}
+
+#[test]
 fn installer_copies_valid_package_disabled_by_default() {
     let package_dir = TestTempDir::new("package");
     let install_root = TestTempDir::new("install-root");
