@@ -413,6 +413,16 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getPlugins(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list plug-ins.",
+            "Native plug-in list JSON parse failed.",
+            ReticulumNodeService::getPluginsJson
+        );
+    }
+
+    @PluginMethod
     public void listPeers(PluginCall call) {
         runStringServiceCall(
             call,

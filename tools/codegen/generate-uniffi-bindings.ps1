@@ -8,6 +8,9 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $udlPath = Join-Path $repoRoot "crates\reticulum_mobile\src\reticulum_mobile.udl"
+$crateManifest = Join-Path $repoRoot "crates\reticulum_mobile\Cargo.toml"
+$bindgenManifest = Join-Path $repoRoot "tools\uniffi-bindgen\Cargo.toml"
+$targetDir = Join-Path $repoRoot "target"
 $tempDir = Join-Path $repoRoot "target\uniffi\$Language"
 
 if (-not $OutDir) {
@@ -38,8 +41,10 @@ function Invoke-UniffiBindgen {
   Write-Host "Generating UniFFI bindings ($LanguageName) via workspace fallback tool..."
   $cargoArgs = @(
     "run",
-    "-p",
-    "reticulum_mobile_uniffi_bindgen",
+    "--manifest-path",
+    $bindgenManifest,
+    "--target-dir",
+    $targetDir,
     "--",
     "generate",
     "--language",
@@ -131,7 +136,7 @@ foreach ($target in $targets) {
   if ($LASTEXITCODE -ne 0) {
     throw "rustup target add failed for $target"
   }
-  cargo build -p reticulum_mobile --release --target $target
+  cargo build --manifest-path $crateManifest --target-dir $targetDir --release --target $target
   if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed for $target"
   }

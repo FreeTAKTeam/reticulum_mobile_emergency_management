@@ -1,4 +1,5 @@
 mod abi;
+mod catalog;
 mod host_api;
 mod installer;
 mod loader;
@@ -9,6 +10,10 @@ mod registry;
 
 pub use abi::{
     PluginEntrypoints, RemPluginAbiVersion, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
+};
+pub use catalog::{
+    InstalledPluginDescriptor, InstalledPluginSettingsDescriptor, PluginCatalog,
+    PluginCatalogDiagnostic, PluginCatalogError, PluginCatalogReport,
 };
 pub use host_api::{PluginHostApi, PluginHostError};
 pub use installer::{InstalledPlugin, PluginInstaller, PluginInstallerError};

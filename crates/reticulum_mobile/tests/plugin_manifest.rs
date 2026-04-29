@@ -1,6 +1,6 @@
 use reticulum_mobile::plugins::{
-    PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError, PluginLoader,
-    PluginLoaderError, PluginLxmfMessage, PluginLxmfMessageError, PluginManifest,
+    PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError,
+    PluginLoader, PluginLoaderError, PluginLxmfMessage, PluginLxmfMessageError, PluginManifest,
     PluginManifestError, PluginRegistry, PluginRegistryError, PluginState, RemPluginStatusCode,
     REM_PLUGIN_ABI_VERSION,
 };
@@ -686,4 +686,33 @@ fn loader_reports_missing_installed_library_without_panicking() {
         report.errors.first().expect("loader error"),
         PluginLoaderError::MissingLibrary { .. }
     ));
+}
+
+#[test]
+fn catalog_lists_installed_plugin_with_settings_schema() {
+    let install_root = TestTempDir::new("catalog-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    write_valid_package(plugin_dir.as_path());
+
+    let report = PluginCatalog::new(install_root.path())
+        .list_installed_plugins("arm64-v8a")
+        .expect("catalog lists plugins");
+
+    assert!(report.errors.is_empty());
+    assert_eq!(report.items.len(), 1);
+    let plugin = &report.items[0];
+    assert_eq!(plugin.id.as_str(), "rem.plugin.example_status");
+    assert_eq!(
+        plugin.library_path.as_str(),
+        "logic/android/arm64-v8a/libexample_status_plugin.so"
+    );
+    assert_eq!(
+        plugin
+            .settings
+            .as_ref()
+            .expect("settings descriptor")
+            .schema["type"],
+        "object"
+    );
 }

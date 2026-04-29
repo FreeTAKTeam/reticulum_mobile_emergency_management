@@ -118,6 +118,13 @@ impl AppStateStore {
         Ok(store)
     }
 
+    pub(crate) fn storage_dir(&self) -> PathBuf {
+        self.db_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_STORAGE_DIR))
+    }
+
     fn connect(&self) -> Result<Connection, NodeError> {
         let connection = Connection::open(&self.db_path).map_err(|_| NodeError::IoError {})?;
         connection
@@ -2606,6 +2613,7 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Conversations {} => "Conversations",
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
+        ProjectionScope::Plugins {} => "Plugins",
         ProjectionScope::Sos {} => "Sos",
     }
 }

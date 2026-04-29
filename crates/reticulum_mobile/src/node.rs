@@ -15,6 +15,7 @@ use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
+use crate::plugins::{PluginCatalog, PluginCatalogReport};
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
     active_status, compose_sos_body, countdown_status, default_sos_settings, idle_status,
@@ -2582,6 +2583,14 @@ impl Node {
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn list_plugins(&self, android_abi: &str) -> Result<PluginCatalogReport, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let install_root = inner.app_state.storage_dir().join("plugins");
+        PluginCatalog::new(install_root)
+            .list_installed_plugins(android_abi)
+            .map_err(|_| NodeError::IoError {})
     }
 
     pub fn list_peers(&self) -> Result<Vec<PeerRecord>, NodeError> {

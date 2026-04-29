@@ -956,6 +956,7 @@ pub enum ProjectionScope {
     Conversations {},
     Messages {},
     Telemetry {},
+    Plugins {},
     Sos {},
 }
 

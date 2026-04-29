@@ -7094,6 +7094,7 @@ enum class ProjectionScope {
     CONVERSATIONS,
     MESSAGES,
     TELEMETRY,
+    PLUGINS,
     SOS;
     companion object
 }

@@ -44,6 +44,7 @@ export type ProjectionScope =
   | "Conversations"
   | "Messages"
   | "Telemetry"
+  | "Plugins"
   | "Checklists"
   | "ChecklistDetail"
   | "Sos";
@@ -393,6 +394,64 @@ export interface AppSettingsRecord {
   checklists: ChecklistSettingsRecord;
 }
 
+export type PluginState =
+  | "Discovered"
+  | "Disabled"
+  | "Enabled"
+  | "Loaded"
+  | "Initialized"
+  | "Running"
+  | "Stopped"
+  | "Failed";
+
+export type PluginMessageDirection = "send" | "receive";
+
+export interface PluginPermissionsRecord {
+  storagePlugin: boolean;
+  storageShared: boolean;
+  messagesRead: boolean;
+  messagesWrite: boolean;
+  lxmfSend: boolean;
+  lxmfReceive: boolean;
+  notificationsRaise: boolean;
+}
+
+export interface PluginMessageDescriptorRecord {
+  name: string;
+  version: string;
+  direction: PluginMessageDirection[];
+  schema: string;
+}
+
+export interface InstalledPluginSettingsDescriptor {
+  schemaPath: string;
+  schema: unknown;
+}
+
+export interface InstalledPluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  remApiVersion: string;
+  pluginType: string;
+  state: PluginState;
+  libraryPath: string;
+  settings?: InstalledPluginSettingsDescriptor;
+  permissions: PluginPermissionsRecord;
+  messages: PluginMessageDescriptorRecord[];
+}
+
+export interface PluginCatalogDiagnostic {
+  pluginId?: string;
+  path: string;
+  message: string;
+}
+
+export interface PluginCatalogReport {
+  items: InstalledPluginRecord[];
+  errors: PluginCatalogDiagnostic[];
+}
+
 export interface SavedPeerRecord {
   destination: string;
   label?: string;
@@ -656,6 +715,7 @@ export interface ReticulumNodeClient {
   setActivePropagationNode(destinationHex?: string): Promise<void>;
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
+  listPlugins(): Promise<PluginCatalogReport>;
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
@@ -890,6 +950,7 @@ interface ReticulumNodePlugin {
   setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
+  getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
@@ -1707,6 +1768,121 @@ function toErrorEvent(raw: Record<string, unknown>): NodeErrorEvent {
   return {
     code: String(raw.code ?? "UNKNOWN"),
     message: String(raw.message ?? "Unknown plugin error"),
+  };
+}
+
+function toPluginPermissionsRecord(raw: Record<string, unknown>): PluginPermissionsRecord {
+  return {
+    storagePlugin: Boolean(raw.storagePlugin ?? raw.storage_plugin),
+    storageShared: Boolean(raw.storageShared ?? raw.storage_shared),
+    messagesRead: Boolean(raw.messagesRead ?? raw.messages_read),
+    messagesWrite: Boolean(raw.messagesWrite ?? raw.messages_write),
+    lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),
+    lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
+    notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
+  };
+}
+
+function toPluginMessageDirection(value: unknown): PluginMessageDirection | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "send" || normalized === "receive" ? normalized : undefined;
+}
+
+function toPluginMessageDescriptorRecord(
+  raw: Record<string, unknown>,
+): PluginMessageDescriptorRecord {
+  return {
+    name: String(raw.name ?? ""),
+    version: String(raw.version ?? ""),
+    direction: Array.isArray(raw.direction)
+      ? raw.direction.flatMap((entry) => {
+          const direction = toPluginMessageDirection(entry);
+          return direction ? [direction] : [];
+        })
+      : [],
+    schema: String(raw.schema ?? ""),
+  };
+}
+
+function toPluginState(value: unknown): PluginState {
+  const normalized = String(value ?? "");
+  switch (normalized) {
+    case "Discovered":
+    case "Enabled":
+    case "Loaded":
+    case "Initialized":
+    case "Running":
+    case "Stopped":
+    case "Failed":
+      return normalized;
+    case "Disabled":
+    default:
+      return "Disabled";
+  }
+}
+
+function toInstalledPluginRecord(raw: Record<string, unknown>): InstalledPluginRecord {
+  const settings =
+    raw.settings && typeof raw.settings === "object"
+      ? raw.settings as Record<string, unknown>
+      : undefined;
+  return {
+    id: String(raw.id ?? ""),
+    name: String(raw.name ?? ""),
+    version: String(raw.version ?? ""),
+    remApiVersion: String(raw.remApiVersion ?? raw.rem_api_version ?? ""),
+    pluginType: String(raw.pluginType ?? raw.plugin_type ?? "native"),
+    state: toPluginState(raw.state),
+    libraryPath: String(raw.libraryPath ?? raw.library_path ?? ""),
+    settings: settings
+      ? {
+          schemaPath: String(settings.schemaPath ?? settings.schema_path ?? ""),
+          schema: settings.schema,
+        }
+      : undefined,
+    permissions: toPluginPermissionsRecord(
+      raw.permissions && typeof raw.permissions === "object"
+        ? raw.permissions as Record<string, unknown>
+        : {},
+    ),
+    messages: Array.isArray(raw.messages)
+      ? raw.messages
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toPluginMessageDescriptorRecord)
+      : [],
+  };
+}
+
+function toPluginCatalogDiagnostic(raw: Record<string, unknown>): PluginCatalogDiagnostic {
+  return {
+    pluginId: typeof raw.pluginId === "string"
+      ? raw.pluginId
+      : typeof raw.plugin_id === "string"
+        ? raw.plugin_id
+        : undefined,
+    path: String(raw.path ?? ""),
+    message: String(raw.message ?? ""),
+  };
+}
+
+function toPluginCatalogReport(raw: Record<string, unknown>): PluginCatalogReport {
+  return {
+    items: Array.isArray(raw.items)
+      ? raw.items
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toInstalledPluginRecord)
+      : [],
+    errors: Array.isArray(raw.errors)
+      ? raw.errors
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toPluginCatalogDiagnostic)
+      : [],
   };
 }
 
@@ -3174,6 +3350,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return Array.isArray(result.items) ? result.items.map(toAnnounceRecord) : [];
   }
 
+  async listPlugins(): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.getPlugins());
+  }
+
   async listPeers(): Promise<PeerRecord[]> {
     await this.ready();
     const result = await this.plugin.listPeers();
@@ -3726,6 +3907,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return [];
   }
 
+  async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
   }
@@ -4258,6 +4443,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async listAnnounces(): Promise<AnnounceRecord[]> {
     return [];
+  }
+
+  async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
   }
 
   async listPeers(): Promise<PeerRecord[]> {

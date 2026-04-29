@@ -290,6 +290,10 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.listAnnouncesJson(), "{\"items\":[]}");
     }
 
+    public synchronized String getPluginsJson() {
+        return nonEmptyJson(ReticulumBridge.getPluginsJson(primaryAndroidAbi()), "{\"items\":[],\"errors\":[]}");
+    }
+
     public synchronized String listPeersJson() {
         return nonEmptyJson(ReticulumBridge.listPeersJson(), "{\"items\":[]}");
     }
@@ -744,6 +748,7 @@ public final class ReticulumNodeService extends Service {
             "Conversations",
             "Messages",
             "Telemetry",
+            "Plugins",
             "Sos",
         }) {
             final JSObject payload = new JSObject();
@@ -1330,6 +1335,13 @@ public final class ReticulumNodeService extends Service {
             return value;
         }
         return value.substring(0, maxLength) + "...";
+    }
+
+    private String primaryAndroidAbi() {
+        if (Build.SUPPORTED_ABIS == null || Build.SUPPORTED_ABIS.length == 0) {
+            return "";
+        }
+        return Build.SUPPORTED_ABIS[0];
     }
 
     private void writeLogcat(String level, String message) {
