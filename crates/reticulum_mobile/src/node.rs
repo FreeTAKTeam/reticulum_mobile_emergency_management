@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -16,7 +17,7 @@ use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::plugins::{
-    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginLoader,
+    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginInstaller, PluginLoader,
     PluginLxmfOutboundRequest, PluginPermissions, PluginRegistry,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
@@ -2608,6 +2609,33 @@ impl Node {
         PluginCatalog::new(install_root)
             .list_installed_plugins_with_state(android_abi, Some(&persisted))
             .map_err(|_| NodeError::IoError {})
+    }
+
+    pub fn install_plugin_package_dir(
+        &self,
+        android_abi: &str,
+        package_dir: &str,
+    ) -> Result<PluginCatalogReport, NodeError> {
+        let (storage_root, install_root) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let storage_root = inner.app_state.storage_dir();
+            let install_root = storage_root.join("plugins");
+            (storage_root, install_root)
+        };
+        let staged_root = storage_root.join("plugin-packages");
+        fs_err::create_dir_all(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
+        let staged_root =
+            fs_err::canonicalize(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
+        let package_dir =
+            fs_err::canonicalize(Path::new(package_dir)).map_err(|_| NodeError::IoError {})?;
+        if !package_dir.starts_with(staged_root.as_path()) {
+            return Err(NodeError::InvalidConfig {});
+        }
+
+        PluginInstaller::new(install_root)
+            .install_from_package_dir(package_dir.as_path(), android_abi)
+            .map_err(|_| NodeError::InvalidConfig {})?;
+        self.list_plugins(android_abi)
     }
 
     pub fn set_plugin_enabled(

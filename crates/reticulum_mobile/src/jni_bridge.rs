@@ -112,6 +112,12 @@ struct PluginEnabledInput {
     enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallPackageInput {
+    package_dir: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginPermissionsInput {
@@ -2463,6 +2469,54 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getPlugi
     };
     let node = ensure_node(&mut guard);
     match node.list_plugins(abi.as_str()) {
+        Ok(report) => ok_json_result(&mut env, &report),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_installPluginPackageJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jstring {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: PluginInstallPackageInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in install payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.install_plugin_package_dir(abi.as_str(), payload.package_dir.as_str()) {
         Ok(report) => ok_json_result(&mut env, &report),
         Err(err) => {
             set_last_node_error(err);

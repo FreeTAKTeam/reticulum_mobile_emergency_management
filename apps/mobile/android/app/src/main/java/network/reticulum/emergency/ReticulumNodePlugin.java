@@ -423,6 +423,23 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void installPluginPackage(PluginCall call) {
+        final String packageDir = call.getString("packageDir");
+        if (packageDir == null || packageDir.trim().isEmpty()) {
+            call.reject("packageDir is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("packageDir", packageDir);
+        runStringServiceCall(
+            call,
+            "Failed to install plug-in package.",
+            "Native plug-in install JSON parse failed.",
+            service -> service.installPluginPackageJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void setPluginEnabled(PluginCall call) {
         final String pluginId = call.getString("pluginId");
         final boolean enabled = call.getBoolean("enabled", false);

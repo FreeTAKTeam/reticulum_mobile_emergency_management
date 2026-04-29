@@ -717,6 +717,7 @@ export interface ReticulumNodeClient {
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
   listPlugins(): Promise<PluginCatalogReport>;
+  installPluginPackage(packageDir: string): Promise<PluginCatalogReport>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
   grantPluginPermissions(pluginId: string, permissions: PluginPermissionsRecord): Promise<void>;
   listPeers(): Promise<PeerRecord[]>;
@@ -954,6 +955,10 @@ interface ReticulumNodePlugin {
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
   getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
+  installPluginPackage(options: { packageDir: string }): Promise<{
+    items: Record<string, unknown>[];
+    errors?: Record<string, unknown>[];
+  }>;
   setPluginEnabled(options: { pluginId: string; enabled: boolean }): Promise<void>;
   grantPluginPermissions(options: {
     pluginId: string;
@@ -3384,6 +3389,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toPluginCatalogReport(await this.plugin.getPlugins());
   }
 
+  async installPluginPackage(packageDir: string): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.installPluginPackage({ packageDir }));
+  }
+
   async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
     await this.ready();
     await this.plugin.setPluginEnabled({ pluginId, enabled });
@@ -3956,6 +3966,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { items: [], errors: [] };
   }
 
+  async installPluginPackage(_packageDir: string): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
   async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
 
   async grantPluginPermissions(
@@ -4498,6 +4512,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginPackage(_packageDir: string): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
 

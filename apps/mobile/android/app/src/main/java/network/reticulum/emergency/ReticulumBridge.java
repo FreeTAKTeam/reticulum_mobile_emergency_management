@@ -78,6 +78,7 @@ public final class ReticulumBridge {
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();
     public static native String getPluginsJson(String androidAbi);
+    public static native String installPluginPackageJson(String androidAbi, String payloadJson);
     public static native int setPluginEnabledJson(String androidAbi, String payloadJson);
     public static native int grantPluginPermissionsJson(String androidAbi, String payloadJson);
     public static native String nextEventJson(int timeoutMs);

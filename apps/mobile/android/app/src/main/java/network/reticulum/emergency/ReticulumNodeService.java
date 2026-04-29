@@ -294,6 +294,10 @@ public final class ReticulumNodeService extends Service {
         return nonEmptyJson(ReticulumBridge.getPluginsJson(primaryAndroidAbi()), "{\"items\":[],\"errors\":[]}");
     }
 
+    public synchronized String installPluginPackageJson(String payloadJson) {
+        return ReticulumBridge.installPluginPackageJson(primaryAndroidAbi(), payloadJson);
+    }
+
     public synchronized int setPluginEnabledJson(String payloadJson) {
         return ReticulumBridge.setPluginEnabledJson(primaryAndroidAbi(), payloadJson);
     }
