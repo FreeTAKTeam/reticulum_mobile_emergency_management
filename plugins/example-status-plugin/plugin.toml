@@ -1,0 +1,25 @@
+id = "rem.plugin.example_status"
+name = "Example Status Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+armeabi_v7a = "logic/android/armeabi-v7a/libexample_status_plugin.so"
+x86_64 = "logic/android/x86_64/libexample_status_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[permissions]
+storage_plugin = true
+messages_write = true
+lxmf_send = true
+notifications_raise = true
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"

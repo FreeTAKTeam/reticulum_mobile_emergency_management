@@ -1,0 +1,17 @@
+{
+  "description": "Example status message defaults.",
+  "fields": [
+    {
+      "id": "statusMessage",
+      "label": "Status message",
+      "type": "text",
+      "default": "Status test from example plug-in"
+    },
+    {
+      "id": "raiseNotification",
+      "label": "Raise notification after send",
+      "type": "boolean",
+      "default": true
+    }
+  ]
+}
