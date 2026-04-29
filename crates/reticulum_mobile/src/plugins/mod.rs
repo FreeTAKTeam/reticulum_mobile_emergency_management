@@ -4,6 +4,7 @@ mod catalog;
 mod host_api;
 mod installer;
 mod loader;
+mod manager;
 mod manifest;
 mod messages;
 mod permissions;
@@ -21,6 +22,7 @@ pub use catalog::{
 pub use host_api::{PluginHostApi, PluginHostError};
 pub use installer::{InstalledPlugin, PluginInstaller, PluginInstallerError};
 pub use loader::{PluginDiscoveryReport, PluginLoadCandidate, PluginLoader, PluginLoaderError};
+pub use manager::{NativePluginRuntime, NativePluginRuntimeError, PluginRuntimeDiagnostic};
 pub use manifest::{PluginLibrary, PluginManifest, PluginManifestError, PluginSettings};
 pub use messages::{
     PluginLxmfMessage, PluginLxmfMessageError, PluginMessageDescriptor, PluginMessageDirection,

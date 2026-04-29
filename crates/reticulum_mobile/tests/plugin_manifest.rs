@@ -1,10 +1,12 @@
 use reticulum_mobile::plugins::{
-    NativePluginLibrary, NativePluginLoadError, PluginCatalog, PluginHostApi, PluginHostError,
-    PluginInstaller, PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
-    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
+    NativePluginLibrary, NativePluginLoadError, NativePluginRuntime, PersistedPluginRegistry,
+    PersistedPluginState, PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller,
+    PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
+    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginPermissions, PluginRegistry,
     PluginRegistryError, PluginState, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
 };
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -189,6 +191,18 @@ fn write_dynamic_plugin_manifest(plugin_dir: &Path, library_path: &Path) {
     );
 }
 
+fn persisted_enabled_plugin_state(plugin_id: &str) -> PersistedPluginRegistry {
+    let mut plugins = BTreeMap::new();
+    plugins.insert(
+        plugin_id.to_string(),
+        PersistedPluginState {
+            state: PluginState::Enabled,
+            granted_permissions: PluginPermissions::default(),
+        },
+    );
+    PersistedPluginRegistry { plugins }
+}
+
 #[test]
 fn parses_android_manifest_with_settings_and_lxmf_message_descriptor() {
     let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
@@ -334,6 +348,110 @@ fn native_loader_rejects_invalid_status_code() {
             status: 99
         }
     ));
+}
+
+#[test]
+fn native_runtime_keeps_discovered_plugins_disabled_by_default() {
+    let install_root = TestTempDir::new("native-runtime-disabled-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        RemPluginStatusCode::Ok as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let mut runtime = NativePluginRuntime::discover(install_root.path(), "arm64-v8a", None)
+        .expect("runtime discovers plugins");
+
+    assert_eq!(runtime.loaded_plugin_count(), 0);
+    assert_eq!(
+        runtime
+            .registry()
+            .get("rem.plugin.example_status")
+            .expect("registered plugin")
+            .state,
+        PluginState::Disabled
+    );
+    runtime.start_enabled_plugins();
+    assert_eq!(runtime.loaded_plugin_count(), 0);
+}
+
+#[test]
+fn native_runtime_starts_enabled_plugin_and_stops_it() {
+    let install_root = TestTempDir::new("native-runtime-start-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        RemPluginStatusCode::Ok as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+    let persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+
+    let mut runtime =
+        NativePluginRuntime::discover(install_root.path(), "arm64-v8a", Some(&persisted))
+            .expect("runtime discovers plugins");
+
+    runtime.start_enabled_plugins();
+    assert_eq!(runtime.loaded_plugin_count(), 1);
+    assert_eq!(
+        runtime
+            .registry()
+            .get("rem.plugin.example_status")
+            .expect("registered plugin")
+            .state,
+        PluginState::Running
+    );
+    runtime.dispatch_event_json(r#"{"topic":"rem.plugin.started","payload":{}}"#);
+    assert!(runtime.diagnostics().is_empty());
+
+    runtime.stop_all();
+    assert_eq!(runtime.loaded_plugin_count(), 0);
+    assert_eq!(
+        runtime
+            .registry()
+            .get("rem.plugin.example_status")
+            .expect("registered plugin")
+            .state,
+        PluginState::Stopped
+    );
+}
+
+#[test]
+fn native_runtime_marks_init_failure_failed() {
+    let install_root = TestTempDir::new("native-runtime-fail-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        RemPluginStatusCode::Error as i32,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+    let persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+
+    let mut runtime =
+        NativePluginRuntime::discover(install_root.path(), "arm64-v8a", Some(&persisted))
+            .expect("runtime discovers plugins");
+
+    runtime.start_enabled_plugins();
+    assert_eq!(runtime.loaded_plugin_count(), 0);
+    assert_eq!(
+        runtime
+            .registry()
+            .get("rem.plugin.example_status")
+            .expect("registered plugin")
+            .state,
+        PluginState::Failed
+    );
+    assert_eq!(runtime.diagnostics().len(), 1);
+    assert_eq!(
+        runtime.diagnostics()[0].plugin_id.as_deref(),
+        Some("rem.plugin.example_status")
+    );
 }
 
 #[test]

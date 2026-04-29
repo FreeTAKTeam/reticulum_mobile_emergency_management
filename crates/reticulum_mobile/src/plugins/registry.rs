@@ -134,7 +134,7 @@ impl PluginRegistry {
         }
     }
 
-    fn set_state(
+    pub(crate) fn set_state(
         &mut self,
         plugin_id: &str,
         state: PluginState,
