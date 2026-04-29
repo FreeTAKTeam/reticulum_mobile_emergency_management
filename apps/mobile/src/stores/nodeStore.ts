@@ -5,6 +5,7 @@ import {
   type InstalledPluginRecord,
   type PeerRecord,
   type PluginCatalogDiagnostic,
+  type PluginPermissionsRecord,
   type ProjectionInvalidationEvent,
   type ProjectionScope,
   type SendMode,
@@ -1072,6 +1073,35 @@ export const useNodeStore = defineStore("node", () => {
         refreshPluginsPromise = null;
       });
     return refreshPluginsPromise;
+  }
+
+  async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      await client.value.setPluginEnabled(pluginId, enabled);
+      await refreshPluginsProjection();
+      appendLog("Info", `Plug-in ${pluginId} ${enabled ? "enabled" : "disabled"}.`);
+    } catch (error: unknown) {
+      throw captureActionError("Set plug-in enabled state", error);
+    }
+  }
+
+  async function grantPluginPermissions(
+    pluginId: string,
+    permissions: PluginPermissionsRecord,
+  ): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      await client.value.grantPluginPermissions(pluginId, permissions);
+      await refreshPluginsProjection();
+      appendLog("Info", `Plug-in ${pluginId} permissions updated.`);
+    } catch (error: unknown) {
+      throw captureActionError("Grant plug-in permissions", error);
+    }
   }
 
   async function refreshSavedPeersProjection(): Promise<void> {
@@ -2900,6 +2930,8 @@ export const useNodeStore = defineStore("node", () => {
     disconnectAllSaved,
     refreshHubDirectory,
     refreshPluginsProjection,
+    setPluginEnabled,
+    grantPluginPermissions,
     refreshHubRegistrationState,
     bootstrapHubRegistration,
     forgetHubRegistryLinkage,

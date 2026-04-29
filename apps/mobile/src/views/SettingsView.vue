@@ -2,6 +2,8 @@
 import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
+import type { PluginPermissionsRecord } from "@reticulum/node-client";
+import PluginManagementCard from "../components/plugins/PluginManagementCard.vue";
 import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import {
@@ -138,12 +140,15 @@ const nodeControlSummary = computed(() =>
 const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>({});
 const pluginSettingsFeedback = ref("");
 const pluginSettingsRefreshing = ref(false);
+const pendingPluginActions = reactive<Record<string, boolean>>({});
 const pluginSettingsSummary = computed(() => {
-  const pluginCount = pluginSettingsSections.value.length;
+  const pluginCount = nodeStore.installedPlugins.length;
   if (pluginCount === 0) {
     return "No installed plug-ins";
   }
-  return pluginCount === 1 ? "1 plug-in configurable" : `${pluginCount} plug-ins configurable`;
+  const configurableCount = pluginSettingsSections.value.length;
+  const enabledCount = nodeStore.installedPlugins.filter((plugin) => plugin.state !== "Disabled").length;
+  return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable`;
 });
 const activePropagationNodeLabel = computed(() => {
   if (!activePropagationNodeHex.value) {
@@ -459,6 +464,53 @@ function savePluginSettings(pluginId: string): void {
   }
   savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
   pluginSettingsFeedback.value = `${section.name} settings saved.`;
+}
+
+function pluginActionKey(pluginId: string, action: string): string {
+  return `${pluginId}:${action}`;
+}
+
+function isPluginActionPending(pluginId: string): boolean {
+  return Object.entries(pendingPluginActions).some(
+    ([key, pending]) => pending && key.startsWith(`${pluginId}:`),
+  );
+}
+
+async function withPluginAction(
+  pluginId: string,
+  action: string,
+  handler: () => Promise<void>,
+): Promise<void> {
+  const key = pluginActionKey(pluginId, action);
+  if (pendingPluginActions[key]) {
+    return;
+  }
+  pendingPluginActions[key] = true;
+  pluginSettingsFeedback.value = "";
+  try {
+    await handler();
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    delete pendingPluginActions[key];
+  }
+}
+
+async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+  await withPluginAction(pluginId, "enabled", async () => {
+    await nodeStore.setPluginEnabled(pluginId, enabled);
+    pluginSettingsFeedback.value = `Plug-in ${enabled ? "enabled" : "disabled"}.`;
+  });
+}
+
+async function grantPluginPermissions(
+  pluginId: string,
+  permissions: PluginPermissionsRecord,
+): Promise<void> {
+  await withPluginAction(pluginId, "permissions", async () => {
+    await nodeStore.grantPluginPermissions(pluginId, permissions);
+    pluginSettingsFeedback.value = "Plug-in permissions updated.";
+  });
 }
 
 async function refreshPluginSettings(): Promise<void> {
@@ -860,7 +912,7 @@ async function refreshPluginSettings(): Promise<void> {
       </summary>
       <div class="panel-body">
         <p class="section-note">
-          Installed plug-ins can contribute host-rendered configuration controls here.
+          Installed plug-ins can be enabled, granted declared permissions, and configured here.
         </p>
         <div class="actions">
           <button
@@ -878,7 +930,17 @@ async function refreshPluginSettings(): Promise<void> {
         >
           {{ diagnostic.path ? `${diagnostic.path}: ` : "" }}{{ diagnostic.message }}
         </p>
-        <div v-if="pluginSettingsSections.length > 0" class="plugin-settings-list">
+        <div v-if="nodeStore.installedPlugins.length > 0" class="plugin-settings-list">
+          <PluginManagementCard
+            v-for="plugin in nodeStore.installedPlugins"
+            :key="plugin.id"
+            :plugin="plugin"
+            :pending="isPluginActionPending(plugin.id)"
+            @set-enabled="setPluginEnabled"
+            @grant-permissions="grantPluginPermissions"
+          />
+        </div>
+        <div v-if="pluginSettingsSections.length > 0" class="plugin-settings-list plugin-config-list">
           <PluginSettingsSection
             v-for="section in pluginSettingsSections"
             :key="section.pluginId"
@@ -888,7 +950,7 @@ async function refreshPluginSettings(): Promise<void> {
             @save="savePluginSettings"
           />
         </div>
-        <p v-else class="section-note">
+        <p v-if="nodeStore.installedPlugins.length === 0" class="section-note">
           No plug-ins are installed or enabled for configuration yet.
         </p>
         <p v-if="pluginSettingsFeedback" class="feedback">{{ pluginSettingsFeedback }}</p>
@@ -1344,6 +1406,10 @@ textarea {
 .plugin-settings-list {
   display: grid;
   gap: 0.65rem;
+}
+
+.plugin-config-list {
+  margin-top: 0.65rem;
 }
 
 .active-endpoint {
