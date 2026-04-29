@@ -1,0 +1,140 @@
+# Android Native Plug-In System
+
+This document tracks the implemented Android-first REM plug-in surface on the
+`codex/android-plugin-system` branch.
+
+## Scope
+
+Android plug-ins are trusted, side-loaded packages installed into app-private
+storage. A plug-in package contains:
+
+- `plugin.toml`
+- an Android native library for one or more ABIs
+- optional host-rendered Settings schema
+- one or more declared REM plug-in LXMF message schemas
+- declared host permissions
+
+REM owns Reticulum routing, LXMF field construction, delivery tracking,
+permission checks, Settings rendering, and all access to runtime internals.
+Plug-ins do not receive raw database handles, filesystem handles, LXMF objects,
+RNS objects, or mutable runtime references.
+
+## Package Layout
+
+```text
+plugin.toml
+logic/
+  android/
+    arm64-v8a/
+      libexample_status_plugin.so
+ui/
+  settings.schema.json
+schemas/
+  status_test.schema.json
+assets/
+```
+
+The installed copy lives under:
+
+```text
+<app storage>/plugins/<plugin id>/
+```
+
+Staged package installation is limited to:
+
+```text
+<app storage>/plugin-packages/<package directory>/
+```
+
+The node rejects staged installs outside that app-private staging root before it
+calls the package installer.
+
+## Manifest
+
+```toml
+id = "rem.plugin.example_status"
+name = "Example Status Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[permissions]
+storage_plugin = true
+lxmf_send = true
+lxmf_receive = true
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send", "receive"]
+schema = "schemas/status_test.schema.json"
+```
+
+Validation rejects missing platform libraries, missing settings schemas, missing
+message schemas, unsafe relative paths, absolute paths, and plug-in IDs that are
+not reverse-DNS style.
+
+## Runtime State
+
+Installed plug-ins are disabled by default. The persisted registry stores
+runtime state and granted permissions separately from the manifest:
+
+- `Disabled`
+- `Enabled`
+- `Loaded`
+- `Initialized`
+- `Running`
+- `Stopped`
+- `Failed`
+
+Declared permissions are never granted automatically. Host API calls require the
+permission to be both declared by the manifest and granted by the registry.
+Persisted grants are intersected with the manifest declarations when loaded.
+
+## Android Bridge
+
+The native Android bridge exposes:
+
+- `getPlugins`
+- `installPluginPackage`
+- `setPluginEnabled`
+- `grantPluginPermissions`
+
+`installPluginPackage` accepts a staged package directory and returns the updated
+plug-in catalog. It does not accept network URLs or marketplace identifiers.
+
+## Settings
+
+Settings contains a fold-out section named **Plugin**. Each installed plug-in is
+listed with its state, declared/granted permission controls, and declared LXMF
+message count. Plug-ins with a valid Settings schema also get host-rendered
+configuration controls in the same section.
+
+Android v1 does not execute side-loaded Vue bundles inside Settings.
+
+## Plug-In LXMF Messages
+
+Plug-ins declare structured REM message types in `plugin.toml`. REM namespaces
+each message as:
+
+```text
+plugin.<plugin_id>.<message_name>
+```
+
+Plug-ins submit structured send requests to REM. REM validates the declared
+message, checks `lxmf.send`, builds the host-owned field envelope, and sends the
+message through the existing Rust runtime.
+
+Plug-in message traffic uses the field key:
+
+```text
+rem.plugin.message
+```
+
+This separates plug-in traffic from existing REM/RCH mission and SOS traffic.
