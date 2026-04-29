@@ -1,5 +1,6 @@
 mod host_api;
 mod installer;
+mod loader;
 mod manifest;
 mod messages;
 mod permissions;
@@ -7,6 +8,7 @@ mod registry;
 
 pub use host_api::{PluginHostApi, PluginHostError};
 pub use installer::{InstalledPlugin, PluginInstaller, PluginInstallerError};
+pub use loader::{PluginDiscoveryReport, PluginLoadCandidate, PluginLoader, PluginLoaderError};
 pub use manifest::{PluginLibrary, PluginManifest, PluginManifestError, PluginSettings};
 pub use messages::{
     PluginLxmfMessage, PluginLxmfMessageError, PluginMessageDescriptor, PluginMessageDirection,

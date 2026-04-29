@@ -1,7 +1,7 @@
 use reticulum_mobile::plugins::{
-    PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError, PluginLxmfMessage,
-    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
-    PluginRegistryError, PluginState,
+    PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError, PluginLoader,
+    PluginLoaderError, PluginLxmfMessage, PluginLxmfMessageError, PluginManifest,
+    PluginManifestError, PluginRegistry, PluginRegistryError, PluginState,
 };
 use serde_json::json;
 use std::fs;
@@ -497,5 +497,47 @@ fn rejects_settings_schema_path_traversal() {
     assert!(matches!(
         err,
         PluginManifestError::InvalidSettingsPath { .. }
+    ));
+}
+
+#[test]
+fn loader_discovers_installed_plugin_for_android_abi() {
+    let install_root = TestTempDir::new("loader-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    write_valid_package(plugin_dir.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("discovery completes");
+
+    assert!(report.errors.is_empty());
+    assert_eq!(report.candidates.len(), 1);
+    assert_eq!(
+        report.candidates[0].library_path,
+        plugin_dir.join("logic/android/arm64-v8a/libexample_status_plugin.so")
+    );
+}
+
+#[test]
+fn loader_reports_missing_installed_library_without_panicking() {
+    let install_root = TestTempDir::new("loader-missing-library");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    write_package_file(
+        plugin_dir.as_path(),
+        "plugin.toml",
+        VALID_MANIFEST.as_bytes(),
+    );
+    write_package_file(plugin_dir.as_path(), "ui/settings.schema.json", br#"{}"#);
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("discovery completes");
+
+    assert!(report.candidates.is_empty());
+    assert!(matches!(
+        report.errors.first().expect("loader error"),
+        PluginLoaderError::MissingLibrary { .. }
     ));
 }
