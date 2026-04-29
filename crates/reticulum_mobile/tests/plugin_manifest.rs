@@ -1,7 +1,8 @@
 use reticulum_mobile::plugins::{
     PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError, PluginLoader,
     PluginLoaderError, PluginLxmfMessage, PluginLxmfMessageError, PluginManifest,
-    PluginManifestError, PluginRegistry, PluginRegistryError, PluginState,
+    PluginManifestError, PluginRegistry, PluginRegistryError, PluginState, RemPluginStatusCode,
+    REM_PLUGIN_ABI_VERSION,
 };
 use serde_json::json;
 use std::fs;
@@ -106,6 +107,27 @@ fn parses_android_manifest_with_settings_and_lxmf_message_descriptor() {
         manifest.messages[0].wire_type(manifest.id.as_str()),
         "plugin.rem.plugin.example_status.status_test"
     );
+    assert_eq!(
+        manifest.entrypoints.metadata.as_str(),
+        "rem_plugin_metadata"
+    );
+    assert_eq!(manifest.entrypoints.init.as_str(), "rem_plugin_init");
+    assert_eq!(manifest.entrypoints.start.as_str(), "rem_plugin_start");
+    assert_eq!(manifest.entrypoints.stop.as_str(), "rem_plugin_stop");
+    assert_eq!(
+        manifest.entrypoints.handle_event.as_str(),
+        "rem_plugin_handle_event"
+    );
+}
+
+#[test]
+fn c_abi_version_and_status_codes_are_stable() {
+    assert_eq!(REM_PLUGIN_ABI_VERSION.major, 1);
+    assert_eq!(REM_PLUGIN_ABI_VERSION.minor, 0);
+    assert_eq!(RemPluginStatusCode::Ok as i32, 0);
+    assert_eq!(RemPluginStatusCode::Error as i32, 1);
+    assert_eq!(RemPluginStatusCode::PermissionDenied as i32, 2);
+    assert_eq!(RemPluginStatusCode::UnsupportedApi as i32, 3);
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::abi::PluginEntrypoints;
 use super::messages::PluginMessageDescriptor;
 use super::permissions::PluginPermissions;
 
@@ -39,6 +40,8 @@ pub struct PluginManifest {
     pub permissions: PluginPermissions,
     #[serde(default)]
     pub messages: Vec<PluginMessageDescriptor>,
+    #[serde(default)]
+    pub entrypoints: PluginEntrypoints,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
