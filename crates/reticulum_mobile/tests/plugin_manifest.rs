@@ -1,6 +1,7 @@
 use reticulum_mobile::plugins::{
-    PluginInstaller, PluginInstallerError, PluginLxmfMessage, PluginLxmfMessageError,
-    PluginManifest, PluginManifestError, PluginRegistry, PluginRegistryError, PluginState,
+    PluginHostApi, PluginHostError, PluginInstaller, PluginInstallerError, PluginLxmfMessage,
+    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
+    PluginRegistryError, PluginState,
 };
 use serde_json::json;
 use std::fs;
@@ -287,6 +288,95 @@ fn registry_does_not_restore_grants_for_undeclared_permissions() {
         .get("rem.plugin.example_status")
         .expect("plugin exists");
     assert!(!plugin.granted_permissions.messages_write);
+}
+
+#[test]
+fn host_api_denies_plugin_storage_without_grant() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    let mut host = PluginHostApi::new(registry);
+
+    let err = host
+        .set_plugin_storage("rem.plugin.example_status", "callsign", json!("alpha"))
+        .expect_err("ungranted storage permission is denied");
+
+    assert!(matches!(
+        err,
+        PluginHostError::PermissionDenied {
+            permission: "storage.plugin",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn host_api_allows_granted_plugin_local_storage() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.storage_plugin = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    host.set_plugin_storage("rem.plugin.example_status", "callsign", json!("alpha"))
+        .expect("storage write succeeds");
+
+    assert_eq!(
+        host.get_plugin_storage("rem.plugin.example_status", "callsign")
+            .expect("storage read succeeds"),
+        Some(json!("alpha"))
+    );
+}
+
+#[test]
+fn host_api_denies_lxmf_send_without_grant() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    let mut host = PluginHostApi::new(registry);
+
+    let err = host
+        .request_lxmf_send(
+            "rem.plugin.example_status",
+            "status_test",
+            json!({ "status": "ok" }),
+        )
+        .expect_err("ungranted lxmf send is denied");
+
+    assert!(matches!(
+        err,
+        PluginHostError::PermissionDenied {
+            permission: "lxmf.send",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn host_api_builds_lxmf_message_for_granted_declared_message() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_send = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    let message = host
+        .request_lxmf_send(
+            "rem.plugin.example_status",
+            "status_test",
+            json!({ "status": "ok" }),
+        )
+        .expect("message request succeeds");
+
+    assert_eq!(
+        message.wire_type.as_str(),
+        "plugin.rem.plugin.example_status.status_test"
+    );
+    assert_eq!(host.queued_lxmf_messages().len(), 1);
 }
 
 #[test]
