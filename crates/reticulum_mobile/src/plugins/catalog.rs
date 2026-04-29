@@ -5,8 +5,8 @@ use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use super::{
-    PluginLoadCandidate, PluginLoader, PluginLoaderError, PluginMessageDescriptor,
-    PluginPermissions, PluginState,
+    PersistedPluginRegistry, PluginLoadCandidate, PluginLoader, PluginLoaderError,
+    PluginMessageDescriptor, PluginPermissions, PluginRegistry, PluginRegistryError, PluginState,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -28,6 +28,7 @@ pub struct InstalledPluginDescriptor {
     pub library_path: String,
     pub settings: Option<InstalledPluginSettingsDescriptor>,
     pub permissions: PluginPermissions,
+    pub granted_permissions: PluginPermissions,
     pub messages: Vec<PluginMessageDescriptor>,
 }
 
@@ -52,6 +53,8 @@ pub enum PluginCatalogError {
     Io(#[from] std::io::Error),
     #[error("invalid plug-in settings schema JSON at {path}")]
     InvalidSettingsSchema { path: PathBuf },
+    #[error(transparent)]
+    Registry(#[from] PluginRegistryError),
 }
 
 #[derive(Debug, Clone)]
@@ -70,9 +73,18 @@ impl PluginCatalog {
         &self,
         android_abi: &str,
     ) -> Result<PluginCatalogReport, PluginCatalogError> {
+        self.list_installed_plugins_with_state(android_abi, None)
+    }
+
+    pub fn list_installed_plugins_with_state(
+        &self,
+        android_abi: &str,
+        persisted: Option<&PersistedPluginRegistry>,
+    ) -> Result<PluginCatalogReport, PluginCatalogError> {
         let discovery = PluginLoader::new(self.install_root.as_path())
             .discover_installed_plugins(android_abi)
             .map_err(loader_error_to_catalog_error)?;
+        let registry = registry_from_candidates(discovery.candidates.as_slice(), persisted)?;
         let mut report = PluginCatalogReport {
             items: Vec::new(),
             errors: discovery
@@ -83,7 +95,7 @@ impl PluginCatalog {
         };
 
         for candidate in discovery.candidates {
-            match descriptor_from_candidate(candidate) {
+            match descriptor_from_candidate(candidate, &registry) {
                 Ok(descriptor) => report.items.push(descriptor),
                 Err(error) => report.errors.push(catalog_error_to_diagnostic(error)),
             }
@@ -96,8 +108,26 @@ impl PluginCatalog {
     }
 }
 
+fn registry_from_candidates(
+    candidates: &[PluginLoadCandidate],
+    persisted: Option<&PersistedPluginRegistry>,
+) -> Result<PluginRegistry, PluginCatalogError> {
+    let mut registry = PluginRegistry::from_manifests(
+        candidates
+            .iter()
+            .map(|candidate| candidate.manifest.clone())
+            .collect(),
+    )
+    .map_err(PluginCatalogError::Registry)?;
+    if let Some(persisted) = persisted {
+        registry.apply_persisted_state(persisted);
+    }
+    Ok(registry)
+}
+
 fn descriptor_from_candidate(
     candidate: PluginLoadCandidate,
+    registry: &PluginRegistry,
 ) -> Result<InstalledPluginDescriptor, PluginCatalogError> {
     let settings = candidate
         .manifest
@@ -113,17 +143,23 @@ fn descriptor_from_candidate(
         .unwrap_or(candidate.library_path.as_path())
         .to_string_lossy()
         .replace('\\', "/");
+    let registered = registry.get(candidate.manifest.id.as_str());
 
     Ok(InstalledPluginDescriptor {
-        id: candidate.manifest.id,
+        id: candidate.manifest.id.clone(),
         name: candidate.manifest.name,
         version: candidate.manifest.version,
         rem_api_version: candidate.manifest.rem_api_version,
         plugin_type: candidate.manifest.plugin_type,
-        state: PluginState::Disabled,
+        state: registered
+            .map(|plugin| plugin.state)
+            .unwrap_or(PluginState::Disabled),
         library_path,
         settings,
-        permissions: candidate.manifest.permissions,
+        permissions: candidate.manifest.permissions.clone(),
+        granted_permissions: registered
+            .map(|plugin| plugin.granted_permissions.clone())
+            .unwrap_or_default(),
         messages: candidate.manifest.messages,
     })
 }
@@ -199,6 +235,11 @@ fn catalog_error_to_diagnostic(error: PluginCatalogError) -> PluginCatalogDiagno
             plugin_id: None,
             path: path.display().to_string(),
             message: "invalid settings schema JSON".to_string(),
+        },
+        PluginCatalogError::Registry(error) => PluginCatalogDiagnostic {
+            plugin_id: None,
+            path: String::new(),
+            message: error.to_string(),
         },
     }
 }

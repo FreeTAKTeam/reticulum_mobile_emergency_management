@@ -660,6 +660,32 @@ fn registry_persists_state_and_granted_permissions_separately() {
 }
 
 #[test]
+fn persisted_registry_round_trips_to_disk() {
+    let temp = TestTempDir::new("persisted-registry");
+    let path = temp.path().join("plugins").join("registry.json");
+    let mut persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+    persisted
+        .plugins
+        .get_mut("rem.plugin.example_status")
+        .expect("persisted plugin exists")
+        .granted_permissions
+        .lxmf_send = true;
+
+    persisted
+        .save_to_path(path.as_path())
+        .expect("registry state saves");
+    let loaded =
+        PersistedPluginRegistry::load_from_path(path.as_path()).expect("registry state loads");
+
+    let plugin = loaded
+        .plugins
+        .get("rem.plugin.example_status")
+        .expect("plugin state persisted");
+    assert_eq!(plugin.state, PluginState::Enabled);
+    assert!(plugin.granted_permissions.lxmf_send);
+}
+
+#[test]
 fn registry_does_not_restore_grants_for_undeclared_permissions() {
     let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
     let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
@@ -1112,4 +1138,29 @@ fn catalog_lists_installed_plugin_with_settings_schema() {
             .schema["type"],
         "object"
     );
+}
+
+#[test]
+fn catalog_applies_persisted_plugin_state_and_grants() {
+    let install_root = TestTempDir::new("catalog-persisted-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    write_valid_package(plugin_dir.as_path());
+    let mut persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+    persisted
+        .plugins
+        .get_mut("rem.plugin.example_status")
+        .expect("persisted plugin exists")
+        .granted_permissions
+        .lxmf_send = true;
+
+    let report = PluginCatalog::new(install_root.path())
+        .list_installed_plugins_with_state("arm64-v8a", Some(&persisted))
+        .expect("catalog lists plugins");
+
+    assert!(report.errors.is_empty());
+    let plugin = report.items.first().expect("plugin listed");
+    assert_eq!(plugin.state, PluginState::Enabled);
+    assert!(plugin.granted_permissions.lxmf_send);
+    assert!(plugin.permissions.lxmf_send);
 }

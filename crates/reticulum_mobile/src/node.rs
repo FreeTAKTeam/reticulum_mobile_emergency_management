@@ -15,7 +15,9 @@ use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
-use crate::plugins::{PluginCatalog, PluginCatalogReport, PluginLxmfOutboundRequest};
+use crate::plugins::{
+    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginLxmfOutboundRequest,
+};
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
     active_status, compose_sos_body, countdown_status, default_sos_settings, idle_status,
@@ -2600,8 +2602,10 @@ impl Node {
     pub fn list_plugins(&self, android_abi: &str) -> Result<PluginCatalogReport, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         let install_root = inner.app_state.storage_dir().join("plugins");
+        let persisted = PersistedPluginRegistry::load_from_path(install_root.join("registry.json"))
+            .map_err(|_| NodeError::IoError {})?;
         PluginCatalog::new(install_root)
-            .list_installed_plugins(android_abi)
+            .list_installed_plugins_with_state(android_abi, Some(&persisted))
             .map_err(|_| NodeError::IoError {})
     }
 

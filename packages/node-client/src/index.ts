@@ -438,6 +438,7 @@ export interface InstalledPluginRecord {
   libraryPath: string;
   settings?: InstalledPluginSettingsDescriptor;
   permissions: PluginPermissionsRecord;
+  grantedPermissions: PluginPermissionsRecord;
   messages: PluginMessageDescriptorRecord[];
 }
 
@@ -1844,6 +1845,13 @@ function toInstalledPluginRecord(raw: Record<string, unknown>): InstalledPluginR
       raw.permissions && typeof raw.permissions === "object"
         ? raw.permissions as Record<string, unknown>
         : {},
+    ),
+    grantedPermissions: toPluginPermissionsRecord(
+      raw.grantedPermissions && typeof raw.grantedPermissions === "object"
+        ? raw.grantedPermissions as Record<string, unknown>
+        : raw.granted_permissions && typeof raw.granted_permissions === "object"
+          ? raw.granted_permissions as Record<string, unknown>
+          : {},
     ),
     messages: Array.isArray(raw.messages)
       ? raw.messages

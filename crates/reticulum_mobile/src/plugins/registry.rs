@@ -1,4 +1,5 @@
 use std::collections::{btree_map::Entry, BTreeMap};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -42,6 +43,10 @@ pub enum PluginRegistryError {
     DuplicatePluginId { plugin_id: String },
     #[error("plugin not found: {plugin_id}")]
     PluginNotFound { plugin_id: String },
+    #[error("plugin registry I/O failed: {message}")]
+    Io { message: String },
+    #[error("plugin registry JSON is invalid")]
+    InvalidJson,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -147,5 +152,33 @@ impl PluginRegistry {
                 })?;
         plugin.state = state;
         Ok(())
+    }
+}
+
+impl PersistedPluginRegistry {
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, PluginRegistryError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let source = fs_err::read_to_string(path).map_err(registry_io_error)?;
+        serde_json::from_str(source.as_str()).map_err(|_| PluginRegistryError::InvalidJson)
+    }
+
+    pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<(), PluginRegistryError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs_err::create_dir_all(parent).map_err(registry_io_error)?;
+        }
+        let source =
+            serde_json::to_string_pretty(self).map_err(|_| PluginRegistryError::InvalidJson)?;
+        fs_err::write(path, source).map_err(registry_io_error)?;
+        Ok(())
+    }
+}
+
+fn registry_io_error(error: std::io::Error) -> PluginRegistryError {
+    PluginRegistryError::Io {
+        message: error.to_string(),
     }
 }
