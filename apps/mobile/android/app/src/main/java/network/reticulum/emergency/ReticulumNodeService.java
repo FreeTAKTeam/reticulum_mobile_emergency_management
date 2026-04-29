@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -27,6 +28,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -296,6 +298,39 @@ public final class ReticulumNodeService extends Service {
 
     public synchronized String installPluginPackageJson(String payloadJson) {
         return ReticulumBridge.installPluginPackageJson(primaryAndroidAbi(), payloadJson);
+    }
+
+    public synchronized String installPluginArchiveBase64Json(String payloadJson) throws JSONException {
+        final JSONObject payload = new JSONObject(payloadJson == null ? "{}" : payloadJson);
+        final String filename = sanitizePluginArchiveFilename(payload.optString("filename", "plugin.remplugin"));
+        final String archiveBase64 = payload.optString("archiveBase64", "");
+        if (archiveBase64.isEmpty()) {
+            return null;
+        }
+        try {
+            final byte[] archiveBytes = Base64.decode(archiveBase64, Base64.DEFAULT);
+            final File stagingDir = new File(storageDir, "plugin-packages");
+            if (!stagingDir.exists() && !stagingDir.mkdirs()) {
+                return null;
+            }
+            final File archiveFile = new File(stagingDir, filename);
+            try (FileOutputStream output = new FileOutputStream(archiveFile, false)) {
+                output.write(archiveBytes);
+            }
+            final JSONObject installPayload = new JSONObject();
+            installPayload.put("packagePath", archiveFile.getAbsolutePath());
+            final String result = installPluginPackageJson(installPayload.toString());
+            if (result != null && !result.isEmpty()) {
+                // The native installer copies validated content into plugins/.
+                // The staged upload is no longer needed after a successful install.
+                //noinspection ResultOfMethodCallIgnored
+                archiveFile.delete();
+            }
+            return result;
+        } catch (IllegalArgumentException | java.io.IOException ex) {
+            Logger.error(TAG, "Failed to stage plug-in archive.", ex);
+            return null;
+        }
     }
 
     public synchronized int setPluginEnabledJson(String payloadJson) {
@@ -1347,6 +1382,21 @@ public final class ReticulumNodeService extends Service {
             return value;
         }
         return value.substring(0, maxLength) + "...";
+    }
+
+    private static String sanitizePluginArchiveFilename(String rawFilename) {
+        final String normalized = rawFilename == null ? "" : rawFilename.trim();
+        final String basename = normalized.replace('\\', '/');
+        final int slash = basename.lastIndexOf('/');
+        final String leaf = slash >= 0 ? basename.substring(slash + 1) : basename;
+        String safe = leaf.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safe.isEmpty()) {
+            safe = "plugin.remplugin";
+        }
+        if (!safe.endsWith(".remplugin")) {
+            safe = safe + ".remplugin";
+        }
+        return safe;
     }
 
     private String primaryAndroidAbi() {

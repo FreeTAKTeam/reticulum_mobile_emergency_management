@@ -137,9 +137,11 @@ const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved pee
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
+const pluginArchiveFileInput = useTemplateRef<HTMLInputElement>("pluginArchiveFileInput");
 const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>({});
 const pluginSettingsFeedback = ref("");
 const pluginSettingsRefreshing = ref(false);
+const pluginArchiveInstalling = ref(false);
 const pendingPluginActions = reactive<Record<string, boolean>>({});
 const pluginSettingsSummary = computed(() => {
   const pluginCount = nodeStore.installedPlugins.length;
@@ -464,6 +466,37 @@ function savePluginSettings(pluginId: string): void {
   }
   savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
   pluginSettingsFeedback.value = `${section.name} settings saved.`;
+}
+
+function openPluginArchiveFilePicker(): void {
+  pluginArchiveFileInput.value?.click();
+}
+
+async function onPluginArchiveSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) {
+    return;
+  }
+  if (!file.name.endsWith(".remplugin")) {
+    pluginSettingsFeedback.value = "Select a .remplugin archive.";
+    return;
+  }
+  if (pluginArchiveInstalling.value) {
+    return;
+  }
+  pluginArchiveInstalling.value = true;
+  pluginSettingsFeedback.value = "";
+  try {
+    const archiveBytes = new Uint8Array(await file.arrayBuffer());
+    await nodeStore.installPluginArchive(file.name, archiveBytes);
+    pluginSettingsFeedback.value = `${file.name} installed disabled by default.`;
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    pluginArchiveInstalling.value = false;
+  }
 }
 
 function pluginActionKey(pluginId: string, action: string): string {
@@ -914,7 +947,21 @@ async function refreshPluginSettings(): Promise<void> {
         <p class="section-note">
           Installed plug-ins can be enabled, granted declared permissions, and configured here.
         </p>
+        <input
+          ref="pluginArchiveFileInput"
+          type="file"
+          accept=".remplugin,application/zip"
+          class="hidden-input"
+          @change="onPluginArchiveSelected"
+        />
         <div class="actions">
+          <button
+            type="button"
+            :disabled="pluginArchiveInstalling"
+            @click="openPluginArchiveFilePicker"
+          >
+            {{ pluginArchiveInstalling ? "Installing" : "Install .remplugin" }}
+          </button>
           <button
             type="button"
             :disabled="pluginSettingsRefreshing"

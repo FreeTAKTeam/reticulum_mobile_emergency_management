@@ -717,6 +717,7 @@ export interface ReticulumNodeClient {
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
   listPlugins(): Promise<PluginCatalogReport>;
+  installPluginArchive(filename: string, archiveBytes: Uint8Array): Promise<PluginCatalogReport>;
   installPluginPackage(packagePath: string): Promise<PluginCatalogReport>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
   grantPluginPermissions(pluginId: string, permissions: PluginPermissionsRecord): Promise<void>;
@@ -955,6 +956,13 @@ interface ReticulumNodePlugin {
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
   getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
+  installPluginArchive(options: {
+    filename: string;
+    archiveBase64: string;
+  }): Promise<{
+    items: Record<string, unknown>[];
+    errors?: Record<string, unknown>[];
+  }>;
   installPluginPackage(options: { packagePath: string }): Promise<{
     items: Record<string, unknown>[];
     errors?: Record<string, unknown>[];
@@ -3389,6 +3397,17 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toPluginCatalogReport(await this.plugin.getPlugins());
   }
 
+  async installPluginArchive(
+    filename: string,
+    archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.installPluginArchive({
+      filename,
+      archiveBase64: encodeBytesToBase64(archiveBytes),
+    }));
+  }
+
   async installPluginPackage(packagePath: string): Promise<PluginCatalogReport> {
     await this.ready();
     return toPluginCatalogReport(await this.plugin.installPluginPackage({ packagePath }));
@@ -3966,6 +3985,13 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { items: [], errors: [] };
   }
 
+  async installPluginArchive(
+    _filename: string,
+    _archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
   async installPluginPackage(_packagePath: string): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
@@ -4512,6 +4538,13 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginArchive(
+    _filename: string,
+    _archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
 

@@ -1104,6 +1104,27 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  async function installPluginArchive(filename: string, archiveBytes: Uint8Array): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      const report = await client.value.installPluginArchive(filename, archiveBytes);
+      installedPlugins.value = [...report.items];
+      pluginCatalogErrors.value = [...report.errors];
+      syncInstalledPluginSettingsSections(report.items);
+      appendLog("Info", `Plug-in archive ${filename} installed disabled by default.`);
+      if (report.errors.length > 0) {
+        appendLog(
+          "Warn",
+          `Plug-in install completed with ${report.errors.length} diagnostic${report.errors.length === 1 ? "" : "s"}.`,
+        );
+      }
+    } catch (error: unknown) {
+      throw captureActionError("Install plug-in archive", error);
+    }
+  }
+
   async function refreshSavedPeersProjection(): Promise<void> {
     if (!client.value) {
       return;
@@ -2932,6 +2953,7 @@ export const useNodeStore = defineStore("node", () => {
     refreshPluginsProjection,
     setPluginEnabled,
     grantPluginPermissions,
+    installPluginArchive,
     refreshHubRegistrationState,
     bootstrapHubRegistration,
     forgetHubRegistryLinkage,

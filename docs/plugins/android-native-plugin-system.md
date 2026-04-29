@@ -103,9 +103,14 @@ Persisted grants are intersected with the manifest declarations when loaded.
 The native Android bridge exposes:
 
 - `getPlugins`
+- `installPluginArchive`
 - `installPluginPackage`
 - `setPluginEnabled`
 - `grantPluginPermissions`
+
+`installPluginArchive` accepts a `.remplugin` filename plus base64 archive
+bytes from the Capacitor UI, writes the archive under app-private
+`plugin-packages` storage, and then calls the native package installer.
 
 `installPluginPackage` accepts a staged `packagePath` and returns the updated
 plug-in catalog. The path may point to an extracted package directory or a
@@ -114,9 +119,10 @@ storage. It does not accept network URLs or marketplace identifiers.
 
 ## Settings
 
-Settings contains a fold-out section named **Plugin**. Each installed plug-in is
-listed with its state, declared/granted permission controls, and declared LXMF
-message count. Plug-ins with a valid Settings schema also get host-rendered
+Settings contains a fold-out section named **Plugin**. Operators can install a
+local `.remplugin` archive from this section. Each installed plug-in is listed
+with its state, declared/granted permission controls, and declared LXMF message
+count. Plug-ins with a valid Settings schema also get host-rendered
 configuration controls in the same section.
 
 Android v1 does not execute side-loaded Vue bundles inside Settings.

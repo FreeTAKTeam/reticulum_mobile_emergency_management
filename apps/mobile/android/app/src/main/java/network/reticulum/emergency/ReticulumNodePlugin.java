@@ -440,6 +440,25 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void installPluginArchive(PluginCall call) {
+        final String filename = call.getString("filename", "plugin.remplugin");
+        final String archiveBase64 = call.getString("archiveBase64");
+        if (archiveBase64 == null || archiveBase64.isEmpty()) {
+            call.reject("archiveBase64 is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("filename", filename);
+        payload.put("archiveBase64", archiveBase64);
+        runStringServiceCall(
+            call,
+            "Failed to install plug-in archive.",
+            "Native plug-in archive install JSON parse failed.",
+            service -> service.installPluginArchiveBase64Json(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void setPluginEnabled(PluginCall call) {
         final String pluginId = call.getString("pluginId");
         final boolean enabled = call.getBoolean("enabled", false);
