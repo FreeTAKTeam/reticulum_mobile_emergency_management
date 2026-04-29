@@ -4784,6 +4784,7 @@ mod tests {
     use super::*;
 
     use crate::mission_sync::parse_mission_sync_metadata;
+    use crate::plugins::PluginState;
     use crate::types::{
         EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod, MessageState,
         TelemetrySettingsRecord,
@@ -4949,6 +4950,101 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create storage dir");
         dir
+    }
+
+    fn write_test_plugin_file(package_dir: &Path, relative_path: &str, contents: &[u8]) {
+        let path = package_dir.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create package parent");
+        }
+        std::fs::write(path, contents).expect("write package file");
+    }
+
+    fn write_test_plugin_package(package_dir: &Path) {
+        write_test_plugin_file(
+            package_dir,
+            "plugin.toml",
+            br#"
+id = "rem.plugin.example_status"
+name = "Example Status Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[permissions]
+storage_plugin = true
+lxmf_send = true
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"
+"#,
+        );
+        write_test_plugin_file(
+            package_dir,
+            "logic/android/arm64-v8a/libexample_status_plugin.so",
+            b"native",
+        );
+        write_test_plugin_file(
+            package_dir,
+            "ui/settings.schema.json",
+            br#"{"type":"object"}"#,
+        );
+        write_test_plugin_file(
+            package_dir,
+            "schemas/status_test.schema.json",
+            br#"{"type":"object"}"#,
+        );
+    }
+
+    #[test]
+    fn install_plugin_package_dir_installs_from_app_private_staging() {
+        let storage_dir = prepare_storage_dir("plugin_install_staged");
+        let package_dir = storage_dir
+            .join("plugin-packages")
+            .join("example-status-package");
+        write_test_plugin_package(package_dir.as_path());
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+
+        let report = node
+            .install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
+            .expect("staged package installs");
+
+        assert!(report.errors.is_empty());
+        assert_eq!(report.items.len(), 1);
+        let plugin = &report.items[0];
+        assert_eq!(plugin.id.as_str(), "rem.plugin.example_status");
+        assert_eq!(plugin.state, PluginState::Disabled);
+        assert!(storage_dir
+            .join("plugins/rem.plugin.example_status/plugin.toml")
+            .is_file());
+    }
+
+    #[test]
+    fn install_plugin_package_dir_rejects_package_outside_staging() {
+        let storage_dir = prepare_storage_dir("plugin_install_rejects_outside");
+        let package_dir = unique_test_dir("plugin_install_outside_package");
+        std::fs::create_dir_all(package_dir.as_path()).expect("create outside package");
+        write_test_plugin_package(package_dir.as_path());
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+
+        let err = node
+            .install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
+            .expect_err("outside package is rejected");
+
+        assert!(matches!(err, NodeError::InvalidConfig {}));
+        assert!(!storage_dir
+            .join("plugins/rem.plugin.example_status")
+            .exists());
+        let _ = std::fs::remove_dir_all(package_dir);
     }
 
     fn build_config(name: &str, storage_dir: &Path, relay_addr: &str) -> NodeConfig {
