@@ -115,7 +115,17 @@ struct PluginEnabledInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginInstallPackageInput {
-    package_dir: String,
+    package_path: Option<String>,
+    package_dir: Option<String>,
+}
+
+impl PluginInstallPackageInput {
+    fn package_path(&self) -> Option<&str> {
+        self.package_path
+            .as_deref()
+            .or(self.package_dir.as_deref())
+            .filter(|value| !value.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2516,7 +2526,11 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_installP
         }
     };
     let node = ensure_node(&mut guard);
-    match node.install_plugin_package_dir(abi.as_str(), payload.package_dir.as_str()) {
+    let Some(package_path) = payload.package_path() else {
+        set_last_error("InvalidConfig", "packagePath is required");
+        return ptr::null_mut();
+    };
+    match node.install_plugin_package_dir(abi.as_str(), package_path) {
         Ok(report) => ok_json_result(&mut env, &report),
         Err(err) => {
             set_last_node_error(err);

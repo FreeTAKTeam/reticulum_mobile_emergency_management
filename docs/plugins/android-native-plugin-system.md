@@ -40,7 +40,8 @@ The installed copy lives under:
 <app storage>/plugins/<plugin id>/
 ```
 
-Staged package installation is limited to:
+Staged package installation is limited to extracted package directories or
+`.remplugin` archives under:
 
 ```text
 <app storage>/plugin-packages/<package directory>/
@@ -106,8 +107,10 @@ The native Android bridge exposes:
 - `setPluginEnabled`
 - `grantPluginPermissions`
 
-`installPluginPackage` accepts a staged package directory and returns the updated
-plug-in catalog. It does not accept network URLs or marketplace identifiers.
+`installPluginPackage` accepts a staged `packagePath` and returns the updated
+plug-in catalog. The path may point to an extracted package directory or a
+`.remplugin` archive, but it must be under app-private `plugin-packages`
+storage. It does not accept network URLs or marketplace identifiers.
 
 ## Settings
 

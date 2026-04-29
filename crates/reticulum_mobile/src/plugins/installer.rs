@@ -1,6 +1,8 @@
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+use zip::ZipArchive;
 
 use super::{PluginManifest, PluginManifestError, PluginState};
 
@@ -25,6 +27,8 @@ pub enum PluginInstallerError {
     AlreadyInstalled { plugin_id: String },
     #[error("plugin install I/O failed")]
     Io(#[from] std::io::Error),
+    #[error("plugin archive is invalid")]
+    InvalidArchive(#[from] zip::result::ZipError),
 }
 
 #[derive(Debug, Clone)]
@@ -89,10 +93,77 @@ impl PluginInstaller {
         })
     }
 
+    pub fn install_from_archive(
+        &self,
+        archive_path: impl AsRef<Path>,
+        android_abi: &str,
+    ) -> Result<InstalledPlugin, PluginInstallerError> {
+        fs_err::create_dir_all(self.install_root.as_path())?;
+        let extraction_dir = self.archive_extraction_dir();
+        if extraction_dir.exists() {
+            fs_err::remove_dir_all(extraction_dir.as_path())?;
+        }
+        fs_err::create_dir(extraction_dir.as_path())?;
+
+        let result = (|| {
+            let archive_file = fs_err::File::open(archive_path.as_ref())?;
+            extract_archive(archive_file, extraction_dir.as_path())?;
+            self.install_from_package_dir(extraction_dir.as_path(), android_abi)
+        })();
+
+        let _ = fs_err::remove_dir_all(extraction_dir.as_path());
+        result
+    }
+
     fn staging_install_dir(&self, plugin_id: &str) -> PathBuf {
         self.install_root
             .join(format!(".{plugin_id}.installing-{}", std::process::id()))
     }
+
+    fn archive_extraction_dir(&self) -> PathBuf {
+        self.install_root
+            .join(format!(".archive-extract-{}", std::process::id()))
+    }
+}
+
+fn extract_archive<R: Read + Seek>(
+    reader: R,
+    destination: &Path,
+) -> Result<(), PluginInstallerError> {
+    let mut archive = ZipArchive::new(reader)?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let enclosed_path =
+            entry
+                .enclosed_name()
+                .ok_or_else(|| PluginInstallerError::InvalidPackagePath {
+                    path: PathBuf::from(entry.name()),
+                })?;
+        if is_zip_symlink(&entry) {
+            return Err(PluginInstallerError::InvalidPackagePath {
+                path: enclosed_path.to_path_buf(),
+            });
+        }
+        let target = destination.join(enclosed_path);
+        if entry.is_dir() {
+            fs_err::create_dir_all(target.as_path())?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs_err::create_dir_all(parent)?;
+        }
+        let mut output = fs_err::File::create(target.as_path())?;
+        std::io::copy(&mut entry, &mut output)?;
+    }
+    Ok(())
+}
+
+fn is_zip_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+    const UNIX_FILE_TYPE_MASK: u32 = 0o170000;
+    const UNIX_SYMLINK_TYPE: u32 = 0o120000;
+    entry
+        .unix_mode()
+        .is_some_and(|mode| mode & UNIX_FILE_TYPE_MASK == UNIX_SYMLINK_TYPE)
 }
 
 fn require_package_file(

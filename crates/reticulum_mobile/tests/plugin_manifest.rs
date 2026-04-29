@@ -9,9 +9,11 @@ use reticulum_mobile::SendMode;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use zip::write::SimpleFileOptions;
 
 const VALID_MANIFEST: &str = r#"
 id = "rem.plugin.example_status"
@@ -91,6 +93,47 @@ fn write_valid_package(package_dir: &Path) {
         "schemas/status_test.schema.json",
         br#"{"type":"object"}"#,
     );
+}
+
+fn write_valid_package_archive(archive_path: &Path) {
+    let archive_file = fs::File::create(archive_path).expect("archive file is created");
+    let mut archive = zip::ZipWriter::new(archive_file);
+    let options = SimpleFileOptions::default();
+    for (relative_path, contents) in [
+        ("plugin.toml", VALID_MANIFEST.as_bytes()),
+        (
+            "logic/android/arm64-v8a/libexample_status_plugin.so",
+            b"native".as_slice(),
+        ),
+        (
+            "ui/settings.schema.json",
+            br#"{"type":"object"}"#.as_slice(),
+        ),
+        (
+            "schemas/status_test.schema.json",
+            br#"{"type":"object"}"#.as_slice(),
+        ),
+    ] {
+        archive
+            .start_file(relative_path, options)
+            .expect("archive entry starts");
+        archive.write_all(contents).expect("archive entry writes");
+    }
+    archive.finish().expect("archive writes");
+}
+
+#[cfg(unix)]
+fn write_symlink_package_archive(archive_path: &Path) {
+    let archive_file = fs::File::create(archive_path).expect("archive file is created");
+    let mut archive = zip::ZipWriter::new(archive_file);
+    let symlink_options = SimpleFileOptions::default().unix_permissions(0o120777);
+    archive
+        .start_file("plugin.toml", symlink_options)
+        .expect("symlink archive entry starts");
+    archive
+        .write_all(b"logic/android/arm64-v8a/libexample_status_plugin.so")
+        .expect("symlink archive entry writes");
+    archive.finish().expect("archive writes");
 }
 
 fn test_dynamic_library_name() -> String {
@@ -979,6 +1022,73 @@ fn installer_copies_valid_package_disabled_by_default() {
         .join("logic/android/arm64-v8a/libexample_status_plugin.so")
         .is_file());
     assert!(installed.install_dir.starts_with(install_root.path()));
+}
+
+#[test]
+fn installer_extracts_valid_archive_disabled_by_default() {
+    let package_dir = TestTempDir::new("archive-package");
+    let install_root = TestTempDir::new("archive-install-root");
+    let archive_path = package_dir.path().join("example-status.remplugin");
+    write_valid_package_archive(archive_path.as_path());
+
+    let installed = PluginInstaller::new(install_root.path())
+        .install_from_archive(archive_path.as_path(), "arm64-v8a")
+        .expect("archive installs");
+
+    assert_eq!(installed.manifest.id.as_str(), "rem.plugin.example_status");
+    assert_eq!(installed.state, PluginState::Disabled);
+    assert!(installed.install_dir.join("plugin.toml").is_file());
+    assert!(!install_root
+        .path()
+        .join(format!(".archive-extract-{}", std::process::id()))
+        .exists());
+}
+
+#[test]
+fn installer_rejects_archive_path_traversal() {
+    let package_dir = TestTempDir::new("archive-traversal-package");
+    let install_root = TestTempDir::new("archive-traversal-install-root");
+    let archive_path = package_dir.path().join("bad.remplugin");
+    let archive_file = fs::File::create(archive_path.as_path()).expect("archive file is created");
+    let mut archive = zip::ZipWriter::new(archive_file);
+    archive
+        .start_file("../plugin.toml", SimpleFileOptions::default())
+        .expect("archive entry starts");
+    archive
+        .write_all(VALID_MANIFEST.as_bytes())
+        .expect("archive entry writes");
+    archive.finish().expect("archive writes");
+
+    let err = PluginInstaller::new(install_root.path())
+        .install_from_archive(archive_path.as_path(), "arm64-v8a")
+        .expect_err("path traversal is rejected");
+
+    assert!(matches!(
+        err,
+        PluginInstallerError::InvalidPackagePath { .. }
+    ));
+    assert!(!install_root
+        .path()
+        .join("rem.plugin.example_status")
+        .exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn installer_rejects_archive_symlink_entries() {
+    let package_dir = TestTempDir::new("archive-symlink-package");
+    let install_root = TestTempDir::new("archive-symlink-install-root");
+    let archive_path = package_dir.path().join("bad.remplugin");
+    write_symlink_package_archive(archive_path.as_path());
+
+    let err = PluginInstaller::new(install_root.path())
+        .install_from_archive(archive_path.as_path(), "arm64-v8a")
+        .expect_err("symlink entry is rejected");
+
+    assert!(matches!(
+        err,
+        PluginInstallerError::InvalidPackagePath { .. }
+    ));
 }
 
 #[test]

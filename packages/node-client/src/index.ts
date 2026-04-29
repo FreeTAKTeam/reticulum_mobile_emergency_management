@@ -717,7 +717,7 @@ export interface ReticulumNodeClient {
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
   listPlugins(): Promise<PluginCatalogReport>;
-  installPluginPackage(packageDir: string): Promise<PluginCatalogReport>;
+  installPluginPackage(packagePath: string): Promise<PluginCatalogReport>;
   setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
   grantPluginPermissions(pluginId: string, permissions: PluginPermissionsRecord): Promise<void>;
   listPeers(): Promise<PeerRecord[]>;
@@ -955,7 +955,7 @@ interface ReticulumNodePlugin {
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
   getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
-  installPluginPackage(options: { packageDir: string }): Promise<{
+  installPluginPackage(options: { packagePath: string }): Promise<{
     items: Record<string, unknown>[];
     errors?: Record<string, unknown>[];
   }>;
@@ -3389,9 +3389,9 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toPluginCatalogReport(await this.plugin.getPlugins());
   }
 
-  async installPluginPackage(packageDir: string): Promise<PluginCatalogReport> {
+  async installPluginPackage(packagePath: string): Promise<PluginCatalogReport> {
     await this.ready();
-    return toPluginCatalogReport(await this.plugin.installPluginPackage({ packageDir }));
+    return toPluginCatalogReport(await this.plugin.installPluginPackage({ packagePath }));
   }
 
   async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
@@ -3966,7 +3966,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { items: [], errors: [] };
   }
 
-  async installPluginPackage(_packageDir: string): Promise<PluginCatalogReport> {
+  async installPluginPackage(_packagePath: string): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
 
@@ -4515,7 +4515,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return { items: [], errors: [] };
   }
 
-  async installPluginPackage(_packageDir: string): Promise<PluginCatalogReport> {
+  async installPluginPackage(_packagePath: string): Promise<PluginCatalogReport> {
     return { items: [], errors: [] };
   }
 

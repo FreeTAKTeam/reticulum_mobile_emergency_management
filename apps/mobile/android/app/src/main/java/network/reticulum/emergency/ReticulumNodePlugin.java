@@ -424,13 +424,13 @@ public class ReticulumNodePlugin extends Plugin {
 
     @PluginMethod
     public void installPluginPackage(PluginCall call) {
-        final String packageDir = call.getString("packageDir");
-        if (packageDir == null || packageDir.trim().isEmpty()) {
-            call.reject("packageDir is required.");
+        final String packagePath = call.getString("packagePath", call.getString("packageDir"));
+        if (packagePath == null || packagePath.trim().isEmpty()) {
+            call.reject("packagePath is required.");
             return;
         }
         final JSObject payload = new JSObject();
-        payload.put("packageDir", packageDir);
+        payload.put("packagePath", packagePath);
         runStringServiceCall(
             call,
             "Failed to install plug-in package.",

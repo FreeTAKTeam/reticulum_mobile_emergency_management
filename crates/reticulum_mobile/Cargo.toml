@@ -36,6 +36,7 @@ thiserror = "1"
 tokio = { version = "1.44.2", features = ["full"] }
 toml = "0.8"
 uniffi = "0.28"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

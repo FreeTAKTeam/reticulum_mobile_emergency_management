@@ -2614,7 +2614,7 @@ impl Node {
     pub fn install_plugin_package_dir(
         &self,
         android_abi: &str,
-        package_dir: &str,
+        package_path: &str,
     ) -> Result<PluginCatalogReport, NodeError> {
         let (storage_root, install_root) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
@@ -2626,15 +2626,24 @@ impl Node {
         fs_err::create_dir_all(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
         let staged_root =
             fs_err::canonicalize(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
-        let package_dir =
-            fs_err::canonicalize(Path::new(package_dir)).map_err(|_| NodeError::IoError {})?;
-        if !package_dir.starts_with(staged_root.as_path()) {
+        let package_path =
+            fs_err::canonicalize(Path::new(package_path)).map_err(|_| NodeError::IoError {})?;
+        if !package_path.starts_with(staged_root.as_path()) {
             return Err(NodeError::InvalidConfig {});
         }
 
-        PluginInstaller::new(install_root)
-            .install_from_package_dir(package_dir.as_path(), android_abi)
-            .map_err(|_| NodeError::InvalidConfig {})?;
+        let installer = PluginInstaller::new(install_root);
+        if package_path.is_dir() {
+            installer
+                .install_from_package_dir(package_path.as_path(), android_abi)
+                .map_err(|_| NodeError::InvalidConfig {})?;
+        } else if package_path.is_file() {
+            installer
+                .install_from_archive(package_path.as_path(), android_abi)
+                .map_err(|_| NodeError::InvalidConfig {})?;
+        } else {
+            return Err(NodeError::IoError {});
+        }
         self.list_plugins(android_abi)
     }
 
@@ -5005,6 +5014,59 @@ schema = "schemas/status_test.schema.json"
         );
     }
 
+    fn write_test_plugin_archive(archive_path: &Path) {
+        let archive_file = std::fs::File::create(archive_path).expect("create plugin archive");
+        let mut archive = zip::ZipWriter::new(archive_file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (relative_path, contents) in [
+            (
+                "plugin.toml",
+                br#"
+id = "rem.plugin.example_status"
+name = "Example Status Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[permissions]
+storage_plugin = true
+lxmf_send = true
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"
+"#
+                .as_slice(),
+            ),
+            (
+                "logic/android/arm64-v8a/libexample_status_plugin.so",
+                b"native".as_slice(),
+            ),
+            (
+                "ui/settings.schema.json",
+                br#"{"type":"object"}"#.as_slice(),
+            ),
+            (
+                "schemas/status_test.schema.json",
+                br#"{"type":"object"}"#.as_slice(),
+            ),
+        ] {
+            archive
+                .start_file(relative_path, options)
+                .expect("start archive entry");
+            std::io::Write::write_all(&mut archive, contents).expect("write archive entry");
+        }
+        archive.finish().expect("finish plugin archive");
+    }
+
     #[test]
     fn install_plugin_package_dir_installs_from_app_private_staging() {
         let storage_dir = prepare_storage_dir("plugin_install_staged");
@@ -5026,6 +5088,27 @@ schema = "schemas/status_test.schema.json"
         assert!(storage_dir
             .join("plugins/rem.plugin.example_status/plugin.toml")
             .is_file());
+    }
+
+    #[test]
+    fn install_plugin_package_dir_installs_archive_from_app_private_staging() {
+        let storage_dir = prepare_storage_dir("plugin_install_staged_archive");
+        let archive_path = storage_dir
+            .join("plugin-packages")
+            .join("example-status.remplugin");
+        std::fs::create_dir_all(archive_path.parent().expect("archive parent"))
+            .expect("create archive parent");
+        write_test_plugin_archive(archive_path.as_path());
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+
+        let report = node
+            .install_plugin_package_dir("arm64-v8a", archive_path.to_string_lossy().as_ref())
+            .expect("staged archive installs");
+
+        assert!(report.errors.is_empty());
+        assert_eq!(report.items.len(), 1);
+        assert_eq!(report.items[0].id.as_str(), "rem.plugin.example_status");
+        assert_eq!(report.items[0].state, PluginState::Disabled);
     }
 
     #[test]
