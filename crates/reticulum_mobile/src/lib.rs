@@ -7,6 +7,7 @@ mod lxmf_fields;
 mod messaging_compat;
 mod mission_sync;
 mod node;
+pub mod plugins;
 mod runtime;
 mod sdk_bridge;
 mod sos;
