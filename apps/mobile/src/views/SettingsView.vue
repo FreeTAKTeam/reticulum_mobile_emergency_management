@@ -137,6 +137,7 @@ const nodeControlSummary = computed(() =>
 );
 const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>({});
 const pluginSettingsFeedback = ref("");
+const pluginSettingsRefreshing = ref(false);
 const pluginSettingsSummary = computed(() => {
   const pluginCount = pluginSettingsSections.value.length;
   if (pluginCount === 0) {
@@ -458,6 +459,21 @@ function savePluginSettings(pluginId: string): void {
   }
   savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
   pluginSettingsFeedback.value = `${section.name} settings saved.`;
+}
+
+async function refreshPluginSettings(): Promise<void> {
+  if (pluginSettingsRefreshing.value) {
+    return;
+  }
+  pluginSettingsRefreshing.value = true;
+  try {
+    await nodeStore.refreshPluginsProjection();
+    pluginSettingsFeedback.value = "Plug-in catalog refreshed.";
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    pluginSettingsRefreshing.value = false;
+  }
 }
 </script>
 
@@ -845,6 +861,22 @@ function savePluginSettings(pluginId: string): void {
       <div class="panel-body">
         <p class="section-note">
           Installed plug-ins can contribute host-rendered configuration controls here.
+        </p>
+        <div class="actions">
+          <button
+            type="button"
+            :disabled="pluginSettingsRefreshing"
+            @click="refreshPluginSettings"
+          >
+            {{ pluginSettingsRefreshing ? "Refreshing" : "Refresh Plug-ins" }}
+          </button>
+        </div>
+        <p
+          v-for="diagnostic in nodeStore.pluginCatalogErrors"
+          :key="`${diagnostic.path}:${diagnostic.message}`"
+          class="feedback"
+        >
+          {{ diagnostic.path ? `${diagnostic.path}: ` : "" }}{{ diagnostic.message }}
         </p>
         <div v-if="pluginSettingsSections.length > 0" class="plugin-settings-list">
           <PluginSettingsSection

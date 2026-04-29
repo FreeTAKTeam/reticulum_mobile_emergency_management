@@ -2,7 +2,9 @@ import {
   type AppSettingsRecord,
   DEFAULT_NODE_CONFIG,
   type AnnounceRecord,
+  type InstalledPluginRecord,
   type PeerRecord,
+  type PluginCatalogDiagnostic,
   type ProjectionInvalidationEvent,
   type ProjectionScope,
   type SendMode,
@@ -38,6 +40,7 @@ import {
   type HubRegistryLinkage,
 } from "../services/hubRegistryBootstrap";
 import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
+import { syncInstalledPluginSettingsSections } from "../plugins/pluginSettings";
 import {
   buildLegacyProjectionState,
   clearLegacyProjectionStorage,
@@ -514,6 +517,7 @@ export const useNodeStore = defineStore("node", () => {
   let presenceTickerId: number | null = null;
   let refreshMessagingStatePromise: Promise<void> | null = null;
   let refreshSettingsPromise: Promise<void> | null = null;
+  let refreshPluginsPromise: Promise<void> | null = null;
   let refreshSavedPeersPromise: Promise<void> | null = null;
   let refreshOperationalSummaryPromise: Promise<void> | null = null;
   let refreshOperationalSummaryTimerId: number | null = null;
@@ -522,6 +526,8 @@ export const useNodeStore = defineStore("node", () => {
   let initPromise: Promise<void> | null = null;
   const startupSettling = ref(false);
   const autoConnectQueueActive = ref(false);
+  const installedPlugins = ref<InstalledPluginRecord[]>([]);
+  const pluginCatalogErrors = ref<PluginCatalogDiagnostic[]>([]);
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
 
@@ -1032,6 +1038,40 @@ export const useNodeStore = defineStore("node", () => {
         refreshSettingsPromise = null;
       });
     return refreshSettingsPromise;
+  }
+
+  async function refreshPluginsProjection(): Promise<void> {
+    if (!client.value) {
+      installedPlugins.value = [];
+      pluginCatalogErrors.value = [];
+      syncInstalledPluginSettingsSections([]);
+      return;
+    }
+    if (refreshPluginsPromise) {
+      return refreshPluginsPromise;
+    }
+    refreshPluginsPromise = (async () => {
+      const report = await client.value!.listPlugins();
+      installedPlugins.value = [...report.items];
+      pluginCatalogErrors.value = [...report.errors];
+      syncInstalledPluginSettingsSections(report.items);
+      if (report.errors.length > 0) {
+        appendLog(
+          "Warn",
+          `Plugin catalog loaded with ${report.errors.length} diagnostic${report.errors.length === 1 ? "" : "s"}.`,
+        );
+      }
+    })()
+      .catch((error: unknown) => {
+        installedPlugins.value = [];
+        pluginCatalogErrors.value = [];
+        syncInstalledPluginSettingsSections([]);
+        appendLog("Debug", `Plugin catalog refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshPluginsPromise = null;
+      });
+    return refreshPluginsPromise;
   }
 
   async function refreshSavedPeersProjection(): Promise<void> {
@@ -1729,6 +1769,9 @@ export const useNodeStore = defineStore("node", () => {
           case "OperationalSummary":
             scheduleOperationalSummaryRefresh();
             break;
+          case "Plugins":
+            void refreshPluginsProjection();
+            break;
           default:
             break;
         }
@@ -1846,6 +1889,7 @@ export const useNodeStore = defineStore("node", () => {
       await importLegacyProjectionState();
       await Promise.all([
         refreshSettingsProjection(),
+        refreshPluginsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
       ]);
@@ -2790,6 +2834,7 @@ export const useNodeStore = defineStore("node", () => {
       clearAnnounceState();
       await Promise.all([
         refreshSettingsProjection(),
+        refreshPluginsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
       ]);
@@ -2837,6 +2882,8 @@ export const useNodeStore = defineStore("node", () => {
     startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,
+    installedPlugins,
+    pluginCatalogErrors,
     savedDestinations,
     ready,
     peerDisplayState,
@@ -2852,6 +2899,7 @@ export const useNodeStore = defineStore("node", () => {
     connectAllSaved,
     disconnectAllSaved,
     refreshHubDirectory,
+    refreshPluginsProjection,
     refreshHubRegistrationState,
     bootstrapHubRegistration,
     forgetHubRegistryLinkage,
