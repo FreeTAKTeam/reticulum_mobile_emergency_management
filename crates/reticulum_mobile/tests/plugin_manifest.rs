@@ -509,6 +509,28 @@ fn installer_rejects_missing_settings_schema() {
 }
 
 #[test]
+fn installer_rejects_missing_message_schema() {
+    let package_dir = TestTempDir::new("missing-message-schema");
+    let install_root = TestTempDir::new("install-root");
+    write_package_file(package_dir.path(), "plugin.toml", VALID_MANIFEST.as_bytes());
+    write_package_file(
+        package_dir.path(),
+        "logic/android/arm64-v8a/libexample_status_plugin.so",
+        b"native",
+    );
+    write_package_file(package_dir.path(), "ui/settings.schema.json", br#"{}"#);
+
+    let err = PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("missing message schema is rejected");
+
+    assert!(matches!(
+        err,
+        PluginInstallerError::MissingPackageFile { .. }
+    ));
+}
+
+#[test]
 fn rejects_settings_schema_path_traversal() {
     let err = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
         "schema = \"ui/settings.schema.json\"",
@@ -519,6 +541,20 @@ fn rejects_settings_schema_path_traversal() {
     assert!(matches!(
         err,
         PluginManifestError::InvalidSettingsPath { .. }
+    ));
+}
+
+#[test]
+fn rejects_message_schema_path_traversal() {
+    let err = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "schema = \"schemas/status_test.schema.json\"",
+        "schema = \"../status_test.schema.json\"",
+    ))
+    .expect_err("message schema path traversal is rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::InvalidMessageSchemaPath { .. }
     ));
 }
 

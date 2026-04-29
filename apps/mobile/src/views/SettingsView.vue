@@ -1,12 +1,12 @@
 ﻿<script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef } from "vue";
+import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import {
-  listPluginSettingsSections,
   loadPluginSettingsValues,
+  pluginSettingsSections,
   savePluginSettingsValues,
   type PluginSettingsValues,
 } from "../plugins/pluginSettings";
@@ -135,18 +135,10 @@ const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved pee
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
-const pluginSettingsSections = listPluginSettingsSections();
-const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>(
-  Object.fromEntries(
-    pluginSettingsSections.map((section) => [
-      section.pluginId,
-      loadPluginSettingsValues(section),
-    ]),
-  ),
-);
+const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>({});
 const pluginSettingsFeedback = ref("");
 const pluginSettingsSummary = computed(() => {
-  const pluginCount = pluginSettingsSections.length;
+  const pluginCount = pluginSettingsSections.value.length;
   if (pluginCount === 0) {
     return "No installed plug-ins";
   }
@@ -247,6 +239,24 @@ const hasUnsavedSettings = computed(
 );
 const unsavedSettingsCount = computed(() =>
   Number(hasMainSettingsChanges.value) + Number(Boolean(sosCardRef.value?.hasUnsavedChanges())),
+);
+
+watch(
+  pluginSettingsSections,
+  (sections) => {
+    const activePluginIds = new Set(sections.map((section) => section.pluginId));
+    for (const section of sections) {
+      if (!pluginSettingsValues[section.pluginId]) {
+        pluginSettingsValues[section.pluginId] = loadPluginSettingsValues(section);
+      }
+    }
+    for (const pluginId of Object.keys(pluginSettingsValues)) {
+      if (!activePluginIds.has(pluginId)) {
+        delete pluginSettingsValues[pluginId];
+      }
+    }
+  },
+  { immediate: true },
 );
 
 function normalizeTcpEndpoint(value: string): string | undefined {
@@ -441,7 +451,7 @@ function updatePluginSettings(pluginId: string, values: PluginSettingsValues): v
 }
 
 function savePluginSettings(pluginId: string): void {
-  const section = pluginSettingsSections.find((entry) => entry.pluginId === pluginId);
+  const section = pluginSettingsSections.value.find((entry) => entry.pluginId === pluginId);
   if (!section) {
     pluginSettingsFeedback.value = "Plug-in settings section is no longer registered.";
     return;

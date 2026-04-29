@@ -1,3 +1,5 @@
+import { computed, reactive } from "vue";
+
 export type PluginSettingsFieldType = "boolean" | "number" | "select" | "text";
 
 export type PluginSettingsValue = boolean | number | string;
@@ -31,7 +33,13 @@ export interface PluginSettingsSection {
 }
 
 const PLUGIN_SETTINGS_STORAGE_PREFIX = "reticulum.mobile.pluginSettings.v1.";
-const registeredPluginSettingsSections: PluginSettingsSection[] = [];
+const registeredPluginSettingsSections = reactive<PluginSettingsSection[]>([]);
+
+export const pluginSettingsSections = computed<PluginSettingsSection[]>(() =>
+  [...registeredPluginSettingsSections].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  ),
+);
 
 export function registerPluginSettingsSection(section: PluginSettingsSection): void {
   const existingIndex = registeredPluginSettingsSections.findIndex(
@@ -42,12 +50,6 @@ export function registerPluginSettingsSection(section: PluginSettingsSection): v
     return;
   }
   registeredPluginSettingsSections.push(section);
-}
-
-export function listPluginSettingsSections(): PluginSettingsSection[] {
-  return [...registeredPluginSettingsSections].sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
 }
 
 export function defaultPluginSettingsValues(section: PluginSettingsSection): PluginSettingsValues {

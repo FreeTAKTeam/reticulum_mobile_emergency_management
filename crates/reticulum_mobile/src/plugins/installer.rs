@@ -57,6 +57,9 @@ impl PluginInstaller {
         if let Some(settings) = &manifest.settings {
             require_package_file(package_dir, settings.schema.as_str())?;
         }
+        for message in &manifest.messages {
+            require_package_file(package_dir, message.schema.as_str())?;
+        }
 
         let install_dir = self.install_root.join(manifest.id.as_str());
         if install_dir.exists() {
@@ -66,13 +69,29 @@ impl PluginInstaller {
         }
 
         fs_err::create_dir_all(self.install_root.as_path())?;
-        copy_package_dir(package_dir, install_dir.as_path())?;
+        let staging_dir = self.staging_install_dir(manifest.id.as_str());
+        if staging_dir.exists() {
+            fs_err::remove_dir_all(staging_dir.as_path())?;
+        }
+        if let Err(error) = copy_package_dir(package_dir, staging_dir.as_path()) {
+            let _ = fs_err::remove_dir_all(staging_dir.as_path());
+            return Err(error);
+        }
+        if let Err(error) = fs_err::rename(staging_dir.as_path(), install_dir.as_path()) {
+            let _ = fs_err::remove_dir_all(staging_dir.as_path());
+            return Err(PluginInstallerError::Io(error));
+        }
 
         Ok(InstalledPlugin {
             manifest,
             install_dir,
             state: PluginState::Disabled,
         })
+    }
+
+    fn staging_install_dir(&self, plugin_id: &str) -> PathBuf {
+        self.install_root
+            .join(format!(".{plugin_id}.installing-{}", std::process::id()))
     }
 }
 

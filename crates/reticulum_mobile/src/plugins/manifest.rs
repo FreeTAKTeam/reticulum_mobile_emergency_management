@@ -22,6 +22,8 @@ pub enum PluginManifestError {
     InvalidLibraryPath { path: String },
     #[error("invalid plugin settings path: {path}")]
     InvalidSettingsPath { path: String },
+    #[error("invalid plugin message schema path: {path}")]
+    InvalidMessageSchemaPath { path: String },
     #[error("invalid plugin message name: {message_name}")]
     InvalidMessageName { message_name: String },
 }
@@ -100,6 +102,11 @@ impl PluginManifest {
         }
         for message in &self.messages {
             message.validate()?;
+            validate_relative_archive_path(message.schema.as_str()).map_err(|()| {
+                PluginManifestError::InvalidMessageSchemaPath {
+                    path: message.schema.clone(),
+                }
+            })?;
         }
         Ok(())
     }
