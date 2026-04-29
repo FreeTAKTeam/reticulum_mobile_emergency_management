@@ -1,8 +1,11 @@
 use reticulum_mobile::plugins::{
-    PluginLxmfMessage, PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
-    PluginRegistryError, PluginState,
+    PluginInstaller, PluginInstallerError, PluginLxmfMessage, PluginLxmfMessageError,
+    PluginManifest, PluginManifestError, PluginRegistry, PluginRegistryError, PluginState,
 };
 use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const VALID_MANIFEST: &str = r#"
 id = "rem.plugin.example_status"
@@ -28,6 +31,61 @@ version = "1.0.0"
 direction = ["send", "receive"]
 schema = "schemas/status_test.schema.json"
 "#;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TestTempDir {
+    path: PathBuf,
+}
+
+impl TestTempDir {
+    fn new(label: &str) -> Self {
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "rem-plugin-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(path.as_path()).expect("temp dir is created");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        self.path.as_path()
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(self.path.as_path());
+    }
+}
+
+fn write_package_file(package_dir: &Path, relative_path: &str, contents: &[u8]) {
+    let path = package_dir.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("parent directory is created");
+    }
+    fs::write(path, contents).expect("package file is written");
+}
+
+fn write_valid_package(package_dir: &Path) {
+    write_package_file(package_dir, "plugin.toml", VALID_MANIFEST.as_bytes());
+    write_package_file(
+        package_dir,
+        "logic/android/arm64-v8a/libexample_status_plugin.so",
+        b"native",
+    );
+    write_package_file(
+        package_dir,
+        "ui/settings.schema.json",
+        br#"{"type":"object"}"#,
+    );
+    write_package_file(
+        package_dir,
+        "schemas/status_test.schema.json",
+        br#"{"type":"object"}"#,
+    );
+}
 
 #[test]
 fn parses_android_manifest_with_settings_and_lxmf_message_descriptor() {
@@ -184,4 +242,75 @@ fn registry_enable_disable_updates_state_without_granting_permissions() {
             .state,
         PluginState::Disabled
     );
+}
+
+#[test]
+fn installer_copies_valid_package_disabled_by_default() {
+    let package_dir = TestTempDir::new("package");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+
+    let installed = PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect("package installs");
+
+    assert_eq!(installed.manifest.id.as_str(), "rem.plugin.example_status");
+    assert_eq!(installed.state, PluginState::Disabled);
+    assert!(installed
+        .install_dir
+        .join("logic/android/arm64-v8a/libexample_status_plugin.so")
+        .is_file());
+    assert!(installed.install_dir.starts_with(install_root.path()));
+}
+
+#[test]
+fn installer_rejects_package_missing_current_abi_library() {
+    let package_dir = TestTempDir::new("missing-library");
+    let install_root = TestTempDir::new("install-root");
+    write_package_file(package_dir.path(), "plugin.toml", VALID_MANIFEST.as_bytes());
+    write_package_file(package_dir.path(), "ui/settings.schema.json", br#"{}"#);
+
+    let err = PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("missing native library is rejected");
+
+    assert!(matches!(
+        err,
+        PluginInstallerError::MissingPackageFile { .. }
+    ));
+}
+
+#[test]
+fn installer_rejects_missing_settings_schema() {
+    let package_dir = TestTempDir::new("missing-settings-schema");
+    let install_root = TestTempDir::new("install-root");
+    write_package_file(package_dir.path(), "plugin.toml", VALID_MANIFEST.as_bytes());
+    write_package_file(
+        package_dir.path(),
+        "logic/android/arm64-v8a/libexample_status_plugin.so",
+        b"native",
+    );
+
+    let err = PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("missing settings schema is rejected");
+
+    assert!(matches!(
+        err,
+        PluginInstallerError::MissingPackageFile { .. }
+    ));
+}
+
+#[test]
+fn rejects_settings_schema_path_traversal() {
+    let err = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "schema = \"ui/settings.schema.json\"",
+        "schema = \"../settings.schema.json\"",
+    ))
+    .expect_err("settings schema path traversal is rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::InvalidSettingsPath { .. }
+    ));
 }

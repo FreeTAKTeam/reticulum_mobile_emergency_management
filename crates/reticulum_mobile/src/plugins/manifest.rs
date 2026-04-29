@@ -19,6 +19,8 @@ pub enum PluginManifestError {
     MissingAndroidLibrary { abi: String },
     #[error("invalid plugin library path: {path}")]
     InvalidLibraryPath { path: String },
+    #[error("invalid plugin settings path: {path}")]
+    InvalidSettingsPath { path: String },
     #[error("invalid plugin message name: {message_name}")]
     InvalidMessageName { message_name: String },
 }
@@ -80,7 +82,18 @@ impl PluginManifest {
             });
         }
         for path in self.library.android.values() {
-            validate_relative_archive_path(path)?;
+            validate_relative_archive_path(path).map_err(|()| {
+                PluginManifestError::InvalidLibraryPath {
+                    path: path.to_string(),
+                }
+            })?;
+        }
+        if let Some(settings) = &self.settings {
+            validate_relative_archive_path(settings.schema.as_str()).map_err(|()| {
+                PluginManifestError::InvalidSettingsPath {
+                    path: settings.schema.clone(),
+                }
+            })?;
         }
         for message in &self.messages {
             message.validate()?;
@@ -113,16 +126,14 @@ fn is_reverse_dns_id(value: &str) -> bool {
         })
 }
 
-fn validate_relative_archive_path(value: &str) -> Result<(), PluginManifestError> {
+fn validate_relative_archive_path(value: &str) -> Result<(), ()> {
     let path = Path::new(value);
     if path.is_absolute()
         || path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(PluginManifestError::InvalidLibraryPath {
-            path: value.to_string(),
-        });
+        return Err(());
     }
     Ok(())
 }
