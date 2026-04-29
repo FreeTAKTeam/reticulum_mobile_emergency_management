@@ -2,7 +2,14 @@
 import { computed, reactive, ref, useTemplateRef } from "vue";
 import { useRouter } from "vue-router";
 
+import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
+import {
+  listPluginSettingsSections,
+  loadPluginSettingsValues,
+  savePluginSettingsValues,
+  type PluginSettingsValues,
+} from "../plugins/pluginSettings";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
@@ -128,6 +135,23 @@ const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved pee
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
+const pluginSettingsSections = listPluginSettingsSections();
+const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>(
+  Object.fromEntries(
+    pluginSettingsSections.map((section) => [
+      section.pluginId,
+      loadPluginSettingsValues(section),
+    ]),
+  ),
+);
+const pluginSettingsFeedback = ref("");
+const pluginSettingsSummary = computed(() => {
+  const pluginCount = pluginSettingsSections.length;
+  if (pluginCount === 0) {
+    return "No installed plug-ins";
+  }
+  return pluginCount === 1 ? "1 plug-in configurable" : `${pluginCount} plug-ins configurable`;
+});
 const activePropagationNodeLabel = computed(() => {
   if (!activePropagationNodeHex.value) {
     return "None";
@@ -409,6 +433,21 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
     return;
   }
   importText.value = await file.text();
+}
+
+function updatePluginSettings(pluginId: string, values: PluginSettingsValues): void {
+  pluginSettingsValues[pluginId] = values;
+  pluginSettingsFeedback.value = "";
+}
+
+function savePluginSettings(pluginId: string): void {
+  const section = pluginSettingsSections.find((entry) => entry.pluginId === pluginId);
+  if (!section) {
+    pluginSettingsFeedback.value = "Plug-in settings section is no longer registered.";
+    return;
+  }
+  savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
+  pluginSettingsFeedback.value = `${section.name} settings saved.`;
 }
 </script>
 
@@ -775,6 +814,44 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
     </details>
 
     <SosEmergencyCard ref="sosCard" />
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M8 8h8" />
+              <path d="M8 12h5" />
+              <path d="M5 4h14v16H5z" />
+              <path d="M16.5 15.5h2" />
+              <path d="M17.5 14.5v2" />
+            </svg>
+          </span>
+          <h2>Plugin</h2>
+          <p>{{ pluginSettingsSummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <p class="section-note">
+          Installed plug-ins can contribute host-rendered configuration controls here.
+        </p>
+        <div v-if="pluginSettingsSections.length > 0" class="plugin-settings-list">
+          <PluginSettingsSection
+            v-for="section in pluginSettingsSections"
+            :key="section.pluginId"
+            :section="section"
+            :values="pluginSettingsValues[section.pluginId] ?? {}"
+            @update="updatePluginSettings"
+            @save="savePluginSettings"
+          />
+        </div>
+        <p v-else class="section-note">
+          No plug-ins are installed or enabled for configuration yet.
+        </p>
+        <p v-if="pluginSettingsFeedback" class="feedback">{{ pluginSettingsFeedback }}</p>
+      </div>
+    </details>
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
@@ -1220,6 +1297,11 @@ textarea {
   display: grid;
   gap: 0.4rem;
   margin-top: 0.65rem;
+}
+
+.plugin-settings-list {
+  display: grid;
+  gap: 0.65rem;
 }
 
 .active-endpoint {
