@@ -1,6 +1,7 @@
 mod manifest;
 mod messages;
 mod permissions;
+mod registry;
 
 pub use manifest::{PluginLibrary, PluginManifest, PluginManifestError, PluginSettings};
 pub use messages::{
@@ -8,3 +9,4 @@ pub use messages::{
     PLUGIN_LXMF_FIELD_KEY,
 };
 pub use permissions::PluginPermissions;
+pub use registry::{PluginRegistry, PluginRegistryError, PluginState, RegisteredPlugin};

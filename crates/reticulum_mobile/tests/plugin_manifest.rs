@@ -1,5 +1,6 @@
 use reticulum_mobile::plugins::{
-    PluginLxmfMessage, PluginLxmfMessageError, PluginManifest, PluginManifestError,
+    PluginLxmfMessage, PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginRegistry,
+    PluginRegistryError, PluginState,
 };
 use serde_json::json;
 
@@ -136,4 +137,51 @@ fn rejects_lxmf_message_not_declared_by_plugin() {
         err,
         PluginLxmfMessageError::UndeclaredMessage { .. }
     ));
+}
+
+#[test]
+fn registry_discovers_plugins_disabled_by_default() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    let plugin = registry
+        .get("rem.plugin.example_status")
+        .expect("plugin is registered");
+
+    assert_eq!(plugin.state, PluginState::Disabled);
+    assert_eq!(registry.list().len(), 1);
+}
+
+#[test]
+fn registry_rejects_duplicate_plugin_ids() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let err = PluginRegistry::from_manifests(vec![manifest.clone(), manifest])
+        .expect_err("duplicates are rejected");
+
+    assert!(matches!(err, PluginRegistryError::DuplicatePluginId { .. }));
+}
+
+#[test]
+fn registry_enable_disable_updates_state_without_granting_permissions() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+
+    registry
+        .enable("rem.plugin.example_status")
+        .expect("enable succeeds");
+    let plugin = registry
+        .get("rem.plugin.example_status")
+        .expect("plugin is registered");
+    assert_eq!(plugin.state, PluginState::Enabled);
+    assert!(!plugin.granted_permissions.lxmf_send);
+
+    registry
+        .disable("rem.plugin.example_status")
+        .expect("disable succeeds");
+    assert_eq!(
+        registry
+            .get("rem.plugin.example_status")
+            .expect("plugin is registered")
+            .state,
+        PluginState::Disabled
+    );
 }
