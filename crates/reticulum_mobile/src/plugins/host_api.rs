@@ -29,6 +29,7 @@ pub struct PluginHostApi {
     registry: PluginRegistry,
     plugin_storage: BTreeMap<(String, String), JsonValue>,
     queued_lxmf_messages: Vec<PluginLxmfMessage>,
+    received_lxmf_messages: BTreeMap<String, Vec<PluginLxmfMessage>>,
     subscriptions: BTreeMap<String, BTreeSet<String>>,
     event_inboxes: BTreeMap<String, Vec<PluginEvent>>,
 }
@@ -39,6 +40,7 @@ impl PluginHostApi {
             registry,
             plugin_storage: BTreeMap::new(),
             queued_lxmf_messages: Vec::new(),
+            received_lxmf_messages: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             event_inboxes: BTreeMap::new(),
         }
@@ -83,6 +85,31 @@ impl PluginHostApi {
 
     pub fn queued_lxmf_messages(&self) -> &[PluginLxmfMessage] {
         self.queued_lxmf_messages.as_slice()
+    }
+
+    pub fn receive_lxmf_fields(
+        &mut self,
+        fields_bytes: &[u8],
+    ) -> Result<Option<PluginLxmfMessage>, PluginHostError> {
+        let Some(plugin_id) = PluginLxmfMessage::try_plugin_id_from_fields_bytes(fields_bytes)?
+        else {
+            return Ok(None);
+        };
+        self.require_permission(plugin_id.as_str(), "lxmf.receive")?;
+        let plugin = self.require_plugin(plugin_id.as_str())?;
+        let message = PluginLxmfMessage::from_fields_bytes(&plugin.manifest, fields_bytes)?;
+        self.received_lxmf_messages
+            .entry(plugin_id)
+            .or_default()
+            .push(message.clone());
+        Ok(Some(message))
+    }
+
+    pub fn received_lxmf_messages(&self, plugin_id: &str) -> &[PluginLxmfMessage] {
+        self.received_lxmf_messages
+            .get(plugin_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub fn subscribe(&mut self, plugin_id: &str, topic: &str) -> Result<(), PluginHostError> {
@@ -144,6 +171,9 @@ impl PluginHostApi {
             }
             "lxmf.send" => {
                 plugin.manifest.permissions.lxmf_send && plugin.granted_permissions.lxmf_send
+            }
+            "lxmf.receive" => {
+                plugin.manifest.permissions.lxmf_receive && plugin.granted_permissions.lxmf_receive
             }
             "messages.read" => {
                 plugin.manifest.permissions.messages_read

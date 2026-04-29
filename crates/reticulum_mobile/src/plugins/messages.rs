@@ -29,6 +29,25 @@ pub enum PluginLxmfMessageError {
     UndeclaredMessage { message_name: String },
     #[error("failed to encode plugin LXMF fields")]
     EncodeFields,
+    #[error("failed to decode plugin LXMF fields")]
+    DecodeFields,
+    #[error("invalid plugin LXMF field envelope")]
+    InvalidEnvelope,
+    #[error("plugin LXMF message is for {actual_plugin_id}, expected {expected_plugin_id}")]
+    PluginIdMismatch {
+        expected_plugin_id: String,
+        actual_plugin_id: String,
+    },
+    #[error("plugin LXMF wire type is {actual_wire_type}, expected {expected_wire_type}")]
+    WireTypeMismatch {
+        expected_wire_type: String,
+        actual_wire_type: String,
+    },
+    #[error("plugin message direction is not allowed for {message_name}: {direction:?}")]
+    DirectionNotAllowed {
+        message_name: String,
+        direction: PluginMessageDirection,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -45,13 +64,21 @@ impl PluginLxmfMessage {
         message_name: &str,
         payload: JsonValue,
     ) -> Result<Self, PluginLxmfMessageError> {
-        let descriptor = manifest
-            .messages
-            .iter()
-            .find(|message| message.name == message_name)
-            .ok_or_else(|| PluginLxmfMessageError::UndeclaredMessage {
-                message_name: message_name.to_string(),
-            })?;
+        Self::new_for_direction(
+            manifest,
+            message_name,
+            payload,
+            PluginMessageDirection::Send,
+        )
+    }
+
+    pub fn new_for_direction(
+        manifest: &PluginManifest,
+        message_name: &str,
+        payload: JsonValue,
+        direction: PluginMessageDirection,
+    ) -> Result<Self, PluginLxmfMessageError> {
+        let descriptor = declared_message_for_direction(manifest, message_name, direction)?;
         Ok(Self {
             plugin_id: manifest.id.clone(),
             message_name: descriptor.name.clone(),
@@ -70,6 +97,59 @@ impl PluginLxmfMessage {
             }
         });
         rmp_serde::to_vec(&fields).map_err(|_| PluginLxmfMessageError::EncodeFields)
+    }
+
+    pub fn try_plugin_id_from_fields_bytes(
+        fields_bytes: &[u8],
+    ) -> Result<Option<String>, PluginLxmfMessageError> {
+        let fields = decode_fields(fields_bytes)?;
+        let Some(envelope) = fields.get(PLUGIN_LXMF_FIELD_KEY) else {
+            return Ok(None);
+        };
+        Ok(Some(required_string(envelope, "plugin_id")?.to_string()))
+    }
+
+    pub fn from_fields_bytes(
+        manifest: &PluginManifest,
+        fields_bytes: &[u8],
+    ) -> Result<Self, PluginLxmfMessageError> {
+        let fields = decode_fields(fields_bytes)?;
+        let envelope = fields
+            .get(PLUGIN_LXMF_FIELD_KEY)
+            .ok_or(PluginLxmfMessageError::InvalidEnvelope)?;
+        let plugin_id = required_string(envelope, "plugin_id")?;
+        if plugin_id != manifest.id {
+            return Err(PluginLxmfMessageError::PluginIdMismatch {
+                expected_plugin_id: manifest.id.clone(),
+                actual_plugin_id: plugin_id.to_string(),
+            });
+        }
+
+        let message_name = required_string(envelope, "message_name")?;
+        let wire_type = required_string(envelope, "wire_type")?;
+        let payload = envelope
+            .get("payload")
+            .cloned()
+            .ok_or(PluginLxmfMessageError::InvalidEnvelope)?;
+        let descriptor = declared_message_for_direction(
+            manifest,
+            message_name,
+            PluginMessageDirection::Receive,
+        )?;
+        let expected_wire_type = descriptor.wire_type(manifest.id.as_str());
+        if wire_type != expected_wire_type {
+            return Err(PluginLxmfMessageError::WireTypeMismatch {
+                expected_wire_type,
+                actual_wire_type: wire_type.to_string(),
+            });
+        }
+
+        Ok(Self {
+            plugin_id: plugin_id.to_string(),
+            message_name: message_name.to_string(),
+            wire_type: wire_type.to_string(),
+            payload,
+        })
     }
 }
 
@@ -90,12 +170,56 @@ impl PluginMessageDescriptor {
                 field: "messages.schema",
             });
         }
+        if self.direction.is_empty() {
+            return Err(PluginManifestError::MissingRequiredField {
+                field: "messages.direction",
+            });
+        }
         Ok(())
     }
 
     pub fn wire_type(&self, plugin_id: &str) -> String {
         format!("plugin.{plugin_id}.{}", self.name)
     }
+
+    fn allows_direction(&self, direction: PluginMessageDirection) -> bool {
+        self.direction.contains(&direction)
+    }
+}
+
+fn declared_message_for_direction<'manifest>(
+    manifest: &'manifest PluginManifest,
+    message_name: &str,
+    direction: PluginMessageDirection,
+) -> Result<&'manifest PluginMessageDescriptor, PluginLxmfMessageError> {
+    let descriptor = manifest
+        .messages
+        .iter()
+        .find(|message| message.name == message_name)
+        .ok_or_else(|| PluginLxmfMessageError::UndeclaredMessage {
+            message_name: message_name.to_string(),
+        })?;
+    if descriptor.allows_direction(direction) {
+        return Ok(descriptor);
+    }
+    Err(PluginLxmfMessageError::DirectionNotAllowed {
+        message_name: message_name.to_string(),
+        direction,
+    })
+}
+
+fn decode_fields(fields_bytes: &[u8]) -> Result<JsonValue, PluginLxmfMessageError> {
+    rmp_serde::from_slice(fields_bytes).map_err(|_| PluginLxmfMessageError::DecodeFields)
+}
+
+fn required_string<'a>(
+    envelope: &'a JsonValue,
+    field: &str,
+) -> Result<&'a str, PluginLxmfMessageError> {
+    envelope
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .ok_or(PluginLxmfMessageError::InvalidEnvelope)
 }
 
 fn is_safe_message_name(value: &str) -> bool {

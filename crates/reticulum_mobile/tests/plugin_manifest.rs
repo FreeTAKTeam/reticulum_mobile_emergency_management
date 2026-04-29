@@ -221,6 +221,45 @@ fn rejects_lxmf_message_not_declared_by_plugin() {
 }
 
 #[test]
+fn rejects_lxmf_message_send_when_direction_is_not_declared() {
+    let manifest = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "direction = [\"send\", \"receive\"]",
+        "direction = [\"receive\"]",
+    ))
+    .expect("manifest parses");
+
+    let err = PluginLxmfMessage::new(&manifest, "status_test", json!({ "status": "ok" }))
+        .expect_err("receive-only message cannot be sent");
+
+    assert!(matches!(
+        err,
+        PluginLxmfMessageError::DirectionNotAllowed { .. }
+    ));
+}
+
+#[test]
+fn decodes_host_owned_lxmf_fields_for_declared_receive_message() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let outgoing = PluginLxmfMessage::new(
+        &manifest,
+        "status_test",
+        json!({
+            "status": "ok",
+            "batteryPercent": 87
+        }),
+    )
+    .expect("message is declared");
+    let fields = outgoing.to_fields_bytes().expect("fields encode");
+
+    let decoded =
+        PluginLxmfMessage::from_fields_bytes(&manifest, fields.as_slice()).expect("fields decode");
+
+    assert_eq!(decoded.plugin_id.as_str(), "rem.plugin.example_status");
+    assert_eq!(decoded.message_name.as_str(), "status_test");
+    assert_eq!(decoded.payload["status"], "ok");
+}
+
+#[test]
 fn registry_discovers_plugins_disabled_by_default() {
     let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
     let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
@@ -399,6 +438,55 @@ fn host_api_builds_lxmf_message_for_granted_declared_message() {
         "plugin.rem.plugin.example_status.status_test"
     );
     assert_eq!(host.queued_lxmf_messages().len(), 1);
+}
+
+#[test]
+fn host_api_denies_lxmf_receive_without_grant() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let message = PluginLxmfMessage::new(&manifest, "status_test", json!({ "status": "ok" }))
+        .expect("message builds");
+    let fields = message.to_fields_bytes().expect("fields encode");
+    let registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    let mut host = PluginHostApi::new(registry);
+
+    let err = host
+        .receive_lxmf_fields(fields.as_slice())
+        .expect_err("ungranted lxmf receive is denied");
+
+    assert!(matches!(
+        err,
+        PluginHostError::PermissionDenied {
+            permission: "lxmf.receive",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn host_api_accepts_granted_declared_lxmf_receive_message() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let message = PluginLxmfMessage::new(&manifest, "status_test", json!({ "status": "ok" }))
+        .expect("message builds");
+    let fields = message.to_fields_bytes().expect("fields encode");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_receive = true;
+        })
+        .expect("grant succeeds");
+    let mut host = PluginHostApi::new(registry);
+
+    let received = host
+        .receive_lxmf_fields(fields.as_slice())
+        .expect("receive succeeds")
+        .expect("plugin message envelope exists");
+
+    assert_eq!(received.message_name.as_str(), "status_test");
+    assert_eq!(
+        host.received_lxmf_messages("rem.plugin.example_status")
+            .len(),
+        1
+    );
 }
 
 #[test]
