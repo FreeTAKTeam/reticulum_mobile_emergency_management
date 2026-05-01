@@ -80,8 +80,10 @@ const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
 const MISSION_SEND_TASK_RESERVED_LIMIT: usize = 2;
-const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize =
-    SEND_TASK_CONCURRENCY_LIMIT - MISSION_SEND_TASK_RESERVED_LIMIT;
+const MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT: usize = 1;
+const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize = SEND_TASK_CONCURRENCY_LIMIT
+    - MISSION_SEND_TASK_RESERVED_LIMIT
+    - MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT;
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
 
 pub(crate) fn now_ms() -> u64 {
@@ -648,6 +650,41 @@ fn checklist_command_source_identity(
     msgpack_get_named(source, &["rns_identity"]).and_then(msgpack_string)
 }
 
+fn checklist_command_source_display_name(
+    command_map: &[(MsgPackValue, MsgPackValue)],
+) -> Option<String> {
+    let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries)?;
+    let display_name = msgpack_get_named(source, &["display_name"]).and_then(msgpack_string)?;
+    normalize_optional_string(Some(display_name.as_str()))
+}
+
+fn apply_checklist_creator_from_command(
+    checklist: &mut ChecklistRecord,
+    args: &[(MsgPackValue, MsgPackValue)],
+    command_map: &[(MsgPackValue, MsgPackValue)],
+    source_identity: Option<&str>,
+) {
+    if let Some(created_by) =
+        msgpack_get_named(args, &["created_by_team_member_rns_identity"]).and_then(msgpack_string)
+    {
+        checklist.created_by_team_member_rns_identity = created_by;
+    }
+    if checklist
+        .created_by_team_member_rns_identity
+        .trim()
+        .is_empty()
+    {
+        checklist.created_by_team_member_rns_identity =
+            source_identity.unwrap_or_default().to_string();
+    }
+    checklist.created_by_team_member_display_name =
+        msgpack_get_named(args, &["created_by_team_member_display_name"])
+            .and_then(msgpack_string)
+            .and_then(|value| normalize_optional_string(Some(value.as_str())))
+            .or_else(|| checklist_command_source_display_name(command_map))
+            .or(checklist.created_by_team_member_display_name.take());
+}
+
 fn emit_checklist_invalidations(
     bus: &EventBus,
     invalidations: Vec<crate::types::ProjectionInvalidation>,
@@ -1063,6 +1100,41 @@ fn merge_uploaded_checklist_snapshot(
     Some(merged)
 }
 
+fn hydrate_checklist_from_local_template(
+    app_state: &AppStateStore,
+    checklist: &mut ChecklistRecord,
+) {
+    if !checklist.tasks.is_empty() {
+        return;
+    }
+    let Some(template_uid) = checklist
+        .template_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Ok(Some(template)) = app_state.get_checklist_template(template_uid) else {
+        return;
+    };
+
+    if checklist.columns.is_empty() {
+        checklist.columns = template.columns;
+    }
+    checklist.tasks = template.tasks;
+    checklist.template_version = Some(template.version);
+    checklist.template_name = Some(template.name);
+    checklist.origin_type = template.origin_type;
+    checklist.expected_task_count = Some(
+        checklist
+            .tasks
+            .iter()
+            .filter(|task| task.deleted_at.is_none())
+            .count() as u32,
+    );
+}
+
 fn blank_task_cells(columns: &[ChecklistColumnRecord], task_uid: &str) -> Vec<ChecklistCellRecord> {
     columns
         .iter()
@@ -1232,6 +1304,28 @@ fn task_needs_row_metadata_hydration(task: &ChecklistTaskRecord) -> bool {
         && task.notes.is_none()
 }
 
+fn checklist_task_from_row_add_args(
+    args: &[(MsgPackValue, MsgPackValue)],
+    task_uid: &str,
+    number: u32,
+    timestamp: &str,
+) -> Option<ChecklistTaskRecord> {
+    msgpack_json_arg::<ChecklistTaskRecord>(args, "task").map(|mut task| {
+        task.task_uid = task_uid.to_string();
+        task.number = number;
+        task.deleted_at = None;
+        task.updated_at =
+            newest_timestamp(task.updated_at.as_deref(), Some(timestamp)).map(ToString::to_string);
+        for cell in &mut task.cells {
+            cell.task_uid = task_uid.to_string();
+            if cell.cell_uid.trim().is_empty() {
+                cell.cell_uid = format!("{}:{}", task_uid, cell.column_uid);
+            }
+        }
+        task
+    })
+}
+
 fn persist_received_checklist_if_present(
     state: &NodeRuntimeState,
     bus: &EventBus,
@@ -1363,12 +1457,6 @@ fn persist_received_checklist_if_present(
                 {
                     checklist.created_at = Some(created_at);
                 }
-                if let Some(created_by) =
-                    msgpack_get_named(args, &["created_by_team_member_rns_identity"])
-                        .and_then(msgpack_string)
-                {
-                    checklist.created_by_team_member_rns_identity = created_by;
-                }
                 if let Some(uploaded_at) =
                     msgpack_get_named(args, &["uploaded_at"]).and_then(msgpack_string)
                 {
@@ -1379,14 +1467,12 @@ fn persist_received_checklist_if_present(
                 if checklist.created_at.is_none() {
                     checklist.created_at = Some(timestamp.clone());
                 }
-                if checklist
-                    .created_by_team_member_rns_identity
-                    .trim()
-                    .is_empty()
-                {
-                    checklist.created_by_team_member_rns_identity =
-                        source_identity.clone().unwrap_or_default();
-                }
+                apply_checklist_creator_from_command(
+                    &mut checklist,
+                    args,
+                    command_map,
+                    source_identity.as_deref(),
+                );
                 if let Some(source_identity) = checklist_command_source_identity(command_map) {
                     if !checklist
                         .participant_rns_identities
@@ -1396,6 +1482,60 @@ fn persist_received_checklist_if_present(
                         checklist.participant_rns_identities.push(source_identity);
                     }
                 }
+                if let Some(snapshot_json) =
+                    checklist_snapshot_json_from_content(content_bytes, checklist_uid.as_str())
+                {
+                    if let Ok(mut snapshot) =
+                        serde_json::from_str::<ChecklistRecord>(snapshot_json.as_str())
+                    {
+                        snapshot.uid = checklist_uid.clone();
+                        if snapshot.mission_uid.is_none() {
+                            snapshot.mission_uid = checklist.mission_uid.clone();
+                        }
+                        if snapshot.template_uid.is_none() {
+                            snapshot.template_uid = checklist.template_uid.clone();
+                        }
+                        if snapshot.name.trim().is_empty() {
+                            snapshot.name = checklist.name.clone();
+                        }
+                        if snapshot.description.trim().is_empty() {
+                            snapshot.description = checklist.description.clone();
+                        }
+                        if snapshot.start_time.is_none() {
+                            snapshot.start_time = checklist.start_time.clone();
+                        }
+                        if snapshot.created_at.is_none() {
+                            snapshot.created_at = checklist.created_at.clone();
+                        }
+                        if snapshot
+                            .created_by_team_member_rns_identity
+                            .trim()
+                            .is_empty()
+                        {
+                            snapshot.created_by_team_member_rns_identity =
+                                checklist.created_by_team_member_rns_identity.clone();
+                        }
+                        if snapshot.created_by_team_member_display_name.is_none() {
+                            snapshot.created_by_team_member_display_name =
+                                checklist.created_by_team_member_display_name.clone();
+                        }
+                        if snapshot.uploaded_at.is_none() {
+                            snapshot.uploaded_at = checklist.uploaded_at.clone();
+                        }
+                        snapshot.updated_at = Some(timestamp.clone());
+                        snapshot.deleted_at = None;
+                        snapshot.sync_state = ChecklistSyncState::Synced {};
+                        snapshot.participant_rns_identities = merge_uploaded_participants(
+                            checklist.participant_rns_identities,
+                            snapshot.participant_rns_identities,
+                            source_identity.as_deref(),
+                        );
+                        set_checklist_last_changed_by(&mut snapshot, source_identity.as_deref());
+                        normalize_checklist_record(&mut snapshot);
+                        checklist = snapshot;
+                    }
+                }
+                hydrate_checklist_from_local_template(&state.app_state, &mut checklist);
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
@@ -1522,6 +1662,12 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
+                let incoming_task_payload = checklist_task_from_row_add_args(
+                    args,
+                    task_uid.as_str(),
+                    number as u32,
+                    timestamp.as_str(),
+                );
                 let mut checklist = state
                     .app_state
                     .get_checklist_any(checklist_uid.as_str())
@@ -1545,13 +1691,14 @@ fn persist_received_checklist_if_present(
                     .iter()
                     .find(|task| task.task_uid == task_uid)
                 {
-                    if task.deleted_at.as_deref().is_some_and(|deleted_at| {
-                        !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
-                    }) || (!task_needs_row_metadata_hydration(task)
-                        && !incoming_timestamp_is_newer(
-                            task.updated_at.as_deref(),
-                            timestamp.as_str(),
-                        ))
+                    if incoming_task_payload.is_none()
+                        && (task.deleted_at.as_deref().is_some_and(|deleted_at| {
+                            !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                        }) || (!task_needs_row_metadata_hydration(task)
+                            && !incoming_timestamp_is_newer(
+                                task.updated_at.as_deref(),
+                                timestamp.as_str(),
+                            )))
                     {
                         continue;
                     }
@@ -1563,7 +1710,19 @@ fn persist_received_checklist_if_present(
                     msgpack_get_named(args, &["legacy_value"]).and_then(msgpack_string);
                 let due_dtg = msgpack_get_named(args, &["due_dtg"]).and_then(msgpack_string);
                 let notes = msgpack_get_named(args, &["notes"]).and_then(msgpack_string);
-                if let Some(task) = checklist
+                if let Some(incoming_task) = incoming_task_payload {
+                    if let Some(index) = checklist
+                        .tasks
+                        .iter()
+                        .position(|task| task.task_uid == task_uid)
+                    {
+                        let local_task = checklist.tasks[index].clone();
+                        checklist.tasks[index] =
+                            merge_uploaded_task_record(local_task, incoming_task);
+                    } else {
+                        checklist.tasks.push(incoming_task);
+                    }
+                } else if let Some(task) = checklist
                     .tasks
                     .iter_mut()
                     .find(|task| task.task_uid == task_uid)
@@ -2676,21 +2835,40 @@ struct ReceiptMessageTracking {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendTaskClass {
     Mission,
+    MissionPropagation,
     General,
 }
 
 impl SendTaskClass {
-    fn from_metadata(metadata: Option<&MissionSyncMetadata>) -> Self {
-        if metadata.is_some_and(MissionSyncMetadata::is_mission_related) {
-            Self::Mission
+    fn from_lxmf_request(
+        has_fields: bool,
+        metadata: Option<&MissionSyncMetadata>,
+        send_mode: &SendMode,
+    ) -> Self {
+        if !has_fields {
+            return Self::General;
+        }
+        if !metadata.is_some_and(MissionSyncMetadata::is_mission_related) {
+            return Self::General;
+        }
+        if matches!(send_mode, SendMode::PropagationOnly {}) {
+            Self::MissionPropagation
         } else {
-            Self::General
+            Self::Mission
+        }
+    }
+
+    fn propagation_equivalent(self) -> Self {
+        match self {
+            Self::Mission | Self::MissionPropagation => Self::MissionPropagation,
+            Self::General => Self::General,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::Mission => "mission",
+            Self::Mission => "mission-direct",
+            Self::MissionPropagation => "mission-propagation",
             Self::General => "general",
         }
     }
@@ -2700,6 +2878,7 @@ impl SendTaskClass {
 struct SendTaskPermits {
     general: Arc<Semaphore>,
     mission: Arc<Semaphore>,
+    mission_propagation: Arc<Semaphore>,
 }
 
 impl SendTaskPermits {
@@ -2707,6 +2886,9 @@ impl SendTaskPermits {
         Self {
             general: Arc::new(Semaphore::new(GENERAL_SEND_TASK_CONCURRENCY_LIMIT)),
             mission: Arc::new(Semaphore::new(MISSION_SEND_TASK_RESERVED_LIMIT)),
+            mission_propagation: Arc::new(Semaphore::new(
+                MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT,
+            )),
         }
     }
 
@@ -2715,6 +2897,7 @@ impl SendTaskPermits {
         Self {
             general: Arc::new(Semaphore::new(general)),
             mission: Arc::new(Semaphore::new(mission)),
+            mission_propagation: Arc::new(Semaphore::new(mission)),
         }
     }
 
@@ -2722,6 +2905,12 @@ impl SendTaskPermits {
         match class {
             SendTaskClass::Mission => self
                 .mission
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+            SendTaskClass::MissionPropagation => self
+                .mission_propagation
                 .clone()
                 .acquire_owned()
                 .await
@@ -2738,7 +2927,7 @@ impl SendTaskPermits {
 
 fn log_send_task(class: SendTaskClass, message: String) {
     match class {
-        SendTaskClass::Mission => info!("{message}"),
+        SendTaskClass::Mission | SendTaskClass::MissionPropagation => info!("{message}"),
         SendTaskClass::General => debug!("{message}"),
     }
 }
@@ -3933,6 +4122,7 @@ async fn send_lxmf_with_delivery_policy(
         && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
 
     if matches!(send_mode, SendMode::PropagationOnly {}) || prefer_propagation {
+        let propagation_task_class = send_task_class.propagation_equivalent();
         if prefer_propagation {
             info!(
                 "[lxmf][mission] saved peer {} is not directly reachable; using propagation relay",
@@ -3943,19 +4133,20 @@ async fn send_lxmf_with_delivery_policy(
             resolve_lxmf_destination_hex(state, requested_destination_hex).await;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
         log_send_task(
-            send_task_class,
+            propagation_task_class,
             format!(
                 "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
-                send_task_class.label(),
+                propagation_task_class.label(),
                 requested_destination_hex,
             ),
         );
-        let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+        let _permit =
+            acquire_send_task_permit(&state.send_task_permits, propagation_task_class).await?;
         log_send_task(
-            send_task_class,
+            propagation_task_class,
             format!(
                 "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=initial-propagation",
-                send_task_class.label(),
+                propagation_task_class.label(),
                 requested_destination_hex,
             ),
         );
@@ -4066,20 +4257,22 @@ async fn send_lxmf_with_delivery_policy(
     let resolved_destination_hex =
         resolve_lxmf_destination_hex(state, requested_destination_hex).await;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+    let propagation_task_class = send_task_class.propagation_equivalent();
     log_send_task(
-        send_task_class,
+        propagation_task_class,
         format!(
             "[lxmf][queue] waiting for {} send slot destination={} mode=PropagationOnly stage=fallback",
-            send_task_class.label(),
+            propagation_task_class.label(),
             requested_destination_hex,
         ),
     );
-    let _permit = acquire_send_task_permit(&state.send_task_permits, send_task_class).await?;
+    let _permit =
+        acquire_send_task_permit(&state.send_task_permits, propagation_task_class).await?;
     log_send_task(
-        send_task_class,
+        propagation_task_class,
         format!(
             "[lxmf][queue] acquired {} send slot destination={} mode=PropagationOnly stage=fallback",
-            send_task_class.label(),
+            propagation_task_class.label(),
             requested_destination_hex,
         ),
     );
@@ -5464,11 +5657,11 @@ pub async fn run_node(
                 let metadata = fields_bytes
                     .as_deref()
                     .and_then(parse_mission_sync_metadata);
-                let send_task_class = if fields_bytes.is_some() {
-                    SendTaskClass::from_metadata(metadata.as_ref())
-                } else {
-                    SendTaskClass::General
-                };
+                let send_task_class = SendTaskClass::from_lxmf_request(
+                    fields_bytes.is_some(),
+                    metadata.as_ref(),
+                    &send_mode,
+                );
                 log_send_task(
                     send_task_class,
                     format!(
@@ -6306,6 +6499,70 @@ mod tests {
     }
 
     #[test]
+    fn inbound_create_sets_creator_display_name_from_command_source() {
+        let timestamp = "2026-04-22T12:00:00.000000000Z";
+        let mut checklist = blank_checklist_record("chk-author", timestamp, None);
+        let args = Vec::<(MsgPackValue, MsgPackValue)>::new();
+        let command = vec![(
+            MsgPackValue::from("source"),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("rns_identity"),
+                    MsgPackValue::from("abcd1234"),
+                ),
+                (
+                    MsgPackValue::from("display_name"),
+                    MsgPackValue::from("Selke"),
+                ),
+            ]),
+        )];
+        let source_identity = checklist_command_source_identity(command.as_slice());
+
+        apply_checklist_creator_from_command(
+            &mut checklist,
+            args.as_slice(),
+            command.as_slice(),
+            source_identity.as_deref(),
+        );
+
+        assert_eq!(checklist.created_by_team_member_rns_identity, "abcd1234");
+        assert_eq!(
+            checklist.created_by_team_member_display_name.as_deref(),
+            Some("Selke")
+        );
+    }
+
+    #[test]
+    fn inbound_create_hydrates_tasks_from_local_template() {
+        let storage_dir =
+            std::env::temp_dir().join(format!("rem-runtime-template-hydration-{}", now_ms()));
+        let store = AppStateStore::new(Some(
+            storage_dir
+                .to_str()
+                .expect("temporary storage dir should be utf-8"),
+        ))
+        .expect("app state store");
+        let mut checklist = blank_checklist_record(
+            "chk-template",
+            "2026-04-22T12:00:00.000000000Z",
+            Some("peer-a"),
+        );
+        checklist.template_uid = Some("tmpl-24-hour-survival-pack".to_string());
+        checklist.columns.clear();
+        checklist.tasks.clear();
+
+        hydrate_checklist_from_local_template(&store, &mut checklist);
+
+        assert_eq!(
+            checklist.template_name.as_deref(),
+            Some("24 Hour Survival Pack")
+        );
+        assert_eq!(checklist.tasks.len(), 12);
+        assert_eq!(checklist.expected_task_count, Some(12));
+        assert!(!checklist.columns.is_empty());
+    }
+
+    #[test]
     fn inbound_delete_marks_existing_checklist_deleted() {
         let existing = checklist_test_record(
             "2026-04-22T12:00:00.000000000Z",
@@ -6512,6 +6769,59 @@ mod tests {
         ));
         assert_eq!(task.cells.len(), 1);
         assert_eq!(task.updated_at.as_deref(), Some("2026-04-22T12:05:00Z"));
+    }
+
+    #[test]
+    fn row_add_task_payload_decodes_complete_task_cells() {
+        let mut task = checklist_test_task(
+            "stale-task-id",
+            1,
+            "Secure north access",
+            "2026-04-22T12:00:00Z",
+        );
+        task.cells.push(checklist_test_cell(
+            "stale-task-id",
+            "col-notes",
+            "Use IR marker",
+            "2026-04-22T12:00:01Z",
+        ));
+        let task_msgpack = rmp_serde::from_slice::<MsgPackValue>(
+            rmp_serde::to_vec(&task).expect("task msgpack").as_slice(),
+        )
+        .expect("task value");
+        let args = vec![
+            (
+                MsgPackValue::from("task_uid"),
+                MsgPackValue::from("task-remote"),
+            ),
+            (MsgPackValue::from("number"), MsgPackValue::from(7_u32)),
+            (MsgPackValue::from("task"), task_msgpack),
+        ];
+
+        let decoded = checklist_task_from_row_add_args(
+            args.as_slice(),
+            "task-remote",
+            7,
+            "2026-04-22T12:02:00Z",
+        )
+        .expect("row task");
+
+        assert_eq!(decoded.task_uid, "task-remote");
+        assert_eq!(decoded.number, 7);
+        assert_eq!(decoded.updated_at.as_deref(), Some("2026-04-22T12:02:00Z"));
+        assert_eq!(decoded.cells.len(), 2);
+        assert!(decoded
+            .cells
+            .iter()
+            .all(|cell| cell.task_uid == "task-remote"));
+        assert_eq!(
+            decoded
+                .cells
+                .iter()
+                .find(|cell| cell.column_uid == "col-task")
+                .and_then(|cell| cell.value.as_deref()),
+            Some("Secure north access")
+        );
     }
 
     #[test]
@@ -6954,6 +7264,33 @@ mod tests {
         assert!(
             blocked_general.is_err(),
             "general pool should remain saturated while the original permit is held"
+        );
+    }
+
+    #[tokio::test]
+    async fn propagation_mission_sends_do_not_block_direct_mission_capacity() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let _propagation = acquire_send_task_permit(&permits, SendTaskClass::MissionPropagation)
+            .await
+            .expect("saturate propagation mission pool");
+
+        let direct = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::Mission),
+        )
+        .await
+        .expect("direct mission permit should not wait on propagation pool saturation")
+        .expect("direct mission permit acquisition should succeed");
+        drop(direct);
+
+        let blocked_propagation = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::MissionPropagation),
+        )
+        .await;
+        assert!(
+            blocked_propagation.is_err(),
+            "propagation mission pool should remain saturated while the original permit is held"
         );
     }
 

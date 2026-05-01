@@ -148,7 +148,9 @@ function checklistAuthorLabel(record: RuntimeChecklistRecord): string {
       createdByTeamMemberName?: string;
     }
   ).createdByTeamMemberName;
-  return authorDisplayName?.trim() || "Original author pending";
+  return authorDisplayName?.trim()
+    || record.createdByTeamMemberRnsIdentity.trim()
+    || "Unknown author";
 }
 
 function checklistMetadataLines(record: RuntimeChecklistRecord): string[] {

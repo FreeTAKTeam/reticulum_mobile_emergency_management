@@ -2,29 +2,15 @@
 import { DEFAULT_SOS_SETTINGS, type SosSettingsRecord } from "@reticulum/node-client";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 
-import { useSosStore } from "../../stores/sosStore";
+import { normalizeReleaseSosSettings, useSosStore } from "../../stores/sosStore";
 
 const sosStore = useSosStore();
 const pin = ref("");
 const feedback = ref("");
 const form = reactive<SosSettingsRecord>({ ...DEFAULT_SOS_SETTINGS });
 
-function normalizedSosSettings(source: SosSettingsRecord): SosSettingsRecord {
-  return {
-    ...source,
-    countdownSeconds: 0,
-    triggerTapPattern: false,
-    shakeSensitivity: Math.max(1, Number(source.shakeSensitivity || 2.5)),
-    audioRecording: false,
-    audioDurationSeconds: DEFAULT_SOS_SETTINGS.audioDurationSeconds,
-    periodicUpdates: false,
-    updateIntervalSeconds: DEFAULT_SOS_SETTINGS.updateIntervalSeconds,
-    silentAutoAnswer: false,
-  };
-}
-
 const dirty = computed(
-  () => JSON.stringify(normalizedSosSettings(form)) !== JSON.stringify(normalizedSosSettings(sosStore.settings)),
+  () => JSON.stringify(normalizeReleaseSosSettings(form)) !== JSON.stringify(sosStore.settings),
 );
 
 const summary = computed(() => {
@@ -41,11 +27,11 @@ const summary = computed(() => {
 });
 
 function syncFromStore(): void {
-  Object.assign(form, normalizedSosSettings(sosStore.settings));
+  Object.assign(form, normalizeReleaseSosSettings(sosStore.settings));
 }
 
 async function save(): Promise<void> {
-  await sosStore.saveSettings(normalizedSosSettings(form));
+  await sosStore.saveSettings(normalizeReleaseSosSettings(form));
   feedback.value = "SOS settings saved.";
 }
 

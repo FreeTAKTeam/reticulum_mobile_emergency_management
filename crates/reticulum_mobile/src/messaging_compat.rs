@@ -994,12 +994,7 @@ mod tests {
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
         assert!(store.saved_peer_has_current_app_announce("appdest"));
 
-        store.record_resolution_result(
-            "appdest",
-            "identity",
-            "lxmfdest",
-            now.saturating_add(2),
-        );
+        store.record_resolution_result("appdest", "identity", "lxmfdest", now.saturating_add(2));
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);

@@ -148,6 +148,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     refreshIntervalSeconds: 3600,
   },
 };
+const RCH_HUB_DIRECTORY_ENABLED = false;
 
 interface UiLogLine {
   at: number;
@@ -338,6 +339,10 @@ function normalizeChecklistSettings(
 }
 
 function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
+  if (!RCH_HUB_DIRECTORY_ENABLED) {
+    return "Autonomous";
+  }
+
   switch (String(value ?? "").trim()) {
     case "Connected":
       return "Connected";
@@ -395,6 +400,10 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
       refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
     },
   };
+}
+
+function hubModeWasCoerced(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.hub.mode !== right.hub.mode;
 }
 
 function toUiSettingsProjection(
@@ -1011,13 +1020,16 @@ export const useNodeStore = defineStore("node", () => {
     refreshSettingsPromise = (async () => {
       const record = await client.value!.getAppSettings();
       if (record) {
-        applySettingsProjection(
-          normalizeAppSettingsRecord(
-            record,
-            loadUiSettingsProjection(DEFAULT_SETTINGS),
-            defaultsWithTcpFallback(),
-          ),
+        const normalizedSettings = normalizeAppSettingsRecord(
+          record,
+          loadUiSettingsProjection(DEFAULT_SETTINGS),
+          defaultsWithTcpFallback(),
         );
+        applySettingsProjection(normalizedSettings);
+        const normalizedRecord = toAppSettingsRecord(normalizedSettings);
+        if (hubModeWasCoerced(record, normalizedRecord)) {
+          await client.value!.setAppSettings(normalizedRecord);
+        }
       }
     })()
       .catch((error: unknown) => {
