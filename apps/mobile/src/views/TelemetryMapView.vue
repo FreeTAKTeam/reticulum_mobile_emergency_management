@@ -401,16 +401,13 @@ onBeforeUnmount(() => {
           <path d="M12 16h.01" />
         </svg>
       </span>
-      <button class="map-chip layers-chip" type="button" aria-label="Map layers">
+      <span class="map-chip layers-chip" aria-label="Map layer status">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M12 4 4 8l8 4 8-4-8-4Z" />
           <path d="M4 12l8 4 8-4" />
         </svg>
-        <span>Layers</span>
-        <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="m7 10 5 5 5-5" />
-        </svg>
-      </button>
+        <span>Base Map</span>
+      </span>
     </div>
 
     <div ref="mapHost" class="map-container"></div>
@@ -498,11 +495,6 @@ onBeforeUnmount(() => {
 
 .layers-chip {
   color: #8fcaff;
-  cursor: pointer;
-}
-
-.layers-chip .chevron {
-  margin-left: auto;
 }
 
 .map-container {

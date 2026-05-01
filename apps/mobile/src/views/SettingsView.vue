@@ -48,7 +48,6 @@ const repositoryUrl = "https://github.com/FreeTAKTeam/reticulum_mobile_emergency
 const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
-  autoConnectSaved: nodeStore.settings.autoConnectSaved,
   announceCapabilities: ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
@@ -71,6 +70,7 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
+const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 
@@ -96,6 +96,8 @@ const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value
 const activePropagationNodeHex = computed(
   () => nodeStore.syncStatus.activePropagationNodeHex?.trim() ?? "",
 );
+
+const rchHubDirectoryDisabled = true;
 
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
@@ -191,7 +193,6 @@ const persistedTcpClients = computed(() =>
 const hasMainSettingsChanges = computed(() =>
   form.displayName !== nodeStore.settings.displayName
   || form.clientMode !== nodeStore.settings.clientMode
-  || form.autoConnectSaved !== nodeStore.settings.autoConnectSaved
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
@@ -302,7 +303,6 @@ async function applySettings(): Promise<void> {
     nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
-      autoConnectSaved: form.autoConnectSaved,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
@@ -371,7 +371,7 @@ async function exportPeerList(): Promise<void> {
   try {
     const payload = JSON.stringify(nodeStore.getSavedPeerList(), null, 2);
     await copyToClipboard(payload);
-    await shareText("PeerListV1", payload);
+    await shareText("Saved peer list", payload);
     importFeedback.value = "Peer list exported to clipboard/share.";
   } catch (error: unknown) {
     importFeedback.value = error instanceof Error ? error.message : String(error);
@@ -402,6 +402,15 @@ async function runSetupWizard(): Promise<void> {
   });
 }
 
+function openNodeControlPanel(): void {
+  const panel = nodeControlPanel.value;
+  if (!panel) {
+    return;
+  }
+  panel.open = true;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function onPeerListFileSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -425,7 +434,12 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </svg>
           <span>Unsaved: {{ unsavedSettingsCount }}</span>
         </span>
-        <button type="button" class="settings-chip node-control-chip" aria-label="Node Control">
+        <button
+          type="button"
+          class="settings-chip node-control-chip"
+          aria-label="Open Node Control"
+          @click="openNodeControlPanel"
+        >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
@@ -469,7 +483,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </header>
 
-    <details class="panel fold-panel">
+    <details ref="nodeControlPanel" class="panel fold-panel">
       <summary class="panel-summary">
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
@@ -480,7 +494,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
               <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
             </svg>
           </span>
-          <h2>Runtime</h2>
+          <h2>Node Config</h2>
           <p>{{ runtimeSummary }}</p>
         </div>
         <span class="chevron" aria-hidden="true">&#9662;</span>
@@ -509,10 +523,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <label>
             Announce interval seconds
             <input v-model.number="form.announceIntervalSeconds" type="number" min="5" />
-          </label>
-          <label class="checkbox">
-            <input v-model="form.autoConnectSaved" type="checkbox" />
-            Auto connect saved peers on startup
           </label>
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />
@@ -583,7 +593,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </details>
 
-    <details class="panel fold-panel">
+    <details class="panel fold-panel" :aria-disabled="rchHubDirectoryDisabled">
       <summary class="panel-summary">
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
@@ -660,7 +670,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="grid">
           <label>
             Mode
-            <select v-model="form.hubMode">
+            <select v-model="form.hubMode" :disabled="rchHubDirectoryDisabled">
               <option value="Autonomous">Autonomous</option>
               <option value="SemiAutonomous">Semi-autonomous</option>
               <option value="Connected">Connected</option>
@@ -668,7 +678,11 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub from announces (RCH servers)
-            <select :value="form.hubIdentityHash" @change="onHubCandidateSelected">
+            <select
+              :value="form.hubIdentityHash"
+              :disabled="rchHubDirectoryDisabled"
+              @change="onHubCandidateSelected"
+            >
               <option value="">Manual / none</option>
               <option
                 v-for="candidate in hubAnnounceCandidates"
@@ -681,11 +695,16 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub identity hash
-            <input v-model="form.hubIdentityHash" type="text" />
+            <input v-model="form.hubIdentityHash" type="text" :disabled="rchHubDirectoryDisabled" />
           </label>
           <label>
             Refresh interval seconds
-            <input v-model.number="form.hubRefreshIntervalSeconds" type="number" min="30" />
+            <input
+              v-model.number="form.hubRefreshIntervalSeconds"
+              type="number"
+              min="30"
+              :disabled="rchHubDirectoryDisabled"
+            />
           </label>
         </div>
 
@@ -699,18 +718,21 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="actions">
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub refresh requested.')"
           >
             Refresh Now
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.bootstrapHubRegistration(true), 'Hub registration requested.')"
           >
             Register Team Member
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.forgetHubRegistryLinkage(), 'Hub registration cleared.')"
           >
             Clear Registration
@@ -742,7 +764,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </summary>
       <div class="panel-body">
         <p class="section-note">
-          Peer List Exchange (PeerListV1) lets you export or import saved peer lists.
+          Saved peer list JSON lets you export or import saved peers.
         </p>
         <input
           ref="peerListFileInput"
@@ -757,7 +779,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
         <label class="full">
           Import JSON
-          <textarea v-model="importText" rows="7" placeholder="Paste PeerListV1 JSON here"></textarea>
+          <textarea v-model="importText" rows="7" placeholder="Paste saved peer list JSON here"></textarea>
         </label>
         <div class="actions">
           <label class="radio">

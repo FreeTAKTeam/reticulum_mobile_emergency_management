@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import ActionMessagesView from "./views/ActionMessagesView.vue";
-import BioSensorsView from "./views/BioSensorsView.vue";
-import CheclklistView from "./views/CheclklistView.vue";
+import ChecklistView from "./views/ChecklistView.vue";
 import ChecklistDetailView from "./views/ChecklistDetailView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import EventsView from "./views/EventsView.vue";
@@ -28,15 +27,13 @@ const routes = [
     component: InboxView,
   },
   {
-    path: "/checlklist",
-    alias: ["/checklists"],
-    name: "checlklist",
-    component: CheclklistView,
+    path: "/checklists",
+    name: "checklists",
+    component: ChecklistView,
   },
   {
-    path: "/checlklist/:checklistId",
-    alias: ["/checklists/:checklistId"],
-    name: "checlklist-detail",
+    path: "/checklists/:checklistId",
+    name: "checklist-detail",
     component: ChecklistDetailView,
   },
   {
@@ -68,11 +65,6 @@ const routes = [
     path: "/peers",
     name: "peers",
     component: PeersDiscoveryView,
-  },
-  {
-    path: "/bio-sensors",
-    name: "bio-sensors",
-    component: BioSensorsView,
   },
   {
     path: "/telemetry",

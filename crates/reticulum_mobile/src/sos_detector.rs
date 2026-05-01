@@ -148,4 +148,25 @@ mod tests {
             Some(SosTriggerSource::PowerButton {})
         );
     }
+
+    #[test]
+    fn tap_pattern_triggers_on_three_spikes_inside_window() {
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.trigger_tap_pattern = true;
+        let mut detector = SosTriggerDetector::new();
+
+        assert_eq!(
+            detector.accelerometer_sample(&settings, 23.0, 0.0, 0.0, 0),
+            None
+        );
+        assert_eq!(
+            detector.accelerometer_sample(&settings, 23.0, 0.0, 0.0, 300),
+            None
+        );
+        assert_eq!(
+            detector.accelerometer_sample(&settings, 23.0, 0.0, 0.0, 600),
+            Some(SosTriggerSource::TapPattern {})
+        );
+    }
 }

@@ -676,7 +676,6 @@ struct CompatSendReport {
     outcome: RnsSendOutcome,
     message_id_hex: String,
     resolved_destination_hex: String,
-    used_resource: bool,
     used_propagation_node: bool,
     method: LxmfDeliveryMethod,
     representation: LxmfDeliveryRepresentation,
@@ -820,7 +819,6 @@ impl RuntimeLxmfSdk {
             resolved_destination_hex: report.resolved_destination_hex,
             metadata,
             track_delivery_timeout,
-            used_resource: report.used_resource,
             used_propagation_node: report.used_propagation_node,
             method: report.method,
             representation: report.representation,
@@ -1155,7 +1153,6 @@ async fn compat_send_lxmf(
             outcome,
             message_id_hex,
             resolved_destination_hex,
-            used_resource: false,
             used_propagation_node: false,
             method: method_value,
             representation: representation_value,
@@ -1223,7 +1220,6 @@ async fn compat_send_lxmf(
                                 outcome: RnsSendOutcome::SentDirect,
                                 message_id_hex,
                                 resolved_destination_hex,
-                                used_resource: true,
                                 used_propagation_node: false,
                                 method: method_value,
                                 representation: representation_value,
@@ -1263,7 +1259,6 @@ async fn compat_send_lxmf(
         outcome,
         message_id_hex,
         resolved_destination_hex,
-        used_resource: false,
         used_propagation_node: false,
         method: method_value,
         representation: representation_value,
@@ -1384,7 +1379,6 @@ async fn compat_send_lxmf_via_propagation(
                                 outcome: RnsSendOutcome::SentDirect,
                                 message_id_hex: message_id_hex.to_string(),
                                 resolved_destination_hex: resolved_destination_hex.to_string(),
-                                used_resource: true,
                                 used_propagation_node: true,
                                 method,
                                 representation,
@@ -1453,7 +1447,6 @@ async fn compat_send_lxmf_via_propagation(
         outcome,
         message_id_hex: message_id_hex.to_string(),
         resolved_destination_hex: resolved_destination_hex.to_string(),
-        used_resource: false,
         used_propagation_node: true,
         method,
         representation,
@@ -1739,7 +1732,6 @@ mod tests {
             outcome: RnsSendOutcome::SentDirect,
             message_id_hex: "msg-1".to_string(),
             resolved_destination_hex: "dest-1".to_string(),
-            used_resource: true,
             used_propagation_node: false,
             method: LxmfDeliveryMethod::Direct {},
             representation: LxmfDeliveryRepresentation::Resource {},
@@ -1759,8 +1751,14 @@ mod tests {
 
         assert_eq!(first.message_id_hex, "msg-1");
         assert_eq!(second.message_id_hex, "msg-1");
-        assert!(first.used_resource);
-        assert!(second.used_resource);
+        assert!(matches!(
+            first.representation,
+            LxmfDeliveryRepresentation::Resource {}
+        ));
+        assert!(matches!(
+            second.representation,
+            LxmfDeliveryRepresentation::Resource {}
+        ));
     }
 
     #[test]
@@ -1828,7 +1826,6 @@ mod tests {
                     outcome: RnsSendOutcome::SentDirect,
                     message_id_hex: format!("msg-{index}"),
                     resolved_destination_hex: format!("dest-{index}"),
-                    used_resource: false,
                     used_propagation_node: false,
                     method: LxmfDeliveryMethod::Direct {},
                     representation: LxmfDeliveryRepresentation::Packet {},

@@ -175,10 +175,7 @@ function normalizeRuntimeSettings(
     displayName:
       normalizeDisplayName(typeof value.displayName === "string" ? value.displayName : "")
       ?? defaults.displayName,
-    autoConnectSaved:
-      typeof value.autoConnectSaved === "boolean"
-        ? value.autoConnectSaved
-        : defaults.autoConnectSaved,
+    autoConnectSaved: false,
     announceCapabilities: ensureRequiredAnnounceCapabilities(
       typeof value.announceCapabilities === "string"
         ? value.announceCapabilities

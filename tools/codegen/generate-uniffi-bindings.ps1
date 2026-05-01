@@ -7,8 +7,11 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$crateManifest = Join-Path $repoRoot "crates\reticulum_mobile\Cargo.toml"
+$bindgenManifest = Join-Path $repoRoot "tools\uniffi-bindgen\Cargo.toml"
 $udlPath = Join-Path $repoRoot "crates\reticulum_mobile\src\reticulum_mobile.udl"
 $tempDir = Join-Path $repoRoot "target\uniffi\$Language"
+$cargoTargetDir = Join-Path $repoRoot "target"
 
 if (-not $OutDir) {
   if ($Language -eq "kotlin") {
@@ -38,8 +41,8 @@ function Invoke-UniffiBindgen {
   Write-Host "Generating UniFFI bindings ($LanguageName) via workspace fallback tool..."
   $cargoArgs = @(
     "run",
-    "-p",
-    "reticulum_mobile_uniffi_bindgen",
+    "--manifest-path",
+    $bindgenManifest,
     "--",
     "generate",
     "--language",
@@ -131,7 +134,7 @@ foreach ($target in $targets) {
   if ($LASTEXITCODE -ne 0) {
     throw "rustup target add failed for $target"
   }
-  cargo build -p reticulum_mobile --release --target $target
+  cargo build --manifest-path $crateManifest --target-dir $cargoTargetDir --release --target $target
   if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed for $target"
   }
@@ -151,7 +154,7 @@ if ($Language -eq "kotlin" -or $Language -eq "swift") {
 
 Write-Host "Copying built native libraries..."
 foreach ($target in $targets) {
-  $releaseDir = Join-Path $repoRoot "target\$target\release"
+  $releaseDir = Join-Path $cargoTargetDir "$target\release"
   if (-not (Test-Path $releaseDir)) {
     continue
   }

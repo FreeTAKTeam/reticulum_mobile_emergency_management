@@ -518,6 +518,11 @@ dictionary ChecklistUpdateRequest {
   string? changed_by_team_member_rns_identity;
 };
 
+dictionary ChecklistDeleteRequest {
+  string checklist_uid;
+  boolean delete_remote;
+};
+
 dictionary ChecklistTaskStatusSetRequest {
   string checklist_uid;
   string task_uid;
@@ -818,7 +823,7 @@ interface Node {
   [Throws=NodeError]
   void update_checklist(ChecklistUpdateRequest request);
   [Throws=NodeError]
-  void delete_checklist(string checklist_uid);
+  void delete_checklist(ChecklistDeleteRequest request);
   [Throws=NodeError]
   void join_checklist(string checklist_uid);
   [Throws=NodeError]
@@ -861,6 +866,8 @@ interface Node {
   sequence<SosLocationRecord> list_sos_locations();
   [Throws=NodeError]
   sequence<SosAudioRecord> list_sos_audio();
+  [Throws=NodeError]
+  void record_sos_audio(SosAudioRecord audio);
 
   [Throws=NodeError]
   void set_announce_capabilities(string capability_string);

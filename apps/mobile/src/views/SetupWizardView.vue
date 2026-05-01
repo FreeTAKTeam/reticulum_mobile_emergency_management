@@ -333,10 +333,6 @@ onMounted(() => {
               <dt>Floating SOS</dt>
               <dd>{{ wizard.sosFloatingButtonEnabled.value ? "Enabled" : "Disabled" }}</dd>
             </div>
-            <div>
-              <dt>Bio Sensors</dt>
-              <dd>Inactive</dd>
-            </div>
           </dl>
           <div class="status-strip ready-strip">
             <span>Ready to save setup</span>

@@ -247,7 +247,13 @@ function normalizePeer(entry: unknown): PeerListV1Peer | null {
 }
 
 export function parsePeerListV1(jsonText: string): ParsedPeerList {
-  const raw = JSON.parse(jsonText) as Partial<PeerListV1>;
+  let raw: Partial<PeerListV1>;
+  try {
+    raw = JSON.parse(jsonText) as Partial<PeerListV1>;
+  } catch {
+    throw new Error("Saved peer list JSON is invalid.");
+  }
+
   if (raw.version !== 1) {
     throw new Error("Unsupported peer list version. Expected version=1.");
   }
