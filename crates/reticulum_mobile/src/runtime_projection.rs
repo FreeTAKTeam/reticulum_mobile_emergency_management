@@ -201,6 +201,23 @@ mod tests {
     }
 
     #[test]
+    fn restored_peers_do_not_restore_transport_state() {
+        let mut peer = build_persisted_peer("saved-peer", Some(true), None);
+        peer.active_link = true;
+        peer.state = "connected".to_string();
+        let snapshot = RuntimeProjectionSnapshot {
+            peers: vec![peer],
+            ..RuntimeProjectionSnapshot::default()
+        };
+
+        let restored = snapshot.restored_peers();
+
+        assert_eq!(restored.len(), 1);
+        assert!(!restored[0].active_link);
+        assert!(matches!(restored[0].state, PeerState::Disconnected {}));
+    }
+
+    #[test]
     fn pruned_for_restore_drops_unsaved_peers_but_keeps_other_projection_data() {
         let snapshot = RuntimeProjectionSnapshot {
             peers: vec![
@@ -285,6 +302,8 @@ mod tests {
             assert_eq!(current.len(), 1);
             assert_eq!(current[0].destination_hex, "saved-peer");
             assert!(current[0].saved);
+            assert!(!current[0].active_link);
+            assert!(matches!(current[0].state, PeerState::Disconnected {}));
         });
     }
 }
@@ -300,11 +319,11 @@ fn persisted_peer_from_runtime(record: &PeerRecord) -> Option<PersistedPeerRecor
         lxmf_destination_hex: record.lxmf_destination_hex.clone(),
         display_name: record.display_name.clone(),
         app_data: record.app_data.clone(),
-        state: peer_state_to_string(record.state),
+        state: peer_state_to_string(PeerState::Disconnected {}),
         saved: Some(record.saved),
         management_state: None,
         stale: record.stale,
-        active_link: record.active_link,
+        active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error.clone(),
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
@@ -358,7 +377,7 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
         lxmf_destination_hex: record.lxmf_destination_hex,
         display_name: record.display_name,
         app_data: record.app_data,
-        state: peer_state_from_string(record.state).unwrap_or(PeerState::Disconnected {}),
+        state: PeerState::Disconnected {},
         saved: record.saved.unwrap_or_else(|| {
             record
                 .management_state
@@ -366,7 +385,7 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
                 .is_some_and(|value| value == "managed")
         }),
         stale: record.stale,
-        active_link: record.active_link,
+        active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error,
         last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
@@ -411,15 +430,6 @@ fn peer_state_to_string(state: PeerState) -> String {
         PeerState::Connecting {} => "connecting".to_string(),
         PeerState::Connected {} => "connected".to_string(),
         PeerState::Disconnected {} => "disconnected".to_string(),
-    }
-}
-
-fn peer_state_from_string(value: String) -> Option<PeerState> {
-    match value.as_str() {
-        "connecting" => Some(PeerState::Connecting {}),
-        "connected" => Some(PeerState::Connected {}),
-        "disconnected" => Some(PeerState::Disconnected {}),
-        _ => None,
     }
 }
 

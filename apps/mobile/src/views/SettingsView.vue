@@ -48,7 +48,6 @@ const repositoryUrl = "https://github.com/FreeTAKTeam/reticulum_mobile_emergency
 const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
-  autoConnectSaved: nodeStore.settings.autoConnectSaved,
   announceCapabilities: ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
@@ -192,7 +191,6 @@ const persistedTcpClients = computed(() =>
 const hasMainSettingsChanges = computed(() =>
   form.displayName !== nodeStore.settings.displayName
   || form.clientMode !== nodeStore.settings.clientMode
-  || form.autoConnectSaved !== nodeStore.settings.autoConnectSaved
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
@@ -303,7 +301,6 @@ async function applySettings(): Promise<void> {
     nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
-      autoConnectSaved: form.autoConnectSaved,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
@@ -524,10 +521,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <label>
             Announce interval seconds
             <input v-model.number="form.announceIntervalSeconds" type="number" min="5" />
-          </label>
-          <label class="checkbox">
-            <input v-model="form.autoConnectSaved" type="checkbox" />
-            Auto connect saved peers on startup
           </label>
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />

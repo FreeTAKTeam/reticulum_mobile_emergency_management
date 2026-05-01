@@ -132,7 +132,7 @@ interface StorageSeed {
 export const defaultSettings: SettingsSeed = {
   displayName: "emergency-ops-mobile",
   clientMode: "auto",
-  autoConnectSaved: true,
+  autoConnectSaved: false,
   announceCapabilities: "R3AKT,EMergencyMessages,Telemetry",
   tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
   broadcast: true,
