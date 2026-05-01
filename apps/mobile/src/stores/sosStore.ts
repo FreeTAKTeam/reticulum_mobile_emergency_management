@@ -28,6 +28,7 @@ export const useSosStore = defineStore("sos", () => {
   const busy = ref(false);
   const lastError = ref("");
   let unsubs: Array<() => void> = [];
+  let initPromise: Promise<void> | null = null;
 
   const active = computed(() => status.value.state !== "Idle");
   const activeAlerts = computed(() => alerts.value.filter((alert) => alert.active));
@@ -93,12 +94,24 @@ export const useSosStore = defineStore("sos", () => {
   }
 
   async function init(): Promise<void> {
+    if (initPromise) {
+      return initPromise;
+    }
     if (initialized.value) {
       return;
     }
-    initialized.value = true;
-    bindEvents();
-    await refresh();
+    if (!nodeStore.initialized) {
+      return;
+    }
+    initPromise = (async () => {
+      bindEvents();
+      await refresh();
+      initialized.value = true;
+    })()
+      .finally(() => {
+        initPromise = null;
+      });
+    return initPromise;
   }
 
   async function saveSettings(next: SosSettingsRecord): Promise<void> {

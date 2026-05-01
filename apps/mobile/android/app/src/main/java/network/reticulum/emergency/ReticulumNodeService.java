@@ -106,12 +106,13 @@ public final class ReticulumNodeService extends Service {
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
-            maybeRestoreAfterBoot();
-            return START_STICKY;
+            return maybeRestoreAfterBoot() ? START_STICKY : START_NOT_STICKY;
         }
 
         if (shouldBeRunning() && !isNodeRunning()) {
-            maybeRestoreAfterProcessRecreation();
+            if (!maybeRestoreAfterProcessRecreation()) {
+                return START_NOT_STICKY;
+            }
         }
         return START_STICKY;
     }
@@ -139,6 +140,16 @@ public final class ReticulumNodeService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
+    }
+
+    @Override
+    public void onTimeout(int startId) {
+        handleForegroundServiceTimeout(startId, 0);
+    }
+
+    @Override
+    public void onTimeout(int startId, int foregroundServiceType) {
+        handleForegroundServiceTimeout(startId, foregroundServiceType);
     }
 
     public void addListener(ServiceEventListener listener) {
@@ -181,7 +192,7 @@ public final class ReticulumNodeService extends Service {
                 promoteServiceForRuntime();
                 final int startResult = ReticulumBridge.start(resolved.resolvedJson);
                 if (startResult != 0) {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    cleanupFailedRuntimeStart();
                     return startResult;
                 }
             }
@@ -198,6 +209,7 @@ public final class ReticulumNodeService extends Service {
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to start node", ex);
+            cleanupFailedRuntimeStart();
             return -1;
         }
     }
@@ -517,27 +529,29 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.takeLastErrorJson();
     }
 
-    private void maybeRestoreAfterProcessRecreation() {
+    private boolean maybeRestoreAfterProcessRecreation() {
         if (!shouldBeRunning()) {
-            return;
+            return true;
         }
 
         final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
         if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return;
+            return true;
         }
 
         if (isNodeRunning()) {
             ensurePoller();
             refreshLatestRuntimeState();
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            return;
+            return true;
         }
 
         final int result = startNode(persistedConfig);
         if (result != 0) {
             Log.e(TAG, "Failed to restore node after process recreation");
+            return false;
         }
+        return true;
     }
 
     private boolean shouldBeRunning() {
@@ -572,6 +586,46 @@ public final class ReticulumNodeService extends Service {
             .apply();
         lastResolvedConfigJson = "";
         lastCanonicalConfigJson = "";
+    }
+
+    private void cleanupFailedRuntimeStart() {
+        stopPoller();
+        try {
+            ReticulumBridge.stop();
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to stop native runtime after start failure", ex);
+        }
+        clearDesiredRunning();
+        refreshLatestRuntimeState();
+        emitCachedStateToAll();
+        stopForegroundAndSelf(0);
+    }
+
+    private synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
+        Log.w(TAG, "Foreground service timeout; stopping Reticulum node service. type=" + foregroundServiceType);
+        stopPoller();
+        try {
+            ReticulumBridge.stop();
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to stop native runtime after foreground service timeout", ex);
+        }
+        clearDesiredRunning();
+        refreshLatestRuntimeState();
+        emitCachedStateToAll();
+        stopForegroundAndSelf(startId);
+    }
+
+    private void stopForegroundAndSelf(int startId) {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to remove foreground notification", ex);
+        }
+        if (startId > 0) {
+            stopSelf(startId);
+        } else {
+            stopSelf();
+        }
     }
 
     private void initializeBridgeStorage(String resolvedStorageDir) {
@@ -677,18 +731,20 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    private void maybeRestoreAfterBoot() {
+    private boolean maybeRestoreAfterBoot() {
         if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
-            return;
+            return true;
         }
         final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
         if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return;
+            return true;
         }
         final int result = startNode(persistedConfig);
         if (result != 0) {
             Log.e(TAG, "Failed to restore node after boot");
+            return false;
         }
+        return true;
     }
 
     private void dispatchEventToListeners(String eventName, JSObject payload) {

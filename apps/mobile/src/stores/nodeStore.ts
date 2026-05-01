@@ -2840,6 +2840,7 @@ export const useNodeStore = defineStore("node", () => {
     bestPropagationNodeHex,
     telemetryDestinations,
     savedDestinations,
+    initialized,
     ready,
     peerDisplayState,
     peerPresenceTimestamp,
