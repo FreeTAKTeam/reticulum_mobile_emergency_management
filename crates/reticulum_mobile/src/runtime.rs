@@ -2987,64 +2987,6 @@ fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
         .map(|dir| PathBuf::from(dir).join(runtime_projection::PERSIST_FILENAME))
 }
 
-fn seed_peer_announces(messaging: &mut sdkmsg::MessagingStore, peer: &PeerRecord) {
-    let Some(identity_hex) = peer
-        .identity_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-
-    let app_received_at_ms = peer
-        .announce_last_seen_at_ms
-        .unwrap_or(peer.last_seen_at_ms);
-    let lxmf_received_at_ms = peer.lxmf_last_seen_at_ms.unwrap_or(app_received_at_ms);
-    let display_name = peer.display_name.clone();
-    let app_data = peer.app_data.clone().unwrap_or_default();
-
-    messaging.record_announce(sdkmsg::AnnounceRecord {
-        destination_hex: peer.destination_hex.clone(),
-        identity_hex: identity_hex.to_string(),
-        destination_kind: "app".to_string(),
-        app_data: app_data.clone(),
-        display_name: display_name.clone(),
-        hops: 0,
-        interface_hex: String::new(),
-        received_at_ms: app_received_at_ms,
-    });
-
-    if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.clone() {
-        messaging.record_announce(sdkmsg::AnnounceRecord {
-            destination_hex: lxmf_destination_hex,
-            identity_hex: identity_hex.to_string(),
-            destination_kind: "lxmf_delivery".to_string(),
-            app_data,
-            display_name,
-            hops: 0,
-            interface_hex: String::new(),
-            received_at_ms: lxmf_received_at_ms,
-        });
-    }
-
-    messaging.mark_peer_saved(peer.destination_hex.as_str(), peer.saved);
-    messaging.set_peer_active_link(
-        peer.destination_hex.as_str(),
-        peer.active_link,
-        peer.last_seen_at_ms,
-    );
-    messaging.record_resolution_attempt(
-        peer.destination_hex.as_str(),
-        peer.last_resolution_attempt_at_ms
-            .unwrap_or(peer.last_seen_at_ms),
-    );
-    messaging.record_resolution_error(
-        peer.destination_hex.as_str(),
-        peer.last_resolution_error.clone(),
-    );
-}
-
 fn restore_saved_peer_management(
     messaging: &mut sdkmsg::MessagingStore,
     saved_peers: &[crate::types::SavedPeerRecord],
@@ -3077,10 +3019,14 @@ async fn seed_runtime_projection_snapshot(
             *current = sdk_sync_status;
         }
     });
-    // Only saved peers survive restart. Unsaved discovered peers must be rebuilt
-    // from fresh announces after startup instead of being revived from cache.
+    // Saved peer management survives restart, but availability and "seen"
+    // timestamps must be rebuilt from fresh announces after startup.
     for peer in snapshot.restored_peers() {
-        seed_peer_announces(&mut messaging, &peer);
+        messaging.mark_peer_saved(peer.destination_hex.as_str(), peer.saved);
+        messaging.record_resolution_error(
+            peer.destination_hex.as_str(),
+            peer.last_resolution_error.clone(),
+        );
     }
     for message in snapshot.messages() {
         messaging.upsert_message(to_sdk_message_record(message));
@@ -3330,7 +3276,6 @@ async fn resolve_peer_route(
     {
         let mut messaging = state.messaging.lock().await;
         messaging.record_resolution_attempt(destination_hex, attempted_at_ms);
-        messaging.record_resolution_error(destination_hex, None);
     }
     emit_peer_changed(state, bus, destination_hex).await;
 
@@ -3392,6 +3337,64 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
                 return;
             }
         }
+    });
+}
+
+fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
+    tokio::spawn(async move {
+        let normalized_destination = match normalize_hex_32(destination_hex.as_str()) {
+            Some(value) => value,
+            None => return,
+        };
+        {
+            let mut inflight = state.peer_connect_inflight.lock().await;
+            if !inflight.insert(normalized_destination.clone()) {
+                return;
+            }
+        }
+
+        let result = async {
+            let should_connect = {
+                let messaging = state.messaging.lock().await;
+                messaging.saved_peer_has_current_app_announce(normalized_destination.as_str())
+            };
+            if !should_connect {
+                return Ok(());
+            }
+
+            state.sdk.record_peer_changed(
+                normalized_destination.as_str(),
+                PeerState::Connecting {},
+                None,
+            );
+            resolve_peer_route(&state, &bus, normalized_destination.as_str()).await?;
+            let destination = parse_address_hash(normalized_destination.as_str())?;
+            let desc = ensure_destination_desc(&state, destination, None).await?;
+            let _link = ensure_output_link(&state, desc).await?;
+            sync_auto_propagation_node(&state, &bus).await;
+            Ok::<(), NodeError>(())
+        }
+        .await;
+
+        if let Err(err) = &result {
+            state
+                .messaging
+                .lock()
+                .await
+                .record_resolution_error(normalized_destination.as_str(), Some(err.to_string()));
+            emit_peer_changed(&state, &bus, normalized_destination.as_str()).await;
+            state.sdk.record_peer_changed(
+                normalized_destination.as_str(),
+                PeerState::Disconnected {},
+                Some(err.to_string().as_str()),
+            );
+        }
+
+        state
+            .peer_connect_inflight
+            .lock()
+            .await
+            .remove(normalized_destination.as_str());
     });
 }
 
@@ -3572,6 +3575,7 @@ struct NodeRuntimeState {
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
+    peer_connect_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
@@ -4728,6 +4732,8 @@ pub async fn run_node(
         Arc::new(TokioMutex::new(HashSet::new()));
     let peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>> =
         Arc::new(TokioMutex::new(HashSet::new()));
+    let peer_connect_inflight: Arc<TokioMutex<HashSet<String>>> =
+        Arc::new(TokioMutex::new(HashSet::new()));
     let pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
     let pending_lxmf_acknowledgements: Arc<
@@ -4763,6 +4769,7 @@ pub async fn run_node(
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
         peer_resolution_inflight: peer_resolution_inflight.clone(),
+        peer_connect_inflight: peer_connect_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
@@ -5021,6 +5028,11 @@ pub async fn run_node(
                             emit_peer_resolved_for_destination(&state, &bus, &destination_hex)
                                 .await;
                             spawn_passive_peer_resolution(
+                                state.clone(),
+                                bus.clone(),
+                                destination_hex.clone(),
+                            );
+                            spawn_saved_peer_auto_connect(
                                 state.clone(),
                                 bus.clone(),
                                 destination_hex.clone(),

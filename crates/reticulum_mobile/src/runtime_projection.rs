@@ -215,6 +215,9 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert!(!restored[0].active_link);
         assert!(matches!(restored[0].state, PeerState::Disconnected {}));
+        assert_eq!(restored[0].last_seen_at_ms, 0);
+        assert_eq!(restored[0].announce_last_seen_at_ms, None);
+        assert_eq!(restored[0].lxmf_last_seen_at_ms, None);
     }
 
     #[test]
@@ -304,6 +307,9 @@ mod tests {
             assert!(current[0].saved);
             assert!(!current[0].active_link);
             assert!(matches!(current[0].state, PeerState::Disconnected {}));
+            assert_eq!(current[0].last_seen_at_ms, 0);
+            assert_eq!(current[0].announce_last_seen_at_ms, None);
+            assert_eq!(current[0].lxmf_last_seen_at_ms, None);
         });
     }
 }
@@ -326,10 +332,10 @@ fn persisted_peer_from_runtime(record: &PeerRecord) -> Option<PersistedPeerRecor
         active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error.clone(),
-        last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_seen_at_ms: record.last_seen_at_ms,
-        announce_last_seen_at_ms: record.announce_last_seen_at_ms,
-        lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+        last_resolution_attempt_at_ms: None,
+        last_seen_at_ms: 0,
+        announce_last_seen_at_ms: None,
+        lxmf_last_seen_at_ms: None,
     })
 }
 
@@ -388,10 +394,10 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
         active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error,
-        last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_seen_at_ms: record.last_seen_at_ms,
-        announce_last_seen_at_ms: record.announce_last_seen_at_ms,
-        lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+        last_resolution_attempt_at_ms: None,
+        last_seen_at_ms: 0,
+        announce_last_seen_at_ms: None,
+        lxmf_last_seen_at_ms: None,
     }
 }
 
