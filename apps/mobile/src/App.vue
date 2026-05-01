@@ -95,7 +95,7 @@ const menuOpen = shallowRef(false);
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/inbox", label: "Chat", icon: "chat" },
-  { path: "/checklists", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Checklists", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
 ];
 
@@ -103,7 +103,7 @@ const menuItems: NavigationItem[] = [
   { path: "/inbox", label: "Chat", icon: "chat" },
   { path: "/messages", label: "Action Messages", icon: "action-messages" },
   { path: "/events", label: "Events", icon: "events" },
-  { path: "/checklists", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Checklists", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
@@ -172,7 +172,7 @@ const pageTitle = computed(() => {
     case "inbox":
       return "Chat";
     case "checklists":
-      return "Tasks";
+      return "Checklists";
     case "checklist-detail":
       return "Checklist Detail";
     case "message-status-help":
@@ -212,9 +212,7 @@ const connectedPeerCountTitle = computed(() => {
 function isTabActive(path: string): boolean {
   if (path === "/checklists") {
     return route.path === path
-      || route.path.startsWith(`${path}/`)
-      || route.path === "/checlklist"
-      || route.path.startsWith("/checlklist/");
+      || route.path.startsWith(`${path}/`);
   }
   return route.path === path || route.path.startsWith(`${path}/`);
 }

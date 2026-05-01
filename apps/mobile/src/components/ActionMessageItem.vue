@@ -165,7 +165,7 @@ function cycleStatus(field: ActionMessageStatusField): void {
         type="button"
         class="pill-button"
         :disabled="!props.editable"
-        :title="props.editable ? undefined : 'Only your own EAM can be edited.'"
+        :title="props.editable ? undefined : 'Only your own action message can be edited.'"
         @click="cycleStatus(status.field)"
       >
         <StatusPill :label="status.label" :value="props.message[status.field]" />

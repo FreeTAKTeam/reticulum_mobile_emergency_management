@@ -28,13 +28,11 @@ const routes = [
   },
   {
     path: "/checklists",
-    alias: ["/checlklist"],
     name: "checklists",
     component: ChecklistView,
   },
   {
     path: "/checklists/:checklistId",
-    alias: ["/checlklist/:checklistId"],
     name: "checklist-detail",
     component: ChecklistDetailView,
   },

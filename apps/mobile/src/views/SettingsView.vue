@@ -372,7 +372,7 @@ async function exportPeerList(): Promise<void> {
   try {
     const payload = JSON.stringify(nodeStore.getSavedPeerList(), null, 2);
     await copyToClipboard(payload);
-    await shareText("PeerListV1", payload);
+    await shareText("Saved peer list", payload);
     importFeedback.value = "Peer list exported to clipboard/share.";
   } catch (error: unknown) {
     importFeedback.value = error instanceof Error ? error.message : String(error);
@@ -757,7 +757,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </summary>
       <div class="panel-body">
         <p class="section-note">
-          Peer List Exchange (PeerListV1) lets you export or import saved peer lists.
+          Saved peer list JSON lets you export or import saved peers.
         </p>
         <input
           ref="peerListFileInput"
@@ -772,7 +772,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
         <label class="full">
           Import JSON
-          <textarea v-model="importText" rows="7" placeholder="Paste PeerListV1 JSON here"></textarea>
+          <textarea v-model="importText" rows="7" placeholder="Paste saved peer list JSON here"></textarea>
         </label>
         <div class="actions">
           <label class="radio">
