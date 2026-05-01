@@ -97,6 +97,8 @@ const activePropagationNodeHex = computed(
   () => nodeStore.syncStatus.activePropagationNodeHex?.trim() ?? "",
 );
 
+const rchHubDirectoryDisabled = true;
+
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
@@ -591,7 +593,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </details>
 
-    <details class="panel fold-panel">
+    <details class="panel fold-panel" :aria-disabled="rchHubDirectoryDisabled">
       <summary class="panel-summary">
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
@@ -668,7 +670,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="grid">
           <label>
             Mode
-            <select v-model="form.hubMode">
+            <select v-model="form.hubMode" :disabled="rchHubDirectoryDisabled">
               <option value="Autonomous">Autonomous</option>
               <option value="SemiAutonomous">Semi-autonomous</option>
               <option value="Connected">Connected</option>
@@ -676,7 +678,11 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub from announces (RCH servers)
-            <select :value="form.hubIdentityHash" @change="onHubCandidateSelected">
+            <select
+              :value="form.hubIdentityHash"
+              :disabled="rchHubDirectoryDisabled"
+              @change="onHubCandidateSelected"
+            >
               <option value="">Manual / none</option>
               <option
                 v-for="candidate in hubAnnounceCandidates"
@@ -689,11 +695,16 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub identity hash
-            <input v-model="form.hubIdentityHash" type="text" />
+            <input v-model="form.hubIdentityHash" type="text" :disabled="rchHubDirectoryDisabled" />
           </label>
           <label>
             Refresh interval seconds
-            <input v-model.number="form.hubRefreshIntervalSeconds" type="number" min="30" />
+            <input
+              v-model.number="form.hubRefreshIntervalSeconds"
+              type="number"
+              min="30"
+              :disabled="rchHubDirectoryDisabled"
+            />
           </label>
         </div>
 
@@ -707,18 +718,21 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="actions">
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub refresh requested.')"
           >
             Refresh Now
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.bootstrapHubRegistration(true), 'Hub registration requested.')"
           >
             Register Team Member
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.forgetHubRegistryLinkage(), 'Hub registration cleared.')"
           >
             Clear Registration

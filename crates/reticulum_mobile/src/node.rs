@@ -1899,6 +1899,18 @@ fn emit_sos_status(
     Ok(())
 }
 
+fn is_pending_sos_countdown_for_incident(status: &SosStatusRecord, incident_id: &str) -> bool {
+    matches!(status.state, SosState::Countdown {})
+        && status.incident_id.as_deref() == Some(incident_id)
+}
+
+fn app_state_has_pending_sos_countdown(app_state: &AppStateStore, incident_id: &str) -> bool {
+    matches!(
+        app_state.get_sos_status(),
+        Ok(Some(status)) if is_pending_sos_countdown_for_incident(&status, incident_id)
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_sos_fanout(
     app_state: AppStateStore,
@@ -4570,6 +4582,9 @@ impl Node {
             emit_sos_status(&app_state, &bus, &countdown_record, "sos-countdown")?;
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(u64::from(countdown)));
+                if !app_state_has_pending_sos_countdown(&app_state, incident_id.as_str()) {
+                    return;
+                }
                 let telemetry = latest_sos_telemetry(&telemetry_store);
                 run_sos_fanout(
                     app_state,
@@ -4968,6 +4983,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn countdown_guard_rejects_deactivated_or_replaced_incident() {
+        let deadline = now_ms().saturating_add(5_000);
+        let pending = countdown_status(
+            "incident-a".to_string(),
+            SosTriggerSource::Manual {},
+            deadline,
+        );
+        assert!(is_pending_sos_countdown_for_incident(
+            &pending,
+            "incident-a"
+        ));
+        assert!(!is_pending_sos_countdown_for_incident(
+            &pending,
+            "incident-b"
+        ));
+        assert!(!is_pending_sos_countdown_for_incident(
+            &idle_status(),
+            "incident-a"
+        ));
     }
 
     fn msgpack_map(entries: Vec<(&str, MsgPackValue)>) -> MsgPackValue {
