@@ -161,7 +161,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
       key,
       title: `Checklist updated: ${record.name || "Checklist"}`,
       body: checklistNotificationBody(record),
-      route: `/checlklist/${record.uid}`,
+    route: `/checklists/${record.uid}`,
       timer: setTimeout(() => {
         pendingChecklistNotifications.delete(record.uid);
         void notifyOperationalUpdateOnce(

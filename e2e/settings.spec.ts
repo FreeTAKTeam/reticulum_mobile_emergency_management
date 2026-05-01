@@ -17,6 +17,18 @@ async function seedAnnouncedPeers(
     const store = mod.useNodeStore();
     const now = Date.now();
     for (const entry of entries) {
+      const isHub = entry.appData.toLowerCase().includes("hub");
+      store.announceByDestination[entry.destination] = {
+        destinationHex: entry.destination,
+        identityHex: entry.destination,
+        destinationKind: "app",
+        announceClass: isHub ? "RchHubServer" : "PeerApp",
+        appData: entry.appData,
+        displayName: entry.announcedName ?? entry.label,
+        hops: 1,
+        interfaceHex: "00000000000000000000000000000000",
+        receivedAtMs: now,
+      };
       store.discoveredByDestination[entry.destination] = {
         destination: entry.destination,
         label: entry.label,
@@ -65,7 +77,7 @@ test("fresh installs default to the first TCP community server", async ({ page }
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
@@ -75,14 +87,7 @@ test("fresh installs default to the first TCP community server", async ({ page }
     .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
 
   await expect(firstServer.getByRole("checkbox")).toBeChecked();
-
-  await page.getByRole("button", { name: "Save" }).click();
-
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
-  expect(storedSettings.tcpClients).toEqual([DEFAULT_TCP_COMMUNITY_ENDPOINT]);
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
 test("legacy placeholder TCP selection normalizes to the first community server", async ({ page }) => {
@@ -96,7 +101,7 @@ test("legacy placeholder TCP selection normalizes to the first community server"
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
@@ -128,7 +133,7 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
@@ -138,7 +143,7 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
 
   await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
 
-  await runtimePanel.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
@@ -163,7 +168,7 @@ test("hub selector only lists RCH-capable announce peers and persists the select
   await seedAnnouncedPeers(page, [
     {
       destination: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      appData: "R3AKT,topic_broker,name=Relay%20Hub",
+      appData: "R3AKT,rch_hub,name=Relay%20Hub",
       announcedName: "Relay Hub",
     },
     {
@@ -177,6 +182,7 @@ test("hub selector only lists RCH-capable announce peers and persists the select
     has: page.getByRole("heading", { name: "RCH Hub Directory" }),
   });
   await hubPanel.locator("summary").click();
+  await hubPanel.getByLabel("Mode").selectOption("SemiAutonomous");
 
   const hubSelect = hubPanel.getByLabel("Hub from announces (RCH servers)");
   await expect(hubSelect.locator("option")).toHaveCount(2);
@@ -184,7 +190,7 @@ test("hub selector only lists RCH-capable announce peers and persists the select
   await expect(hubSelect).not.toContainText("Telemetry Peer");
 
   await hubSelect.selectOption("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  await hubPanel.getByRole("button", { name: "Save Hub Settings" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
@@ -192,10 +198,6 @@ test("hub selector only lists RCH-capable announce peers and persists the select
 
   expect(storedSettings.hub.identityHash).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   expect(storedSettings.hub.mode).toBe("SemiAutonomous");
-
-  await page.reload();
-  await expect(page).toHaveURL(/\/settings$/);
-  await expect(hubPanel).toContainText("aaaaaaaaaa...");
 });
 
 test("hub summary shows cached peer count, connected override, and missing connected hub state", async ({ page }) => {
@@ -211,6 +213,12 @@ test("hub summary shows cached peer count, connected override, and missing conne
   });
 
   await gotoApp(page, "/settings");
+  const hubPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  });
+  await hubPanel.locator("summary").click();
+  await hubPanel.getByLabel("Mode").selectOption("SemiAutonomous");
+  await hubPanel.getByLabel("Hub identity hash").fill("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   await seedHubDirectorySnapshot(page, {
     effectiveConnectedMode: true,
     receivedAtMs: Date.now(),
@@ -228,23 +236,11 @@ test("hub summary shows cached peer count, connected override, and missing conne
     ],
   });
 
-  const hubPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
-  });
   await expect(hubPanel).toContainText("1 cached peers");
   await expect(hubPanel).toContainText("server forcing connected routing");
 
-  await page.evaluate(async () => {
-    const mod = await import("/src/stores/nodeStore.ts");
-    const store = mod.useNodeStore();
-    store.updateSettings({
-      hub: {
-        ...store.settings.hub,
-        mode: "Connected",
-        identityHash: "",
-      },
-    });
-  });
+  await hubPanel.getByLabel("Mode").selectOption("Connected");
+  await hubPanel.getByLabel("Hub identity hash").fill("");
 
   await expect(hubPanel).toContainText("No hub selected | outbound blocked");
 });

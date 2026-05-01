@@ -69,7 +69,7 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   expect(setupState.completed).toBe(true);
 });
 
-test("settings can relaunch setup wizard and bio sensors stays inactive", async ({ page }) => {
+test("settings can relaunch setup wizard", async ({ page }) => {
   await seedAppStorage(page, {
     settings: defaultSettings,
   });
@@ -78,9 +78,4 @@ test("settings can relaunch setup wizard and bio sensors stays inactive", async 
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "Run setup wizard" }).click();
   await expect(page).toHaveURL(/\/setup\?source=settings$/);
-
-  await page.goto("/bio-sensors");
-  await expect(page.getByRole("main").getByRole("heading", { name: "Bio Sensors", exact: true })).toBeVisible();
-  await expect(page.getByText("Bio Sensors are inactive")).toBeVisible();
-  await expect(page.getByText("No sensor pairing")).toBeVisible();
 });

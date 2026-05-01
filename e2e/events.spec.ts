@@ -36,13 +36,13 @@ test("header shows the connected peer count", async ({ page }) => {
 
   const connectedPeerCount = page.getByTestId("connected-peer-count");
 
-  await expect(page.getByRole("heading", { name: "Peers & Discovery" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Peers" })).toBeVisible();
   await expect(page.locator(".rows .row").first()).toBeVisible();
-  await expect(connectedPeerCount).toHaveText("1");
-
-  await page.locator(".rows .row").first().getByRole("button", { name: "Disconnect" }).click();
-  await expect(connectedPeerCount).toHaveText("0");
+  await expect(connectedPeerCount).toHaveText("1/0");
 
   await page.locator(".rows .row").first().getByRole("button", { name: "Connect" }).click();
-  await expect(connectedPeerCount).toHaveText("1");
+  await expect(connectedPeerCount).toHaveText("1/1");
+
+  await page.locator(".rows .row").first().getByRole("button", { name: "Disconnect" }).click();
+  await expect(connectedPeerCount).toHaveText("1/0");
 });

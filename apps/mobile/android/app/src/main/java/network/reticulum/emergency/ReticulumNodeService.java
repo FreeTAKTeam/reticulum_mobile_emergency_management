@@ -239,7 +239,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getStatusJson(), "{}");
+        return ReticulumBridge.getStatusJson();
     }
 
     public synchronized int connectPeer(String destinationHex) {
@@ -263,7 +263,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String sendLxmfJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.sendLxmfJson(payloadJson), "");
+        return ReticulumBridge.sendLxmfJson(payloadJson);
     }
 
     public synchronized int retryLxmfJson(String payloadJson) {
@@ -287,19 +287,19 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String listAnnouncesJson() {
-        return nonEmptyJson(ReticulumBridge.listAnnouncesJson(), "{\"items\":[]}");
+        return ReticulumBridge.listAnnouncesJson();
     }
 
     public synchronized String listPeersJson() {
-        return nonEmptyJson(ReticulumBridge.listPeersJson(), "{\"items\":[]}");
+        return ReticulumBridge.listPeersJson();
     }
 
     public synchronized String listConversationsJson() {
-        return nonEmptyJson(ReticulumBridge.listConversationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listConversationsJson();
     }
 
     public synchronized String listMessagesJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.listMessagesJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.listMessagesJson(payloadJson);
     }
 
     public synchronized int deleteConversationJson(String payloadJson) {
@@ -307,15 +307,15 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getLxmfSyncStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
+        return ReticulumBridge.getLxmfSyncStatusJson();
     }
 
     public synchronized String listTelemetryDestinationsJson() {
-        return nonEmptyJson(ReticulumBridge.listTelemetryDestinationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listTelemetryDestinationsJson();
     }
 
     public synchronized String legacyImportCompletedJson() {
-        return nonEmptyJson(ReticulumBridge.legacyImportCompletedJson(), "{\"completed\":false}");
+        return ReticulumBridge.legacyImportCompletedJson();
     }
 
     public synchronized int importLegacyStateJson(String payloadJson) {
@@ -323,7 +323,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getAppSettingsJson() {
-        return nonEmptyJson(ReticulumBridge.getAppSettingsJson(), "{}");
+        return ReticulumBridge.getAppSettingsJson();
     }
 
     public synchronized int setAppSettingsJson(String payloadJson) {
@@ -331,7 +331,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getSavedPeersJson() {
-        return nonEmptyJson(ReticulumBridge.getSavedPeersJson(), "{\"items\":[]}");
+        return ReticulumBridge.getSavedPeersJson();
     }
 
     public synchronized int setSavedPeersJson(String payloadJson) {
@@ -339,23 +339,23 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getOperationalSummaryJson() {
-        return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
+        return ReticulumBridge.getOperationalSummaryJson();
     }
 
     public synchronized String getChecklistsJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistsJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.getChecklistsJson(payloadJson);
     }
 
     public synchronized String getChecklistJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistJson(payloadJson), "{}");
+        return ReticulumBridge.getChecklistJson(payloadJson);
     }
 
     public synchronized String getChecklistTemplatesJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistTemplatesJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.getChecklistTemplatesJson(payloadJson);
     }
 
     public synchronized String importChecklistTemplateCsvJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.importChecklistTemplateCsvJson(payloadJson), "{}");
+        return ReticulumBridge.importChecklistTemplateCsvJson(payloadJson);
     }
 
     public synchronized int createChecklistFromTemplateJson(String payloadJson) {
@@ -403,7 +403,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getEamsJson() {
-        return nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getEamsJson();
     }
 
     public synchronized int upsertEamJson(String payloadJson) {
@@ -415,11 +415,11 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getEamTeamSummaryJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getEamTeamSummaryJson(payloadJson), "{}");
+        return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
     }
 
     public synchronized String getEventsJson() {
-        return nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getEventsJson();
     }
 
     public synchronized int upsertEventJson(String payloadJson) {
@@ -431,7 +431,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getTelemetryPositionsJson() {
-        return nonEmptyJson(ReticulumBridge.getTelemetryPositionsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getTelemetryPositionsJson();
     }
 
     public synchronized int recordLocalTelemetryFixJson(String payloadJson) {
@@ -443,7 +443,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getSosSettingsJson() {
-        return nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}");
+        return ReticulumBridge.getSosSettingsJson();
     }
 
     public synchronized int setSosSettingsJson(String payloadJson) {
@@ -459,18 +459,18 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getSosStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getSosStatusJson(), "{}");
+        return ReticulumBridge.getSosStatusJson();
     }
 
     public synchronized String triggerSosJson(String payloadJson) {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.submitTelemetrySnapshot();
         }
-        return nonEmptyJson(ReticulumBridge.triggerSosJson(payloadJson), "{}");
+        return ReticulumBridge.triggerSosJson(payloadJson);
     }
 
     public synchronized String deactivateSosJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.deactivateSosJson(payloadJson), "{}");
+        return ReticulumBridge.deactivateSosJson(payloadJson);
     }
 
     public synchronized int submitSosTelemetryJson(String payloadJson) {
@@ -478,23 +478,23 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String submitSosAccelerometerJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.submitSosAccelerometerJson(payloadJson), "{\"triggered\":false}");
+        return ReticulumBridge.submitSosAccelerometerJson(payloadJson);
     }
 
     public synchronized String submitSosScreenEventJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.submitSosScreenEventJson(payloadJson), "{\"triggered\":false}");
+        return ReticulumBridge.submitSosScreenEventJson(payloadJson);
     }
 
     public synchronized String listSosAlertsJson() {
-        return nonEmptyJson(ReticulumBridge.listSosAlertsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosAlertsJson();
     }
 
     public synchronized String listSosLocationsJson() {
-        return nonEmptyJson(ReticulumBridge.listSosLocationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosLocationsJson();
     }
 
     public synchronized String listSosAudioJson() {
-        return nonEmptyJson(ReticulumBridge.listSosAudioJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosAudioJson();
     }
 
     public synchronized int recordSosAudioJson(String payloadJson) {

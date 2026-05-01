@@ -80,7 +80,6 @@ type AppIcon =
   | "dashboard"
   | "events"
   | "map"
-  | "bio-sensors"
   | "more"
   | "peers"
   | "settings";
@@ -96,7 +95,7 @@ const menuOpen = shallowRef(false);
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/inbox", label: "Chat", icon: "chat" },
-  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Tasks", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
 ];
 
@@ -104,10 +103,9 @@ const menuItems: NavigationItem[] = [
   { path: "/inbox", label: "Chat", icon: "chat" },
   { path: "/messages", label: "Action Messages", icon: "action-messages" },
   { path: "/events", label: "Events", icon: "events" },
-  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Tasks", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
-  { path: "/bio-sensors", label: "Bio Sensors", icon: "bio-sensors" },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -144,11 +142,6 @@ const iconPaths: Record<AppIcon, string[]> = {
     "M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z",
     "M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z",
   ],
-  "bio-sensors": [
-    "M5 12h3l1.5-4 4 9 2-5H19",
-    "M4 19h16",
-    "M6 5h12",
-  ],
   more: [
     "M5 7h14",
     "M5 12h14",
@@ -178,16 +171,14 @@ const pageTitle = computed(() => {
       return "Events";
     case "inbox":
       return "Chat";
-    case "checlklist":
+    case "checklists":
       return "Tasks";
-    case "checlklist-detail":
+    case "checklist-detail":
       return "Checklist Detail";
     case "message-status-help":
       return "Status Help";
     case "peers":
       return "Peers";
-    case "bio-sensors":
-      return "Bio Sensors";
     case "settings":
       return "Settings";
     case "setup":
@@ -219,8 +210,11 @@ const connectedPeerCountTitle = computed(() => {
 });
 
 function isTabActive(path: string): boolean {
-  if (path === "/checlklist") {
-    return route.path === path || route.path.startsWith(`${path}/`) || route.path === "/checklists";
+  if (path === "/checklists") {
+    return route.path === path
+      || route.path.startsWith(`${path}/`)
+      || route.path === "/checlklist"
+      || route.path.startsWith("/checlklist/");
   }
   return route.path === path || route.path.startsWith(`${path}/`);
 }
@@ -230,7 +224,6 @@ const moreRouteNames = new Set([
   "events",
   "message-status-help",
   "peers",
-  "bio-sensors",
   "settings",
 ]);
 
@@ -295,23 +288,11 @@ watch(
         class="tools-menu"
         aria-label="More tools"
       >
-        <div class="tools-rail" aria-hidden="true">
-          <span
-            v-for="item in menuItems.slice(0, 5)"
-            :key="`rail-${item.path}`"
-            class="tools-rail-icon"
-          >
-            <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
-              <path
-                v-for="path in iconPaths[item.icon]"
-                :key="path"
-                :d="path"
-              />
-            </svg>
-          </span>
+        <header class="tools-header">
+          <h2>Tools</h2>
           <button
             type="button"
-            class="tools-close tools-close-rail"
+            class="tools-close"
             aria-label="Close more tools"
             @click="closeMenu"
           >
@@ -320,15 +301,6 @@ watch(
               <path d="M18 6 6 18" />
             </svg>
           </button>
-        </div>
-
-        <header class="tools-header">
-          <h2>Tools</h2>
-          <div class="tools-header-actions" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
         </header>
 
         <div class="tools-grid">
@@ -600,27 +572,15 @@ watch(
   z-index: 12;
 }
 
-.tools-rail {
-  align-items: center;
-  background: rgb(2 8 18 / 82%);
-  border-bottom: 1px solid rgb(89 126 181 / 26%);
-  display: grid;
-  gap: 0;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  min-height: 3.2rem;
-}
-
-.tools-rail-icon,
 .tools-close {
   align-items: center;
   color: #dff3ff;
   display: inline-flex;
   height: 3.2rem;
   justify-content: center;
-  width: 100%;
+  width: 3.2rem;
 }
 
-.tools-rail-icon .icon-svg,
 .tools-close .icon-svg {
   height: 1.65rem;
   width: 1.65rem;
@@ -657,21 +617,6 @@ watch(
   font-size: 1.45rem;
   letter-spacing: 0;
   margin: 0;
-}
-
-.tools-header-actions {
-  align-items: center;
-  display: inline-flex;
-  gap: 0.58rem;
-}
-
-.tools-header-actions span {
-  background: #b9e9ff;
-  border-radius: 999px;
-  box-shadow: 0 0 12px rgb(100 190 255 / 26%);
-  display: inline-block;
-  height: 0.42rem;
-  width: 0.42rem;
 }
 
 .tools-grid {

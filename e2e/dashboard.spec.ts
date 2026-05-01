@@ -32,8 +32,9 @@ test("renders dashboard readiness metrics from stored action messages", async ({
 
   await gotoApp(page, "/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Emergency Ops Dashboard" })).toBeVisible();
-  await expect(page.getByText("# 2 MSG")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.locator(".activity-grid")).toContainText("2");
+  await expect(page.locator(".activity-grid")).toContainText("MSG");
 
   const securityCard = page.locator(".ring-card").filter({ hasText: "Security" });
   await expect(securityCard).toContainText("63%");

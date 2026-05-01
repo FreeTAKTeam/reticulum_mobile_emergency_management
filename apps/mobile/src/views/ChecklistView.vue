@@ -199,7 +199,7 @@ function toggleMetadata(checklistId: string): void {
 
 function openChecklist(checklistId: string, edit = false): void {
   void router.push({
-    name: "checlklist-detail",
+    name: "checklist-detail",
     params: { checklistId },
     query: edit ? { edit: "1" } : undefined,
   });

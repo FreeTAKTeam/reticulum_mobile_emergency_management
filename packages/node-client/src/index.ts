@@ -137,12 +137,10 @@ export interface PacketReceivedEvent {
   destinationHex: string;
   sourceHex?: string;
   bytes: Uint8Array;
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
 }
 
 export interface PacketSendOptions {
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
   sendMode?: SendMode;
 }
@@ -875,7 +873,6 @@ interface ReticulumNodePlugin {
   send(options: {
     destinationHex: string;
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
     sendMode?: SendMode;
   }): Promise<void>;
@@ -889,7 +886,6 @@ interface ReticulumNodePlugin {
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
   }): Promise<void>;
   setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
@@ -1330,23 +1326,6 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
 }
 
 
-function toDedicatedFields(raw: unknown): Record<string, string> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === "string") {
-      out[String(key)] = value;
-      continue;
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      out[String(key)] = String(value);
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function toPacketReceivedEvent(
   raw: Record<string, unknown>,
 ): PacketReceivedEvent {
@@ -1360,7 +1339,6 @@ function toPacketReceivedEvent(
         ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
         : undefined,
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
-    dedicatedFields: toDedicatedFields(raw.dedicatedFields ?? raw.dedicated_fields),
     fieldsBase64:
       typeof raw.fieldsBase64 === "string"
         ? raw.fieldsBase64
@@ -3138,7 +3116,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.send({
       destinationHex: normalizeHex(destinationHex),
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
       sendMode: options?.sendMode,
     });
@@ -3169,7 +3146,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     await this.plugin.broadcast({
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
     });
   }

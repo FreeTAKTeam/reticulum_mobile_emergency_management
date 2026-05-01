@@ -56,11 +56,11 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   const rotatedUpdatedAt = await updatedAtFor("Bravo-2");
   expect(rotatedUpdatedAt).toBeGreaterThan(editedUpdatedAt);
 
-  await page.getByRole("button", { name: "Open status color help" }).click();
+  await page.getByRole("link", { name: "Open status color help" }).click();
   await expect(page).toHaveURL(/\/messages\/help$/);
-  await expect(page.getByRole("heading", { name: "Help - Status Color Indicators" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Status Help" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Back to Messages" }).click();
+  await page.getByRole("link", { name: "Messages" }).click();
   await messageCard.getByRole("button", { name: "Delete Bravo-2" }).click();
   await expect(page.getByRole("heading", { name: "Bravo-2" })).toHaveCount(0);
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DEFAULT_SOS_SETTINGS, type SosSettingsRecord } from "@reticulum/node-client";
-import { computed, defineExpose, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
 import { useSosStore } from "../../stores/sosStore";
 

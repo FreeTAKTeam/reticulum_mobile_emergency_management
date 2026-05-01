@@ -157,7 +157,6 @@ interface UiLogLine {
   message: string;
 }
 
-type DedicatedFields = Record<string, string>;
 type EventPeerRoute = {
   appDestinationHex: string;
   lxmfDestinationHex: string;
@@ -167,7 +166,6 @@ type EventPeerRoute = {
   sendMode: SendMode;
 };
 type PacketSendOptions = {
-  dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
   sendMode?: SendMode;
 };
@@ -2768,18 +2766,17 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+  async function broadcastJson(payload: unknown): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await broadcastBytes(body, { dedicatedFields });
+    await broadcastBytes(body);
   }
 
   async function sendJson(
     destinationHex: string,
     payload: unknown,
-    dedicatedFields?: DedicatedFields,
   ): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await sendBytes(destinationHex, body, { dedicatedFields });
+    await sendBytes(destinationHex, body);
   }
 
   async function reinitializeClient(): Promise<void> {

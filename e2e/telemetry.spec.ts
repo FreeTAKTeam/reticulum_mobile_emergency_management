@@ -24,6 +24,8 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
       telemetry: {
         enabled: false,
         publishIntervalSeconds: 10,
+        staleAfterMinutes: 5,
+        expireAfterMinutes: 10,
       },
     },
     telemetry: [
@@ -50,11 +52,12 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
   });
 
   await gotoApp(page, "/dashboard");
-  await page.getByRole("link", { name: "Telemetry" }).click();
+  await page.getByRole("link", { name: "Map" }).click();
 
   await expect(page).toHaveURL(/\/telemetry$/);
-  await expect(page.getByRole("heading", { name: "Telemetry Map" })).toBeVisible();
-  await expect(page.getByText("Last update: < 1 min ago")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Map" })).toBeVisible();
+  await expect(page.getByText("1 Live")).toBeVisible();
+  await expect(page.getByText("Stale: 1")).toBeVisible();
   await expect(page.locator(".map-container .maplibregl-canvas")).toBeVisible();
 
   await expect(page.locator(".telemetry-marker")).toHaveCount(2);
