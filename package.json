@@ -1,7 +1,7 @@
 {
   "name": "reticulum_mobile_emergency_management",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "workspaces": [
     "apps/*",
     "packages/*"
