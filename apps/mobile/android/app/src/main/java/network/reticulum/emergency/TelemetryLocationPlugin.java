@@ -40,8 +40,10 @@ import java.util.List;
 public class TelemetryLocationPlugin extends Plugin {
     static final String LOCATION_ALIAS = "location";
     static final String COARSE_LOCATION_ALIAS = "coarseLocation";
+    private static final String FUSED_PROVIDER = "fused";
     private static final long DEFAULT_TIMEOUT_MS = 15_000L;
     private static final long DEFAULT_MAXIMUM_AGE_MS = 5_000L;
+    private static final long FALLBACK_MAXIMUM_AGE_MS = 10L * 60L * 1000L;
 
     @PluginMethod
     @Override
@@ -108,7 +110,13 @@ public class TelemetryLocationPlugin extends Plugin {
             return;
         }
 
-        new SingleFixRequest(call, locationManager, providers, timeoutMs).start();
+        final Location fallbackLocation = findBestLastKnownLocation(
+            locationManager,
+            providers,
+            Math.max(maximumAgeMs, FALLBACK_MAXIMUM_AGE_MS)
+        );
+
+        new SingleFixRequest(call, locationManager, providers, timeoutMs, fallbackLocation).start();
     }
 
     private String getAlias(PluginCall call) {
@@ -137,15 +145,22 @@ public class TelemetryLocationPlugin extends Plugin {
         final List<String> providers = new ArrayList<>();
         final boolean gpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
         final boolean networkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        final boolean fusedEnabled = isProviderEnabled(locationManager, FUSED_PROVIDER);
 
         if (enableHighAccuracy) {
             if (gpsEnabled) {
                 providers.add(LocationManager.GPS_PROVIDER);
             }
-            if (!gpsEnabled && networkEnabled) {
+            if (fusedEnabled) {
+                providers.add(FUSED_PROVIDER);
+            }
+            if (networkEnabled) {
                 providers.add(LocationManager.NETWORK_PROVIDER);
             }
         } else {
+            if (fusedEnabled) {
+                providers.add(FUSED_PROVIDER);
+            }
             if (networkEnabled) {
                 providers.add(LocationManager.NETWORK_PROVIDER);
             }
@@ -157,10 +172,21 @@ public class TelemetryLocationPlugin extends Plugin {
         if (providers.isEmpty() && gpsEnabled) {
             providers.add(LocationManager.GPS_PROVIDER);
         }
+        if (providers.isEmpty() && fusedEnabled) {
+            providers.add(FUSED_PROVIDER);
+        }
         if (providers.isEmpty() && networkEnabled) {
             providers.add(LocationManager.NETWORK_PROVIDER);
         }
         return providers;
+    }
+
+    private static boolean isProviderEnabled(LocationManager locationManager, String provider) {
+        try {
+            return locationManager.getAllProviders().contains(provider) && locationManager.isProviderEnabled(provider);
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     private Location findBestLastKnownLocation(
@@ -222,6 +248,7 @@ public class TelemetryLocationPlugin extends Plugin {
         private final LocationManager locationManager;
         private final List<String> providers;
         private final long timeoutMs;
+        private final Location fallbackLocation;
         private final Handler handler = new Handler(Looper.getMainLooper());
         private boolean finished = false;
 
@@ -229,12 +256,14 @@ public class TelemetryLocationPlugin extends Plugin {
             PluginCall call,
             LocationManager locationManager,
             List<String> providers,
-            long timeoutMs
+            long timeoutMs,
+            Location fallbackLocation
         ) {
             this.call = call;
             this.locationManager = locationManager;
             this.providers = providers;
             this.timeoutMs = timeoutMs;
+            this.fallbackLocation = fallbackLocation;
         }
 
         void start() {
@@ -250,7 +279,7 @@ public class TelemetryLocationPlugin extends Plugin {
                 return;
             }
 
-            handler.postDelayed(() -> finishWithError("Unable to read device location."), timeoutMs);
+            handler.postDelayed(this::finishWithFallbackOrError, timeoutMs);
         }
 
         @Override
@@ -295,6 +324,14 @@ public class TelemetryLocationPlugin extends Plugin {
             finished = true;
             cleanup();
             call.reject(message);
+        }
+
+        private void finishWithFallbackOrError() {
+            if (fallbackLocation != null) {
+                finishWithSuccess(fallbackLocation);
+                return;
+            }
+            finishWithError("Unable to read device location.");
         }
 
         private void cleanup() {

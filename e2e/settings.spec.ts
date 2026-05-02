@@ -109,6 +109,36 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 
+test("telemetry publish interval above 60 seconds activates save and persists", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      telemetry: {
+        ...defaultSettings.telemetry,
+        publishIntervalSeconds: 10,
+      },
+    },
+  });
+
+  await gotoApp(page, "/settings");
+
+  const telemetryPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Telemetry" }),
+  });
+
+  await telemetryPanel.locator("summary").click();
+  await telemetryPanel.getByLabel("Telemetry publish interval (seconds)").fill("120");
+
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
+  expect(storedSettings.telemetry.publishIntervalSeconds).toBe(120);
+});
+
 test("RCH hub directory is disabled and coerces persisted mode to autonomous", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {

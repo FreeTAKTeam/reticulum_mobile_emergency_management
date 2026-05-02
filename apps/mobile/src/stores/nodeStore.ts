@@ -313,9 +313,9 @@ function normalizeTelemetrySettings(
   return {
     ...base,
     ...telemetry,
-    publishIntervalSeconds: Math.min(
-      60,
-      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds)),
+    publishIntervalSeconds: Math.max(
+      1,
+      Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds),
     ),
     accuracyThresholdMeters:
       telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null

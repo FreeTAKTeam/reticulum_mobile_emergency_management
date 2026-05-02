@@ -250,7 +250,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     telemetryError.value = "";
 
     await publishOnce();
-    const intervalMs = Math.max(5, nodeStore.settings.telemetry.publishIntervalSeconds) * 1000;
+    const intervalMs = Math.max(1, nodeStore.settings.telemetry.publishIntervalSeconds) * 1000;
     loopTimer.value = window.setInterval(() => {
       void publishOnce();
     }, intervalMs);

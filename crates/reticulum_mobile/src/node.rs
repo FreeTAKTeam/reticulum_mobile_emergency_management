@@ -1779,6 +1779,68 @@ fn build_event_replication_payload(
     Ok((body, fields_bytes))
 }
 
+fn build_telemetry_replication_payload(
+    position: &TelemetryPositionRecord,
+    target: &MissionReplicationTarget,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let callsign = position.callsign.trim();
+    if callsign.is_empty() || !position.lat.is_finite() || !position.lon.is_finite() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let send_ts_ms = now_ms();
+    let correlation_id = format!(
+        "telemetry-upsert-{}-{}-{send_ts_ms}",
+        sanitize_correlation_token(callsign),
+        &target.app_destination_hex[..8],
+    );
+    let command_id = format!("cmd-{correlation_id}");
+    let body = format!(
+        "Telemetry {} {:.6},{:.6}",
+        callsign, position.lat, position.lon
+    )
+    .into_bytes();
+    let fields = build_mission_command_fields(
+        command_id.as_str(),
+        correlation_id.as_str(),
+        "mission.registry.telemetry.upsert",
+        vec![
+            ("callsign", MsgPackValue::from(callsign)),
+            ("lat", MsgPackValue::from(position.lat)),
+            ("lon", MsgPackValue::from(position.lon)),
+            ("updated_at_ms", MsgPackValue::from(position.updated_at_ms)),
+        ]
+        .into_iter()
+        .chain(
+            position
+                .alt
+                .map(|value| ("alt", MsgPackValue::from(value)))
+                .into_iter(),
+        )
+        .chain(
+            position
+                .course
+                .map(|value| ("course", MsgPackValue::from(value)))
+                .into_iter(),
+        )
+        .chain(
+            position
+                .speed
+                .map(|value| ("speed", MsgPackValue::from(value)))
+                .into_iter(),
+        )
+        .chain(
+            position
+                .accuracy
+                .map(|value| ("accuracy", MsgPackValue::from(value)))
+                .into_iter(),
+        )
+        .collect(),
+    )?;
+
+    Ok((body, fields))
+}
+
 fn emit_sos_status(
     app_state: &AppStateStore,
     bus: &EventBus,
@@ -4340,15 +4402,80 @@ impl Node {
         &self,
         position: TelemetryPositionRecord,
     ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        let summary = inner.app_state.bump_projection_revision(
-            ProjectionScope::OperationalSummary {},
-            None,
-            Some("telemetry-upserted".to_string()),
-        )?;
-        emit_projection_invalidation(&inner.bus, summary);
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
+            emit_projection_invalidation(&inner.bus, invalidation);
+            let summary = inner.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("telemetry-upserted".to_string()),
+            )?;
+            emit_projection_invalidation(&inner.bus, summary);
+
+            if inner.cmd_tx.is_some() {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let hub_directory_snapshot = inner
+                    .hub_directory_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let telemetry_destinations = build_runtime_telemetry_destinations(
+                    &status,
+                    peers.as_slice(),
+                    inner.active_config.as_ref(),
+                    hub_directory_snapshot.as_ref(),
+                )?;
+                for destination_hex in telemetry_destinations {
+                    let target = MissionReplicationTarget {
+                        app_destination_hex: destination_hex,
+                        send_mode: SendMode::Auto {},
+                    };
+                    match build_telemetry_replication_payload(&position, &target) {
+                        Ok((body, fields)) => scheduled_sends.push((
+                            target.app_destination_hex,
+                            body,
+                            fields,
+                            target.send_mode,
+                        )),
+                        Err(err) => inner.bus.emit(NodeEvent::Error {
+                            code: "InvalidConfig".to_string(),
+                            message: format!(
+                                "telemetry replication skipped destination={} callsign={} reason={}",
+                                target.app_destination_hex, position.callsign, err
+                            ),
+                        }),
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "telemetry replication enqueue failed destination={} callsign={} reason={}",
+                        destination_hex, position.callsign, err
+                    ),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -6487,6 +6614,150 @@ mod tests {
             received.team_member_uid.as_deref(),
             record.team_member_uid.as_deref()
         );
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_built_telemetry_replication_payload_is_persisted_by_receiver() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("telemetry_payload_projection").await;
+
+        let node_b_status = node_b.get_status();
+        let position = TelemetryPositionRecord {
+            callsign: "PixelManualMonitor".to_string(),
+            lat: 43.9674,
+            lon: -66.1261,
+            alt: Some(10.0),
+            course: Some(0.0),
+            speed: Some(0.0),
+            accuracy: Some(5.0),
+            updated_at_ms: now_ms(),
+        };
+        let target = MissionReplicationTarget {
+            app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
+        };
+        let (body, fields) =
+            build_telemetry_replication_payload(&position, &target).expect("telemetry payload");
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                body,
+                Some(fields),
+                SendMode::Auto {},
+            )
+            .expect("send telemetry replication payload");
+
+        let received_deadline = Instant::now() + TEST_TIMEOUT;
+        let received = loop {
+            let received = node_b
+                .get_telemetry_positions()
+                .expect("get telemetry")
+                .into_iter()
+                .find(|entry| entry.callsign == position.callsign);
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted direct telemetry replication payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(received.callsign, position.callsign);
+        assert_eq!(received.lat, position.lat);
+        assert_eq!(received.lon, position.lon);
+        assert_eq!(received.accuracy, position.accuracy);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
+        const TELEMETRY_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("telemetry_projection").await;
+
+        let node_b_status = node_b.get_status();
+        node_a
+            .connect_peer(node_b_status.app_destination_hex.clone())
+            .expect("connect peer b");
+
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm telemetry link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm telemetry link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm telemetry link")
+        })
+        .expect("node b received telemetry warmup message");
+
+        let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let peer_ready = node_a
+                .list_peers()
+                .expect("list peers")
+                .into_iter()
+                .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
+                .is_some_and(|peer| peer.active_link);
+            if peer_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became telemetry-ready"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let position = TelemetryPositionRecord {
+            callsign: "PixelManualMonitor".to_string(),
+            lat: 43.9674,
+            lon: -66.1261,
+            alt: Some(10.0),
+            course: Some(0.0),
+            speed: Some(0.0),
+            accuracy: Some(5.0),
+            updated_at_ms: now_ms(),
+        };
+
+        node_a
+            .record_local_telemetry_fix(position.clone())
+            .expect("record local telemetry");
+
+        let received_deadline = Instant::now() + TELEMETRY_REPLICATION_TIMEOUT;
+        let received = loop {
+            let received = node_b
+                .get_telemetry_positions()
+                .expect("get telemetry")
+                .into_iter()
+                .find(|entry| entry.callsign == position.callsign);
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted replicated telemetry"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(received.callsign, position.callsign);
+        assert_eq!(received.lat, position.lat);
+        assert_eq!(received.lon, position.lon);
+        assert_eq!(received.updated_at_ms, position.updated_at_ms);
 
         stop_node(node_a).await;
         stop_node(node_b).await;

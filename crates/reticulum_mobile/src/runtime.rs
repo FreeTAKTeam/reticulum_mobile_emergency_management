@@ -534,6 +534,92 @@ fn event_projection_from_fields(
     None
 }
 
+fn telemetry_position_from_fields(
+    fields_bytes: &[u8],
+    received_at_ms: u64,
+) -> Option<TelemetryPositionRecord> {
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
+    let field_entries = msgpack_map_entries(&fields)?;
+    let commands = msgpack_get_indexed(field_entries, FIELD_COMMANDS)?;
+    let MsgPackValue::Array(command_entries) = commands else {
+        return None;
+    };
+
+    for command in command_entries {
+        let command_map = msgpack_map_entries(command)?;
+        let command_type =
+            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        if command_type != "mission.registry.telemetry.upsert" {
+            continue;
+        }
+        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
+        let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
+        let lat = msgpack_get_named(args, &["lat"]).and_then(msgpack_f64)?;
+        let lon = msgpack_get_named(args, &["lon"]).and_then(msgpack_f64)?;
+        if callsign.trim().is_empty() || !lat.is_finite() || !lon.is_finite() {
+            return None;
+        }
+        return Some(TelemetryPositionRecord {
+            callsign: callsign.trim().to_string(),
+            lat,
+            lon,
+            alt: msgpack_get_named(args, &["alt"]).and_then(msgpack_f64),
+            course: msgpack_get_named(args, &["course"]).and_then(msgpack_f64),
+            speed: msgpack_get_named(args, &["speed"]).and_then(msgpack_f64),
+            accuracy: msgpack_get_named(args, &["accuracy"]).and_then(msgpack_f64),
+            updated_at_ms: msgpack_get_named(args, &["updated_at_ms", "updatedAt"])
+                .and_then(msgpack_u64)
+                .unwrap_or(received_at_ms),
+        });
+    }
+
+    None
+}
+
+async fn persist_received_telemetry_if_present(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    metadata: Option<&MissionSyncMetadata>,
+    fields_bytes: Option<&[u8]>,
+) {
+    if !metadata
+        .and_then(|value| value.command_type.as_deref())
+        .is_some_and(|value| value == "mission.registry.telemetry.upsert")
+    {
+        return;
+    }
+
+    let Some(record) =
+        fields_bytes.and_then(|value| telemetry_position_from_fields(value, now_ms()))
+    else {
+        return;
+    };
+
+    match state.app_state.record_local_telemetry_fix(&record) {
+        Ok(invalidation) => {
+            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            if let Ok(summary) = state.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("telemetry-received".to_string()),
+            ) {
+                bus.emit(NodeEvent::ProjectionInvalidated {
+                    invalidation: summary,
+                });
+            }
+        }
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist inbound telemetry callsign={} reason={}",
+                    record.callsign, err
+                ),
+            });
+        }
+    }
+}
+
 async fn persist_received_event_if_present(
     state: &NodeRuntimeState,
     bus: &EventBus,
@@ -4360,6 +4446,13 @@ async fn emit_received_payload(
             .await;
             persist_received_event_if_present(state, bus, Some(metadata), fields_bytes.as_deref())
                 .await;
+            persist_received_telemetry_if_present(
+                state,
+                bus,
+                Some(metadata),
+                fields_bytes.as_deref(),
+            )
+            .await;
             persist_received_checklist_if_present(
                 state,
                 bus,

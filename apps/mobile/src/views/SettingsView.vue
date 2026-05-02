@@ -190,6 +190,11 @@ const persistedTcpClients = computed(() =>
   ],
 );
 
+function normalizeTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
+  const parsed = Number(value ?? 60);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 60;
+}
+
 const hasMainSettingsChanges = computed(() =>
   form.displayName !== nodeStore.settings.displayName
   || form.clientMode !== nodeStore.settings.clientMode
@@ -198,7 +203,7 @@ const hasMainSettingsChanges = computed(() =>
   || form.broadcast !== nodeStore.settings.broadcast
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
-  || Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60)))
+  || normalizeTelemetryPublishIntervalSeconds(form.telemetryPublishIntervalSeconds)
     !== nodeStore.settings.telemetry.publishIntervalSeconds
   || (
     form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
@@ -309,7 +314,9 @@ async function applySettings(): Promise<void> {
       broadcast: form.broadcast,
       telemetry: {
         enabled: form.telemetryEnabled,
-        publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60))),
+        publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
+          form.telemetryPublishIntervalSeconds,
+        ),
         accuracyThresholdMeters:
           form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
             ? undefined
@@ -593,7 +600,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </div>
     </details>
 
-    <details class="panel fold-panel" :aria-disabled="rchHubDirectoryDisabled">
+    <details class="panel fold-panel">
       <summary class="panel-summary">
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
@@ -617,7 +624,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Telemetry publish interval (seconds)
-            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="5" max="60" />
+            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="1" />
           </label>
           <label>
             Telemetry accuracy threshold (meters, optional)
