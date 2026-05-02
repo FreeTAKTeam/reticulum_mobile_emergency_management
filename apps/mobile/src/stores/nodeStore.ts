@@ -21,6 +21,7 @@ import {
   type ReticulumNodeClient,
   type SosAudioRecord,
   type StatusChangedEvent,
+  generateDefaultCallSign,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
@@ -121,6 +122,8 @@ interface HubAnnounceCandidate {
   destination: string;
   label: string;
 }
+
+const LEGACY_DEFAULT_DISPLAY_NAME = "emergency-ops-mobile";
 
 const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
@@ -294,7 +297,11 @@ function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
 }
 
 function normalizeStoredDisplayName(value: unknown): string {
-  return normalizeDisplayName(typeof value === "string" ? value : "") ?? DEFAULT_SETTINGS.displayName;
+  const normalized = normalizeDisplayName(typeof value === "string" ? value : "");
+  if (!normalized || normalized.toLowerCase() === LEGACY_DEFAULT_DISPLAY_NAME) {
+    return generateDefaultCallSign();
+  }
+  return normalized;
 }
 
 function normalizeTelemetrySettings(
@@ -406,6 +413,10 @@ function hubModeWasCoerced(left: AppSettingsRecord, right: AppSettingsRecord): b
   return left.hub.mode !== right.hub.mode;
 }
 
+function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -465,7 +476,7 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
 }
 
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
-  const displayName = normalizeDisplayName(settings.displayName) ?? DEFAULT_NODE_CONFIG.name;
+  const displayName = normalizeStoredDisplayName(settings.displayName);
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
@@ -1027,7 +1038,7 @@ export const useNodeStore = defineStore("node", () => {
         );
         applySettingsProjection(normalizedSettings);
         const normalizedRecord = toAppSettingsRecord(normalizedSettings);
-        if (hubModeWasCoerced(record, normalizedRecord)) {
+        if (settingsRecordWasNormalized(record, normalizedRecord)) {
           await client.value!.setAppSettings(normalizedRecord);
         }
       }

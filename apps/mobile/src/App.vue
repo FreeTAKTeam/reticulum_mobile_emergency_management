@@ -49,7 +49,9 @@ onMounted(async () => {
     }
     await nodeStore.init();
     await messagingStore.init();
-    await nodeStore.startNode();
+    if (setupCompleted) {
+      await nodeStore.startNode();
+    }
     await messagingStore.hydrateStartupHistory();
 
     messagesStore.init();

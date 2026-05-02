@@ -783,8 +783,41 @@ export interface ReticulumNodeClientFactoryOptions {
   mode?: "auto" | "capacitor" | "web";
 }
 
+const GREEK_CALLSIGN_PREFIXES = [
+  "Alpha",
+  "Beta",
+  "Gamma",
+  "Delta",
+  "Epsilon",
+  "Zeta",
+  "Eta",
+  "Theta",
+  "Iota",
+  "Kappa",
+  "Lambda",
+  "Mu",
+  "Nu",
+  "Xi",
+  "Omicron",
+  "Pi",
+  "Rho",
+  "Sigma",
+  "Tau",
+  "Upsilon",
+  "Phi",
+  "Chi",
+  "Psi",
+  "Omega",
+] as const;
+
+export function generateDefaultCallSign(): string {
+  const prefix = GREEK_CALLSIGN_PREFIXES[Math.floor(Math.random() * GREEK_CALLSIGN_PREFIXES.length)];
+  const suffix = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
+  return `${prefix}${suffix}`;
+}
+
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
-  name: "emergency-ops-mobile",
+  name: generateDefaultCallSign(),
   tcpClients: [],
   broadcast: true,
   announceIntervalSeconds: 1800,

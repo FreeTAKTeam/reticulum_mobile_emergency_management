@@ -200,6 +200,7 @@ export function useSetupWizard() {
         permissions.location = await requestLocationPermission();
       }
       markSetupWizardCompleted();
+      await nodeStore.startNode();
       await router.replace("/dashboard");
     } catch (error: unknown) {
       feedback.value = error instanceof Error ? error.message : String(error);

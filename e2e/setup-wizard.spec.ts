@@ -3,6 +3,8 @@ import { expect, test } from "@playwright/test";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINT } from "../apps/mobile/src/utils/tcpCommunityServers";
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
+const GREEK_CALLSIGN_PATTERN = /^(Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)\d{3}$/;
+
 test("first start redirects to setup wizard", async ({ page }) => {
   await seedAppStorage(page, {
     setupWizardCompleted: false,
@@ -12,6 +14,16 @@ test("first start redirects to setup wizard", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/setup$/);
   await expect(page.getByRole("heading", { name: "Reticulum Emergency Manager" })).toBeVisible();
+
+  const status = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().status;
+  });
+  expect(status.running).toBe(false);
+  expect(status.name).toBe("");
+
+  await page.getByRole("button", { name: "Start Setup" }).click();
+  await expect(page.getByTestId("setup-callsign")).toHaveValue(GREEK_CALLSIGN_PATTERN);
 });
 
 test("operators complete first-run setup and persist core choices", async ({ page }) => {
@@ -19,7 +31,6 @@ test("operators complete first-run setup and persist core choices", async ({ pag
     setupWizardCompleted: false,
     settings: {
       ...defaultSettings,
-      displayName: "emergency-ops-mobile",
       tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
     },
   });
@@ -58,10 +69,16 @@ test("operators complete first-run setup and persist core choices", async ({ pag
       floatingButton: store.settings.floatingButton,
     };
   });
+  const status = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().status;
+  });
 
   expect(storedSettings.displayName).toBe("Atlas-9");
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
   expect(storedSettings.telemetry.enabled).toBe(true);
+  expect(status.running).toBe(true);
+  expect(status.name).toBe("Atlas-9");
   expect(sosSettings).toEqual({
     enabled: true,
     floatingButton: true,

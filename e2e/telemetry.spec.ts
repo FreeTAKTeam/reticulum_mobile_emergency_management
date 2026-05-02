@@ -38,8 +38,8 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
       },
       {
         callsign: "Relay-3",
-        lat: 44.6713,
-        lon: -63.6117,
+        lat: 44.6488,
+        lon: -63.5752,
         updatedAt: now - 6 * 60_000,
       },
       {
@@ -56,13 +56,41 @@ test("telemetry map shows live and stale markers while filtering expired fixes",
 
   await expect(page).toHaveURL(/\/telemetry$/);
   await expect(page.getByRole("heading", { name: "Map" })).toBeVisible();
-  await expect(page.getByText("1 Live")).toBeVisible();
-  await expect(page.getByText("Stale: 1")).toBeVisible();
+  await expect(page.locator('[aria-label="Live telemetry: 1"]')).toBeVisible();
+  await expect(page.locator('[aria-label="Stale telemetry: 1"]')).toBeVisible();
+  await expect(page.locator('[aria-label="SOS alerts: 0"]')).toBeVisible();
+  await expect(page.getByText("1 Live")).toHaveCount(0);
+  await expect(page.getByText("Stale: 1")).toHaveCount(0);
+  await expect(page.getByText("SOS: 0")).toHaveCount(0);
+  await expect(page.getByText("Base Map")).toHaveCount(0);
   await expect(page.locator(".map-container .maplibregl-canvas")).toBeVisible();
+  const bottomGap = await page.locator(".telemetry-view").evaluate((view) => {
+    const content = view.closest("main");
+    if (!content) {
+      return Number.POSITIVE_INFINITY;
+    }
+    const contentRect = content.getBoundingClientRect();
+    const viewRect = view.getBoundingClientRect();
+    return Math.abs(contentRect.bottom - viewRect.bottom);
+  });
+  expect(bottomGap).toBeLessThanOrEqual(2);
+
+  const layerButton = page.getByRole("button", { name: "Map layer: Base" });
+  await expect(layerButton).toHaveAttribute("data-map-layer", "base");
+  await layerButton.click();
+  await expect(page.getByRole("menuitemradio", { name: "Base" })).toBeVisible();
+  await page.getByRole("menuitemradio", { name: "Satellite" }).click();
+  await expect(page.getByRole("button", { name: "Map layer: Satellite" })).toHaveAttribute(
+    "data-map-layer",
+    "satellite",
+  );
 
   await expect(page.locator(".telemetry-marker")).toHaveCount(2);
   await expect(page.locator('.telemetry-marker.is-live[title="Rescue-1"]')).toBeVisible();
   await expect(page.locator('.telemetry-marker.is-stale[title="Relay-3"]')).toBeVisible();
+  await expect(page.locator('.telemetry-marker.is-overlapped[data-overlap-count="2"]')).toHaveCount(2);
+  await expect(page.locator(".telemetry-marker-label", { hasText: "Rescue-1" })).toBeVisible();
+  await expect(page.locator(".telemetry-marker-label", { hasText: "Relay-3" })).toBeVisible();
   await expect(page.locator('.telemetry-marker[title="Expired-9"]')).toHaveCount(0);
 
   await page.locator('.telemetry-marker[title="Rescue-1"]').click();

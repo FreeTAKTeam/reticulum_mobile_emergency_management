@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import maplibregl, { Marker, type LngLatLike, type Map as MapLibreMap } from "maplibre-gl";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import maplibregl, {
+  Marker,
+  type LngLatLike,
+  type Map as MapLibreMap,
+  type StyleSpecification,
+} from "maplibre-gl";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import type { TelemetryPosition } from "../types/domain";
@@ -26,10 +31,57 @@ const sosMarkersByKey = new Map<string, Marker>();
 const sosMarkerElementsByKey = new Map<string, HTMLDivElement>();
 let lastFocusedSosTargetKey = "";
 
+type MapLayerId = "base" | "satellite";
+
 interface SosRouteTarget {
   incidentId: string;
   sourceHex: string;
   messageIdHex?: string;
+}
+
+interface MarkerLabelPlacement {
+  stackIndex: number;
+  stackSize: number;
+}
+
+const BASE_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const mapLayerOptions: Array<{ id: MapLayerId; label: string }> = [
+  { id: "base", label: "Base" },
+  { id: "satellite", label: "Satellite" },
+];
+
+const selectedMapLayer = shallowRef<MapLayerId>("base");
+const layerMenuOpen = shallowRef(false);
+
+const activeMapLayerLabel = computed(
+  () => mapLayerOptions.find((option) => option.id === selectedMapLayer.value)?.label ?? "Base",
+);
+
+function satelliteMapStyle(): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      "esri-world-imagery": {
+        type: "raster",
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        ],
+        tileSize: 256,
+        attribution: "Tiles &copy; Esri",
+      },
+    },
+    layers: [
+      {
+        id: "esri-world-imagery",
+        type: "raster",
+        source: "esri-world-imagery",
+      },
+    ],
+  };
+}
+
+function mapStyleFor(layer: MapLayerId): string | StyleSpecification {
+  return layer === "satellite" ? satelliteMapStyle() : BASE_MAP_STYLE_URL;
 }
 
 function safeTrim(value: unknown): string {
@@ -114,6 +166,45 @@ function positionLabel(position: TelemetryPosition): string {
   return safeTrim(peer?.announcedName) || safeTrim(peer?.label) || position.callsign;
 }
 
+function telemetryMarkerKey(position: TelemetryPosition): string {
+  return position.callsign.toLowerCase();
+}
+
+function telemetryCoordinateKey(position: TelemetryPosition): string {
+  return `${position.lat}:${position.lon}`;
+}
+
+function labelPlacementsFor(positions: TelemetryPosition[]): Map<string, MarkerLabelPlacement> {
+  const groups = new Map<string, TelemetryPosition[]>();
+  for (const position of positions) {
+    const coordinateKey = telemetryCoordinateKey(position);
+    groups.set(coordinateKey, [...(groups.get(coordinateKey) ?? []), position]);
+  }
+
+  const placements = new Map<string, MarkerLabelPlacement>();
+  for (const group of groups.values()) {
+    group.forEach((position, stackIndex) => {
+      placements.set(telemetryMarkerKey(position), {
+        stackIndex,
+        stackSize: group.length,
+      });
+    });
+  }
+  return placements;
+}
+
+function ensureMarkerLabelElement(markerElement: HTMLDivElement): HTMLSpanElement {
+  const existing = markerElement.querySelector<HTMLSpanElement>(".telemetry-marker-label");
+  if (existing) {
+    return existing;
+  }
+
+  const labelElement = document.createElement("span");
+  labelElement.className = "telemetry-marker-label";
+  markerElement.append(labelElement);
+  return labelElement;
+}
+
 function popupHtml(position: TelemetryPosition): string {
   const label = positionLabel(position);
   const identityLine =
@@ -134,9 +225,12 @@ function syncMarkers(positions: TelemetryPosition[]): void {
   }
 
   const active = new Set<string>();
+  const labelPlacements = labelPlacementsFor(positions);
 
   for (const position of positions) {
-    const key = position.callsign.toLowerCase();
+    const key = telemetryMarkerKey(position);
+    const label = positionLabel(position);
+    const placement = labelPlacements.get(key) ?? { stackIndex: 0, stackSize: 1 };
     active.add(key);
 
     let marker = markersByCallsign.get(key);
@@ -145,7 +239,7 @@ function syncMarkers(positions: TelemetryPosition[]): void {
     if (!marker || !markerElement) {
       markerElement = document.createElement("div");
       markerElement.className = "telemetry-marker";
-      markerElement.title = positionLabel(position);
+      markerElement.title = label;
 
       marker = new maplibregl.Marker({ element: markerElement })
         .setLngLat([position.lon, position.lat] as LngLatLike)
@@ -157,11 +251,16 @@ function syncMarkers(positions: TelemetryPosition[]): void {
     } else {
       marker.setLngLat([position.lon, position.lat] as LngLatLike);
       marker.getPopup()?.setHTML(popupHtml(position));
-      markerElement.title = positionLabel(position);
+      markerElement.title = label;
     }
 
+    const labelElement = ensureMarkerLabelElement(markerElement);
+    labelElement.textContent = label;
+    markerElement.dataset.overlapCount = String(placement.stackSize);
+    markerElement.style.setProperty("--label-offset-y", `${placement.stackIndex * 1.42}rem`);
     markerElement.classList.remove("is-live", "is-stale");
     markerElement.classList.add(markerStatusClass(position));
+    markerElement.classList.toggle("is-overlapped", placement.stackSize > 1);
   }
 
   for (const [key, marker] of markersByCallsign.entries()) {
@@ -301,11 +400,36 @@ function syncSosTrails(): void {
   }
 }
 
+function syncSosTrailsWhenStyleReady(): void {
+  if (!map) {
+    return;
+  }
+  if (map.isStyleLoaded()) {
+    syncSosTrails();
+    return;
+  }
+  map.once("idle", syncSosTrailsWhenStyleReady);
+}
+
 const liveTelemetryCount = computed(() =>
   Math.max(0, telemetryStore.activePositions.length - telemetryStore.stalePositions.length),
 );
 const staleTelemetryCount = computed(() => telemetryStore.stalePositions.length);
 const sosAlertCount = computed(() => sosStore.alerts.length);
+
+function toggleLayerMenu(): void {
+  layerMenuOpen.value = !layerMenuOpen.value;
+}
+
+function setMapLayer(layer: MapLayerId): void {
+  layerMenuOpen.value = false;
+  if (selectedMapLayer.value === layer) {
+    return;
+  }
+  selectedMapLayer.value = layer;
+  map?.setStyle(mapStyleFor(layer));
+  syncSosTrailsWhenStyleReady();
+}
 
 onMounted(() => {
   if (!mapHost.value) {
@@ -314,12 +438,12 @@ onMounted(() => {
 
   map = new maplibregl.Map({
     container: mapHost.value,
-    style: "https://tiles.openfreemap.org/styles/liberty",
+    style: mapStyleFor(selectedMapLayer.value),
     center: [-98.5795, 39.8283],
     zoom: 3,
   });
 
-  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
   map.on("load", syncSosTrails);
 
   stopWatch = watch(
@@ -376,49 +500,74 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="telemetry-view">
-    <div class="telemetry-legend">
-      <span class="map-chip live-chip">
-        <span>{{ liveTelemetryCount }} Live</span>
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 20v-5" />
-          <path d="M8 20h8" />
-          <path d="M8.5 11.5a5 5 0 1 1 7 0" />
-          <path d="M6 8a8 8 0 0 1 12 0" />
-        </svg>
-      </span>
-      <span class="map-chip stale-chip">
-        <span>Stale: {{ staleTelemetryCount }}</span>
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="8" />
-          <path d="M12 8v4l3 2" />
-        </svg>
-      </span>
-      <span class="map-chip sos-chip">
-        <span>SOS: {{ sosAlertCount }}</span>
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 4 21 20H3L12 4Z" />
-          <path d="M12 9v4" />
-          <path d="M12 16h.01" />
-        </svg>
-      </span>
-      <span class="map-chip layers-chip" aria-label="Map layer status">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 4 4 8l8 4 8-4-8-4Z" />
-          <path d="M4 12l8 4 8-4" />
-        </svg>
-        <span>Base Map</span>
-      </span>
-    </div>
+    <div class="map-frame">
+      <div ref="mapHost" class="map-container"></div>
 
-    <div ref="mapHost" class="map-container"></div>
+      <div class="map-overlay" aria-label="Map indicators">
+        <span class="map-chip live-chip" :aria-label="`Live telemetry: ${liveTelemetryCount}`">
+          <span class="map-chip-count">{{ liveTelemetryCount }}</span>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 20v-5" />
+            <path d="M8 20h8" />
+            <path d="M8.5 11.5a5 5 0 1 1 7 0" />
+            <path d="M6 8a8 8 0 0 1 12 0" />
+          </svg>
+        </span>
+        <span class="map-chip stale-chip" :aria-label="`Stale telemetry: ${staleTelemetryCount}`">
+          <span class="map-chip-count">{{ staleTelemetryCount }}</span>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="8" />
+            <path d="M12 8v4l3 2" />
+          </svg>
+        </span>
+        <span class="map-chip sos-chip" :aria-label="`SOS alerts: ${sosAlertCount}`">
+          <span class="map-chip-count">{{ sosAlertCount }}</span>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4 21 20H3L12 4Z" />
+            <path d="M12 9v4" />
+            <path d="M12 16h.01" />
+          </svg>
+        </span>
+        <div class="layer-control">
+          <button
+            class="map-chip layer-chip"
+            type="button"
+            :aria-expanded="layerMenuOpen"
+            :aria-label="`Map layer: ${activeMapLayerLabel}`"
+            aria-haspopup="menu"
+            :data-map-layer="selectedMapLayer"
+            @click="toggleLayerMenu"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+              <path d="M4 12l8 4 8-4" />
+              <path d="M4 16l8 4 8-4" />
+            </svg>
+          </button>
+          <div v-if="layerMenuOpen" class="layer-menu" role="menu" aria-label="Map layer options">
+            <button
+              v-for="option in mapLayerOptions"
+              :key="option.id"
+              class="layer-option"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="selectedMapLayer === option.id"
+              @click="setMapLayer(option.id)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .telemetry-view {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  height: calc(100% + 0.2rem);
+  margin-bottom: -0.2rem;
   min-height: 100%;
 }
 
@@ -434,11 +583,22 @@ onBeforeUnmount(() => {
   margin: 0.2rem 0 0;
 }
 
-.telemetry-legend {
+.map-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.map-overlay {
   align-items: center;
-  display: grid;
-  gap: 0.72rem;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 0.95fr) minmax(0, 0.95fr) minmax(0, 1.12fr);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.52rem;
+  left: 0.82rem;
+  max-width: calc(100% - 1.64rem);
+  position: absolute;
+  top: 0.82rem;
+  z-index: 3;
 }
 
 .map-chip {
@@ -452,13 +612,17 @@ onBeforeUnmount(() => {
   color: #8fcaff;
   display: inline-flex;
   font-family: var(--font-ui);
-  font-size: clamp(0.78rem, 1.9vw, 0.96rem);
+  font-size: clamp(0.88rem, 2vw, 1.02rem);
   font-weight: 700;
-  gap: 0.52rem;
+  gap: 0.42rem;
   justify-content: center;
-  min-height: 2.85rem;
-  min-width: 0;
-  padding: 0.42rem 0.66rem;
+  min-height: 2.64rem;
+  min-width: 3.35rem;
+  padding: 0.42rem 0.58rem;
+}
+
+button.map-chip {
+  cursor: pointer;
 }
 
 .map-chip svg {
@@ -471,11 +635,9 @@ onBeforeUnmount(() => {
   width: 1.05rem;
 }
 
-.map-chip span {
+.map-chip-count {
+  font-variant-numeric: tabular-nums;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .live-chip {
@@ -493,23 +655,90 @@ onBeforeUnmount(() => {
   color: #ff5e64;
 }
 
-.layers-chip {
+.layer-control {
+  position: relative;
+}
+
+.layer-chip {
   color: #8fcaff;
+  min-width: 2.72rem;
+  padding-inline: 0.56rem;
+}
+
+.layer-menu {
+  background: rgb(4 17 39 / 94%);
+  border: 1px solid rgb(113 175 255 / 46%);
+  border-radius: 8px;
+  box-shadow: 0 16px 34px rgb(0 0 0 / 38%);
+  display: grid;
+  gap: 0.25rem;
+  min-width: 8rem;
+  padding: 0.34rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.42rem);
+}
+
+.layer-option {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #d9ecff;
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 0.46rem 0.58rem;
+  text-align: left;
+}
+
+.layer-option[aria-checked="true"] {
+  background: rgb(43 217 178 / 16%);
+  border-color: rgb(72 224 186 / 42%);
+  color: #7af4d3;
 }
 
 .map-container {
   border: 1px solid rgb(90 142 220 / 24%);
   border-radius: 12px;
-  min-height: 420px;
+  height: 100%;
+  min-height: inherit;
   overflow: hidden;
 }
 
 :deep(.telemetry-marker) {
+  align-items: center;
   border: 2px solid #05203f;
   border-radius: 999px;
   box-shadow: 0 0 12px rgb(0 0 0 / 35%);
+  display: flex;
   height: 14px;
+  justify-content: center;
+  position: relative;
   width: 14px;
+}
+
+:deep(.telemetry-marker::after) {
+  align-items: center;
+  background: #071a36;
+  border: 1px solid rgb(176 214 255 / 72%);
+  border-radius: 999px;
+  color: #d9ecff;
+  content: attr(data-overlap-count);
+  display: none;
+  font-family: var(--font-ui);
+  font-size: 0.58rem;
+  font-weight: 800;
+  height: 0.88rem;
+  justify-content: center;
+  line-height: 1;
+  position: absolute;
+  right: -0.58rem;
+  top: -0.58rem;
+  width: 0.88rem;
+}
+
+:deep(.telemetry-marker.is-overlapped::after) {
+  display: flex;
 }
 
 :deep(.telemetry-marker.is-live) {
@@ -518,6 +747,38 @@ onBeforeUnmount(() => {
 
 :deep(.telemetry-marker.is-stale) {
   background: #ffb467;
+}
+
+:deep(.telemetry-marker-label) {
+  background: rgb(4 17 39 / 92%);
+  border: 1px solid rgb(130 185 255 / 50%);
+  border-radius: 5px;
+  box-shadow: 0 5px 14px rgb(0 0 0 / 34%);
+  color: #d9ecff;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 800;
+  left: 50%;
+  line-height: 1;
+  max-width: 8.5rem;
+  min-width: max-content;
+  overflow: hidden;
+  padding: 0.24rem 0.42rem;
+  pointer-events: none;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: calc(100% + 0.32rem + var(--label-offset-y, 0rem));
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+:deep(.telemetry-marker.is-live .telemetry-marker-label) {
+  border-color: rgb(72 224 186 / 58%);
+}
+
+:deep(.telemetry-marker.is-stale .telemetry-marker-label) {
+  border-color: rgb(255 180 103 / 62%);
+  color: #ffe1bd;
 }
 
 :deep(.sos-trail-marker) {
@@ -576,25 +837,28 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 780px) {
-  .telemetry-legend {
-    gap: 0.48rem;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+  .map-frame {
+    min-height: 0;
+  }
+
+  .map-overlay {
+    gap: 0.4rem;
+    left: 0.58rem;
+    max-width: calc(100% - 1.16rem);
+    top: 0.58rem;
   }
 
   .map-chip {
     font-size: 0.72rem;
-    gap: 0.32rem;
-    min-height: 2.55rem;
-    padding-inline: 0.4rem;
+    gap: 0.3rem;
+    min-height: 2.4rem;
+    min-width: 2.86rem;
+    padding-inline: 0.42rem;
   }
 
   .map-chip svg {
     height: 0.9rem;
     width: 0.9rem;
-  }
-
-  .map-container {
-    min-height: min(60dvh, 520px);
   }
 }
 </style>

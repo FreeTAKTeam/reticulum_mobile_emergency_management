@@ -130,7 +130,7 @@ interface StorageSeed {
 }
 
 export const defaultSettings: SettingsSeed = {
-  displayName: "emergency-ops-mobile",
+  displayName: "Omega999",
   clientMode: "auto",
   autoConnectSaved: false,
   announceCapabilities: "R3AKT,EMergencyMessages,Telemetry",
