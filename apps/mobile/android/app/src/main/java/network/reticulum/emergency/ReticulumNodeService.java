@@ -272,6 +272,10 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.sendPluginLxmfJson(primaryAndroidAbi(), payloadJson);
     }
 
+    public synchronized String decodePluginLxmfFieldsJson(String payloadJson) {
+        return ReticulumBridge.decodePluginLxmfFieldsJson(primaryAndroidAbi(), payloadJson);
+    }
+
     public synchronized int retryLxmfJson(String payloadJson) {
         return ReticulumBridge.retryLxmfJson(payloadJson);
     }

@@ -253,6 +253,13 @@ export interface PluginLxmfSendRequest {
   sendMode?: SendMode;
 }
 
+export interface PluginLxmfMessageRecord {
+  pluginId: string;
+  messageName: string;
+  wireType: string;
+  payload: unknown;
+}
+
 export interface HubSettingsRecord {
   mode: HubMode;
   identityHash: string;
@@ -722,6 +729,7 @@ export interface ReticulumNodeClient {
   sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   sendLxmf(request: SendLxmfRequest): Promise<string>;
   sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void>;
+  decodePluginLxmfFields(fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined>;
   retryLxmf(messageIdHex: string): Promise<void>;
   cancelLxmf(messageIdHex: string): Promise<void>;
   broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
@@ -966,6 +974,9 @@ interface ReticulumNodePlugin {
     title?: string;
     sendMode?: SendMode;
   }): Promise<void>;
+  decodePluginLxmfFields(options: {
+    fieldsBase64: string;
+  }): Promise<{ message?: Record<string, unknown> | null }>;
   retryLxmf(options: { messageIdHex: string }): Promise<void>;
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
@@ -1464,6 +1475,17 @@ function toPacketReceivedEvent(
         : typeof raw.fields_base64 === "string"
           ? raw.fields_base64
           : undefined,
+  };
+}
+
+function toPluginLxmfMessageRecord(
+  raw: Record<string, unknown>,
+): PluginLxmfMessageRecord {
+  return {
+    pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+    messageName: String(raw.messageName ?? raw.message_name ?? ""),
+    wireType: String(raw.wireType ?? raw.wire_type ?? ""),
+    payload: raw.payload,
   };
 }
 
@@ -3390,6 +3412,15 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async decodePluginLxmfFields(fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    await this.ready();
+    const result = await this.plugin.decodePluginLxmfFields({ fieldsBase64 });
+    if (!result.message || typeof result.message !== "object" || Array.isArray(result.message)) {
+      return undefined;
+    }
+    return toPluginLxmfMessageRecord(result.message as Record<string, unknown>);
+  }
+
   async retryLxmf(messageIdHex: string): Promise<void> {
     await this.ready();
     await this.plugin.retryLxmf({ messageIdHex: normalizeHex(messageIdHex) });
@@ -3989,6 +4020,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
+  async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    return undefined;
+  }
+
   async retryLxmf(_messageIdHex: string): Promise<void> {}
 
   async cancelLxmf(_messageIdHex: string): Promise<void> {}
@@ -4549,6 +4584,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       title: request.title,
       sendMode: request.sendMode,
     });
+  }
+
+  async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    return undefined;
   }
 
   async retryLxmf(_messageIdHex: string): Promise<void> {}

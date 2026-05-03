@@ -110,6 +110,12 @@ struct PluginLxmfSendInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PluginLxmfDecodeInput {
+    fields_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MessageIdInput {
     message_id_hex: String,
 }
@@ -2267,6 +2273,76 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendPlug
         Err(err) => {
             set_last_node_error(err);
             RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_decodePluginLxmfFieldsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jstring {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: PluginLxmfDecodeInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in lxmf decode payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let fields_bytes = match BASE64_STANDARD.decode(payload.fields_base64.as_bytes()) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in fields base64: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.receive_plugin_lxmf_fields(abi.as_str(), fields_bytes.as_slice()) {
+        Ok(Some(message)) => ok_json_result(
+            &mut env,
+            &json!({
+                "message": {
+                    "pluginId": message.plugin_id,
+                    "messageName": message.message_name,
+                    "wireType": message.wire_type,
+                    "payload": message.payload,
+                }
+            }),
+        ),
+        Ok(None) => ok_json_result(&mut env, &json!({ "message": Value::Null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
         }
     }
 }

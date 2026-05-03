@@ -314,6 +314,24 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void decodePluginLxmfFields(PluginCall call) {
+        final String fieldsBase64 = call.getString("fieldsBase64");
+        if (fieldsBase64 == null || fieldsBase64.isEmpty()) {
+            call.reject("fieldsBase64 is required.");
+            return;
+        }
+
+        final JSObject payload = new JSObject();
+        payload.put("fieldsBase64", fieldsBase64);
+        runStringServiceCall(
+            call,
+            "Failed to decode plug-in LXMF fields.",
+            "Native plug-in LXMF decode JSON parse failed.",
+            service -> service.decodePluginLxmfFieldsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void retryLxmf(PluginCall call) {
         final String messageIdHex = call.getString("messageIdHex");
         if (messageIdHex == null || messageIdHex.isEmpty()) {

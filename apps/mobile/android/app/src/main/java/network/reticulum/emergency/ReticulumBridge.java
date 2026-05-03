@@ -19,6 +19,7 @@ public final class ReticulumBridge {
     public static native int sendJson(String payloadJson);
     public static native String sendLxmfJson(String payloadJson);
     public static native int sendPluginLxmfJson(String androidAbi, String payloadJson);
+    public static native String decodePluginLxmfFieldsJson(String androidAbi, String payloadJson);
     public static native int retryLxmfJson(String payloadJson);
     public static native int cancelLxmfJson(String payloadJson);
     public static native int broadcastBase64(String bytesBase64);
