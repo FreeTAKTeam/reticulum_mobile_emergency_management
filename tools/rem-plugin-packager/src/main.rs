@@ -159,6 +159,7 @@ fn validate_package_references(
     {
         validate_relative_path(settings_schema)?;
         require_package_file(plugin_dir, settings_schema)?;
+        require_json_package_file(plugin_dir, settings_schema)?;
     }
 
     if let Some(messages) = manifest.get("messages").and_then(toml::Value::as_array) {
@@ -439,6 +440,17 @@ schema = "../status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("invalid message schema json is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_invalid_settings_schema_json() {
+        let package = TestTempDir::new("invalid-settings-schema-json");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(package.path(), "ui/settings.schema.json", b"not-json");
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("invalid settings schema json is rejected");
     }
 
     #[test]

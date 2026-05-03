@@ -1341,6 +1341,18 @@ fn installer_rejects_missing_settings_schema() {
 }
 
 #[test]
+fn installer_rejects_invalid_settings_schema_json() {
+    let package_dir = TestTempDir::new("invalid-settings-schema");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(package_dir.path(), "ui/settings.schema.json", b"not-json");
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("invalid settings schema json is rejected");
+}
+
+#[test]
 fn installer_rejects_missing_message_schema() {
     let package_dir = TestTempDir::new("missing-message-schema");
     let install_root = TestTempDir::new("install-root");

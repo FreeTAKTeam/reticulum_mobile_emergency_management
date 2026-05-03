@@ -62,6 +62,7 @@ impl PluginInstaller {
         require_package_file(package_dir, library_path)?;
         if let Some(settings) = &manifest.settings {
             require_package_file(package_dir, settings.schema.as_str())?;
+            require_json_package_file(package_dir, settings.schema.as_str())?;
         }
         for message in &manifest.messages {
             require_package_file(package_dir, message.schema.as_str())?;
