@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,8 @@ pub enum PluginManifestError {
     InvalidMessageSchemaPath { path: String },
     #[error("invalid plugin message name: {message_name}")]
     InvalidMessageName { message_name: String },
+    #[error("duplicate plugin message name: {message_name}")]
+    DuplicateMessageName { message_name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,8 +116,14 @@ impl PluginManifest {
                 }
             })?;
         }
+        let mut message_names = BTreeSet::new();
         for message in &self.messages {
             message.validate()?;
+            if !message_names.insert(message.name.as_str()) {
+                return Err(PluginManifestError::DuplicateMessageName {
+                    message_name: message.name.clone(),
+                });
+            }
             validate_relative_archive_path(message.schema.as_str()).map_err(|()| {
                 PluginManifestError::InvalidMessageSchemaPath {
                     path: message.schema.clone(),

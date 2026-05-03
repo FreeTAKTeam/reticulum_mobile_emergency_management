@@ -367,6 +367,21 @@ fn parses_android_manifest_with_settings_and_lxmf_message_descriptor() {
 }
 
 #[test]
+fn rejects_duplicate_lxmf_message_names() {
+    let duplicate_manifest = format!(
+        "{VALID_MANIFEST}\n[[messages]]\nname = \"status_test\"\nversion = \"1.0.0\"\ndirection = [\"send\"]\nschema = \"schemas/status_test.schema.json\"\n"
+    );
+
+    let err = PluginManifest::from_toml_str(duplicate_manifest.as_str())
+        .expect_err("duplicate message names are rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::DuplicateMessageName { .. }
+    ));
+}
+
+#[test]
 fn c_abi_version_and_status_codes_are_stable() {
     assert_eq!(REM_PLUGIN_ABI_VERSION.major, 1);
     assert_eq!(REM_PLUGIN_ABI_VERSION.minor, 0);

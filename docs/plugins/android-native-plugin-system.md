@@ -91,7 +91,8 @@ schema = "schemas/status_test.schema.json"
 
 Validation rejects missing platform libraries, missing settings schemas, missing
 message schemas, unsafe relative paths, absolute paths, and plug-in IDs that are
-not reverse-DNS style.
+not reverse-DNS style. Each declared plug-in LXMF message name must be unique
+within the manifest.
 
 ## Runtime State
 
