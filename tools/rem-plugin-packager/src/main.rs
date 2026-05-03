@@ -132,6 +132,12 @@ fn validate_package_references(
     allow_missing_libraries: bool,
 ) -> Result<(), PackagerError> {
     let mut library_paths = BTreeSet::new();
+    let plugin_type = manifest_string(manifest, "plugin_type")?;
+    if plugin_type != "native" {
+        return Err(PackagerError::InvalidManifestField {
+            field: "plugin_type",
+        });
+    }
     let android_libraries = manifest
         .get("library")
         .and_then(|value| value.get("android"))
@@ -322,6 +328,7 @@ mod tests {
     fn valid_manifest() -> toml::Value {
         r#"
 id = "rem.plugin.example_status"
+plugin_type = "native"
 
 [library.android]
 arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
@@ -408,6 +415,7 @@ schema = "schemas/status_test.schema.json"
         let package = TestTempDir::new("unsafe-message-schema");
         let manifest = r#"
 id = "rem.plugin.example_status"
+plugin_type = "native"
 
 [library.android]
 arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
@@ -451,6 +459,24 @@ schema = "../status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("invalid settings schema json is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_non_native_plugin_type() {
+        let package = TestTempDir::new("non-native-plugin-type");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "web"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("non-native plugin type is rejected");
     }
 
     #[test]

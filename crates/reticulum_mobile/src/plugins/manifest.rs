@@ -16,6 +16,8 @@ pub enum PluginManifestError {
     MissingRequiredField { field: &'static str },
     #[error("invalid plugin id: {plugin_id}")]
     InvalidPluginId { plugin_id: String },
+    #[error("unsupported plugin type: {plugin_type}")]
+    InvalidPluginType { plugin_type: String },
     #[error("missing Android library for ABI: {abi}")]
     MissingAndroidLibrary { abi: String },
     #[error("invalid plugin library path: {path}")]
@@ -84,6 +86,11 @@ impl PluginManifest {
         if !is_reverse_dns_id(self.id.as_str()) {
             return Err(PluginManifestError::InvalidPluginId {
                 plugin_id: self.id.clone(),
+            });
+        }
+        if self.plugin_type != "native" {
+            return Err(PluginManifestError::InvalidPluginType {
+                plugin_type: self.plugin_type.clone(),
             });
         }
         for path in self.library.android.values() {

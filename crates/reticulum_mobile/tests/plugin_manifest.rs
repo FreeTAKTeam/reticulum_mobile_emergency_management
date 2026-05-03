@@ -646,6 +646,16 @@ fn rejects_non_reverse_dns_plugin_id() {
 }
 
 #[test]
+fn rejects_non_native_plugin_type() {
+    let err = PluginManifest::from_toml_str(
+        &VALID_MANIFEST.replace("plugin_type = \"native\"", "plugin_type = \"web\""),
+    )
+    .expect_err("non-native plugin type is rejected");
+
+    assert!(matches!(err, PluginManifestError::InvalidPluginType { .. }));
+}
+
+#[test]
 fn rejects_missing_android_library_for_current_abi() {
     let manifest = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
         "arm64_v8a = \"logic/android/arm64-v8a/libexample_status_plugin.so\"",
