@@ -2,8 +2,9 @@ use reticulum_mobile::plugins::{
     NativePluginLibrary, NativePluginLoadError, NativePluginRuntime, PersistedPluginRegistry,
     PersistedPluginState, PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller,
     PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
-    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginPermissions, PluginRegistry,
-    PluginRegistryError, PluginState, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
+    PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginMessageSchemaMap,
+    PluginPermissions, PluginRegistry, PluginRegistryError, PluginState, RemPluginStatusCode,
+    REM_PLUGIN_ABI_VERSION,
 };
 use reticulum_mobile::SendMode;
 use serde_json::json;
@@ -1027,6 +1028,51 @@ fn host_api_builds_outbound_lxmf_request_for_granted_plugin_message() {
     )
     .expect("fields decode");
     assert_eq!(decoded.payload["status"], "ok");
+}
+
+#[test]
+fn host_api_validates_lxmf_send_payload_against_message_schema() {
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+    registry
+        .grant_permissions("rem.plugin.example_status", |permissions| {
+            permissions.lxmf_send = true;
+        })
+        .expect("grant succeeds");
+    let mut schemas = PluginMessageSchemaMap::new();
+    schemas.insert(
+        (
+            "rem.plugin.example_status".to_string(),
+            "status_test".to_string(),
+        ),
+        json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+                "status": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        }),
+    );
+    let mut host = PluginHostApi::new_with_message_schemas(registry, schemas);
+
+    let err = host
+        .request_lxmf_send_to(
+            "rem.plugin.example_status",
+            "aabbccddeeff00112233445566778899",
+            "status_test",
+            json!({ "status": "" }),
+            "Status test from example plug-in",
+            None,
+            SendMode::Auto {},
+        )
+        .expect_err("invalid payload is rejected");
+
+    assert!(matches!(
+        err,
+        PluginHostError::LxmfMessage(PluginLxmfMessageError::InvalidPayload { .. })
+    ));
+    assert!(host.queued_lxmf_outbound_requests().is_empty());
 }
 
 #[test]

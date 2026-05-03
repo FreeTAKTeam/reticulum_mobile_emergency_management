@@ -170,3 +170,10 @@ Received plug-in LXMF messages are decoded through the native bridge, checked
 against the plug-in manifest and granted `lxmf_receive` permission, emitted to
 the owning native plug-in runtime as `rem.plugin.lxmf.received`, and mirrored to
 the mobile store as `pluginLxmfReceived` for UI observability.
+
+For both outbound and inbound plug-in LXMF messages, REM loads the declared
+message schema from the installed plug-in directory and validates the structured
+payload before building or accepting the host-owned field envelope. Android v1
+supports the schema subset used by host-rendered Settings actions: object
+payloads, required fields, primitive property types, string length bounds, and
+`additionalProperties = false`.

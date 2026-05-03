@@ -4,8 +4,8 @@ use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use super::{
-    PluginLxmfMessage, PluginLxmfMessageError, PluginLxmfOutboundRequest, PluginRegistry,
-    RegisteredPlugin,
+    validate_plugin_message_payload, PluginLxmfMessage, PluginLxmfMessageError,
+    PluginLxmfOutboundRequest, PluginMessageSchemaMap, PluginRegistry, RegisteredPlugin,
 };
 use crate::types::SendMode;
 
@@ -39,6 +39,7 @@ pub struct PluginPermissionCheckLog {
 #[derive(Debug, Clone)]
 pub struct PluginHostApi {
     registry: PluginRegistry,
+    message_schemas: PluginMessageSchemaMap,
     plugin_storage: BTreeMap<(String, String), JsonValue>,
     queued_lxmf_messages: Vec<PluginLxmfMessage>,
     queued_lxmf_outbound: Vec<PluginLxmfOutboundRequest>,
@@ -50,8 +51,16 @@ pub struct PluginHostApi {
 
 impl PluginHostApi {
     pub fn new(registry: PluginRegistry) -> Self {
+        Self::new_with_message_schemas(registry, PluginMessageSchemaMap::new())
+    }
+
+    pub fn new_with_message_schemas(
+        registry: PluginRegistry,
+        message_schemas: PluginMessageSchemaMap,
+    ) -> Self {
         Self {
             registry,
+            message_schemas,
             plugin_storage: BTreeMap::new(),
             queued_lxmf_messages: Vec::new(),
             queued_lxmf_outbound: Vec::new(),
@@ -95,6 +104,7 @@ impl PluginHostApi {
         self.require_permission(plugin_id, "request_lxmf_send", "lxmf.send")?;
         let plugin = self.require_plugin(plugin_id)?;
         let message = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?;
+        self.validate_payload(&message)?;
         self.queued_lxmf_messages.push(message.clone());
         Ok(message)
     }
@@ -111,8 +121,10 @@ impl PluginHostApi {
     ) -> Result<PluginLxmfOutboundRequest, PluginHostError> {
         self.require_permission(plugin_id, "request_lxmf_send_to", "lxmf.send")?;
         let plugin = self.require_plugin(plugin_id)?;
-        let request = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?
-            .into_outbound_request(destination_hex, body_utf8, title, send_mode)?;
+        let message = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?;
+        self.validate_payload(&message)?;
+        let request =
+            message.into_outbound_request(destination_hex, body_utf8, title, send_mode)?;
         self.queued_lxmf_outbound.push(request.clone());
         Ok(request)
     }
@@ -140,6 +152,7 @@ impl PluginHostApi {
         self.require_permission(plugin_id.as_str(), "receive_lxmf_fields", "lxmf.receive")?;
         let plugin = self.require_plugin(plugin_id.as_str())?;
         let message = PluginLxmfMessage::from_fields_bytes(&plugin.manifest, fields_bytes)?;
+        self.validate_payload(&message)?;
         self.received_lxmf_messages
             .entry(plugin_id)
             .or_default()
@@ -249,6 +262,17 @@ impl PluginHostApi {
             .ok_or_else(|| PluginHostError::PluginNotFound {
                 plugin_id: plugin_id.to_string(),
             })
+    }
+
+    fn validate_payload(&self, message: &PluginLxmfMessage) -> Result<(), PluginHostError> {
+        let Some(schema) = self
+            .message_schemas
+            .get(&(message.plugin_id.clone(), message.message_name.clone()))
+        else {
+            return Ok(());
+        };
+        validate_plugin_message_payload(message.message_name.as_str(), &message.payload, schema)?;
+        Ok(())
     }
 }
 

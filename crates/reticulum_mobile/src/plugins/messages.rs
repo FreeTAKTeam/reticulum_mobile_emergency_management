@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
@@ -7,6 +9,8 @@ use super::PluginManifest;
 use crate::types::SendMode;
 
 pub const PLUGIN_LXMF_FIELD_KEY: &str = "rem.plugin.message";
+
+pub type PluginMessageSchemaMap = BTreeMap<(String, String), JsonValue>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,6 +52,11 @@ pub enum PluginLxmfMessageError {
     DirectionNotAllowed {
         message_name: String,
         direction: PluginMessageDirection,
+    },
+    #[error("invalid plugin message payload for {message_name}: {reason}")]
+    InvalidPayload {
+        message_name: String,
+        reason: String,
     },
 }
 
@@ -229,6 +238,112 @@ impl PluginMessageDescriptor {
     fn allows_direction(&self, direction: PluginMessageDirection) -> bool {
         self.direction.contains(&direction)
     }
+}
+
+pub fn validate_plugin_message_payload(
+    message_name: &str,
+    payload: &JsonValue,
+    schema: &JsonValue,
+) -> Result<(), PluginLxmfMessageError> {
+    validate_schema_value("$", payload, schema).map_err(|reason| {
+        PluginLxmfMessageError::InvalidPayload {
+            message_name: message_name.to_string(),
+            reason,
+        }
+    })
+}
+
+fn validate_schema_value(path: &str, value: &JsonValue, schema: &JsonValue) -> Result<(), String> {
+    let Some(schema_object) = schema.as_object() else {
+        return Err(format!("{path} schema must be an object"));
+    };
+    match schema_object.get("type").and_then(JsonValue::as_str) {
+        Some("object") => validate_object_schema(path, value, schema_object),
+        Some("string") => validate_string_schema(path, value, schema_object),
+        Some("number") => value
+            .is_number()
+            .then_some(())
+            .ok_or_else(|| format!("{path} must be a number")),
+        Some("integer") => value
+            .as_i64()
+            .map(|_| ())
+            .ok_or_else(|| format!("{path} must be an integer")),
+        Some("boolean") => value
+            .is_boolean()
+            .then_some(())
+            .ok_or_else(|| format!("{path} must be a boolean")),
+        Some("array") => value
+            .is_array()
+            .then_some(())
+            .ok_or_else(|| format!("{path} must be an array")),
+        Some(other) => Err(format!("{path} has unsupported schema type {other}")),
+        None => Ok(()),
+    }
+}
+
+fn validate_object_schema(
+    path: &str,
+    value: &JsonValue,
+    schema: &serde_json::Map<String, JsonValue>,
+) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err(format!("{path} must be an object"));
+    };
+    if let Some(required) = schema.get("required").and_then(JsonValue::as_array) {
+        for field in required.iter().filter_map(JsonValue::as_str) {
+            if !object.contains_key(field) {
+                return Err(format!("{path}.{field} is required"));
+            }
+        }
+    }
+
+    let properties = schema.get("properties").and_then(JsonValue::as_object);
+    if schema
+        .get("additionalProperties")
+        .and_then(JsonValue::as_bool)
+        == Some(false)
+    {
+        if let Some(properties) = properties {
+            for key in object.keys() {
+                if !properties.contains_key(key) {
+                    return Err(format!("{path}.{key} is not allowed"));
+                }
+            }
+        }
+    }
+    if let Some(properties) = properties {
+        for (key, property_schema) in properties {
+            if let Some(property_value) = object.get(key) {
+                validate_schema_value(
+                    format!("{path}.{key}").as_str(),
+                    property_value,
+                    property_schema,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_schema(
+    path: &str,
+    value: &JsonValue,
+    schema: &serde_json::Map<String, JsonValue>,
+) -> Result<(), String> {
+    let Some(value) = value.as_str() else {
+        return Err(format!("{path} must be a string"));
+    };
+    if let Some(min_length) = schema.get("minLength").and_then(JsonValue::as_u64) {
+        if value.chars().count() < min_length as usize {
+            return Err(format!("{path} is shorter than {min_length} characters"));
+        }
+    }
+    if let Some(max_length) = schema.get("maxLength").and_then(JsonValue::as_u64) {
+        if value.chars().count() > max_length as usize {
+            return Err(format!("{path} is longer than {max_length} characters"));
+        }
+    }
+    Ok(())
 }
 
 fn declared_message_for_direction<'manifest>(

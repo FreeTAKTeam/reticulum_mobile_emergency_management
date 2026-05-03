@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,9 +18,9 @@ use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::plugins::{
     NativePluginRuntime, PersistedPluginRegistry, PluginCatalog, PluginCatalogReport,
-    PluginHostApi, PluginHostError, PluginInstaller, PluginLoader, PluginLxmfMessage,
-    PluginLxmfOutboundRequest, PluginLxmfSendRequest, PluginPermissions, PluginRegistry,
-    PluginRuntimeDiagnostic, PluginState,
+    PluginHostApi, PluginHostError, PluginInstaller, PluginLoadCandidate, PluginLoader,
+    PluginLxmfMessage, PluginLxmfOutboundRequest, PluginLxmfSendRequest, PluginMessageSchemaMap,
+    PluginPermissions, PluginRegistry, PluginRuntimeDiagnostic, PluginState,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -67,6 +67,30 @@ fn plugin_host_error_to_node_error(error: PluginHostError) -> NodeError {
         | PluginHostError::PluginNotFound { .. }
         | PluginHostError::LxmfMessage(_) => NodeError::InvalidConfig {},
     }
+}
+
+fn load_plugin_message_schemas(
+    candidates: &[PluginLoadCandidate],
+    plugin_id_filter: Option<&str>,
+) -> Result<PluginMessageSchemaMap, NodeError> {
+    let mut schemas: PluginMessageSchemaMap = BTreeMap::new();
+    for candidate in candidates {
+        if plugin_id_filter.is_some_and(|plugin_id| plugin_id != candidate.manifest.id.as_str()) {
+            continue;
+        }
+        for message in &candidate.manifest.messages {
+            let schema_path = candidate.install_dir.join(message.schema.as_str());
+            let schema_source =
+                fs_err::read_to_string(schema_path.as_path()).map_err(|_| NodeError::IoError {})?;
+            let schema = serde_json::from_str(schema_source.as_str())
+                .map_err(|_| NodeError::InvalidConfig {})?;
+            schemas.insert(
+                (candidate.manifest.id.clone(), message.name.clone()),
+                schema,
+            );
+        }
+    }
+    Ok(schemas)
 }
 
 fn plugin_runtime_state_allows_host_call(state: PluginState) -> bool {
@@ -2636,14 +2660,15 @@ impl Node {
         android_abi: &str,
         request: PluginLxmfSendRequest,
     ) -> Result<PluginLxmfOutboundRequest, NodeError> {
-        let registry = self.plugin_registry_for_android_abi(android_abi)?;
+        let (registry, message_schemas) =
+            self.plugin_context_for_android_abi(android_abi, Some(request.plugin_id.as_str()))?;
         let plugin = registry
             .get(request.plugin_id.as_str())
             .ok_or(NodeError::InvalidConfig {})?;
         if !plugin_runtime_state_allows_host_call(plugin.state) {
             return Err(NodeError::InvalidConfig {});
         }
-        let mut host_api = PluginHostApi::new(registry);
+        let mut host_api = PluginHostApi::new_with_message_schemas(registry, message_schemas);
         host_api
             .request_lxmf_send_to(
                 request.plugin_id.as_str(),
@@ -2662,20 +2687,21 @@ impl Node {
         android_abi: &str,
         fields_bytes: &[u8],
     ) -> Result<Option<PluginLxmfMessage>, NodeError> {
-        let registry = self.plugin_registry_for_android_abi(android_abi)?;
         let Some(plugin_id) = PluginLxmfMessage::try_plugin_id_from_fields_bytes(fields_bytes)
             .map_err(PluginHostError::from)
             .map_err(plugin_host_error_to_node_error)?
         else {
             return Ok(None);
         };
+        let (registry, message_schemas) =
+            self.plugin_context_for_android_abi(android_abi, Some(plugin_id.as_str()))?;
         let plugin = registry
             .get(plugin_id.as_str())
             .ok_or(NodeError::InvalidConfig {})?;
         if !plugin_runtime_state_allows_host_call(plugin.state) {
             return Err(NodeError::InvalidConfig {});
         }
-        let mut host_api = PluginHostApi::new(registry);
+        let mut host_api = PluginHostApi::new_with_message_schemas(registry, message_schemas);
         let message = host_api
             .receive_lxmf_fields(fields_bytes)
             .map_err(plugin_host_error_to_node_error)?;
@@ -2710,10 +2736,11 @@ impl Node {
         Ok(())
     }
 
-    fn plugin_registry_for_android_abi(
+    fn plugin_context_for_android_abi(
         &self,
         android_abi: &str,
-    ) -> Result<PluginRegistry, NodeError> {
+        schema_plugin_id: Option<&str>,
+    ) -> Result<(PluginRegistry, PluginMessageSchemaMap), NodeError> {
         let install_root = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             inner.app_state.storage_dir().join("plugins")
@@ -2722,6 +2749,8 @@ impl Node {
         let discovery = PluginLoader::new(install_root.as_path())
             .discover_installed_plugins(android_abi)
             .map_err(|_| NodeError::IoError {})?;
+        let message_schemas =
+            load_plugin_message_schemas(discovery.candidates.as_slice(), schema_plugin_id)?;
         let mut registry = PluginRegistry::from_manifests(
             discovery
                 .candidates
@@ -2733,7 +2762,7 @@ impl Node {
         let persisted = PersistedPluginRegistry::load_from_path(registry_path.as_path())
             .map_err(|_| NodeError::IoError {})?;
         registry.apply_persisted_state(&persisted);
-        Ok(registry)
+        Ok((registry, message_schemas))
     }
 
     pub fn retry_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
@@ -5260,7 +5289,7 @@ schema = "schemas/status_test.schema.json"
         write_test_plugin_file(
             package_dir,
             "schemas/status_test.schema.json",
-            br#"{"type":"object"}"#,
+            br#"{"type":"object","required":["status"],"properties":{"status":{"type":"string","minLength":1}},"additionalProperties":false}"#,
         );
     }
 
@@ -5305,7 +5334,7 @@ schema = "schemas/status_test.schema.json"
         write_test_plugin_file(
             package_dir,
             "schemas/status_test.schema.json",
-            br#"{"type":"object"}"#,
+            br#"{"type":"object","required":["status"],"properties":{"status":{"type":"string","minLength":1}},"additionalProperties":false}"#,
         );
     }
 
@@ -5480,6 +5509,114 @@ schema = "schemas/status_test.schema.json"
     }
 
     #[test]
+    fn plugin_lxmf_dispatch_rejects_payload_that_violates_message_schema() {
+        let storage_dir = prepare_storage_dir("plugin_lxmf_dispatch_bad_schema");
+        let package_dir = storage_dir
+            .join("plugin-packages")
+            .join("example-status-package");
+        write_test_plugin_package(package_dir.as_path());
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
+            .expect("staged package installs");
+        let mut grants = PluginPermissions::default();
+        grants.lxmf_send = true;
+        node.grant_plugin_permissions("arm64-v8a", "rem.plugin.example_status", grants)
+            .expect("permissions grant");
+        node.set_plugin_enabled("arm64-v8a", "rem.plugin.example_status", true)
+            .expect("plugin enabled");
+
+        let err = node
+            .build_plugin_lxmf_outbound_request(
+                "arm64-v8a",
+                PluginLxmfSendRequest {
+                    plugin_id: "rem.plugin.example_status".to_string(),
+                    destination_hex: "aabbccddeeff00112233445566778899".to_string(),
+                    message_name: "status_test".to_string(),
+                    payload: json!({ "status": "" }),
+                    body_utf8: "Status test from example plug-in".to_string(),
+                    title: None,
+                    send_mode: SendMode::Auto {},
+                },
+            )
+            .expect_err("invalid payload is denied");
+
+        assert!(matches!(err, NodeError::InvalidConfig {}));
+    }
+
+    #[test]
+    fn plugin_lxmf_dispatch_does_not_load_unrelated_plugin_message_schema() {
+        let storage_dir = prepare_storage_dir("plugin_lxmf_dispatch_unrelated_bad_schema");
+        let valid_package_dir = storage_dir
+            .join("plugin-packages")
+            .join("example-status-package");
+        write_test_plugin_package(valid_package_dir.as_path());
+        let bad_package_dir = storage_dir
+            .join("plugin-packages")
+            .join("bad-schema-package");
+        write_test_plugin_file(
+            bad_package_dir.as_path(),
+            "plugin.toml",
+            br#"
+id = "rem.plugin.bad_schema"
+name = "Bad Schema Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libbad_schema_plugin.so"
+
+[permissions]
+lxmf_send = true
+
+[[messages]]
+name = "bad_status"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/bad_status.schema.json"
+"#,
+        );
+        write_test_plugin_file(
+            bad_package_dir.as_path(),
+            "logic/android/arm64-v8a/libbad_schema_plugin.so",
+            b"native",
+        );
+        write_test_plugin_file(
+            bad_package_dir.as_path(),
+            "schemas/bad_status.schema.json",
+            b"not-json",
+        );
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        node.install_plugin_package_dir("arm64-v8a", valid_package_dir.to_string_lossy().as_ref())
+            .expect("valid staged package installs");
+        node.install_plugin_package_dir("arm64-v8a", bad_package_dir.to_string_lossy().as_ref())
+            .expect("bad schema package still installs because schema file exists");
+        let mut grants = PluginPermissions::default();
+        grants.lxmf_send = true;
+        node.grant_plugin_permissions("arm64-v8a", "rem.plugin.example_status", grants)
+            .expect("permissions grant");
+        node.set_plugin_enabled("arm64-v8a", "rem.plugin.example_status", true)
+            .expect("plugin enabled");
+
+        let request = node
+            .build_plugin_lxmf_outbound_request(
+                "arm64-v8a",
+                PluginLxmfSendRequest {
+                    plugin_id: "rem.plugin.example_status".to_string(),
+                    destination_hex: "aabbccddeeff00112233445566778899".to_string(),
+                    message_name: "status_test".to_string(),
+                    payload: json!({ "status": "ok" }),
+                    body_utf8: "Status test from example plug-in".to_string(),
+                    title: None,
+                    send_mode: SendMode::Auto {},
+                },
+            )
+            .expect("unrelated bad schema does not block valid plugin");
+
+        assert_eq!(request.plugin_id.as_str(), "rem.plugin.example_status");
+    }
+
+    #[test]
     fn plugin_lxmf_dispatch_denies_disabled_plugin_even_with_grant() {
         let storage_dir = prepare_storage_dir("plugin_lxmf_dispatch_disabled");
         let package_dir = storage_dir
@@ -5537,6 +5674,39 @@ schema = "schemas/status_test.schema.json"
         assert_eq!(message.plugin_id.as_str(), "rem.plugin.example_status");
         assert_eq!(message.message_name.as_str(), "status_test");
         assert_eq!(message.payload, json!({ "status": "ok" }));
+    }
+
+    #[test]
+    fn plugin_lxmf_receive_rejects_payload_that_violates_message_schema() {
+        let storage_dir = prepare_storage_dir("plugin_lxmf_receive_bad_schema");
+        let package_dir = storage_dir
+            .join("plugin-packages")
+            .join("example-status-package");
+        write_test_plugin_receive_package(package_dir.as_path());
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
+            .expect("staged package installs");
+        let mut grants = PluginPermissions::default();
+        grants.lxmf_receive = true;
+        node.grant_plugin_permissions("arm64-v8a", "rem.plugin.example_status", grants)
+            .expect("permissions grant");
+        node.set_plugin_enabled("arm64-v8a", "rem.plugin.example_status", true)
+            .expect("plugin enabled");
+        let fields = json!({
+            PLUGIN_LXMF_FIELD_KEY: {
+                "plugin_id": "rem.plugin.example_status",
+                "message_name": "status_test",
+                "wire_type": "plugin.rem.plugin.example_status.status_test",
+                "payload": { "unexpected": "ok" },
+            }
+        });
+        let fields = rmp_serde::to_vec(&fields).expect("plugin fields encode");
+
+        let err = node
+            .receive_plugin_lxmf_fields("arm64-v8a", fields.as_slice())
+            .expect_err("invalid payload is denied");
+
+        assert!(matches!(err, NodeError::InvalidConfig {}));
     }
 
     #[test]
