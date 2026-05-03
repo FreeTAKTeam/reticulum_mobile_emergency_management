@@ -133,6 +133,10 @@ fn validate_package_references(
     allow_missing_libraries: bool,
 ) -> Result<(), PackagerError> {
     let mut library_paths = BTreeSet::new();
+    let plugin_id = manifest_string(manifest, "id")?;
+    if !is_reverse_dns_id(plugin_id.as_str()) {
+        return Err(PackagerError::InvalidManifestField { field: "id" });
+    }
     let plugin_type = manifest_string(manifest, "plugin_type")?;
     if plugin_type != "native" {
         return Err(PackagerError::InvalidManifestField {
@@ -251,6 +255,19 @@ fn manifest_string(manifest: &toml::Value, key: &'static str) -> Result<String, 
 
 fn is_semver_version(value: &str) -> bool {
     Version::parse(value.trim()).is_ok()
+}
+
+fn is_reverse_dns_id(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() >= 3
+        && parts.iter().all(|part| {
+            let mut chars = part.chars();
+            let Some(first) = chars.next() else {
+                return false;
+            };
+            (first.is_ascii_lowercase() || first.is_ascii_digit())
+                && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        })
 }
 
 fn require_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), PackagerError> {
@@ -920,6 +937,31 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("duplicate settings action ids are rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_invalid_plugin_id() {
+        let package = TestTempDir::new("invalid-plugin-id");
+        let manifest = r#"
+id = "example_status"
+plugin_type = "native"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        let err = validate_package_references(package.path(), &manifest, true)
+            .expect_err("invalid plugin id is rejected");
+
+        assert!(matches!(
+            err,
+            PackagerError::InvalidManifestField { field: "id" }
+        ));
     }
 
     #[test]
