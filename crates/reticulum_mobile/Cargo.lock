@@ -1431,6 +1431,7 @@ dependencies = [
  "base64",
  "crossbeam-channel",
  "csv",
+ "ed25519-dalek",
  "fs-err",
  "hex",
  "jni",

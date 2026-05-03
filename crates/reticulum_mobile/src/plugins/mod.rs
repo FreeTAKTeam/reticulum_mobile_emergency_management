@@ -20,7 +20,10 @@ pub use catalog::{
     PluginCatalogDiagnostic, PluginCatalogError, PluginCatalogReport,
 };
 pub use host_api::{PluginHostApi, PluginHostError, PluginPermissionCheckLog};
-pub use installer::{InstalledPlugin, PluginInstaller, PluginInstallerError};
+pub use installer::{
+    InstalledPlugin, PluginInstaller, PluginInstallerError, PluginTrustPolicy,
+    TrustedPluginPublisher,
+};
 pub use loader::{PluginDiscoveryReport, PluginLoadCandidate, PluginLoader, PluginLoaderError};
 pub use manager::{NativePluginRuntime, NativePluginRuntimeError, PluginRuntimeDiagnostic};
 pub use manifest::{PluginLibrary, PluginManifest, PluginManifestError, PluginSettings};

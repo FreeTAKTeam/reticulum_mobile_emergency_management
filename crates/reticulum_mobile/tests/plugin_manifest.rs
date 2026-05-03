@@ -1,13 +1,16 @@
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use reticulum_mobile::plugins::{
     NativePluginLibrary, NativePluginLoadError, NativePluginRuntime, PersistedPluginRegistry,
     PersistedPluginState, PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller,
     PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
     PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginMessageSchemaMap,
-    PluginPermissions, PluginRegistry, PluginRegistryError, PluginState, RemPluginHostApi,
-    RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
+    PluginPermissions, PluginRegistry, PluginRegistryError, PluginState, PluginTrustPolicy,
+    RemPluginHostApi, RemPluginStatusCode, TrustedPluginPublisher, REM_PLUGIN_ABI_VERSION,
 };
 use reticulum_mobile::SendMode;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -94,6 +97,94 @@ fn write_valid_package(package_dir: &Path) {
         "schemas/status_test.schema.json",
         br#"{"type":"object"}"#,
     );
+}
+
+fn sign_test_package(package_dir: &Path, signing_key: &SigningKey, publisher: &str) {
+    let manifest = PluginManifest::from_toml_str(
+        fs::read_to_string(package_dir.join("plugin.toml"))
+            .expect("manifest reads")
+            .as_str(),
+    )
+    .expect("manifest parses");
+    let manifest_sha256 = test_sha256_hex(
+        fs::read(package_dir.join("plugin.toml"))
+            .expect("manifest bytes read")
+            .as_slice(),
+    );
+    let package_sha256 = test_package_sha256(package_dir);
+    let payload = format!(
+        "{}\n{}\n{}\n{}\n{}\n",
+        manifest.id, manifest.version, manifest_sha256, package_sha256, publisher
+    );
+    let signature = signing_key.sign(payload.as_bytes());
+    let signature_json = json!({
+        "plugin_id": manifest.id,
+        "version": manifest.version,
+        "manifest_sha256": manifest_sha256,
+        "package_sha256": package_sha256,
+        "publisher": publisher,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+    });
+    fs::write(
+        package_dir.join("signature.json"),
+        serde_json::to_vec_pretty(&signature_json).expect("signature json encodes"),
+    )
+    .expect("signature writes");
+}
+
+fn test_trust_policy(signing_key: &SigningKey, publisher: &str) -> PluginTrustPolicy {
+    PluginTrustPolicy::production(vec![TrustedPluginPublisher {
+        publisher: publisher.to_string(),
+        public_key_base64: base64::engine::general_purpose::STANDARD
+            .encode(signing_key.verifying_key().to_bytes()),
+    }])
+}
+
+fn test_package_sha256(package_dir: &Path) -> String {
+    let mut entries = Vec::new();
+    collect_test_package_hash_entries(package_dir, package_dir, &mut entries);
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hasher = Sha256::new();
+    for (relative_path, file_hash) in entries {
+        hasher.update(relative_path.as_bytes());
+        hasher.update([0]);
+        hasher.update(file_hash.as_bytes());
+        hasher.update([b'\n']);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn collect_test_package_hash_entries(
+    root: &Path,
+    current: &Path,
+    entries: &mut Vec<(String, String)>,
+) {
+    for entry in fs::read_dir(current).expect("package dir reads") {
+        let entry = entry.expect("package entry reads");
+        let file_type = entry.file_type().expect("file type reads");
+        if file_type.is_dir() {
+            collect_test_package_hash_entries(root, entry.path().as_path(), entries);
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let relative_path = entry
+            .path()
+            .strip_prefix(root)
+            .expect("relative path")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if relative_path == "signature.json" {
+            continue;
+        }
+        let contents = fs::read(entry.path()).expect("package file reads");
+        entries.push((relative_path, test_sha256_hex(contents.as_slice())));
+    }
+}
+
+fn test_sha256_hex(contents: &[u8]) -> String {
+    hex::encode(Sha256::digest(contents))
 }
 
 fn write_valid_package_archive(archive_path: &Path) {
@@ -1736,6 +1827,67 @@ fn installer_extracts_valid_archive_disabled_by_default() {
         .path()
         .join(format!(".archive-extract-{}", std::process::id()))
         .exists());
+}
+
+#[test]
+fn installer_rejects_unsigned_package_in_production_mode() {
+    let package_dir = TestTempDir::new("unsigned-package");
+    let install_root = TestTempDir::new("unsigned-install-root");
+    write_valid_package(package_dir.path());
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+
+    let err = PluginInstaller::new_with_trust_policy(
+        install_root.path(),
+        test_trust_policy(&signing_key, "FreeTAKTeam"),
+    )
+    .install_from_package_dir(package_dir.path(), "arm64-v8a")
+    .expect_err("unsigned package is rejected");
+
+    assert!(matches!(err, PluginInstallerError::UnsignedPackageRejected));
+}
+
+#[test]
+fn installer_accepts_signed_package_from_trusted_publisher() {
+    let package_dir = TestTempDir::new("signed-package");
+    let install_root = TestTempDir::new("signed-install-root");
+    write_valid_package(package_dir.path());
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    sign_test_package(package_dir.path(), &signing_key, "FreeTAKTeam");
+
+    let installed = PluginInstaller::new_with_trust_policy(
+        install_root.path(),
+        test_trust_policy(&signing_key, "FreeTAKTeam"),
+    )
+    .install_from_package_dir(package_dir.path(), "arm64-v8a")
+    .expect("signed package installs");
+
+    assert_eq!(installed.manifest.id.as_str(), "rem.plugin.example_status");
+    assert!(installed.install_dir.join("signature.json").is_file());
+}
+
+#[test]
+fn installer_rejects_signed_package_after_library_tamper() {
+    let package_dir = TestTempDir::new("tampered-package");
+    let install_root = TestTempDir::new("tampered-install-root");
+    write_valid_package(package_dir.path());
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    sign_test_package(package_dir.path(), &signing_key, "FreeTAKTeam");
+    fs::write(
+        package_dir
+            .path()
+            .join("logic/android/arm64-v8a/libexample_status_plugin.so"),
+        b"tampered",
+    )
+    .expect("library tampered");
+
+    let err = PluginInstaller::new_with_trust_policy(
+        install_root.path(),
+        test_trust_policy(&signing_key, "FreeTAKTeam"),
+    )
+    .install_from_package_dir(package_dir.path(), "arm64-v8a")
+    .expect_err("tampered package is rejected");
+
+    assert!(matches!(err, PluginInstallerError::PackageTampered));
 }
 
 #[test]
