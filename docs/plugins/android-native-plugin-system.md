@@ -50,6 +50,18 @@ Staged package installation is limited to extracted package directories or
 The node rejects staged installs outside that app-private staging root before it
 calls the package installer.
 
+## Packaging
+
+Use the local packager tool to create a `.remplugin` archive:
+
+```powershell
+cargo run --manifest-path tools/rem-plugin-packager/Cargo.toml -- plugins/example-status-plugin output/example-status.remplugin --allow-missing-libraries
+```
+
+Omit `--allow-missing-libraries` for production packages. Without that flag, the
+packager requires every Android library path declared in `plugin.toml` to exist
+before the archive is written.
+
 ## Manifest
 
 ```toml
