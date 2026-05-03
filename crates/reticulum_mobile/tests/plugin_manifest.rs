@@ -426,20 +426,40 @@ fn compile_event_asserting_test_plugin_library(
         source_path.as_path(),
         format!(
             r#"
+use std::os::raw::{{c_char, c_void}};
+
+type SubscribeFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+
 #[repr(C)]
 pub struct RemPluginHostApi {{
     pub abi_major: u16,
     pub abi_minor: u16,
+    pub ctx: *mut c_void,
+    pub storage_get: Option<unsafe extern "C" fn()>,
+    pub storage_set: Option<unsafe extern "C" fn()>,
+    pub subscribe: Option<SubscribeFn>,
+    pub publish_event: Option<unsafe extern "C" fn()>,
+    pub send_lxmf: Option<unsafe extern "C" fn()>,
+    pub raise_notification: Option<unsafe extern "C" fn()>,
+    pub free_buffer: Option<unsafe extern "C" fn()>,
 }}
 
 #[no_mangle]
-pub extern "C" fn rem_plugin_metadata() -> *const std::os::raw::c_char {{
-    b"{{\"id\":\"{metadata_id}\",\"name\":\"Example Status Plugin\",\"version\":\"0.1.0\",\"rem_api_version\":\">=1.0.0,<2.0.0\",\"abi_major\":1,\"abi_minor\":0}}\0".as_ptr() as *const std::os::raw::c_char
+pub extern "C" fn rem_plugin_metadata() -> *const c_char {{
+    b"{{\"id\":\"{metadata_id}\",\"name\":\"Example Status Plugin\",\"version\":\"0.1.0\",\"rem_api_version\":\">=1.0.0,<2.0.0\",\"abi_major\":1,\"abi_minor\":0}}\0".as_ptr() as *const c_char
 }}
 
 #[no_mangle]
-pub extern "C" fn rem_plugin_init(_host: *const RemPluginHostApi) -> i32 {{
-    0
+pub extern "C" fn rem_plugin_init(host: *const RemPluginHostApi) -> i32 {{
+    if host.is_null() {{
+        return 1;
+    }}
+    let host = unsafe {{ &*host }};
+    let Some(subscribe) = host.subscribe else {{
+        return 1;
+    }};
+    let topic = b"rem.plugin.lxmf.received\0".as_ptr() as *const c_char;
+    if unsafe {{ subscribe(host.ctx, topic) }} == 0 {{ 0 }} else {{ 1 }}
 }}
 
 #[no_mangle]
@@ -453,7 +473,7 @@ pub extern "C" fn rem_plugin_stop() -> i32 {{
 }}
 
 #[no_mangle]
-pub extern "C" fn rem_plugin_handle_event(event: *const std::os::raw::c_char) -> i32 {{
+pub extern "C" fn rem_plugin_handle_event(event: *const c_char) -> i32 {{
     if event.is_null() {{
         return 1;
     }}

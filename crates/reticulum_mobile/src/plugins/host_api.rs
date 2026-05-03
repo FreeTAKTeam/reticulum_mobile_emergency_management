@@ -223,18 +223,36 @@ impl PluginHostApi {
             .collect::<Vec<_>>();
 
         for plugin_id in plugin_ids {
-            if let Some(permission) = permission_for_topic(topic) {
-                self.require_permission(plugin_id.as_str(), "deliver_event", permission)?;
-            }
-            self.event_inboxes
-                .entry(plugin_id)
-                .or_default()
-                .push(PluginEvent {
-                    topic: topic.to_string(),
-                    payload: payload.clone(),
-                });
+            self.deliver_event_to_plugin(plugin_id.as_str(), topic, payload.clone())?;
         }
         Ok(())
+    }
+
+    pub fn deliver_event_to_plugin(
+        &mut self,
+        plugin_id: &str,
+        topic: &str,
+        payload: JsonValue,
+    ) -> Result<bool, PluginHostError> {
+        self.require_plugin(plugin_id)?;
+        if !self
+            .subscriptions
+            .get(plugin_id)
+            .is_some_and(|topics| topics.contains(topic))
+        {
+            return Ok(false);
+        }
+        if let Some(permission) = permission_for_topic(topic) {
+            self.require_permission(plugin_id, "deliver_event", permission)?;
+        }
+        self.event_inboxes
+            .entry(plugin_id.to_string())
+            .or_default()
+            .push(PluginEvent {
+                topic: topic.to_string(),
+                payload,
+            });
+        Ok(true)
     }
 
     pub fn plugin_events(&self, plugin_id: &str) -> &[PluginEvent] {
@@ -310,6 +328,7 @@ impl PluginHostApi {
 fn permission_for_topic(topic: &str) -> Option<&'static str> {
     match topic {
         "rem.message.received" | "rem.message.sent" => Some("messages.read"),
+        "rem.plugin.lxmf.received" => Some("lxmf.receive"),
         _ => None,
     }
 }

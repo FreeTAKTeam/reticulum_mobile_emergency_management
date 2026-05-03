@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
 
 use super::{
@@ -12,6 +12,14 @@ use super::{
     PluginState,
 };
 use crate::app_state::AppStateStore;
+
+const SANITIZED_RUNTIME_TOPICS: &[&str] = &[
+    "rem.message.received",
+    "rem.message.sent",
+    "rem.plugin.lxmf.received",
+    "rem.plugin.started",
+    "rem.plugin.stopped",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,6 +198,55 @@ impl NativePluginRuntime {
         }
     }
 
+    pub fn dispatch_sanitized_event(&mut self, topic: &str, payload: JsonValue) {
+        if !is_sanitized_runtime_topic(topic) {
+            self.diagnostics.push(PluginRuntimeDiagnostic {
+                plugin_id: None,
+                path: None,
+                message: format!("unsupported plug-in runtime event topic: {topic}"),
+            });
+            return;
+        }
+        let plugin_ids = self.loaded.keys().cloned().collect::<Vec<_>>();
+        for plugin_id in plugin_ids {
+            self.dispatch_sanitized_event_to(plugin_id.as_str(), topic, payload.clone());
+        }
+    }
+
+    pub fn dispatch_sanitized_event_to(
+        &mut self,
+        plugin_id: &str,
+        topic: &str,
+        payload: JsonValue,
+    ) {
+        if !is_sanitized_runtime_topic(topic) {
+            self.diagnostics.push(PluginRuntimeDiagnostic {
+                plugin_id: Some(plugin_id.to_string()),
+                path: self
+                    .candidates
+                    .get(plugin_id)
+                    .map(|candidate| candidate.install_dir.clone()),
+                message: format!("unsupported plug-in runtime event topic: {topic}"),
+            });
+            return;
+        }
+        let Some(plugin) = self.loaded.get(plugin_id) else {
+            return;
+        };
+        let delivered = plugin.deliver_event(topic, payload.clone());
+        match delivered {
+            Ok(false) => {}
+            Ok(true) => {
+                let event = json!({
+                    "topic": topic,
+                    "payload": payload,
+                });
+                self.dispatch_event_json_to(plugin_id, event.to_string().as_str());
+            }
+            Err(error) => self.fail_plugin(plugin_id, error.to_string()),
+        }
+    }
+
     pub fn dispatch_lxmf_message_received(&mut self, message: &PluginLxmfMessage) {
         let Some(plugin) = self.registry.get(message.plugin_id.as_str()) else {
             return;
@@ -206,7 +263,11 @@ impl NativePluginRuntime {
                 "payload": message.payload,
             }
         });
-        self.dispatch_event_json_to(message.plugin_id.as_str(), &event.to_string());
+        self.dispatch_sanitized_event_to(
+            message.plugin_id.as_str(),
+            "rem.plugin.lxmf.received",
+            event["payload"].clone(),
+        );
     }
 
     fn dispatch_event_json_to(&mut self, plugin_id: &str, event_json: &str) {
@@ -287,6 +348,10 @@ fn load_message_schemas(
         }
     }
     (schemas, diagnostics)
+}
+
+fn is_sanitized_runtime_topic(topic: &str) -> bool {
+    SANITIZED_RUNTIME_TOPICS.contains(&topic)
 }
 
 fn loader_error_to_diagnostic(error: PluginLoaderError) -> PluginRuntimeDiagnostic {

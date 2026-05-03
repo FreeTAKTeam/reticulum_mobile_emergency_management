@@ -212,6 +212,19 @@ impl NativePluginLibrary {
             .unwrap_or_default()
     }
 
+    pub fn deliver_event(&self, topic: &str, payload: JsonValue) -> Result<bool, PluginHostError> {
+        let Some(context) = self.host_context.as_ref() else {
+            return Ok(false);
+        };
+        context
+            .host_api
+            .lock()
+            .map_err(|_| PluginHostError::PluginNotFound {
+                plugin_id: context.plugin_id.clone(),
+            })?
+            .deliver_event_to_plugin(context.plugin_id.as_str(), topic, payload)
+    }
+
     pub fn start(&self) -> Result<(), NativePluginLoadError> {
         // SAFETY: The function pointer was resolved from the loaded library with
         // the no-argument C ABI lifecycle signature.
