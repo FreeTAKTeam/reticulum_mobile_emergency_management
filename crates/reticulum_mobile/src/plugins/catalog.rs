@@ -170,11 +170,16 @@ fn read_settings_descriptor(
 ) -> Result<InstalledPluginSettingsDescriptor, PluginCatalogError> {
     let path = install_dir.join(schema_path);
     let schema_source = fs_err::read_to_string(path.as_path())?;
-    let schema = serde_json::from_str(schema_source.as_str()).map_err(|_| {
+    let schema: JsonValue = serde_json::from_str(schema_source.as_str()).map_err(|_| {
         PluginCatalogError::InvalidSettingsSchema {
             path: path.to_path_buf(),
         }
     })?;
+    if !schema.is_object() {
+        return Err(PluginCatalogError::InvalidSettingsSchema {
+            path: path.to_path_buf(),
+        });
+    }
     Ok(InstalledPluginSettingsDescriptor {
         schema_path: schema_path.to_string(),
         schema,

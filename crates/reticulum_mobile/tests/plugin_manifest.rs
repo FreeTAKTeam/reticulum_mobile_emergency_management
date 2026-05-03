@@ -1589,6 +1589,26 @@ fn catalog_lists_installed_plugin_with_settings_schema() {
 }
 
 #[test]
+fn catalog_rejects_non_object_settings_schema() {
+    let install_root = TestTempDir::new("catalog-invalid-settings-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    write_valid_package(plugin_dir.as_path());
+    write_package_file(plugin_dir.as_path(), "ui/settings.schema.json", br#"[]"#);
+
+    let report = PluginCatalog::new(install_root.path())
+        .list_installed_plugins("arm64-v8a")
+        .expect("catalog lists plugins");
+
+    assert!(report.items.is_empty());
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(
+        report.errors[0].message.as_str(),
+        "invalid settings schema JSON"
+    );
+}
+
+#[test]
 fn catalog_applies_persisted_plugin_state_and_grants() {
     let install_root = TestTempDir::new("catalog-persisted-root");
     let plugin_dir = install_root.path().join("rem.plugin.example_status");
