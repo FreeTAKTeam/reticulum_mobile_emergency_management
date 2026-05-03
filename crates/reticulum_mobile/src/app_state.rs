@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fs_err as fs;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 use crate::runtime::now_ms;
 use crate::types::{
@@ -230,6 +231,13 @@ impl AppStateStore {
                     revision INTEGER NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS plugin_storage (
+                    plugin_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (plugin_id, key)
+                );
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -238,6 +246,46 @@ impl AppStateStore {
             )
             .map_err(|_| NodeError::IoError {})?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
+        Ok(())
+    }
+
+    pub(crate) fn get_plugin_storage_value(
+        &self,
+        plugin_id: &str,
+        key: &str,
+    ) -> Result<Option<JsonValue>, NodeError> {
+        validate_plugin_storage_key(plugin_id, key)?;
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2",
+                params![plugin_id, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub(crate) fn set_plugin_storage_value(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        value: &JsonValue,
+    ) -> Result<(), NodeError> {
+        validate_plugin_storage_key(plugin_id, key)?;
+        let json = serialize_json(value)?;
+        let connection = self.connect()?;
+        connection
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, json, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(plugin_id, key) DO UPDATE SET
+                    json = excluded.json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![plugin_id, key, json, now_ms() as i64],
+            )
+            .map_err(|_| NodeError::IoError {})?;
         Ok(())
     }
 
@@ -2014,6 +2062,13 @@ fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, No
     serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
 }
 
+fn validate_plugin_storage_key(plugin_id: &str, key: &str) -> Result<(), NodeError> {
+    if plugin_id.trim().is_empty() || key.trim().is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+    Ok(())
+}
+
 pub(crate) fn canonicalize_chat_message(message: &MessageRecord) -> MessageRecord {
     canonicalize_chat_message_with_resolver(message, &ConversationPeerResolver::default())
 }
@@ -2913,6 +2968,7 @@ mod tests {
         ChecklistUpdateRequest, ChecklistUserTaskStatus, HubMode, HubSettingsRecord,
         MessageDirection, MessageMethod, MessageState, ProjectionScope, TelemetrySettingsRecord,
     };
+    use serde_json::json;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -2952,6 +3008,27 @@ mod tests {
                 default_task_due_step_minutes,
             },
         }
+    }
+
+    #[test]
+    fn plugin_storage_round_trips_across_store_reopen() {
+        let storage_dir = test_storage_dir("plugin-storage-round-trip");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        store
+            .set_plugin_storage_value("rem.plugin.example_status", "counter", &json!({"value": 3}))
+            .expect("write plugin storage");
+
+        let restarted =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("reopen store");
+
+        assert_eq!(
+            restarted
+                .get_plugin_storage_value("rem.plugin.example_status", "counter")
+                .expect("read plugin storage"),
+            Some(json!({"value": 3}))
+        );
     }
 
     fn message(

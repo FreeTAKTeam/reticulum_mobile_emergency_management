@@ -7,7 +7,8 @@ use super::{
     validate_plugin_message_payload, PluginLxmfMessage, PluginLxmfMessageError,
     PluginLxmfOutboundRequest, PluginMessageSchemaMap, PluginRegistry, RegisteredPlugin,
 };
-use crate::types::SendMode;
+use crate::app_state::AppStateStore;
+use crate::types::{NodeError, SendMode};
 
 #[derive(Debug, Error)]
 pub enum PluginHostError {
@@ -18,6 +19,8 @@ pub enum PluginHostError {
         plugin_id: String,
         permission: &'static str,
     },
+    #[error("plugin storage failed: {0}")]
+    Storage(#[from] NodeError),
     #[error(transparent)]
     LxmfMessage(#[from] PluginLxmfMessageError),
 }
@@ -40,6 +43,7 @@ pub struct PluginPermissionCheckLog {
 pub struct PluginHostApi {
     registry: PluginRegistry,
     message_schemas: PluginMessageSchemaMap,
+    app_state: Option<AppStateStore>,
     plugin_storage: BTreeMap<(String, String), JsonValue>,
     queued_lxmf_messages: Vec<PluginLxmfMessage>,
     queued_lxmf_outbound: Vec<PluginLxmfOutboundRequest>,
@@ -58,9 +62,26 @@ impl PluginHostApi {
         registry: PluginRegistry,
         message_schemas: PluginMessageSchemaMap,
     ) -> Self {
+        Self::new_inner(registry, message_schemas, None)
+    }
+
+    pub(crate) fn new_with_message_schemas_and_app_state_store(
+        registry: PluginRegistry,
+        message_schemas: PluginMessageSchemaMap,
+        app_state: AppStateStore,
+    ) -> Self {
+        Self::new_inner(registry, message_schemas, Some(app_state))
+    }
+
+    fn new_inner(
+        registry: PluginRegistry,
+        message_schemas: PluginMessageSchemaMap,
+        app_state: Option<AppStateStore>,
+    ) -> Self {
         Self {
             registry,
             message_schemas,
+            app_state,
             plugin_storage: BTreeMap::new(),
             queued_lxmf_messages: Vec::new(),
             queued_lxmf_outbound: Vec::new(),
@@ -77,6 +98,11 @@ impl PluginHostApi {
         key: &str,
     ) -> Result<Option<JsonValue>, PluginHostError> {
         self.require_permission(plugin_id, "get_plugin_storage", "storage.plugin")?;
+        if let Some(app_state) = self.app_state.as_ref() {
+            return app_state
+                .get_plugin_storage_value(plugin_id, key)
+                .map_err(PluginHostError::Storage);
+        }
         Ok(self
             .plugin_storage
             .get(&(plugin_id.to_string(), key.to_string()))
@@ -90,6 +116,11 @@ impl PluginHostApi {
         value: JsonValue,
     ) -> Result<(), PluginHostError> {
         self.require_permission(plugin_id, "set_plugin_storage", "storage.plugin")?;
+        if let Some(app_state) = self.app_state.as_ref() {
+            return app_state
+                .set_plugin_storage_value(plugin_id, key, &value)
+                .map_err(PluginHostError::Storage);
+        }
         self.plugin_storage
             .insert((plugin_id.to_string(), key.to_string()), value);
         Ok(())
@@ -280,5 +311,88 @@ fn permission_for_topic(topic: &str) -> Option<&'static str> {
     match topic {
         "rem.message.received" | "rem.message.sent" => Some("messages.read"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppStateStore;
+    use crate::plugins::{PluginManifest, PluginRegistry};
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const VALID_MANIFEST: &str = r#"
+id = "rem.plugin.example_status"
+name = "Example Status Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[permissions]
+storage_plugin = true
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "messages/status_test.schema.json"
+"#;
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_storage_dir(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "reticulum-mobile-plugin-host-{name}-{}-{}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        path
+    }
+
+    fn granted_storage_registry() -> PluginRegistry {
+        let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+        let mut registry = PluginRegistry::from_manifests(vec![manifest]).expect("registry builds");
+        registry
+            .grant_permissions("rem.plugin.example_status", |permissions| {
+                permissions.storage_plugin = true;
+            })
+            .expect("grant succeeds");
+        registry
+    }
+
+    #[test]
+    fn host_api_persists_plugin_storage_with_app_state_store() {
+        let storage_dir = test_storage_dir("storage-round-trip");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let mut host = PluginHostApi::new_with_message_schemas_and_app_state_store(
+            granted_storage_registry(),
+            PluginMessageSchemaMap::new(),
+            store,
+        );
+
+        host.set_plugin_storage("rem.plugin.example_status", "counter", json!(4))
+            .expect("write plugin storage");
+
+        let restarted_store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("reopen store");
+        let mut restarted = PluginHostApi::new_with_message_schemas_and_app_state_store(
+            granted_storage_registry(),
+            PluginMessageSchemaMap::new(),
+            restarted_store,
+        );
+
+        assert_eq!(
+            restarted
+                .get_plugin_storage("rem.plugin.example_status", "counter")
+                .expect("read plugin storage"),
+            Some(json!(4))
+        );
     }
 }

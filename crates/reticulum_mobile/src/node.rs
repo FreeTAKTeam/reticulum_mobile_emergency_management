@@ -65,7 +65,9 @@ fn plugin_host_error_to_node_error(error: PluginHostError) -> NodeError {
     match error {
         PluginHostError::PermissionDenied { .. }
         | PluginHostError::PluginNotFound { .. }
+        | PluginHostError::Storage(NodeError::InvalidConfig {})
         | PluginHostError::LxmfMessage(_) => NodeError::InvalidConfig {},
+        PluginHostError::Storage(error) => error,
     }
 }
 
@@ -2668,7 +2670,15 @@ impl Node {
         if !plugin_runtime_state_allows_host_call(plugin.state) {
             return Err(NodeError::InvalidConfig {});
         }
-        let mut host_api = PluginHostApi::new_with_message_schemas(registry, message_schemas);
+        let app_state = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.app_state.clone()
+        };
+        let mut host_api = PluginHostApi::new_with_message_schemas_and_app_state_store(
+            registry,
+            message_schemas,
+            app_state,
+        );
         host_api
             .request_lxmf_send_to(
                 request.plugin_id.as_str(),
@@ -2701,7 +2711,15 @@ impl Node {
         if !plugin_runtime_state_allows_host_call(plugin.state) {
             return Err(NodeError::InvalidConfig {});
         }
-        let mut host_api = PluginHostApi::new_with_message_schemas(registry, message_schemas);
+        let app_state = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            inner.app_state.clone()
+        };
+        let mut host_api = PluginHostApi::new_with_message_schemas_and_app_state_store(
+            registry,
+            message_schemas,
+            app_state,
+        );
         let message = host_api
             .receive_lxmf_fields(fields_bytes)
             .map_err(plugin_host_error_to_node_error)?;
