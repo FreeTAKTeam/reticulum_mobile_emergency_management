@@ -28,6 +28,14 @@ pub struct PluginEvent {
     pub payload: JsonValue,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPermissionCheckLog {
+    pub plugin_id: String,
+    pub action: &'static str,
+    pub permission: &'static str,
+    pub allowed: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginHostApi {
     registry: PluginRegistry,
@@ -37,6 +45,7 @@ pub struct PluginHostApi {
     received_lxmf_messages: BTreeMap<String, Vec<PluginLxmfMessage>>,
     subscriptions: BTreeMap<String, BTreeSet<String>>,
     event_inboxes: BTreeMap<String, Vec<PluginEvent>>,
+    permission_checks: Vec<PluginPermissionCheckLog>,
 }
 
 impl PluginHostApi {
@@ -49,15 +58,16 @@ impl PluginHostApi {
             received_lxmf_messages: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             event_inboxes: BTreeMap::new(),
+            permission_checks: Vec::new(),
         }
     }
 
     pub fn get_plugin_storage(
-        &self,
+        &mut self,
         plugin_id: &str,
         key: &str,
     ) -> Result<Option<JsonValue>, PluginHostError> {
-        self.require_permission(plugin_id, "storage.plugin")?;
+        self.require_permission(plugin_id, "get_plugin_storage", "storage.plugin")?;
         Ok(self
             .plugin_storage
             .get(&(plugin_id.to_string(), key.to_string()))
@@ -70,7 +80,7 @@ impl PluginHostApi {
         key: &str,
         value: JsonValue,
     ) -> Result<(), PluginHostError> {
-        self.require_permission(plugin_id, "storage.plugin")?;
+        self.require_permission(plugin_id, "set_plugin_storage", "storage.plugin")?;
         self.plugin_storage
             .insert((plugin_id.to_string(), key.to_string()), value);
         Ok(())
@@ -82,7 +92,7 @@ impl PluginHostApi {
         message_name: &str,
         payload: JsonValue,
     ) -> Result<PluginLxmfMessage, PluginHostError> {
-        self.require_permission(plugin_id, "lxmf.send")?;
+        self.require_permission(plugin_id, "request_lxmf_send", "lxmf.send")?;
         let plugin = self.require_plugin(plugin_id)?;
         let message = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?;
         self.queued_lxmf_messages.push(message.clone());
@@ -99,7 +109,7 @@ impl PluginHostApi {
         title: Option<String>,
         send_mode: SendMode,
     ) -> Result<PluginLxmfOutboundRequest, PluginHostError> {
-        self.require_permission(plugin_id, "lxmf.send")?;
+        self.require_permission(plugin_id, "request_lxmf_send_to", "lxmf.send")?;
         let plugin = self.require_plugin(plugin_id)?;
         let request = PluginLxmfMessage::new(&plugin.manifest, message_name, payload)?
             .into_outbound_request(destination_hex, body_utf8, title, send_mode)?;
@@ -127,7 +137,7 @@ impl PluginHostApi {
         else {
             return Ok(None);
         };
-        self.require_permission(plugin_id.as_str(), "lxmf.receive")?;
+        self.require_permission(plugin_id.as_str(), "receive_lxmf_fields", "lxmf.receive")?;
         let plugin = self.require_plugin(plugin_id.as_str())?;
         let message = PluginLxmfMessage::from_fields_bytes(&plugin.manifest, fields_bytes)?;
         self.received_lxmf_messages
@@ -146,7 +156,7 @@ impl PluginHostApi {
 
     pub fn subscribe(&mut self, plugin_id: &str, topic: &str) -> Result<(), PluginHostError> {
         if let Some(permission) = permission_for_topic(topic) {
-            self.require_permission(plugin_id, permission)?;
+            self.require_permission(plugin_id, "subscribe", permission)?;
         } else {
             self.require_plugin(plugin_id)?;
         }
@@ -170,7 +180,7 @@ impl PluginHostApi {
 
         for plugin_id in plugin_ids {
             if let Some(permission) = permission_for_topic(topic) {
-                self.require_permission(plugin_id.as_str(), permission)?;
+                self.require_permission(plugin_id.as_str(), "deliver_event", permission)?;
             }
             self.event_inboxes
                 .entry(plugin_id)
@@ -190,9 +200,14 @@ impl PluginHostApi {
             .unwrap_or_default()
     }
 
+    pub fn permission_checks(&self) -> &[PluginPermissionCheckLog] {
+        self.permission_checks.as_slice()
+    }
+
     fn require_permission(
-        &self,
+        &mut self,
         plugin_id: &str,
+        action: &'static str,
         permission: &'static str,
     ) -> Result<(), PluginHostError> {
         let plugin = self.require_plugin(plugin_id)?;
@@ -213,6 +228,12 @@ impl PluginHostApi {
             }
             _ => false,
         };
+        self.permission_checks.push(PluginPermissionCheckLog {
+            plugin_id: plugin_id.to_string(),
+            action,
+            permission,
+            allowed,
+        });
         if allowed {
             return Ok(());
         }

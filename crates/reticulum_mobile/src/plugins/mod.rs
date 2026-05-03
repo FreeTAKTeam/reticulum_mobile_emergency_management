@@ -19,7 +19,7 @@ pub use catalog::{
     InstalledPluginDescriptor, InstalledPluginSettingsDescriptor, PluginCatalog,
     PluginCatalogDiagnostic, PluginCatalogError, PluginCatalogReport,
 };
-pub use host_api::{PluginHostApi, PluginHostError};
+pub use host_api::{PluginHostApi, PluginHostError, PluginPermissionCheckLog};
 pub use installer::{InstalledPlugin, PluginInstaller, PluginInstallerError};
 pub use loader::{PluginDiscoveryReport, PluginLoadCandidate, PluginLoader, PluginLoaderError};
 pub use manager::{NativePluginRuntime, NativePluginRuntimeError, PluginRuntimeDiagnostic};

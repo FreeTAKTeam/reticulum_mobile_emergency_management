@@ -762,6 +762,14 @@ fn host_api_denies_plugin_storage_without_grant() {
             ..
         }
     ));
+    assert_eq!(host.permission_checks().len(), 1);
+    assert_eq!(
+        host.permission_checks()[0].plugin_id,
+        "rem.plugin.example_status"
+    );
+    assert_eq!(host.permission_checks()[0].action, "set_plugin_storage");
+    assert_eq!(host.permission_checks()[0].permission, "storage.plugin");
+    assert!(!host.permission_checks()[0].allowed);
 }
 
 #[test]
@@ -783,6 +791,11 @@ fn host_api_allows_granted_plugin_local_storage() {
             .expect("storage read succeeds"),
         Some(json!("alpha"))
     );
+    assert_eq!(host.permission_checks().len(), 2);
+    assert!(host
+        .permission_checks()
+        .iter()
+        .all(|entry| entry.allowed && entry.permission == "storage.plugin"));
 }
 
 #[test]
@@ -976,6 +989,10 @@ fn host_api_denies_message_subscription_without_grant() {
             ..
         }
     ));
+    assert_eq!(host.permission_checks().len(), 1);
+    assert_eq!(host.permission_checks()[0].action, "subscribe");
+    assert_eq!(host.permission_checks()[0].permission, "messages.read");
+    assert!(!host.permission_checks()[0].allowed);
 }
 
 #[test]
@@ -1003,6 +1020,18 @@ fn host_api_delivers_events_only_to_subscribed_granted_plugins() {
     let inbox = host.plugin_events("rem.plugin.example_status");
     assert_eq!(inbox.len(), 1);
     assert_eq!(inbox[0].topic.as_str(), "rem.message.received");
+    assert!(host
+        .permission_checks()
+        .iter()
+        .any(|entry| entry.action == "subscribe"
+            && entry.permission == "messages.read"
+            && entry.allowed));
+    assert!(host
+        .permission_checks()
+        .iter()
+        .any(|entry| entry.action == "deliver_event"
+            && entry.permission == "messages.read"
+            && entry.allowed));
 }
 
 #[test]
