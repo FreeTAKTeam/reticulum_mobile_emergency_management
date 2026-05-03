@@ -17,8 +17,9 @@ use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
 use crate::plugins::{
-    PersistedPluginRegistry, PluginCatalog, PluginCatalogReport, PluginInstaller, PluginLoader,
-    PluginLxmfOutboundRequest, PluginPermissions, PluginRegistry,
+    NativePluginRuntime, PersistedPluginRegistry, PluginCatalog, PluginCatalogReport,
+    PluginInstaller, PluginLoader, PluginLxmfOutboundRequest, PluginPermissions, PluginRegistry,
+    PluginRuntimeDiagnostic,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -88,6 +89,8 @@ struct NodeInner {
     sos_device_telemetry: Arc<Mutex<Option<SosDeviceTelemetryRecord>>>,
     sos_detector: Arc<Mutex<SosTriggerDetector>>,
     active_config: Option<NodeConfigFingerprint>,
+    plugin_android_abi: Option<String>,
+    plugin_runtime: Option<NativePluginRuntime>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
 }
@@ -129,6 +132,52 @@ impl NodeConfigFingerprint {
             hub_api_key: config.hub_api_key.clone(),
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
         })
+    }
+}
+
+fn start_enabled_native_plugins(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    android_abi: Option<&str>,
+) -> Option<NativePluginRuntime> {
+    let android_abi = android_abi
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let install_root = app_state.storage_dir().join("plugins");
+    let persisted =
+        match PersistedPluginRegistry::load_from_path(install_root.join("registry.json")) {
+            Ok(persisted) => persisted,
+            Err(error) => {
+                bus.emit(NodeEvent::Error {
+                    code: "PluginRuntimeError".to_string(),
+                    message: format!("failed to load plug-in registry: {error}"),
+                });
+                return None;
+            }
+        };
+    let mut plugin_runtime =
+        match NativePluginRuntime::discover(install_root, android_abi, Some(&persisted)) {
+            Ok(plugin_runtime) => plugin_runtime,
+            Err(error) => {
+                bus.emit(NodeEvent::Error {
+                    code: "PluginRuntimeError".to_string(),
+                    message: format!("failed to discover native plug-ins: {error}"),
+                });
+                return None;
+            }
+        };
+    plugin_runtime.start_enabled_plugins();
+    emit_plugin_runtime_diagnostics(bus, plugin_runtime.diagnostics());
+    Some(plugin_runtime)
+}
+
+fn emit_plugin_runtime_diagnostics(bus: &EventBus, diagnostics: &[PluginRuntimeDiagnostic]) {
+    for diagnostic in diagnostics {
+        let plugin_id = diagnostic.plugin_id.as_deref().unwrap_or("unknown");
+        bus.emit(NodeEvent::Error {
+            code: "PluginRuntimeDiagnostic".to_string(),
+            message: format!("plug-in {plugin_id}: {}", diagnostic.message),
+        });
     }
 }
 
@@ -2031,6 +2080,8 @@ impl Node {
                 sos_device_telemetry: Arc::new(Mutex::new(None)),
                 sos_detector: Arc::new(Mutex::new(SosTriggerDetector::new())),
                 active_config: None,
+                plugin_android_abi: None,
+                plugin_runtime: None,
                 runtime: None,
                 cmd_tx: None,
             }),
@@ -2128,6 +2179,7 @@ impl Node {
         let runtime = build_node_runtime()?;
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
 
+        let plugin_android_abi = inner.plugin_android_abi.clone();
         runtime.spawn(run_node(
             config,
             identity,
@@ -2143,6 +2195,11 @@ impl Node {
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
         inner.active_config = Some(config_fingerprint);
+        inner.plugin_runtime = start_enabled_native_plugins(
+            &inner.app_state,
+            &inner.bus,
+            plugin_android_abi.as_deref(),
+        );
 
         Ok(())
     }
@@ -2167,6 +2224,18 @@ impl Node {
         self.start_fresh(config, config_fingerprint)
     }
 
+    pub(crate) fn set_plugin_android_abi(
+        &self,
+        android_abi: Option<&str>,
+    ) -> Result<(), NodeError> {
+        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.plugin_android_abi = android_abi
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        Ok(())
+    }
+
     pub fn stop(&self) -> Result<(), NodeError> {
         let (
             runtime,
@@ -2176,6 +2245,7 @@ impl Node {
             peers_snapshot,
             sync_status_snapshot,
             hub_directory_snapshot,
+            plugin_runtime,
         ) = {
             let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             inner.active_config = None;
@@ -2187,8 +2257,14 @@ impl Node {
                 inner.peers_snapshot.clone(),
                 inner.sync_status_snapshot.clone(),
                 inner.hub_directory_snapshot.clone(),
+                inner.plugin_runtime.take(),
             )
         };
+
+        if let Some(mut plugin_runtime) = plugin_runtime {
+            plugin_runtime.stop_all();
+            emit_plugin_runtime_diagnostics(&bus, plugin_runtime.diagnostics());
+        }
 
         let Some(runtime) = runtime else {
             return Ok(());
@@ -4813,6 +4889,17 @@ mod tests {
     static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn plugin_android_abi_is_trimmed_runtime_context() {
+        let node = Node::new();
+
+        node.set_plugin_android_abi(Some(" arm64-v8a "))
+            .expect("abi stores");
+
+        let inner = node.inner.lock().expect("node lock");
+        assert_eq!(inner.plugin_android_abi.as_deref(), Some("arm64-v8a"));
+    }
 
     struct TcpRelayHandle {
         addr: SocketAddr,

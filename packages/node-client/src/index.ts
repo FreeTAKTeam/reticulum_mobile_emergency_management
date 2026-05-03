@@ -63,6 +63,7 @@ export type SosMessageKind = "Active" | "Update" | "Cancelled";
 export interface NodeConfig {
   name: string;
   storageDir?: string;
+  pluginAndroidAbi?: string;
   tcpClients: string[];
   broadcast: boolean;
   announceIntervalSeconds: number;
@@ -3204,6 +3205,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
     storageDir: config.storageDir,
+    pluginAndroidAbi: config.pluginAndroidAbi,
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
     announceIntervalSeconds: config.announceIntervalSeconds,

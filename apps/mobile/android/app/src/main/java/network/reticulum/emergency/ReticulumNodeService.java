@@ -1327,6 +1327,7 @@ public final class ReticulumNodeService extends Service {
             : new JSONObject(rawConfigJson);
         final File resolvedStorageDir = resolveStorageDir(config.optString("storageDir", ""));
         config.put("storageDir", resolvedStorageDir.getAbsolutePath());
+        config.put("pluginAndroidAbi", primaryAndroidAbi());
         return new ResolvedConfig(
             config.toString(),
             canonicalize(config),

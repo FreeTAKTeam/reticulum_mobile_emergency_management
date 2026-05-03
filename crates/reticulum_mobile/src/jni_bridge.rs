@@ -59,6 +59,7 @@ struct LastError {
 struct NodeConfigInput {
     name: Option<String>,
     storage_dir: Option<String>,
+    plugin_android_abi: Option<String>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
     announce_interval_seconds: Option<u32>,
@@ -1870,6 +1871,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
+    let plugin_android_abi = input.plugin_android_abi.clone();
     let config = parse_node_config(input);
 
     let mut guard = match bridge_state().lock() {
@@ -1879,6 +1881,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
 
     let subscription = {
         let node = ensure_node(&mut guard);
+        if let Err(err) = node.set_plugin_android_abi(plugin_android_abi.as_deref()) {
+            set_last_node_error(err);
+            return RESULT_ERR;
+        }
         if let Err(err) = node.start(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -1928,6 +1934,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
+    let plugin_android_abi = input.plugin_android_abi.clone();
     let config = parse_node_config(input);
 
     let mut guard = match bridge_state().lock() {
@@ -1937,6 +1944,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
 
     let subscription = {
         let node = ensure_node(&mut guard);
+        if let Err(err) = node.set_plugin_android_abi(plugin_android_abi.as_deref()) {
+            set_last_node_error(err);
+            return RESULT_ERR;
+        }
         if let Err(err) = node.restart(config) {
             set_last_node_error(err);
             return RESULT_ERR;
