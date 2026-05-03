@@ -147,10 +147,12 @@ const pluginArchiveInstalling = ref(false);
 const pendingPluginActions = reactive<Record<string, boolean>>({});
 const pluginSettingsSummary = computed(() => {
   const pluginCount = nodeStore.installedPlugins.length;
-  if (pluginCount === 0) {
-    return "No installed plug-ins";
-  }
   const configurableCount = pluginSettingsSections.value.length;
+  if (pluginCount === 0) {
+    return configurableCount === 0
+      ? "No installed plug-ins"
+      : `${configurableCount} configurable`;
+  }
   const enabledCount = nodeStore.installedPlugins.filter((plugin) => plugin.state !== "Disabled").length;
   return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable`;
 });
@@ -1033,7 +1035,10 @@ async function refreshPluginSettings(): Promise<void> {
           v-if="recentPluginLxmfMessages.length > 0"
           :messages="recentPluginLxmfMessages"
         />
-        <p v-if="nodeStore.installedPlugins.length === 0" class="section-note">
+        <p
+          v-if="nodeStore.installedPlugins.length === 0 && pluginSettingsSections.length === 0"
+          class="section-note"
+        >
           No plug-ins are installed or enabled for configuration yet.
         </p>
         <p v-if="pluginSettingsFeedback" class="feedback">{{ pluginSettingsFeedback }}</p>

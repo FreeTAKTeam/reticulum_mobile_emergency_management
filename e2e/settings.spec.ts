@@ -248,3 +248,64 @@ test("hub summary shows cached peer count, connected override, and missing conne
 
   await expect(hubPanel).toContainText("No hub selected | outbound blocked");
 });
+
+test("plugin settings sections can register after Settings is mounted", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  await page.evaluate(async () => {
+    const mod = await import("/src/plugins/pluginSettings.ts");
+    mod.registerPluginSettingsSection({
+      pluginId: "rem.plugin.example_status",
+      name: "Example Status Plugin",
+      version: "0.1.0",
+      state: "Enabled",
+      description: "Host-rendered settings for the example plug-in.",
+      fields: [
+        {
+          id: "destinationHex",
+          label: "Destination",
+          type: "text",
+          defaultValue: "",
+          placeholder: "Reticulum destination",
+        },
+        {
+          id: "statusMessage",
+          label: "Status message",
+          type: "text",
+          defaultValue: "Status test from example plug-in",
+        },
+      ],
+      actions: [],
+    });
+  });
+
+  const pluginPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Plugin" }),
+  });
+  await pluginPanel.locator("summary").click();
+
+  await expect(pluginPanel).toContainText("1 configurable");
+  await expect(pluginPanel.getByRole("heading", { name: "Example Status Plugin" })).toBeVisible();
+  await expect(pluginPanel.getByText("No plug-ins are installed or enabled")).toHaveCount(0);
+
+  await pluginPanel.getByLabel("Destination").fill("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  await pluginPanel.getByLabel("Status message").fill("Field report ready");
+  await pluginPanel.getByRole("button", { name: "Save Plug-in" }).click();
+
+  const saved = await page.evaluate(() =>
+    JSON.parse(
+      window.localStorage.getItem(
+        "reticulum.mobile.pluginSettings.v1.rem.plugin.example_status",
+      ) ?? "{}",
+    ),
+  );
+
+  expect(saved).toEqual({
+    destinationHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    statusMessage: "Field report ready",
+  });
+});
