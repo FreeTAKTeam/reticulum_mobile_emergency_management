@@ -3,7 +3,11 @@ use std::env;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use semver::Version;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
@@ -11,7 +15,7 @@ use zip::write::SimpleFileOptions;
 #[derive(Debug, Error)]
 enum PackagerError {
     #[error(
-        "usage: rem-plugin-packager <plugin-dir> [output.remplugin] [--allow-missing-libraries]"
+        "usage: rem-plugin-packager <plugin-dir> [output.remplugin] [--allow-missing-libraries] [--publisher <publisher> --signing-key-base64 <seed>]"
     )]
     Usage,
     #[error("plugin directory does not exist: {path}")]
@@ -34,6 +38,12 @@ enum PackagerError {
     Zip(#[from] zip::result::ZipError),
     #[error("directory walk failed")]
     Walk(#[from] walkdir::Error),
+    #[error("missing signing option: {option}")]
+    MissingSigningOption { option: &'static str },
+    #[error("invalid signing key")]
+    InvalidSigningKey,
+    #[error("signature JSON failed")]
+    SignatureJson(#[from] serde_json::Error),
 }
 
 #[derive(Debug)]
@@ -41,6 +51,18 @@ struct PackagerArgs {
     plugin_dir: PathBuf,
     output_path: Option<PathBuf>,
     allow_missing_libraries: bool,
+    publisher: Option<String>,
+    signing_key_base64: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PackageSignature {
+    plugin_id: String,
+    version: String,
+    manifest_sha256: String,
+    package_sha256: String,
+    publisher: String,
+    signature: String,
 }
 
 fn main() {
@@ -76,6 +98,7 @@ fn run() -> Result<(), PackagerError> {
 
     let output_path = args
         .output_path
+        .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{plugin_id}.remplugin")));
     let output_path = absolute_path(output_path)?;
     if output_path.starts_with(plugin_dir.as_path()) {
@@ -89,8 +112,9 @@ fn run() -> Result<(), PackagerError> {
     {
         fs_err::create_dir_all(parent)?;
     }
+    let signature = build_optional_package_signature(&plugin_dir, &manifest, &args)?;
     let archive_file = fs_err::File::create(output_path.as_path())?;
-    write_archive(plugin_dir.as_path(), archive_file)?;
+    write_archive(plugin_dir.as_path(), archive_file, signature.as_ref())?;
     println!("{}", output_path.display());
     Ok(())
 }
@@ -106,15 +130,25 @@ fn parse_args(raw_args: impl IntoIterator<Item = String>) -> Result<PackagerArgs
     let mut plugin_dir = None;
     let mut output_path = None;
     let mut allow_missing_libraries = false;
-    for arg in raw_args {
-        if arg == "--allow-missing-libraries" {
-            allow_missing_libraries = true;
-        } else if plugin_dir.is_none() {
-            plugin_dir = Some(PathBuf::from(arg));
-        } else if output_path.is_none() {
-            output_path = Some(PathBuf::from(arg));
-        } else {
-            return Err(PackagerError::Usage);
+    let mut publisher = None;
+    let mut signing_key_base64 = None;
+    let mut args = raw_args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--allow-missing-libraries" => allow_missing_libraries = true,
+            "--publisher" => {
+                publisher = Some(args.next().ok_or(PackagerError::Usage)?);
+            }
+            "--signing-key-base64" => {
+                signing_key_base64 = Some(args.next().ok_or(PackagerError::Usage)?);
+            }
+            _ if plugin_dir.is_none() => {
+                plugin_dir = Some(PathBuf::from(arg));
+            }
+            _ if output_path.is_none() => {
+                output_path = Some(PathBuf::from(arg));
+            }
+            _ => return Err(PackagerError::Usage),
         }
     }
     let Some(plugin_dir) = plugin_dir else {
@@ -124,6 +158,8 @@ fn parse_args(raw_args: impl IntoIterator<Item = String>) -> Result<PackagerArgs
         plugin_dir,
         output_path,
         allow_missing_libraries,
+        publisher,
+        signing_key_base64,
     })
 }
 
@@ -458,9 +494,102 @@ fn validate_relative_path(path: &str) -> Result<(), PackagerError> {
     Ok(())
 }
 
-fn write_archive<W: Write + Seek>(plugin_dir: &Path, writer: W) -> Result<(), PackagerError> {
-    let mut archive = zip::ZipWriter::new(writer);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+fn build_optional_package_signature(
+    plugin_dir: &Path,
+    manifest: &toml::Value,
+    args: &PackagerArgs,
+) -> Result<Option<PackageSignature>, PackagerError> {
+    match (&args.publisher, &args.signing_key_base64) {
+        (None, None) => Ok(None),
+        (Some(publisher), Some(signing_key_base64)) => build_package_signature(
+            plugin_dir,
+            manifest,
+            publisher.as_str(),
+            signing_key_base64.as_str(),
+        )
+        .map(Some),
+        (None, Some(_)) => Err(PackagerError::MissingSigningOption {
+            option: "--publisher",
+        }),
+        (Some(_), None) => Err(PackagerError::MissingSigningOption {
+            option: "--signing-key-base64",
+        }),
+    }
+}
+
+fn build_package_signature(
+    plugin_dir: &Path,
+    manifest: &toml::Value,
+    publisher: &str,
+    signing_key_base64: &str,
+) -> Result<PackageSignature, PackagerError> {
+    let plugin_id = manifest_string(manifest, "id")?;
+    let version = manifest_string(manifest, "version")?;
+    let manifest_sha256 = sha256_hex(fs_err::read(plugin_dir.join("plugin.toml"))?.as_slice());
+    let package_sha256 = package_sha256(plugin_dir)?;
+    let payload = signature_payload(
+        plugin_id.as_str(),
+        version.as_str(),
+        manifest_sha256.as_str(),
+        package_sha256.as_str(),
+        publisher,
+    );
+    let signing_key = signing_key_from_base64(signing_key_base64)?;
+    let signature = signing_key.sign(payload.as_bytes());
+    Ok(PackageSignature {
+        plugin_id,
+        version,
+        manifest_sha256,
+        package_sha256,
+        publisher: publisher.to_string(),
+        signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+    })
+}
+
+fn signing_key_from_base64(signing_key_base64: &str) -> Result<SigningKey, PackagerError> {
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signing_key_base64.as_bytes())
+        .map_err(|_| PackagerError::InvalidSigningKey)?;
+    let seed: [u8; 32] = key_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| PackagerError::InvalidSigningKey)?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+fn signature_payload(
+    plugin_id: &str,
+    version: &str,
+    manifest_sha256: &str,
+    package_sha256: &str,
+    publisher: &str,
+) -> String {
+    format!("{plugin_id}\n{version}\n{manifest_sha256}\n{package_sha256}\n{publisher}\n")
+}
+
+fn package_sha256(plugin_dir: &Path) -> Result<String, PackagerError> {
+    let mut files = collect_package_files(plugin_dir)?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    for relative in files {
+        let archive_path = relative.to_string_lossy().replace('\\', "/");
+        if archive_path == "signature.json" {
+            continue;
+        }
+        let bytes = fs_err::read(plugin_dir.join(relative))?;
+        hasher.update(archive_path.as_bytes());
+        hasher.update([0]);
+        hasher.update(sha256_hex(bytes.as_slice()).as_bytes());
+        hasher.update([b'\n']);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn sha256_hex(contents: &[u8]) -> String {
+    hex::encode(Sha256::digest(contents))
+}
+
+fn collect_package_files(plugin_dir: &Path) -> Result<Vec<PathBuf>, PackagerError> {
     let mut files = Vec::new();
     for entry in WalkDir::new(plugin_dir).follow_links(false) {
         let entry = entry?;
@@ -484,12 +613,31 @@ fn write_archive<W: Write + Seek>(plugin_dir: &Path, writer: W) -> Result<(), Pa
         }
         files.push(relative.to_path_buf());
     }
+    Ok(files)
+}
+
+fn write_archive<W: Write + Seek>(
+    plugin_dir: &Path,
+    writer: W,
+    signature: Option<&PackageSignature>,
+) -> Result<(), PackagerError> {
+    let mut archive = zip::ZipWriter::new(writer);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut files = collect_package_files(plugin_dir)?;
     files.sort();
     for relative in files {
         let archive_path = relative.to_string_lossy().replace('\\', "/");
+        if archive_path == "signature.json" {
+            continue;
+        }
         validate_relative_path(archive_path.as_str())?;
         archive.start_file(archive_path, options)?;
         let bytes = fs_err::read(plugin_dir.join(relative))?;
+        archive.write_all(bytes.as_slice())?;
+    }
+    if let Some(signature) = signature {
+        archive.start_file("signature.json", options)?;
+        let bytes = serde_json::to_vec_pretty(signature)?;
         archive.write_all(bytes.as_slice())?;
     }
     archive.finish()?;
@@ -608,6 +756,66 @@ schema = "schemas/status_test.schema.json"
             Some(PathBuf::from("output/example-status.remplugin"))
         );
         assert!(args.allow_missing_libraries);
+    }
+
+    #[test]
+    fn parse_args_accepts_signing_options() {
+        let args = parse_args([
+            "plugins/example-status-plugin".to_string(),
+            "output/example-status.remplugin".to_string(),
+            "--publisher".to_string(),
+            "FreeTAKTeam".to_string(),
+            "--signing-key-base64".to_string(),
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=".to_string(),
+        ])
+        .expect("args parse");
+
+        assert_eq!(args.publisher.as_deref(), Some("FreeTAKTeam"));
+        assert_eq!(
+            args.signing_key_base64.as_deref(),
+            Some("BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=")
+        );
+    }
+
+    #[test]
+    fn write_signed_archive_includes_signature_without_source_side_effect() {
+        let package = TestTempDir::new("signed-archive-package");
+        let archive_dir = TestTempDir::new("signed-archive-output");
+        write_valid_package(package.path());
+        let manifest = valid_manifest();
+        fs::write(package.path().join("plugin.toml"), manifest.to_string())
+            .expect("manifest writes");
+        let archive_path = archive_dir.path().join("example-status.remplugin");
+        let archive_file = fs::File::create(archive_path.as_path()).expect("archive file");
+        let signature = build_package_signature(
+            package.path(),
+            &manifest,
+            "FreeTAKTeam",
+            "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+        )
+        .expect("signature builds");
+
+        write_archive(package.path(), archive_file, Some(&signature)).expect("archive writes");
+
+        assert!(!package.path().join("signature.json").exists());
+        let archive_file = fs::File::open(archive_path.as_path()).expect("archive opens");
+        let mut archive = zip::ZipArchive::new(archive_file).expect("zip opens");
+        let mut signature_entry = archive
+            .by_name("signature.json")
+            .expect("signature entry exists");
+        let mut signature_json = String::new();
+        signature_entry
+            .read_to_string(&mut signature_json)
+            .expect("signature reads");
+        let signature_json: serde_json::Value =
+            serde_json::from_str(signature_json.as_str()).expect("signature json parses");
+        assert_eq!(signature_json["plugin_id"], "rem.plugin.example_status");
+        assert_eq!(signature_json["publisher"], "FreeTAKTeam");
+        assert!(
+            signature_json["signature"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
     }
 
     #[test]
@@ -1016,7 +1224,7 @@ arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
         write_file(package.path(), "node_modules/example/index.js", b"ignored");
 
         let mut cursor = std::io::Cursor::new(Vec::new());
-        write_archive(package.path(), &mut cursor).expect("archive writes");
+        write_archive(package.path(), &mut cursor, None).expect("archive writes");
         cursor.set_position(0);
         let mut archive = zip::ZipArchive::new(cursor).expect("archive reads");
         let mut names = Vec::new();
