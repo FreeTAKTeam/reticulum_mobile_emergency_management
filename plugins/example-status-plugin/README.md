@@ -21,6 +21,13 @@ plugin.rem.plugin.example_status.status_test
 Android package builds must place compiled libraries at the paths declared in
 `plugin.toml`, then zip this directory as a `.remplugin` archive.
 
+During `rem_plugin_init`, the native library uses the REM host callback table
+to:
+
+- read and increment the plug-in-local `status_send_count` storage value
+- subscribe to `rem.plugin.lxmf.received`
+- send a `status_test` message request through `send_lxmf`
+
 The Settings schema exposes a destination field, message field, and host-rendered
 `Send test status` action. The action submits a structured `status_test`
 payload to REM; the plug-in never constructs raw LXMF bytes itself.
