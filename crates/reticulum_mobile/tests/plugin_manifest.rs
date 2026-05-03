@@ -207,6 +207,93 @@ pub extern "C" fn rem_plugin_handle_event(_event: *const std::os::raw::c_char) -
     library_path
 }
 
+fn compile_event_asserting_test_plugin_library(
+    plugin_dir: &Path,
+    metadata_id: &str,
+    marker_path: &Path,
+) -> PathBuf {
+    let library_relative_path = format!("logic/android/arm64-v8a/{}", test_dynamic_library_name());
+    let library_path = plugin_dir.join(library_relative_path);
+    let source_path = plugin_dir.join("example_status_plugin.rs");
+    let marker_path = marker_path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    if let Some(parent) = library_path.parent() {
+        fs::create_dir_all(parent).expect("library parent exists");
+    }
+    fs::write(
+        source_path.as_path(),
+        format!(
+            r#"
+#[repr(C)]
+pub struct RemPluginHostApi {{
+    pub abi_major: u16,
+    pub abi_minor: u16,
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_metadata() -> *const std::os::raw::c_char {{
+    b"{{\"id\":\"{metadata_id}\",\"name\":\"Example Status Plugin\",\"version\":\"0.1.0\",\"rem_api_version\":\">=1.0.0,<2.0.0\",\"abi_major\":1,\"abi_minor\":0}}\0".as_ptr() as *const std::os::raw::c_char
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_init(_host: *const RemPluginHostApi) -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_start() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_stop() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_handle_event(event: *const std::os::raw::c_char) -> i32 {{
+    if event.is_null() {{
+        return 1;
+    }}
+    let event = unsafe {{ std::ffi::CStr::from_ptr(event) }}.to_string_lossy();
+    if event.contains("\"topic\":\"rem.plugin.lxmf.received\"")
+        && event.contains("\"pluginId\":\"{metadata_id}\"")
+        && event.contains("\"messageName\":\"status_test\"")
+        && event.contains("\"status\":\"ok\"")
+    {{
+        if std::fs::write("{marker_path}", event.as_bytes()).is_ok() {{
+            0
+        }} else {{
+            1
+        }}
+    }} else {{
+        1
+    }}
+}}
+"#
+        ),
+    )
+    .expect("test plugin source is written");
+
+    let output = Command::new("rustc")
+        .arg("--crate-type")
+        .arg("cdylib")
+        .arg(source_path.as_path())
+        .arg("-o")
+        .arg(library_path.as_path())
+        .output()
+        .expect("rustc can be launched");
+    assert!(
+        output.status.success(),
+        "test plugin compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(output.stdout.as_slice()),
+        String::from_utf8_lossy(output.stderr.as_slice())
+    );
+    library_path
+}
+
 fn write_dynamic_plugin_manifest(plugin_dir: &Path, library_path: &Path) {
     let relative_path = library_path
         .strip_prefix(plugin_dir)
@@ -461,6 +548,55 @@ fn native_runtime_starts_enabled_plugin_and_stops_it() {
             .expect("registered plugin")
             .state,
         PluginState::Stopped
+    );
+}
+
+#[test]
+fn native_runtime_dispatches_received_lxmf_message_to_owner_plugin() {
+    let install_root = TestTempDir::new("native-runtime-lxmf-receive-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    let marker_path = install_root.path().join("received-plugin-event.json");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_event_asserting_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        marker_path.as_path(),
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+    let mut persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+    persisted
+        .plugins
+        .get_mut("rem.plugin.example_status")
+        .expect("persisted plugin exists")
+        .granted_permissions
+        .lxmf_receive = true;
+
+    let mut runtime =
+        NativePluginRuntime::discover(install_root.path(), "arm64-v8a", Some(&persisted))
+            .expect("runtime discovers plugins");
+    let manifest = PluginManifest::from_toml_str(VALID_MANIFEST).expect("manifest parses");
+    let message = PluginLxmfMessage::new_for_direction(
+        &manifest,
+        "status_test",
+        json!({ "status": "ok" }),
+        reticulum_mobile::plugins::PluginMessageDirection::Receive,
+    )
+    .expect("received plugin message builds");
+
+    runtime.start_enabled_plugins();
+    runtime.dispatch_lxmf_message_received(&message);
+
+    assert!(runtime.diagnostics().is_empty());
+    let delivered_event =
+        fs::read_to_string(marker_path.as_path()).expect("plugin receives event marker");
+    assert!(delivered_event.contains("\"topic\":\"rem.plugin.lxmf.received\""));
+    assert_eq!(
+        runtime
+            .registry()
+            .get("rem.plugin.example_status")
+            .expect("registered plugin")
+            .state,
+        PluginState::Running
     );
 }
 

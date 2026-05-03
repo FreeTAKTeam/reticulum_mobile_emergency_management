@@ -2676,9 +2676,38 @@ impl Node {
             return Err(NodeError::InvalidConfig {});
         }
         let mut host_api = PluginHostApi::new(registry);
-        host_api
+        let message = host_api
             .receive_lxmf_fields(fields_bytes)
-            .map_err(plugin_host_error_to_node_error)
+            .map_err(plugin_host_error_to_node_error)?;
+        if let Some(message) = message.as_ref() {
+            self.dispatch_plugin_lxmf_message_received(message)?;
+        }
+        Ok(message)
+    }
+
+    fn dispatch_plugin_lxmf_message_received(
+        &self,
+        message: &PluginLxmfMessage,
+    ) -> Result<(), NodeError> {
+        let diagnostics = {
+            let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let Some(plugin_runtime) = inner.plugin_runtime.as_mut() else {
+                return Ok(());
+            };
+            let previous_diagnostic_count = plugin_runtime.diagnostics().len();
+            plugin_runtime.dispatch_lxmf_message_received(message);
+            plugin_runtime.diagnostics()[previous_diagnostic_count..].to_vec()
+        };
+        if !diagnostics.is_empty() {
+            let bus = self
+                .inner
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .bus
+                .clone();
+            emit_plugin_runtime_diagnostics(&bus, diagnostics.as_slice());
+        }
+        Ok(())
     }
 
     fn plugin_registry_for_android_abi(

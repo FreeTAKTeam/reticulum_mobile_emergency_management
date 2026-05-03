@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
+use serde_json::json;
 use thiserror::Error;
 
 use super::{
     NativePluginLibrary, NativePluginLoadError, PersistedPluginRegistry, PluginLoadCandidate,
-    PluginLoader, PluginLoaderError, PluginRegistry, PluginRegistryError, PluginState,
+    PluginLoader, PluginLoaderError, PluginLxmfMessage, PluginRegistry, PluginRegistryError,
+    PluginState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -150,12 +152,35 @@ impl NativePluginRuntime {
     pub fn dispatch_event_json(&mut self, event_json: &str) {
         let plugin_ids = self.loaded.keys().cloned().collect::<Vec<_>>();
         for plugin_id in plugin_ids {
-            let Some(plugin) = self.loaded.get(plugin_id.as_str()) else {
-                continue;
-            };
-            if let Err(error) = plugin.handle_event_json(event_json) {
-                self.fail_plugin(plugin_id.as_str(), error.to_string());
+            self.dispatch_event_json_to(plugin_id.as_str(), event_json);
+        }
+    }
+
+    pub fn dispatch_lxmf_message_received(&mut self, message: &PluginLxmfMessage) {
+        let Some(plugin) = self.registry.get(message.plugin_id.as_str()) else {
+            return;
+        };
+        if !(plugin.manifest.permissions.lxmf_receive && plugin.granted_permissions.lxmf_receive) {
+            return;
+        }
+        let event = json!({
+            "topic": "rem.plugin.lxmf.received",
+            "payload": {
+                "pluginId": message.plugin_id,
+                "messageName": message.message_name,
+                "wireType": message.wire_type,
+                "payload": message.payload,
             }
+        });
+        self.dispatch_event_json_to(message.plugin_id.as_str(), &event.to_string());
+    }
+
+    fn dispatch_event_json_to(&mut self, plugin_id: &str, event_json: &str) {
+        let Some(plugin) = self.loaded.get(plugin_id) else {
+            return;
+        };
+        if let Err(error) = plugin.handle_event_json(event_json) {
+            self.fail_plugin(plugin_id, error.to_string());
         }
     }
 
