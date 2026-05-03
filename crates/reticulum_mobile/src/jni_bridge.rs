@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
-use crate::plugins::PluginPermissions;
+use crate::plugins::{PluginLxmfSendRequest, PluginPermissions};
 use crate::types::{
     AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
     ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
@@ -87,6 +87,20 @@ struct SendInput {
 #[serde(rename_all = "camelCase")]
 struct SendLxmfInput {
     destination_hex: String,
+    body_utf8: String,
+    title: Option<String>,
+    send_mode: Option<String>,
+    #[serde(default)]
+    use_propagation_node: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginLxmfSendInput {
+    plugin_id: String,
+    destination_hex: String,
+    message_name: String,
+    payload: Value,
     body_utf8: String,
     title: Option<String>,
     send_mode: Option<String>,
@@ -2200,6 +2214,59 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmf
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendPluginLxmfJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginLxmfSendInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in lxmf payload: {e}"),
+            )
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.send_plugin_lxmf(
+        abi.as_str(),
+        PluginLxmfSendRequest {
+            plugin_id: payload.plugin_id,
+            destination_hex: payload.destination_hex,
+            message_name: payload.message_name,
+            payload: payload.payload,
+            body_utf8: payload.body_utf8,
+            title: payload.title,
+            send_mode: send_mode_from_input(
+                payload.send_mode.as_deref(),
+                payload.use_propagation_node,
+            ),
+        },
+    ) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

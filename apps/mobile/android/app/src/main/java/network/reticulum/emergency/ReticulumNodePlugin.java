@@ -268,6 +268,52 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void sendPluginLxmf(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final String destinationHex = call.getString("destinationHex");
+        final String messageName = call.getString("messageName");
+        final JSObject messagePayload = call.getObject("payload", new JSObject());
+        final String bodyUtf8 = call.getString("bodyUtf8", "");
+        final String title = call.getString("title");
+        final String sendMode = call.getString("sendMode");
+        final boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        if (destinationHex == null || destinationHex.isEmpty()) {
+            call.reject("destinationHex is required.");
+            return;
+        }
+        if (messageName == null || messageName.trim().isEmpty()) {
+            call.reject("messageName is required.");
+            return;
+        }
+
+        final JSObject request = new JSObject();
+        request.put("pluginId", pluginId);
+        request.put("destinationHex", destinationHex);
+        request.put("messageName", messageName);
+        request.put("payload", messagePayload);
+        request.put("bodyUtf8", bodyUtf8);
+        if (title != null && !title.isEmpty()) {
+            request.put("title", title);
+        }
+        if (sendMode != null && !sendMode.isEmpty()) {
+            request.put("sendMode", sendMode);
+        }
+        if (usePropagationNode) {
+            request.put("usePropagationNode", true);
+        }
+
+        runIntServiceCall(
+            call,
+            "Failed to send plug-in LXMF message.",
+            service -> service.sendPluginLxmfJson(request.toString())
+        );
+    }
+
+    @PluginMethod
     public void retryLxmf(PluginCall call) {
         final String messageIdHex = call.getString("messageIdHex");
         if (messageIdHex == null || messageIdHex.isEmpty()) {

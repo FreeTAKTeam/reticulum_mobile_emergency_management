@@ -71,6 +71,17 @@ pub struct PluginLxmfOutboundRequest {
     pub send_mode: SendMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginLxmfSendRequest {
+    pub plugin_id: String,
+    pub destination_hex: String,
+    pub message_name: String,
+    pub payload: JsonValue,
+    pub body_utf8: String,
+    pub title: Option<String>,
+    pub send_mode: SendMode,
+}
+
 impl PluginLxmfMessage {
     pub fn new(
         manifest: &PluginManifest,

@@ -25,8 +25,8 @@ pub use loader::{PluginDiscoveryReport, PluginLoadCandidate, PluginLoader, Plugi
 pub use manager::{NativePluginRuntime, NativePluginRuntimeError, PluginRuntimeDiagnostic};
 pub use manifest::{PluginLibrary, PluginManifest, PluginManifestError, PluginSettings};
 pub use messages::{
-    PluginLxmfMessage, PluginLxmfMessageError, PluginLxmfOutboundRequest, PluginMessageDescriptor,
-    PluginMessageDirection, PLUGIN_LXMF_FIELD_KEY,
+    PluginLxmfMessage, PluginLxmfMessageError, PluginLxmfOutboundRequest, PluginLxmfSendRequest,
+    PluginMessageDescriptor, PluginMessageDirection, PLUGIN_LXMF_FIELD_KEY,
 };
 pub use permissions::PluginPermissions;
 pub use registry::{

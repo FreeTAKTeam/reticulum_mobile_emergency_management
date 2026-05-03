@@ -243,6 +243,16 @@ export interface SendLxmfRequest {
   sendMode?: SendMode;
 }
 
+export interface PluginLxmfSendRequest {
+  pluginId: string;
+  destinationHex: string;
+  messageName: string;
+  payload: unknown;
+  bodyUtf8: string;
+  title?: string;
+  sendMode?: SendMode;
+}
+
 export interface HubSettingsRecord {
   mode: HubMode;
   identityHash: string;
@@ -711,6 +721,7 @@ export interface ReticulumNodeClient {
   requestPeerIdentity(destinationHex: string): Promise<void>;
   sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   sendLxmf(request: SendLxmfRequest): Promise<string>;
+  sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void>;
   retryLxmf(messageIdHex: string): Promise<void>;
   cancelLxmf(messageIdHex: string): Promise<void>;
   broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
@@ -946,6 +957,15 @@ interface ReticulumNodePlugin {
     title?: string;
     sendMode?: SendMode;
   }): Promise<{ messageIdHex: string }>;
+  sendPluginLxmf(options: {
+    pluginId: string;
+    destinationHex: string;
+    messageName: string;
+    payload: unknown;
+    bodyUtf8: string;
+    title?: string;
+    sendMode?: SendMode;
+  }): Promise<void>;
   retryLxmf(options: { messageIdHex: string }): Promise<void>;
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
@@ -3357,6 +3377,19 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return normalizeHex(String(result.messageIdHex ?? ""));
   }
 
+  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    await this.ready();
+    await this.plugin.sendPluginLxmf({
+      pluginId: request.pluginId.trim(),
+      destinationHex: normalizeHex(request.destinationHex),
+      messageName: request.messageName,
+      payload: request.payload ?? {},
+      bodyUtf8: request.bodyUtf8,
+      title: request.title,
+      sendMode: request.sendMode,
+    });
+  }
+
   async retryLxmf(messageIdHex: string): Promise<void> {
     await this.ready();
     await this.plugin.retryLxmf({ messageIdHex: normalizeHex(messageIdHex) });
@@ -3947,6 +3980,15 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return messageIdHex;
   }
 
+  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    await this.sendLxmf({
+      destinationHex: request.destinationHex,
+      bodyUtf8: request.bodyUtf8,
+      title: request.title,
+      sendMode: request.sendMode,
+    });
+  }
+
   async retryLxmf(_messageIdHex: string): Promise<void> {}
 
   async cancelLxmf(_messageIdHex: string): Promise<void> {}
@@ -4498,6 +4540,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       });
     }, 300);
     return messageIdHex;
+  }
+
+  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    await this.sendLxmf({
+      destinationHex: request.destinationHex,
+      bodyUtf8: request.bodyUtf8,
+      title: request.title,
+      sendMode: request.sendMode,
+    });
   }
 
   async retryLxmf(_messageIdHex: string): Promise<void> {}
