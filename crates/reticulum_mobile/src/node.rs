@@ -184,6 +184,9 @@ fn start_enabled_native_plugins(
     app_state: &AppStateStore,
     bus: &EventBus,
     android_abi: Option<&str>,
+    cmd_tx: Option<&mpsc::Sender<Command>>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> Option<NativePluginRuntime> {
     let android_abi = android_abi
         .map(str::trim)
@@ -217,6 +220,15 @@ fn start_enabled_native_plugins(
     };
     plugin_runtime.start_enabled_plugins();
     emit_plugin_runtime_diagnostics(bus, plugin_runtime.diagnostics());
+    if let Some(cmd_tx) = cmd_tx {
+        dispatch_queued_plugin_lxmf_outbound(
+            bus,
+            &plugin_runtime,
+            cmd_tx,
+            active_config,
+            hub_directory_snapshot,
+        );
+    }
     Some(plugin_runtime)
 }
 
@@ -238,11 +250,69 @@ fn restart_enabled_native_plugin_runtime(inner: &mut NodeInner) {
     if inner.runtime.is_none() {
         return;
     }
+    let hub_directory_snapshot = inner
+        .hub_directory_snapshot
+        .lock()
+        .ok()
+        .and_then(|snapshot| snapshot.clone());
     inner.plugin_runtime = start_enabled_native_plugins(
         &inner.app_state,
         &inner.bus,
         inner.plugin_android_abi.as_deref(),
+        inner.cmd_tx.as_ref(),
+        inner.active_config.as_ref(),
+        hub_directory_snapshot.as_ref(),
     );
+}
+
+fn dispatch_queued_plugin_lxmf_outbound(
+    bus: &EventBus,
+    plugin_runtime: &NativePluginRuntime,
+    cmd_tx: &mpsc::Sender<Command>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) {
+    for request in plugin_runtime.drain_queued_lxmf_outbound_requests() {
+        let plugin_id = request.plugin_id.clone();
+        if let Err(error) = dispatch_plugin_lxmf_outbound_request(
+            cmd_tx,
+            active_config,
+            hub_directory_snapshot,
+            request,
+        ) {
+            bus.emit(NodeEvent::Error {
+                code: "PluginRuntimeError".to_string(),
+                message: format!("plug-in {plugin_id} queued LXMF send failed: {error}"),
+            });
+        }
+    }
+}
+
+fn dispatch_plugin_lxmf_outbound_request(
+    tx: &mpsc::Sender<Command>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    request: PluginLxmfOutboundRequest,
+) -> Result<(), NodeError> {
+    let destination_hex = routed_destination_hex(
+        request.destination_hex,
+        active_config,
+        hub_directory_snapshot,
+    )?;
+    let (resp_tx, resp_rx) = cb::bounded(1);
+    dispatch_command(
+        tx,
+        Command::SendBytes {
+            destination_hex,
+            bytes: request.body_utf8.into_bytes(),
+            fields_bytes: Some(request.fields_bytes),
+            send_mode: request.send_mode,
+            resp: resp_tx,
+        },
+    )?;
+    resp_rx
+        .recv_timeout(SEND_COMMAND_TIMEOUT)
+        .unwrap_or(Err(NodeError::Timeout {}))
 }
 
 fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
@@ -2259,10 +2329,18 @@ impl Node {
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
         inner.active_config = Some(config_fingerprint);
+        let hub_directory_snapshot = inner
+            .hub_directory_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
         inner.plugin_runtime = start_enabled_native_plugins(
             &inner.app_state,
             &inner.bus,
             plugin_android_abi.as_deref(),
+            inner.cmd_tx.as_ref(),
+            inner.active_config.as_ref(),
+            hub_directory_snapshot.as_ref(),
         );
 
         Ok(())
@@ -5370,6 +5448,44 @@ schema = "schemas/status_test.schema.json"
             }
         });
         rmp_serde::to_vec(&fields).expect("plugin fields encode")
+    }
+
+    #[test]
+    fn plugin_lxmf_outbound_dispatch_sends_body_and_fields() {
+        let fields_bytes = plugin_lxmf_fields_bytes();
+        let request = PluginLxmfOutboundRequest {
+            plugin_id: "rem.plugin.example_status".to_string(),
+            destination_hex: "aabbccddeeff00112233445566778899".to_string(),
+            message_name: "status_test".to_string(),
+            wire_type: "plugin.rem.plugin.example_status.status_test".to_string(),
+            body_utf8: "Status test from runtime callback".to_string(),
+            title: Some("Status Test".to_string()),
+            fields_bytes: fields_bytes.clone(),
+            send_mode: SendMode::PropagationOnly {},
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let worker = std::thread::spawn(move || {
+            let command = rx.blocking_recv().expect("send command received");
+            let Command::SendBytes {
+                destination_hex,
+                bytes,
+                fields_bytes: received_fields_bytes,
+                send_mode,
+                resp,
+            } = command
+            else {
+                panic!("expected SendBytes command");
+            };
+            assert_eq!(destination_hex.as_str(), "aabbccddeeff00112233445566778899");
+            assert_eq!(bytes, b"Status test from runtime callback");
+            assert_eq!(received_fields_bytes, Some(fields_bytes));
+            assert!(matches!(send_mode, SendMode::PropagationOnly {}));
+            resp.send(Ok(())).expect("send response");
+        });
+
+        dispatch_plugin_lxmf_outbound_request(&tx, None, None, request)
+            .expect("plugin outbound request dispatches");
+        worker.join().expect("worker exits");
     }
 
     fn write_test_plugin_archive(archive_path: &Path) {
