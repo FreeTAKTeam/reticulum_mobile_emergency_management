@@ -200,17 +200,21 @@ fn start_enabled_native_plugins(
                 return None;
             }
         };
-    let mut plugin_runtime =
-        match NativePluginRuntime::discover(install_root, android_abi, Some(&persisted)) {
-            Ok(plugin_runtime) => plugin_runtime,
-            Err(error) => {
-                bus.emit(NodeEvent::Error {
-                    code: "PluginRuntimeError".to_string(),
-                    message: format!("failed to discover native plug-ins: {error}"),
-                });
-                return None;
-            }
-        };
+    let mut plugin_runtime = match NativePluginRuntime::discover_with_app_state_store(
+        install_root,
+        android_abi,
+        Some(&persisted),
+        app_state.clone(),
+    ) {
+        Ok(plugin_runtime) => plugin_runtime,
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "PluginRuntimeError".to_string(),
+                message: format!("failed to discover native plug-ins: {error}"),
+            });
+            return None;
+        }
+    };
     plugin_runtime.start_enabled_plugins();
     emit_plugin_runtime_diagnostics(bus, plugin_runtime.diagnostics());
     Some(plugin_runtime)

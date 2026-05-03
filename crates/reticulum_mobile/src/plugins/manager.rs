@@ -6,10 +6,12 @@ use serde_json::json;
 use thiserror::Error;
 
 use super::{
-    NativePluginLibrary, NativePluginLoadError, PersistedPluginRegistry, PluginLoadCandidate,
-    PluginLoader, PluginLoaderError, PluginLxmfMessage, PluginRegistry, PluginRegistryError,
+    NativePluginLibrary, NativePluginLoadError, PersistedPluginRegistry, PluginHostApi,
+    PluginLoadCandidate, PluginLoader, PluginLoaderError, PluginLxmfMessage,
+    PluginLxmfOutboundRequest, PluginMessageSchemaMap, PluginRegistry, PluginRegistryError,
     PluginState,
 };
+use crate::app_state::AppStateStore;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +34,8 @@ pub struct NativePluginRuntime {
     registry: PluginRegistry,
     candidates: BTreeMap<String, PluginLoadCandidate>,
     loaded: BTreeMap<String, NativePluginLibrary>,
+    message_schemas: PluginMessageSchemaMap,
+    app_state: Option<AppStateStore>,
     diagnostics: Vec<PluginRuntimeDiagnostic>,
 }
 
@@ -40,6 +44,24 @@ impl NativePluginRuntime {
         install_root: impl Into<PathBuf>,
         android_abi: &str,
         persisted: Option<&PersistedPluginRegistry>,
+    ) -> Result<Self, NativePluginRuntimeError> {
+        Self::discover_inner(install_root, android_abi, persisted, None)
+    }
+
+    pub fn discover_with_app_state_store(
+        install_root: impl Into<PathBuf>,
+        android_abi: &str,
+        persisted: Option<&PersistedPluginRegistry>,
+        app_state: AppStateStore,
+    ) -> Result<Self, NativePluginRuntimeError> {
+        Self::discover_inner(install_root, android_abi, persisted, Some(app_state))
+    }
+
+    fn discover_inner(
+        install_root: impl Into<PathBuf>,
+        android_abi: &str,
+        persisted: Option<&PersistedPluginRegistry>,
+        app_state: Option<AppStateStore>,
     ) -> Result<Self, NativePluginRuntimeError> {
         let discovery = PluginLoader::new(install_root).discover_installed_plugins(android_abi)?;
         let mut diagnostics = discovery
@@ -55,6 +77,8 @@ impl NativePluginRuntime {
             manifests.push(candidate.manifest.clone());
             candidates.insert(plugin_id, candidate);
         }
+        let (message_schemas, schema_diagnostics) = load_message_schemas(&candidates);
+        diagnostics.extend(schema_diagnostics);
 
         let mut registry = PluginRegistry::from_manifests(manifests)?;
         if let Some(persisted) = persisted {
@@ -66,6 +90,8 @@ impl NativePluginRuntime {
             registry,
             candidates,
             loaded: BTreeMap::new(),
+            message_schemas,
+            app_state,
             diagnostics,
         })
     }
@@ -126,7 +152,7 @@ impl NativePluginRuntime {
             return;
         };
 
-        let plugin = match NativePluginLibrary::load(candidate) {
+        let mut plugin = match NativePluginLibrary::load(candidate) {
             Ok(plugin) => plugin,
             Err(error) => {
                 self.fail_plugin(plugin_id, error.to_string());
@@ -135,7 +161,8 @@ impl NativePluginRuntime {
         };
         let _ = self.registry.set_state(plugin_id, PluginState::Loaded);
 
-        if let Err(error) = plugin.initialize() {
+        let host_api = self.host_api();
+        if let Err(error) = plugin.initialize_with_host_api(plugin_id, host_api) {
             self.fail_plugin(plugin_id, error.to_string());
             return;
         }
@@ -147,6 +174,13 @@ impl NativePluginRuntime {
         }
         let _ = self.registry.set_state(plugin_id, PluginState::Running);
         self.loaded.insert(plugin_id.to_string(), plugin);
+    }
+
+    pub fn drain_queued_lxmf_outbound_requests(&self) -> Vec<PluginLxmfOutboundRequest> {
+        self.loaded
+            .values()
+            .flat_map(NativePluginLibrary::drain_queued_lxmf_outbound_requests)
+            .collect()
     }
 
     pub fn dispatch_event_json(&mut self, event_json: &str) {
@@ -213,6 +247,46 @@ impl NativePluginRuntime {
         });
         self.loaded.remove(plugin_id);
     }
+
+    fn host_api(&self) -> PluginHostApi {
+        if let Some(app_state) = self.app_state.as_ref() {
+            return PluginHostApi::new_with_message_schemas_and_app_state_store(
+                self.registry.clone(),
+                self.message_schemas.clone(),
+                app_state.clone(),
+            );
+        }
+        PluginHostApi::new_with_message_schemas(self.registry.clone(), self.message_schemas.clone())
+    }
+}
+
+fn load_message_schemas(
+    candidates: &BTreeMap<String, PluginLoadCandidate>,
+) -> (PluginMessageSchemaMap, Vec<PluginRuntimeDiagnostic>) {
+    let mut schemas = PluginMessageSchemaMap::new();
+    let mut diagnostics = Vec::new();
+    for candidate in candidates.values() {
+        for message in &candidate.manifest.messages {
+            let schema_path = candidate.install_dir.join(message.schema.as_str());
+            let schema = fs_err::read_to_string(schema_path.as_path())
+                .ok()
+                .and_then(|source| serde_json::from_str(source.as_str()).ok());
+            match schema {
+                Some(schema) => {
+                    schemas.insert(
+                        (candidate.manifest.id.clone(), message.name.clone()),
+                        schema,
+                    );
+                }
+                None => diagnostics.push(PluginRuntimeDiagnostic {
+                    plugin_id: Some(candidate.manifest.id.clone()),
+                    path: Some(schema_path),
+                    message: "plugin message schema could not be loaded".to_string(),
+                }),
+            }
+        }
+    }
+    (schemas, diagnostics)
 }
 
 fn loader_error_to_diagnostic(error: PluginLoaderError) -> PluginRuntimeDiagnostic {

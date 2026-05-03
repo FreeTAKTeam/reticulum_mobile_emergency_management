@@ -956,6 +956,44 @@ fn native_runtime_starts_enabled_plugin_and_stops_it() {
 }
 
 #[test]
+fn native_runtime_initializes_enabled_plugin_with_host_callbacks() {
+    let install_root = TestTempDir::new("native-runtime-host-callback-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_host_callback_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+        r#"
+    let send_lxmf = host.send_lxmf.expect("send_lxmf callback");
+    let request = b"{\"destinationHex\":\"aabbccddeeff00112233445566778899\",\"messageName\":\"status_test\",\"payload\":{\"status\":\"ok\"},\"bodyUtf8\":\"Status test from runtime callback\",\"title\":\"Status Test\",\"sendMode\":{\"PropagationOnly\":{}}}\0".as_ptr() as *const c_char;
+    if unsafe { send_lxmf(host.ctx, request) } == 0 { 0 } else { 1 }
+"#,
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+    let mut persisted = persisted_enabled_plugin_state("rem.plugin.example_status");
+    persisted
+        .plugins
+        .get_mut("rem.plugin.example_status")
+        .expect("persisted plugin exists")
+        .granted_permissions
+        .lxmf_send = true;
+
+    let mut runtime =
+        NativePluginRuntime::discover(install_root.path(), "arm64-v8a", Some(&persisted))
+            .expect("runtime discovers plugins");
+
+    runtime.start_enabled_plugins();
+
+    let queued = runtime.drain_queued_lxmf_outbound_requests();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        queued[0].body_utf8.as_str(),
+        "Status test from runtime callback"
+    );
+    assert!(matches!(queued[0].send_mode, SendMode::PropagationOnly {}));
+}
+
+#[test]
 fn native_runtime_dispatches_received_lxmf_message_to_owner_plugin() {
     let install_root = TestTempDir::new("native-runtime-lxmf-receive-root");
     let plugin_dir = install_root.path().join("rem.plugin.example_status");
