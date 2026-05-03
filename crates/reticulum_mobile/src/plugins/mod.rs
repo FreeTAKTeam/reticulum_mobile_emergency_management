@@ -11,8 +11,8 @@ mod permissions;
 mod registry;
 
 pub use abi::{
-    PluginEntrypoints, RemPluginAbiVersion, RemPluginHostApi, RemPluginStatusCode,
-    REM_PLUGIN_ABI_VERSION,
+    PluginEntrypoints, RemPluginAbiVersion, RemPluginHostApi, RemPluginHostBuffer,
+    RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
 };
 pub use abi_c::{NativePluginLibrary, NativePluginLoadError, NativePluginMetadata};
 pub use catalog::{

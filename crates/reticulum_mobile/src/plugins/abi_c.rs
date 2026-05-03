@@ -1,12 +1,18 @@
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use libloading::Library;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 
-use super::{PluginLoadCandidate, RemPluginHostApi, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION};
+use super::{
+    PluginHostApi, PluginHostError, PluginLoadCandidate, PluginLxmfOutboundRequest,
+    RemPluginHostApi, RemPluginHostBuffer, RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
+};
+use crate::types::SendMode;
 
 type MetadataFn = unsafe extern "C" fn() -> *const c_char;
 type InitFn = unsafe extern "C" fn(*const RemPluginHostApi) -> i32;
@@ -75,6 +81,30 @@ pub struct NativePluginLibrary {
     start: StatusFn,
     stop: StatusFn,
     handle_event: HandleEventFn,
+    host_context: Option<Box<NativePluginHostContext>>,
+}
+
+#[derive(Debug)]
+struct NativePluginHostContext {
+    plugin_id: String,
+    host_api: Mutex<PluginHostApi>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativePluginSendLxmfRequest {
+    destination_hex: String,
+    message_name: String,
+    payload: JsonValue,
+    body_utf8: String,
+    title: Option<String>,
+    #[serde(default = "default_send_mode")]
+    send_mode: SendMode,
+}
+
+enum NativePluginCallbackError {
+    Error,
+    PermissionDenied,
 }
 
 impl NativePluginLibrary {
@@ -126,6 +156,7 @@ impl NativePluginLibrary {
             start,
             stop,
             handle_event,
+            host_context: None,
         })
     }
 
@@ -140,6 +171,45 @@ impl NativePluginLibrary {
         // the duration of the call and the plugin must not retain it.
         let status = unsafe { (self.init)(&host_api) };
         status_to_result("init", status)
+    }
+
+    pub fn initialize_with_host_api(
+        &mut self,
+        plugin_id: impl Into<String>,
+        host_api: PluginHostApi,
+    ) -> Result<(), NativePluginLoadError> {
+        self.host_context = Some(Box::new(NativePluginHostContext {
+            plugin_id: plugin_id.into(),
+            host_api: Mutex::new(host_api),
+        }));
+        let host_api = self
+            .host_context
+            .as_mut()
+            .expect("host context exists")
+            .rem_host_api();
+        // SAFETY: The function pointer was resolved from the loaded library with
+        // the C ABI signature required by REM. The callback table points at
+        // NativePluginLibrary-owned context that remains valid until the plugin
+        // library is dropped or reinitialized.
+        let status = unsafe { (self.init)(&host_api) };
+        match status_to_result("init", status) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.host_context = None;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn drain_queued_lxmf_outbound_requests(&self) -> Vec<PluginLxmfOutboundRequest> {
+        let Some(context) = self.host_context.as_ref() else {
+            return Vec::new();
+        };
+        context
+            .host_api
+            .lock()
+            .map(|mut host_api| host_api.drain_queued_lxmf_outbound_requests())
+            .unwrap_or_default()
     }
 
     pub fn start(&self) -> Result<(), NativePluginLoadError> {
@@ -164,6 +234,251 @@ impl NativePluginLibrary {
         // the duration of the call.
         let status = unsafe { (self.handle_event)(event.as_ptr()) };
         status_to_result("handle_event", status)
+    }
+}
+
+impl NativePluginHostContext {
+    fn rem_host_api(&mut self) -> RemPluginHostApi {
+        RemPluginHostApi {
+            abi_major: REM_PLUGIN_ABI_VERSION.major,
+            abi_minor: REM_PLUGIN_ABI_VERSION.minor,
+            ctx: self as *mut Self as *mut c_void,
+            storage_get: Some(host_storage_get),
+            storage_set: Some(host_storage_set),
+            subscribe: Some(host_subscribe),
+            publish_event: Some(host_publish_event),
+            send_lxmf: Some(host_send_lxmf),
+            raise_notification: Some(host_raise_notification),
+            free_buffer: Some(host_free_buffer),
+        }
+    }
+}
+
+unsafe extern "C" fn host_storage_get(
+    ctx: *mut c_void,
+    key: *const c_char,
+    out: *mut RemPluginHostBuffer,
+) -> i32 {
+    callback_status(storage_get_impl(ctx, key, out))
+}
+
+fn storage_get_impl(
+    ctx: *mut c_void,
+    key: *const c_char,
+    out: *mut RemPluginHostBuffer,
+) -> Result<(), NativePluginCallbackError> {
+    if out.is_null() {
+        return Err(NativePluginCallbackError::Error);
+    }
+    // SAFETY: The callback table passes the host-owned context pointer that was
+    // created by `NativePluginHostContext::rem_host_api`.
+    let context = unsafe { context_from_ptr(ctx)? };
+    let key = read_c_string(key)?;
+    let value = context
+        .host_api
+        .lock()
+        .map_err(|_| NativePluginCallbackError::Error)?
+        .get_plugin_storage(context.plugin_id.as_str(), key.as_str())
+        .map_err(NativePluginCallbackError::from)?;
+    let buffer = match value {
+        Some(value) => host_buffer_from_json(&value)?,
+        None => RemPluginHostBuffer {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        },
+    };
+    // SAFETY: `out` was checked for null and points to caller-provided writable
+    // storage for the duration of this callback.
+    unsafe {
+        *out = buffer;
+    }
+    Ok(())
+}
+
+unsafe extern "C" fn host_storage_set(
+    ctx: *mut c_void,
+    key: *const c_char,
+    value_json: *const c_char,
+) -> i32 {
+    callback_status(storage_set_impl(ctx, key, value_json))
+}
+
+fn storage_set_impl(
+    ctx: *mut c_void,
+    key: *const c_char,
+    value_json: *const c_char,
+) -> Result<(), NativePluginCallbackError> {
+    // SAFETY: The callback table passes the host-owned context pointer that was
+    // created by `NativePluginHostContext::rem_host_api`.
+    let context = unsafe { context_from_ptr(ctx)? };
+    let key = read_c_string(key)?;
+    let value = read_json(value_json)?;
+    context
+        .host_api
+        .lock()
+        .map_err(|_| NativePluginCallbackError::Error)?
+        .set_plugin_storage(context.plugin_id.as_str(), key.as_str(), value)
+        .map_err(NativePluginCallbackError::from)
+}
+
+unsafe extern "C" fn host_subscribe(ctx: *mut c_void, topic: *const c_char) -> i32 {
+    callback_status(subscribe_impl(ctx, topic))
+}
+
+fn subscribe_impl(ctx: *mut c_void, topic: *const c_char) -> Result<(), NativePluginCallbackError> {
+    // SAFETY: The callback table passes the host-owned context pointer that was
+    // created by `NativePluginHostContext::rem_host_api`.
+    let context = unsafe { context_from_ptr(ctx)? };
+    let topic = read_c_string(topic)?;
+    context
+        .host_api
+        .lock()
+        .map_err(|_| NativePluginCallbackError::Error)?
+        .subscribe(context.plugin_id.as_str(), topic.as_str())
+        .map_err(NativePluginCallbackError::from)
+}
+
+unsafe extern "C" fn host_publish_event(
+    ctx: *mut c_void,
+    topic: *const c_char,
+    payload_json: *const c_char,
+) -> i32 {
+    callback_status(publish_event_impl(ctx, topic, payload_json))
+}
+
+fn publish_event_impl(
+    ctx: *mut c_void,
+    topic: *const c_char,
+    payload_json: *const c_char,
+) -> Result<(), NativePluginCallbackError> {
+    // SAFETY: The callback table passes the host-owned context pointer that was
+    // created by `NativePluginHostContext::rem_host_api`.
+    let context = unsafe { context_from_ptr(ctx)? };
+    let topic = read_c_string(topic)?;
+    let payload = read_json(payload_json)?;
+    context
+        .host_api
+        .lock()
+        .map_err(|_| NativePluginCallbackError::Error)?
+        .deliver_event(topic.as_str(), payload)
+        .map_err(NativePluginCallbackError::from)
+}
+
+unsafe extern "C" fn host_send_lxmf(ctx: *mut c_void, request_json: *const c_char) -> i32 {
+    callback_status(send_lxmf_impl(ctx, request_json))
+}
+
+fn send_lxmf_impl(
+    ctx: *mut c_void,
+    request_json: *const c_char,
+) -> Result<(), NativePluginCallbackError> {
+    // SAFETY: The callback table passes the host-owned context pointer that was
+    // created by `NativePluginHostContext::rem_host_api`.
+    let context = unsafe { context_from_ptr(ctx)? };
+    let request_json = read_c_string(request_json)?;
+    let request: NativePluginSendLxmfRequest = serde_json::from_str(request_json.as_str())
+        .map_err(|_| NativePluginCallbackError::Error)?;
+    context
+        .host_api
+        .lock()
+        .map_err(|_| NativePluginCallbackError::Error)?
+        .request_lxmf_send_to(
+            context.plugin_id.as_str(),
+            request.destination_hex.as_str(),
+            request.message_name.as_str(),
+            request.payload,
+            request.body_utf8.as_str(),
+            request.title,
+            request.send_mode,
+        )
+        .map(|_| ())
+        .map_err(NativePluginCallbackError::from)
+}
+
+unsafe extern "C" fn host_raise_notification(
+    _ctx: *mut c_void,
+    _notification_json: *const c_char,
+) -> i32 {
+    RemPluginStatusCode::UnsupportedApi as i32
+}
+
+unsafe extern "C" fn host_free_buffer(_ctx: *mut c_void, buffer: RemPluginHostBuffer) {
+    if buffer.ptr.is_null() || buffer.len == 0 {
+        return;
+    }
+    // SAFETY: Host buffers are allocated from `Box<[u8]>` in
+    // `host_buffer_from_json` and are returned with the exact pointer and length.
+    // Reconstructing the same boxed slice releases the allocation once.
+    unsafe {
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            buffer.ptr, buffer.len,
+        )));
+    }
+}
+
+unsafe fn context_from_ptr(
+    ctx: *mut c_void,
+) -> Result<&'static NativePluginHostContext, NativePluginCallbackError> {
+    if ctx.is_null() {
+        return Err(NativePluginCallbackError::Error);
+    }
+    // SAFETY: The caller guarantees `ctx` is the host-owned pointer created from
+    // a boxed NativePluginHostContext and that the box outlives this callback.
+    Ok(unsafe { &*(ctx as *const NativePluginHostContext) })
+}
+
+fn read_c_string(ptr: *const c_char) -> Result<String, NativePluginCallbackError> {
+    if ptr.is_null() {
+        return Err(NativePluginCallbackError::Error);
+    }
+    // SAFETY: Callback string arguments must be valid NUL-terminated C strings
+    // for the duration of the callback.
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map(str::to_string)
+        .map_err(|_| NativePluginCallbackError::Error)
+}
+
+fn read_json(ptr: *const c_char) -> Result<JsonValue, NativePluginCallbackError> {
+    let value = read_c_string(ptr)?;
+    serde_json::from_str(value.as_str()).map_err(|_| NativePluginCallbackError::Error)
+}
+
+fn host_buffer_from_json(
+    value: &JsonValue,
+) -> Result<RemPluginHostBuffer, NativePluginCallbackError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| NativePluginCallbackError::Error)?;
+    let mut bytes = bytes.into_boxed_slice();
+    let buffer = RemPluginHostBuffer {
+        ptr: bytes.as_mut_ptr(),
+        len: bytes.len(),
+    };
+    std::mem::forget(bytes);
+    Ok(buffer)
+}
+
+fn callback_status(result: Result<(), NativePluginCallbackError>) -> i32 {
+    match result {
+        Ok(()) => RemPluginStatusCode::Ok as i32,
+        Err(NativePluginCallbackError::PermissionDenied) => {
+            RemPluginStatusCode::PermissionDenied as i32
+        }
+        Err(NativePluginCallbackError::Error) => RemPluginStatusCode::Error as i32,
+    }
+}
+
+fn default_send_mode() -> SendMode {
+    SendMode::Auto {}
+}
+
+impl From<PluginHostError> for NativePluginCallbackError {
+    fn from(error: PluginHostError) -> Self {
+        match error {
+            PluginHostError::PermissionDenied { .. } => Self::PermissionDenied,
+            PluginHostError::Storage(_)
+            | PluginHostError::PluginNotFound { .. }
+            | PluginHostError::LxmfMessage(_) => Self::Error,
+        }
     }
 }
 
