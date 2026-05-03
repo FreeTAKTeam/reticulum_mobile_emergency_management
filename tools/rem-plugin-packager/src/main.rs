@@ -287,7 +287,7 @@ fn validate_settings_schema_actions(
     manifest: &toml::Value,
     relative_path: &str,
 ) -> Result<(), PackagerError> {
-    let field_ids = settings_field_ids(schema);
+    let field_ids = settings_field_ids(schema, relative_path)?;
     let declared_messages = manifest
         .get("messages")
         .and_then(toml::Value::as_array)
@@ -342,24 +342,30 @@ fn validate_settings_schema_actions(
     Ok(())
 }
 
-fn settings_field_ids(schema: &serde_json::Value) -> BTreeSet<String> {
-    let explicit = schema
-        .get("fields")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|field| field.get("id").and_then(serde_json::Value::as_str))
-        .filter(|field_id| !field_id.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
-    if !explicit.is_empty() {
-        return explicit;
+fn settings_field_ids(
+    schema: &serde_json::Value,
+    relative_path: &str,
+) -> Result<BTreeSet<String>, PackagerError> {
+    let mut explicit = BTreeSet::new();
+    if let Some(fields) = schema.get("fields").and_then(serde_json::Value::as_array) {
+        for field_id in fields
+            .iter()
+            .filter_map(|field| field.get("id").and_then(serde_json::Value::as_str))
+            .filter(|field_id| !field_id.trim().is_empty())
+        {
+            if !explicit.insert(field_id.to_string()) {
+                return Err(invalid_schema(relative_path));
+            }
+        }
     }
-    schema
+    if !explicit.is_empty() {
+        return Ok(explicit);
+    }
+    Ok(schema
         .get("properties")
         .and_then(serde_json::Value::as_object)
         .map(|properties| properties.keys().cloned().collect())
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 fn invalid_schema(relative_path: &str) -> PackagerError {
@@ -848,6 +854,26 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("settings action for unknown field is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_duplicate_settings_field_ids() {
+        let package = TestTempDir::new("settings-duplicate-field-id");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(
+            package.path(),
+            "ui/settings.schema.json",
+            br#"{
+                "fields": [
+                    {"id": "destinationHex", "type": "text"},
+                    {"id": "destinationHex", "type": "text"}
+                ]
+            }"#,
+        );
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("duplicate settings field ids are rejected");
     }
 
     #[test]

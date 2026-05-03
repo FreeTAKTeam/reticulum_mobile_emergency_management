@@ -1492,6 +1492,27 @@ fn installer_rejects_settings_action_for_unknown_field() {
 }
 
 #[test]
+fn installer_rejects_duplicate_settings_field_ids() {
+    let package_dir = TestTempDir::new("settings-duplicate-field-id");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(
+        package_dir.path(),
+        "ui/settings.schema.json",
+        br#"{
+            "fields": [
+                {"id": "destinationHex", "type": "text"},
+                {"id": "destinationHex", "type": "text"}
+            ]
+        }"#,
+    );
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("duplicate settings field ids are rejected");
+}
+
+#[test]
 fn installer_rejects_missing_message_schema() {
     let package_dir = TestTempDir::new("missing-message-schema");
     let install_root = TestTempDir::new("install-root");
