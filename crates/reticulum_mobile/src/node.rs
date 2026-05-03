@@ -5584,13 +5584,13 @@ schema = "schemas/bad_status.schema.json"
         write_test_plugin_file(
             bad_package_dir.as_path(),
             "schemas/bad_status.schema.json",
-            b"not-json",
+            br#"{"type":"object","required":["badStatus"],"properties":{"badStatus":{"type":"string","minLength":1}},"additionalProperties":false}"#,
         );
         let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
         node.install_plugin_package_dir("arm64-v8a", valid_package_dir.to_string_lossy().as_ref())
             .expect("valid staged package installs");
         node.install_plugin_package_dir("arm64-v8a", bad_package_dir.to_string_lossy().as_ref())
-            .expect("bad schema package still installs because schema file exists");
+            .expect("unrelated schema package installs");
         let mut grants = PluginPermissions::default();
         grants.lxmf_send = true;
         node.grant_plugin_permissions("arm64-v8a", "rem.plugin.example_status", grants)

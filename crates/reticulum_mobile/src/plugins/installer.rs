@@ -21,6 +21,8 @@ pub enum PluginInstallerError {
     Manifest(#[from] PluginManifestError),
     #[error("required package file is missing: {relative_path}")]
     MissingPackageFile { relative_path: String },
+    #[error("invalid package schema file: {relative_path}")]
+    InvalidPackageSchema { relative_path: String },
     #[error("invalid package path: {path}")]
     InvalidPackagePath { path: PathBuf },
     #[error("plugin is already installed: {plugin_id}")]
@@ -63,6 +65,7 @@ impl PluginInstaller {
         }
         for message in &manifest.messages {
             require_package_file(package_dir, message.schema.as_str())?;
+            require_json_package_file(package_dir, message.schema.as_str())?;
         }
 
         let install_dir = self.install_root.join(manifest.id.as_str());
@@ -175,6 +178,25 @@ fn require_package_file(
         return Ok(());
     }
     Err(PluginInstallerError::MissingPackageFile {
+        relative_path: relative_path.to_string(),
+    })
+}
+
+fn require_json_package_file(
+    package_dir: &Path,
+    relative_path: &str,
+) -> Result<(), PluginInstallerError> {
+    let path = package_dir.join(relative_path);
+    let contents = fs_err::read(path)?;
+    let schema: serde_json::Value = serde_json::from_slice(contents.as_slice()).map_err(|_| {
+        PluginInstallerError::InvalidPackageSchema {
+            relative_path: relative_path.to_string(),
+        }
+    })?;
+    if schema.is_object() {
+        return Ok(());
+    }
+    Err(PluginInstallerError::InvalidPackageSchema {
         relative_path: relative_path.to_string(),
     })
 }

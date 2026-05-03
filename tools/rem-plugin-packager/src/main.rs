@@ -25,6 +25,8 @@ enum PackagerError {
     UnsafePath { path: String },
     #[error("required package file is missing: {path}")]
     MissingPackageFile { path: String },
+    #[error("invalid package schema file: {path}")]
+    InvalidPackageSchema { path: String },
     #[error("archive I/O failed")]
     Io(#[from] std::io::Error),
     #[error("archive write failed")]
@@ -168,6 +170,7 @@ fn validate_package_references(
             )?;
             validate_relative_path(schema)?;
             require_package_file(plugin_dir, schema)?;
+            require_json_package_file(plugin_dir, schema)?;
         }
     }
     Ok(())
@@ -188,6 +191,22 @@ fn require_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), Pa
         return Ok(());
     }
     Err(PackagerError::MissingPackageFile {
+        path: relative_path.to_string(),
+    })
+}
+
+fn require_json_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), PackagerError> {
+    let path = plugin_dir.join(relative_path);
+    let contents = fs_err::read(path)?;
+    let schema: serde_json::Value = serde_json::from_slice(contents.as_slice()).map_err(|_| {
+        PackagerError::InvalidPackageSchema {
+            path: relative_path.to_string(),
+        }
+    })?;
+    if schema.is_object() {
+        return Ok(());
+    }
+    Err(PackagerError::InvalidPackageSchema {
         path: relative_path.to_string(),
     })
 }
@@ -405,6 +424,21 @@ schema = "../status_test.schema.json"
             .expect_err("unsafe schema path is rejected");
 
         assert!(matches!(err, PackagerError::UnsafePath { .. }));
+    }
+
+    #[test]
+    fn validate_package_references_rejects_invalid_message_schema_json() {
+        let package = TestTempDir::new("invalid-message-schema-json");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(
+            package.path(),
+            "schemas/status_test.schema.json",
+            b"not-json",
+        );
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("invalid message schema json is rejected");
     }
 
     #[test]

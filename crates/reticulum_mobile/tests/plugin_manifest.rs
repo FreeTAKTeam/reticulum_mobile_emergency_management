@@ -1363,6 +1363,22 @@ fn installer_rejects_missing_message_schema() {
 }
 
 #[test]
+fn installer_rejects_invalid_message_schema_json() {
+    let package_dir = TestTempDir::new("invalid-message-schema");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(
+        package_dir.path(),
+        "schemas/status_test.schema.json",
+        b"not-json",
+    );
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("invalid message schema json is rejected");
+}
+
+#[test]
 fn rejects_settings_schema_path_traversal() {
     let err = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
         "schema = \"ui/settings.schema.json\"",
