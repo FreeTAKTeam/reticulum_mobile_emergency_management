@@ -62,6 +62,14 @@ Omit `--allow-missing-libraries` for production packages. Without that flag, the
 packager requires every Android library path declared in `plugin.toml` to exist
 before the archive is written.
 
+Production packages can include `signature.json`:
+
+```powershell
+cargo run --manifest-path tools/rem-plugin-packager/Cargo.toml -- plugins/example-status-plugin output/example-status.remplugin --publisher FreeTAKTeam --signing-key-base64 <32-byte-seed-base64>
+```
+
+The installer rejects unsigned packages when production trust policy is active.
+
 ## Manifest
 
 ```toml
@@ -182,3 +190,13 @@ payload before building or accepting the host-owned field envelope. Android v1
 supports the schema subset used by host-rendered Settings actions: object
 payloads, required fields, primitive property types, string length bounds, and
 `additionalProperties = false`.
+
+## Reference Docs
+
+- [Manifest reference](plugin-manifest.md)
+- [Permission reference](plugin-permissions.md)
+- [C ABI guide](c-abi-guide.md)
+- [Storage and events](storage-and-events.md)
+- [Signing and trust model](signing-trust-model.md)
+- [Building a plug-in](building-a-plugin.md)
+- [Example walkthrough](example-plugin-walkthrough.md)
