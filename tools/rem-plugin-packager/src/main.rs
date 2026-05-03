@@ -3,6 +3,7 @@ use std::env;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
+use semver::Version;
 use thiserror::Error;
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
@@ -138,6 +139,10 @@ fn validate_package_references(
             field: "plugin_type",
         });
     }
+    let plugin_version = manifest_string(manifest, "version")?;
+    if !is_semver_version(plugin_version.as_str()) {
+        return Err(PackagerError::InvalidManifestField { field: "version" });
+    }
     let rem_api_version = manifest_string(manifest, "rem_api_version")?;
     if !rem_api_version_supports_current(rem_api_version.as_str()) {
         return Err(PackagerError::InvalidManifestField {
@@ -188,6 +193,16 @@ fn validate_package_references(
                     field: "messages.name",
                 });
             }
+            let version = message.get("version").and_then(toml::Value::as_str).ok_or(
+                PackagerError::InvalidManifestField {
+                    field: "messages.version",
+                },
+            )?;
+            if !is_semver_version(version) {
+                return Err(PackagerError::InvalidManifestField {
+                    field: "messages.version",
+                });
+            }
             let directions = message
                 .get("direction")
                 .and_then(toml::Value::as_array)
@@ -227,6 +242,10 @@ fn manifest_string(manifest: &toml::Value, key: &'static str) -> Result<String, 
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
         .ok_or(PackagerError::InvalidManifestField { field: key })
+}
+
+fn is_semver_version(value: &str) -> bool {
+    Version::parse(value.trim()).is_ok()
 }
 
 fn require_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), PackagerError> {
@@ -494,6 +513,7 @@ mod tests {
         r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+version = "0.1.0"
 rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
@@ -582,6 +602,7 @@ schema = "schemas/status_test.schema.json"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+version = "0.1.0"
 rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
@@ -634,6 +655,7 @@ schema = "../status_test.schema.json"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+version = "0.1.0"
 rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
@@ -665,6 +687,7 @@ schema = "schemas/status_test.schema.json"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+version = "0.1.0"
 rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
@@ -682,6 +705,58 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("duplicate message directions are rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_malformed_plugin_version() {
+        let package = TestTempDir::new("malformed-plugin-version");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "native"
+version = "preview"
+rem_api_version = ">=1.0.0,<2.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("malformed plugin version is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_malformed_message_version() {
+        let package = TestTempDir::new("malformed-message-version");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "native"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[[messages]]
+name = "status_test"
+version = "one"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("malformed message version is rejected");
     }
 
     #[test]
@@ -769,6 +844,7 @@ arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+version = "0.1.0"
 rem_api_version = ">=2.0.0,<3.0.0"
 
 [library.android]

@@ -1445,6 +1445,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

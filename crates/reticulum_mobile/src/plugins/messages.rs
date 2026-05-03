@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use thiserror::Error;
 
-use super::manifest::PluginManifestError;
+use super::manifest::{is_semver_version, PluginManifestError};
 use super::PluginManifest;
 use crate::types::SendMode;
 
@@ -216,6 +216,12 @@ impl PluginMessageDescriptor {
         if self.version.trim().is_empty() {
             return Err(PluginManifestError::MissingRequiredField {
                 field: "messages.version",
+            });
+        }
+        if !is_semver_version(self.version.as_str()) {
+            return Err(PluginManifestError::InvalidMessageVersion {
+                message_name: self.name.clone(),
+                version: self.version.clone(),
             });
         }
         if self.schema.trim().is_empty() {

@@ -396,6 +396,32 @@ fn rejects_duplicate_lxmf_message_directions() {
 }
 
 #[test]
+fn rejects_malformed_plugin_version() {
+    let err = PluginManifest::from_toml_str(
+        &VALID_MANIFEST.replace("version = \"0.1.0\"", "version = \"preview\""),
+    )
+    .expect_err("malformed plugin version is rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::InvalidPluginVersion { .. }
+    ));
+}
+
+#[test]
+fn rejects_malformed_lxmf_message_version() {
+    let err = PluginManifest::from_toml_str(
+        &VALID_MANIFEST.replace("version = \"1.0.0\"", "version = \"one\""),
+    )
+    .expect_err("malformed message version is rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::InvalidMessageVersion { .. }
+    ));
+}
+
+#[test]
 fn c_abi_version_and_status_codes_are_stable() {
     assert_eq!(REM_PLUGIN_ABI_VERSION.major, 1);
     assert_eq!(REM_PLUGIN_ABI_VERSION.minor, 0);

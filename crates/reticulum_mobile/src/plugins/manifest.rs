@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,6 +19,8 @@ pub enum PluginManifestError {
     InvalidPluginId { plugin_id: String },
     #[error("unsupported plugin type: {plugin_type}")]
     InvalidPluginType { plugin_type: String },
+    #[error("invalid plugin version: {version}")]
+    InvalidPluginVersion { version: String },
     #[error("unsupported REM plugin API version: {rem_api_version}")]
     UnsupportedApiVersion { rem_api_version: String },
     #[error("missing Android library for ABI: {abi}")]
@@ -30,6 +33,11 @@ pub enum PluginManifestError {
     InvalidMessageSchemaPath { path: String },
     #[error("invalid plugin message name: {message_name}")]
     InvalidMessageName { message_name: String },
+    #[error("invalid plugin message version for {message_name}: {version}")]
+    InvalidMessageVersion {
+        message_name: String,
+        version: String,
+    },
     #[error("duplicate plugin message name: {message_name}")]
     DuplicateMessageName { message_name: String },
     #[error("duplicate plugin message direction for {message_name}: {direction}")]
@@ -92,6 +100,11 @@ impl PluginManifest {
         require_nonempty(self.version.as_str(), "version")?;
         require_nonempty(self.rem_api_version.as_str(), "rem_api_version")?;
         require_nonempty(self.plugin_type.as_str(), "plugin_type")?;
+        if !is_semver_version(self.version.as_str()) {
+            return Err(PluginManifestError::InvalidPluginVersion {
+                version: self.version.clone(),
+            });
+        }
         if !is_reverse_dns_id(self.id.as_str()) {
             return Err(PluginManifestError::InvalidPluginId {
                 plugin_id: self.id.clone(),
@@ -144,6 +157,10 @@ fn require_nonempty(value: &str, field: &'static str) -> Result<(), PluginManife
         return Err(PluginManifestError::MissingRequiredField { field });
     }
     Ok(())
+}
+
+pub(crate) fn is_semver_version(value: &str) -> bool {
+    Version::parse(value.trim()).is_ok()
 }
 
 fn normalize_android_abi_key(abi: &str) -> String {
