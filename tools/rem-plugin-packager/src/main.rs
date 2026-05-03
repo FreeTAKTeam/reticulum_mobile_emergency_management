@@ -313,7 +313,7 @@ schema = "ui/settings.schema.json"
 [[messages]]
 name = "status_test"
 version = "1.0.0"
-direction = ["send"]
+direction = ["send", "receive"]
 schema = "schemas/status_test.schema.json"
 "#
         .parse()
@@ -395,7 +395,7 @@ arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
 [[messages]]
 name = "status_test"
 version = "1.0.0"
-direction = ["send"]
+direction = ["send", "receive"]
 schema = "../status_test.schema.json"
 "#
         .parse()

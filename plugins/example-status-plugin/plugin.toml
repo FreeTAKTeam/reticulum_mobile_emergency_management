@@ -16,10 +16,11 @@ schema = "ui/settings.schema.json"
 storage_plugin = true
 messages_write = true
 lxmf_send = true
+lxmf_receive = true
 notifications_raise = true
 
 [[messages]]
 name = "status_test"
 version = "1.0.0"
-direction = ["send"]
+direction = ["send", "receive"]
 schema = "schemas/status_test.schema.json"
