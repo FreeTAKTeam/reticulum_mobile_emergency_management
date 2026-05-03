@@ -1018,8 +1018,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "lxmf-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "hex",
+ "rand_core 0.6.4",
+ "rmp-serde",
+ "rmpv",
+ "rns-core",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha2",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "lxmf-sdk"
-version = "0.2.1"
+version = "0.1.0"
 dependencies = [
  "hex",
  "hmac",
@@ -1028,24 +1046,6 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "zeroize",
-]
-
-[[package]]
-name = "lxmf-wire"
-version = "0.2.0"
-dependencies = [
- "base64",
- "ed25519-dalek",
- "hex",
- "rand_core 0.6.4",
- "reticulum-rs-core",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha2",
- "x25519-dalek",
 ]
 
 [[package]]
@@ -1425,25 +1425,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reticulum-rs-core"
-version = "0.2.0"
-dependencies = [
- "aes",
- "cbc",
- "crypto-common",
- "ed25519-dalek",
- "hex",
- "hkdf",
- "hmac",
- "rand_core 0.6.4",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "sha2",
- "x25519-dalek",
-]
-
-[[package]]
 name = "reticulum_mobile"
 version = "0.1.0"
 dependencies = [
@@ -1455,8 +1436,8 @@ dependencies = [
  "jni",
  "libloading",
  "log",
+ "lxmf-core",
  "lxmf-sdk",
- "lxmf-wire",
  "rand_core 0.6.4",
  "regex",
  "reqwest",
@@ -1516,6 +1497,25 @@ dependencies = [
  "rmp",
  "serde",
  "serde_bytes",
+]
+
+[[package]]
+name = "rns-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "cbc",
+ "crypto-common",
+ "ed25519-dalek",
+ "hex",
+ "hkdf",
+ "hmac",
+ "rand_core 0.6.4",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "sha2",
+ "x25519-dalek",
 ]
 
 [[package]]
