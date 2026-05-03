@@ -171,7 +171,8 @@ fn validate_package_references(
     {
         validate_relative_path(settings_schema)?;
         require_package_file(plugin_dir, settings_schema)?;
-        require_json_package_file(plugin_dir, settings_schema)?;
+        let settings_schema_json = read_json_package_file(plugin_dir, settings_schema)?;
+        validate_settings_schema_actions(&settings_schema_json, manifest, settings_schema)?;
     }
 
     if let Some(messages) = manifest.get("messages").and_then(toml::Value::as_array) {
@@ -183,7 +184,7 @@ fn validate_package_references(
             )?;
             validate_relative_path(schema)?;
             require_package_file(plugin_dir, schema)?;
-            require_json_package_file(plugin_dir, schema)?;
+            read_json_package_file(plugin_dir, schema)?;
         }
     }
     Ok(())
@@ -208,7 +209,10 @@ fn require_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), Pa
     })
 }
 
-fn require_json_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(), PackagerError> {
+fn read_json_package_file(
+    plugin_dir: &Path,
+    relative_path: &str,
+) -> Result<serde_json::Value, PackagerError> {
     let path = plugin_dir.join(relative_path);
     let contents = fs_err::read(path)?;
     let schema: serde_json::Value = serde_json::from_slice(contents.as_slice()).map_err(|_| {
@@ -217,11 +221,97 @@ fn require_json_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(
         }
     })?;
     if schema.is_object() {
-        return Ok(());
+        return Ok(schema);
     }
     Err(PackagerError::InvalidPackageSchema {
         path: relative_path.to_string(),
     })
+}
+
+fn validate_settings_schema_actions(
+    schema: &serde_json::Value,
+    manifest: &toml::Value,
+    relative_path: &str,
+) -> Result<(), PackagerError> {
+    let field_ids = settings_field_ids(schema);
+    let declared_messages = manifest
+        .get("messages")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("name").and_then(toml::Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let Some(actions) = schema.get("actions").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    for action in actions {
+        let Some(action) = action.as_object() else {
+            continue;
+        };
+        let Some(action_type) = action.get("type").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if action_type != "send_lxmf" && action_type != "sendPluginLxmf" {
+            continue;
+        }
+        let Some(message_name) = action
+            .get("messageName")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return Err(invalid_schema(relative_path));
+        };
+        if !declared_messages.contains(message_name) {
+            return Err(invalid_schema(relative_path));
+        }
+        for field_key in ["destinationField", "bodyField"] {
+            let Some(field_id) = action.get(field_key).and_then(serde_json::Value::as_str) else {
+                return Err(invalid_schema(relative_path));
+            };
+            if !field_ids.contains(field_id) {
+                return Err(invalid_schema(relative_path));
+            }
+        }
+        if let Some(payload_fields) = action
+            .get("payloadFields")
+            .and_then(serde_json::Value::as_object)
+        {
+            for value in payload_fields.values() {
+                let Some(field_id) = value.as_str() else {
+                    return Err(invalid_schema(relative_path));
+                };
+                if !field_ids.contains(field_id) {
+                    return Err(invalid_schema(relative_path));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn settings_field_ids(schema: &serde_json::Value) -> BTreeSet<String> {
+    let explicit = schema
+        .get("fields")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|field| field.get("id").and_then(serde_json::Value::as_str))
+        .filter(|field_id| !field_id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn invalid_schema(relative_path: &str) -> PackagerError {
+    PackagerError::InvalidPackageSchema {
+        path: relative_path.to_string(),
+    }
 }
 
 fn rem_api_version_supports_current(value: &str) -> bool {
@@ -506,6 +596,66 @@ schema = "../status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("invalid settings schema json is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_settings_action_for_undeclared_message() {
+        let package = TestTempDir::new("settings-action-undeclared-message");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(
+            package.path(),
+            "ui/settings.schema.json",
+            br#"{
+                "fields": [
+                    {"id": "destinationHex", "type": "text"},
+                    {"id": "statusMessage", "type": "text"}
+                ],
+                "actions": [
+                    {
+                        "id": "sendMissing",
+                        "type": "send_lxmf",
+                        "messageName": "missing_status",
+                        "destinationField": "destinationHex",
+                        "bodyField": "statusMessage",
+                        "payloadFields": {"message": "statusMessage"}
+                    }
+                ]
+            }"#,
+        );
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("settings action for undeclared message is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_settings_action_for_unknown_field() {
+        let package = TestTempDir::new("settings-action-unknown-field");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(
+            package.path(),
+            "ui/settings.schema.json",
+            br#"{
+                "fields": [
+                    {"id": "destinationHex", "type": "text"},
+                    {"id": "statusMessage", "type": "text"}
+                ],
+                "actions": [
+                    {
+                        "id": "sendStatus",
+                        "type": "send_lxmf",
+                        "messageName": "status_test",
+                        "destinationField": "destinationHex",
+                        "bodyField": "missingBody",
+                        "payloadFields": {"message": "statusMessage"}
+                    }
+                ]
+            }"#,
+        );
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("settings action for unknown field is rejected");
     }
 
     #[test]

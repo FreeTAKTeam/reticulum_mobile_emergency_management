@@ -1,6 +1,8 @@
+use std::collections::BTreeSet;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 
+use serde_json::Value as JsonValue;
 use thiserror::Error;
 use zip::ZipArchive;
 
@@ -62,11 +64,16 @@ impl PluginInstaller {
         require_package_file(package_dir, library_path)?;
         if let Some(settings) = &manifest.settings {
             require_package_file(package_dir, settings.schema.as_str())?;
-            require_json_package_file(package_dir, settings.schema.as_str())?;
+            let settings_schema = read_json_package_file(package_dir, settings.schema.as_str())?;
+            validate_settings_schema_actions(
+                &settings_schema,
+                &manifest,
+                settings.schema.as_str(),
+            )?;
         }
         for message in &manifest.messages {
             require_package_file(package_dir, message.schema.as_str())?;
-            require_json_package_file(package_dir, message.schema.as_str())?;
+            read_json_package_file(package_dir, message.schema.as_str())?;
         }
 
         let install_dir = self.install_root.join(manifest.id.as_str());
@@ -183,23 +190,101 @@ fn require_package_file(
     })
 }
 
-fn require_json_package_file(
+fn read_json_package_file(
     package_dir: &Path,
     relative_path: &str,
-) -> Result<(), PluginInstallerError> {
+) -> Result<JsonValue, PluginInstallerError> {
     let path = package_dir.join(relative_path);
     let contents = fs_err::read(path)?;
-    let schema: serde_json::Value = serde_json::from_slice(contents.as_slice()).map_err(|_| {
+    let schema: JsonValue = serde_json::from_slice(contents.as_slice()).map_err(|_| {
         PluginInstallerError::InvalidPackageSchema {
             relative_path: relative_path.to_string(),
         }
     })?;
     if schema.is_object() {
-        return Ok(());
+        return Ok(schema);
     }
     Err(PluginInstallerError::InvalidPackageSchema {
         relative_path: relative_path.to_string(),
     })
+}
+
+fn validate_settings_schema_actions(
+    schema: &JsonValue,
+    manifest: &PluginManifest,
+    relative_path: &str,
+) -> Result<(), PluginInstallerError> {
+    let field_ids = settings_field_ids(schema);
+    let declared_messages = manifest
+        .messages
+        .iter()
+        .map(|message| message.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let Some(actions) = schema.get("actions").and_then(JsonValue::as_array) else {
+        return Ok(());
+    };
+    for action in actions {
+        let Some(action) = action.as_object() else {
+            continue;
+        };
+        let Some(action_type) = action.get("type").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        if action_type != "send_lxmf" && action_type != "sendPluginLxmf" {
+            continue;
+        }
+        let Some(message_name) = action.get("messageName").and_then(JsonValue::as_str) else {
+            return Err(invalid_schema(relative_path));
+        };
+        if !declared_messages.contains(message_name) {
+            return Err(invalid_schema(relative_path));
+        }
+        for field_key in ["destinationField", "bodyField"] {
+            let Some(field_id) = action.get(field_key).and_then(JsonValue::as_str) else {
+                return Err(invalid_schema(relative_path));
+            };
+            if !field_ids.contains(field_id) {
+                return Err(invalid_schema(relative_path));
+            }
+        }
+        if let Some(payload_fields) = action.get("payloadFields").and_then(JsonValue::as_object) {
+            for value in payload_fields.values() {
+                let Some(field_id) = value.as_str() else {
+                    return Err(invalid_schema(relative_path));
+                };
+                if !field_ids.contains(field_id) {
+                    return Err(invalid_schema(relative_path));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn settings_field_ids(schema: &JsonValue) -> BTreeSet<String> {
+    let explicit = schema
+        .get("fields")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|field| field.get("id").and_then(JsonValue::as_str))
+        .filter(|field_id| !field_id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn invalid_schema(relative_path: &str) -> PluginInstallerError {
+    PluginInstallerError::InvalidPackageSchema {
+        relative_path: relative_path.to_string(),
+    }
 }
 
 fn copy_package_dir(source: &Path, destination: &Path) -> Result<(), PluginInstallerError> {

@@ -1375,6 +1375,68 @@ fn installer_rejects_invalid_settings_schema_json() {
 }
 
 #[test]
+fn installer_rejects_settings_action_for_undeclared_message() {
+    let package_dir = TestTempDir::new("settings-action-undeclared-message");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(
+        package_dir.path(),
+        "ui/settings.schema.json",
+        br#"{
+            "fields": [
+                {"id": "destinationHex", "type": "text"},
+                {"id": "statusMessage", "type": "text"}
+            ],
+            "actions": [
+                {
+                    "id": "sendMissing",
+                    "type": "send_lxmf",
+                    "messageName": "missing_status",
+                    "destinationField": "destinationHex",
+                    "bodyField": "statusMessage",
+                    "payloadFields": {"message": "statusMessage"}
+                }
+            ]
+        }"#,
+    );
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("settings action for undeclared message is rejected");
+}
+
+#[test]
+fn installer_rejects_settings_action_for_unknown_field() {
+    let package_dir = TestTempDir::new("settings-action-unknown-field");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(
+        package_dir.path(),
+        "ui/settings.schema.json",
+        br#"{
+            "fields": [
+                {"id": "destinationHex", "type": "text"},
+                {"id": "statusMessage", "type": "text"}
+            ],
+            "actions": [
+                {
+                    "id": "sendStatus",
+                    "type": "send_lxmf",
+                    "messageName": "status_test",
+                    "destinationField": "destinationHex",
+                    "bodyField": "missingBody",
+                    "payloadFields": {"message": "statusMessage"}
+                }
+            ]
+        }"#,
+    );
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("settings action for unknown field is rejected");
+}
+
+#[test]
 fn installer_rejects_missing_message_schema() {
     let package_dir = TestTempDir::new("missing-message-schema");
     let install_root = TestTempDir::new("install-root");
