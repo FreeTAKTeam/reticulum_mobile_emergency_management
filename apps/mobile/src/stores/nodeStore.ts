@@ -5,6 +5,7 @@ import {
   type InstalledPluginRecord,
   type PeerRecord,
   type PluginCatalogDiagnostic,
+  type PluginLxmfSendRequest,
   type PluginLxmfMessageRecord,
   type PluginPermissionsRecord,
   type ProjectionInvalidationEvent,
@@ -2783,6 +2784,40 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
+  async function sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    const nodeClient = client.value;
+    if (!nodeClient) {
+      throw captureActionError(
+        `Plug-in LXMF send failed (${request.pluginId})`,
+        new Error("Node client is not initialized."),
+      );
+    }
+    try {
+      assertReadyForOutbound("send plug-in LXMF");
+      assertHubRoutingReadyForOutbound("send plug-in LXMF");
+      const destinationHex = normalizeDestinationHex(request.destinationHex);
+      if (!isValidDestinationHex(destinationHex)) {
+        throw new Error("Plug-in LXMF destination must be a 32-character destination hex.");
+      }
+      const bodyUtf8 = asTrimmedString(request.bodyUtf8);
+      if (!bodyUtf8) {
+        throw new Error("Plug-in LXMF body cannot be empty.");
+      }
+      await nodeClient.sendPluginLxmf({
+        ...request,
+        destinationHex,
+        bodyUtf8,
+        sendMode: request.sendMode ?? "Auto",
+      });
+      logUi(
+        "Info",
+        `Plug-in LXMF sent plugin=${request.pluginId} message=${request.messageName} destination=${destinationHex}.`,
+      );
+    } catch (error: unknown) {
+      throw captureActionError(`Plug-in LXMF send failed (${request.pluginId})`, error);
+    }
+  }
+
   function requireClient(action: string): ReticulumNodeClient {
     if (!client.value) {
       throw captureActionError(action, new Error("Node client is not initialized."));
@@ -2996,6 +3031,7 @@ export const useNodeStore = defineStore("node", () => {
     sendBytesDirect,
     sendBytesViaPropagation,
     sendLxmf,
+    sendPluginLxmf,
     onClientEvent,
     getSosSettings,
     setSosSettings,

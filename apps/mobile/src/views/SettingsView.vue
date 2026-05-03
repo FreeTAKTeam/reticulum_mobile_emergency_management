@@ -11,6 +11,7 @@ import {
   loadPluginSettingsValues,
   pluginSettingsSections,
   savePluginSettingsValues,
+  type PluginSettingsAction,
   type PluginSettingsValues,
 } from "../plugins/pluginSettings";
 import { copyToClipboard, shareText } from "../services/peerExchange";
@@ -468,6 +469,33 @@ function savePluginSettings(pluginId: string): void {
   }
   savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
   pluginSettingsFeedback.value = `${section.name} settings saved.`;
+}
+
+async function runPluginSettingsAction(
+  pluginId: string,
+  action: PluginSettingsAction,
+): Promise<void> {
+  const values = pluginSettingsValues[pluginId] ?? {};
+  const destinationHex = String(values[action.destinationField] ?? "").trim();
+  const bodyUtf8 = String(values[action.bodyField] ?? "").trim();
+  const payload = Object.fromEntries(
+    Object.entries(action.payloadFields).map(([payloadKey, fieldId]) => [
+      payloadKey,
+      values[fieldId],
+    ]),
+  );
+  await withPluginAction(pluginId, action.id, async () => {
+    await nodeStore.sendPluginLxmf({
+      pluginId,
+      destinationHex,
+      messageName: action.messageName,
+      payload,
+      bodyUtf8,
+      title: action.label,
+      sendMode: "Auto",
+    });
+    pluginSettingsFeedback.value = `${action.label} sent.`;
+  });
 }
 
 function openPluginArchiveFilePicker(): void {
@@ -995,8 +1023,10 @@ async function refreshPluginSettings(): Promise<void> {
             :key="section.pluginId"
             :section="section"
             :values="pluginSettingsValues[section.pluginId] ?? {}"
+            :pending="isPluginActionPending(section.pluginId)"
             @update="updatePluginSettings"
             @save="savePluginSettings"
+            @run-action="runPluginSettingsAction"
           />
         </div>
         <PluginLxmfMessageLog

@@ -21,6 +21,10 @@ plugin.rem.plugin.example_status.status_test
 Android package builds must place compiled libraries at the paths declared in
 `plugin.toml`, then zip this directory as a `.remplugin` archive.
 
+The Settings schema exposes a destination field, message field, and host-rendered
+`Send test status` action. The action submits a structured `status_test`
+payload to REM; the plug-in never constructs raw LXMF bytes itself.
+
 On receive, REM validates the `status_test` field envelope and delivers a
 `rem.plugin.lxmf.received` event to `rem_plugin_handle_event`; the example
 handler records that event without touching raw LXMF or Reticulum internals.

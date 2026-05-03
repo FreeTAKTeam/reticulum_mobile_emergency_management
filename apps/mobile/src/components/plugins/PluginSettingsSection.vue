@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  PluginSettingsAction,
   PluginSettingsField,
   PluginSettingsSection,
   PluginSettingsValue,
@@ -9,11 +10,13 @@ import type {
 const props = defineProps<{
   section: PluginSettingsSection;
   values: PluginSettingsValues;
+  pending: boolean;
 }>();
 
 const emit = defineEmits<{
   update: [pluginId: string, values: PluginSettingsValues];
   save: [pluginId: string];
+  runAction: [pluginId: string, action: PluginSettingsAction];
 }>();
 
 function fieldValue(field: PluginSettingsField): PluginSettingsValue {
@@ -55,6 +58,7 @@ function updateField(field: PluginSettingsField, value: PluginSettingsValue): vo
           type="text"
           :value="fieldValue(field)"
           :placeholder="field.placeholder"
+          :disabled="pending"
           @input="updateField(field, ($event.target as HTMLInputElement).value)"
         />
         <input
@@ -64,11 +68,13 @@ function updateField(field: PluginSettingsField, value: PluginSettingsValue): vo
           :min="field.min"
           :max="field.max"
           :step="field.step"
+          :disabled="pending"
           @input="updateField(field, Number(($event.target as HTMLInputElement).value))"
         />
         <select
           v-else-if="field.type === 'select'"
           :value="fieldValue(field)"
+          :disabled="pending"
           @change="updateField(field, ($event.target as HTMLSelectElement).value)"
         >
           <option
@@ -83,6 +89,7 @@ function updateField(field: PluginSettingsField, value: PluginSettingsValue): vo
           v-else
           type="checkbox"
           :checked="Boolean(fieldValue(field))"
+          :disabled="pending"
           @change="updateField(field, ($event.target as HTMLInputElement).checked)"
         />
       </label>
@@ -91,7 +98,18 @@ function updateField(field: PluginSettingsField, value: PluginSettingsValue): vo
     <p v-else class="plugin-description">This plug-in does not expose configurable fields.</p>
 
     <div class="plugin-actions">
-      <button type="button" @click="emit('save', section.pluginId)">Save Plug-in</button>
+      <button type="button" :disabled="pending" @click="emit('save', section.pluginId)">
+        Save Plug-in
+      </button>
+      <button
+        v-for="action in section.actions"
+        :key="action.id"
+        type="button"
+        :disabled="pending"
+        @click="emit('runAction', section.pluginId, action)"
+      >
+        {{ action.label }}
+      </button>
     </div>
   </article>
 </template>
@@ -187,6 +205,7 @@ function updateField(field: PluginSettingsField, value: PluginSettingsValue): vo
 
 .plugin-actions {
   display: flex;
+  gap: 0.5rem;
   justify-content: flex-end;
 }
 </style>

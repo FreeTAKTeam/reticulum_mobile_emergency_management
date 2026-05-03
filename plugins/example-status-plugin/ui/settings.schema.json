@@ -2,6 +2,13 @@
   "description": "Example status message defaults.",
   "fields": [
     {
+      "id": "destinationHex",
+      "label": "Destination",
+      "type": "text",
+      "default": "",
+      "placeholder": "32-character destination hex"
+    },
+    {
       "id": "statusMessage",
       "label": "Status message",
       "type": "text",
@@ -12,6 +19,19 @@
       "label": "Raise notification after send",
       "type": "boolean",
       "default": true
+    }
+  ],
+  "actions": [
+    {
+      "id": "sendStatusTest",
+      "label": "Send test status",
+      "type": "send_lxmf",
+      "messageName": "status_test",
+      "destinationField": "destinationHex",
+      "bodyField": "statusMessage",
+      "payloadFields": {
+        "message": "statusMessage"
+      }
     }
   ]
 }

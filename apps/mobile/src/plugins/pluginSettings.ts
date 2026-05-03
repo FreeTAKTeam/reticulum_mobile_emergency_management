@@ -24,6 +24,16 @@ export interface PluginSettingsField {
   options?: PluginSettingsOption[];
 }
 
+export interface PluginSettingsAction {
+  id: string;
+  label: string;
+  type: "send_lxmf";
+  messageName: string;
+  destinationField: string;
+  bodyField: string;
+  payloadFields: Record<string, string>;
+}
+
 export interface PluginSettingsSection {
   pluginId: string;
   name: string;
@@ -31,6 +41,7 @@ export interface PluginSettingsSection {
   state: PluginState;
   description?: string;
   fields: PluginSettingsField[];
+  actions: PluginSettingsAction[];
 }
 
 const PLUGIN_SETTINGS_STORAGE_PREFIX = "reticulum.mobile.pluginSettings.v1.";
@@ -93,6 +104,7 @@ function pluginSettingsSectionFromInstalledPlugin(
     state: plugin.state,
     description: asOptionalString(schema.description),
     fields,
+    actions: actionsFromSettingsSchema(schema),
   };
 }
 
@@ -138,6 +150,61 @@ function fieldFromExplicitSchema(
     placeholder: asOptionalString(raw.placeholder),
     options,
   };
+}
+
+function actionsFromSettingsSchema(schema: Record<string, unknown>): PluginSettingsAction[] {
+  if (!Array.isArray(schema.actions)) {
+    return [];
+  }
+  return schema.actions
+    .map((action) => actionFromSchema(asRecord(action)))
+    .filter((action): action is PluginSettingsAction => Boolean(action));
+}
+
+function actionFromSchema(
+  raw: Record<string, unknown> | undefined,
+): PluginSettingsAction | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const id = asOptionalString(raw.id);
+  const type = asOptionalString(raw.type);
+  const messageName = asOptionalString(raw.messageName);
+  const destinationField = asOptionalString(raw.destinationField);
+  const bodyField = asOptionalString(raw.bodyField);
+  if (
+    !id
+    || (type !== "send_lxmf" && type !== "sendPluginLxmf")
+    || !messageName
+    || !destinationField
+    || !bodyField
+  ) {
+    return undefined;
+  }
+  return {
+    id,
+    label: asOptionalString(raw.label) ?? id,
+    type: "send_lxmf",
+    messageName,
+    destinationField,
+    bodyField,
+    payloadFields: payloadFieldsFromSchema(raw.payloadFields),
+  };
+}
+
+function payloadFieldsFromSchema(value: unknown): Record<string, string> {
+  const raw = asRecord(value);
+  if (!raw) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(raw).flatMap(([payloadKey, fieldId]) => {
+      if (typeof fieldId !== "string" || fieldId.trim().length === 0) {
+        return [];
+      }
+      return [[payloadKey, fieldId]];
+    }),
+  );
 }
 
 function fieldFromJsonSchemaProperty(

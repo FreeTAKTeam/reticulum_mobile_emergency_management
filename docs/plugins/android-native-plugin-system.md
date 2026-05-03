@@ -140,6 +140,11 @@ recent validated plug-in LXMF receive events observed by the app store.
 
 Android v1 does not execute side-loaded Vue bundles inside Settings.
 
+Settings schemas may declare host-rendered actions. The initial action type is
+`send_lxmf`, which maps configured fields to a `PluginLxmfSendRequest` and lets
+REM validate permissions, build the plug-in LXMF field envelope, and send
+through the native runtime.
+
 ## Plug-In LXMF Messages
 
 Plug-ins declare structured REM message types in `plugin.toml`. REM namespaces
