@@ -18,6 +18,8 @@ pub enum PluginManifestError {
     InvalidPluginId { plugin_id: String },
     #[error("unsupported plugin type: {plugin_type}")]
     InvalidPluginType { plugin_type: String },
+    #[error("unsupported REM plugin API version: {rem_api_version}")]
+    UnsupportedApiVersion { rem_api_version: String },
     #[error("missing Android library for ABI: {abi}")]
     MissingAndroidLibrary { abi: String },
     #[error("invalid plugin library path: {path}")]
@@ -93,6 +95,11 @@ impl PluginManifest {
                 plugin_type: self.plugin_type.clone(),
             });
         }
+        if !rem_api_version_supports_current(self.rem_api_version.as_str()) {
+            return Err(PluginManifestError::UnsupportedApiVersion {
+                rem_api_version: self.rem_api_version.clone(),
+            });
+        }
         for path in self.library.android.values() {
             validate_relative_archive_path(path).map_err(|()| {
                 PluginManifestError::InvalidLibraryPath {
@@ -141,6 +148,45 @@ fn is_reverse_dns_id(value: &str) -> bool {
             (first.is_ascii_lowercase() || first.is_ascii_digit())
                 && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
         })
+}
+
+fn rem_api_version_supports_current(value: &str) -> bool {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(comparator_allows_current_api)
+}
+
+fn comparator_allows_current_api(comparator: &str) -> bool {
+    const CURRENT_API_VERSION: (u64, u64, u64) = (1, 0, 0);
+    for operator in [">=", "<=", ">", "<", "="] {
+        if let Some(raw_version) = comparator.strip_prefix(operator) {
+            let Some(version) = parse_api_version(raw_version.trim()) else {
+                return false;
+            };
+            return match operator {
+                ">=" => CURRENT_API_VERSION >= version,
+                "<=" => CURRENT_API_VERSION <= version,
+                ">" => CURRENT_API_VERSION > version,
+                "<" => CURRENT_API_VERSION < version,
+                "=" => CURRENT_API_VERSION == version,
+                _ => false,
+            };
+        }
+    }
+    parse_api_version(comparator).is_some_and(|version| version == CURRENT_API_VERSION)
+}
+
+fn parse_api_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
 }
 
 fn validate_relative_archive_path(value: &str) -> Result<(), ()> {

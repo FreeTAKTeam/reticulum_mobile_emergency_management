@@ -138,6 +138,12 @@ fn validate_package_references(
             field: "plugin_type",
         });
     }
+    let rem_api_version = manifest_string(manifest, "rem_api_version")?;
+    if !rem_api_version_supports_current(rem_api_version.as_str()) {
+        return Err(PackagerError::InvalidManifestField {
+            field: "rem_api_version",
+        });
+    }
     let android_libraries = manifest
         .get("library")
         .and_then(|value| value.get("android"))
@@ -216,6 +222,45 @@ fn require_json_package_file(plugin_dir: &Path, relative_path: &str) -> Result<(
     Err(PackagerError::InvalidPackageSchema {
         path: relative_path.to_string(),
     })
+}
+
+fn rem_api_version_supports_current(value: &str) -> bool {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .all(comparator_allows_current_api)
+}
+
+fn comparator_allows_current_api(comparator: &str) -> bool {
+    const CURRENT_API_VERSION: (u64, u64, u64) = (1, 0, 0);
+    for operator in [">=", "<=", ">", "<", "="] {
+        if let Some(raw_version) = comparator.strip_prefix(operator) {
+            let Some(version) = parse_api_version(raw_version.trim()) else {
+                return false;
+            };
+            return match operator {
+                ">=" => CURRENT_API_VERSION >= version,
+                "<=" => CURRENT_API_VERSION <= version,
+                ">" => CURRENT_API_VERSION > version,
+                "<" => CURRENT_API_VERSION < version,
+                "=" => CURRENT_API_VERSION == version,
+                _ => false,
+            };
+        }
+    }
+    parse_api_version(comparator).is_some_and(|version| version == CURRENT_API_VERSION)
+}
+
+fn parse_api_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
 }
 
 fn validate_relative_path(path: &str) -> Result<(), PackagerError> {
@@ -329,6 +374,7 @@ mod tests {
         r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
 arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
@@ -416,6 +462,7 @@ schema = "schemas/status_test.schema.json"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "native"
+rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
 arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
@@ -467,6 +514,7 @@ schema = "../status_test.schema.json"
         let manifest = r#"
 id = "rem.plugin.example_status"
 plugin_type = "web"
+rem_api_version = ">=1.0.0,<2.0.0"
 
 [library.android]
 arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
@@ -477,6 +525,25 @@ arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("non-native plugin type is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_unsupported_rem_api_version() {
+        let package = TestTempDir::new("unsupported-rem-api-version");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "native"
+rem_api_version = ">=2.0.0,<3.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("unsupported API range is rejected");
     }
 
     #[test]

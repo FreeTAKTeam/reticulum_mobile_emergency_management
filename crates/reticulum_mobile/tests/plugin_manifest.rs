@@ -656,6 +656,18 @@ fn rejects_non_native_plugin_type() {
 }
 
 #[test]
+fn rejects_unsupported_rem_api_version() {
+    let err =
+        PluginManifest::from_toml_str(&VALID_MANIFEST.replace(">=1.0.0,<2.0.0", ">=2.0.0,<3.0.0"))
+            .expect_err("unsupported API range is rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::UnsupportedApiVersion { .. }
+    ));
+}
+
+#[test]
 fn rejects_missing_android_library_for_current_abi() {
     let manifest = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
         "arm64_v8a = \"logic/android/arm64-v8a/libexample_status_plugin.so\"",
