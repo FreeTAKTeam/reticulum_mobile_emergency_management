@@ -701,6 +701,7 @@ export interface NodeClientEvents {
   peerChanged: PeerChangedEvent;
   peerResolved: PeerRecord;
   packetReceived: PacketReceivedEvent;
+  pluginLxmfReceived: PluginLxmfMessageRecord;
   packetSent: PacketSentEvent;
   lxmfDelivery: LxmfDeliveryEvent;
   messageReceived: MessageRecord;
@@ -3298,11 +3299,33 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
         this.listenerHandles.push(handle);
       };
 
+      const registerPacketReceived = async () => {
+        if (generation !== this.generation) {
+          return;
+        }
+        const handle = await Promise.resolve(
+          this.plugin.addListener("packetReceived", (payload: unknown) => {
+            const objectPayload =
+              payload && typeof payload === "object"
+                ? (payload as Record<string, unknown>)
+                : {};
+            const packet = toPacketReceivedEvent(objectPayload);
+            this.emitter.emit("packetReceived", packet);
+            void this.emitPluginLxmfReceived(packet, generation);
+          }),
+        );
+        if (generation !== this.generation) {
+          await handle.remove().catch(() => undefined);
+          return;
+        }
+        this.listenerHandles.push(handle);
+      };
+
       await register("statusChanged", toStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);
       await register("peerResolved", toPeerRecord);
-      await register("packetReceived", toPacketReceivedEvent);
+      await registerPacketReceived();
       await register("packetSent", toPacketSentEvent);
       await register("lxmfDelivery", toLxmfDeliveryEvent);
       await register("messageReceived", toMessageRecord);
@@ -3326,6 +3349,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     });
 
     return this.attachPromise;
+  }
+
+  private async emitPluginLxmfReceived(
+    packet: PacketReceivedEvent,
+    generation: number,
+  ): Promise<void> {
+    if (!packet.fieldsBase64 || generation !== this.generation) {
+      return;
+    }
+    try {
+      const message = await this.decodePluginLxmfFields(packet.fieldsBase64);
+      if (message && generation === this.generation) {
+        this.emitter.emit("pluginLxmfReceived", message);
+      }
+    } catch {
+      // Plugin packets are optional overlays on raw packet events; malformed or
+      // ungranted plug-in fields should not break normal packet delivery.
+    }
   }
 
   private async ready(): Promise<void> {
