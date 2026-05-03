@@ -1513,6 +1513,43 @@ fn installer_rejects_duplicate_settings_field_ids() {
 }
 
 #[test]
+fn installer_rejects_duplicate_settings_action_ids() {
+    let package_dir = TestTempDir::new("settings-duplicate-action-id");
+    let install_root = TestTempDir::new("install-root");
+    write_valid_package(package_dir.path());
+    write_package_file(
+        package_dir.path(),
+        "ui/settings.schema.json",
+        br#"{
+            "fields": [
+                {"id": "destinationHex", "type": "text"},
+                {"id": "statusMessage", "type": "text"}
+            ],
+            "actions": [
+                {
+                    "id": "sendStatus",
+                    "type": "send_lxmf",
+                    "messageName": "status_test",
+                    "destinationField": "destinationHex",
+                    "bodyField": "statusMessage"
+                },
+                {
+                    "id": "sendStatus",
+                    "type": "send_lxmf",
+                    "messageName": "status_test",
+                    "destinationField": "destinationHex",
+                    "bodyField": "statusMessage"
+                }
+            ]
+        }"#,
+    );
+
+    PluginInstaller::new(install_root.path())
+        .install_from_package_dir(package_dir.path(), "arm64-v8a")
+        .expect_err("duplicate settings action ids are rejected");
+}
+
+#[test]
 fn installer_rejects_missing_message_schema() {
     let package_dir = TestTempDir::new("missing-message-schema");
     let install_root = TestTempDir::new("install-root");

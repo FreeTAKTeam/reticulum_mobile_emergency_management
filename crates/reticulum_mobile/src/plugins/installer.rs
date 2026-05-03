@@ -223,10 +223,20 @@ fn validate_settings_schema_actions(
     let Some(actions) = schema.get("actions").and_then(JsonValue::as_array) else {
         return Ok(());
     };
+    let mut action_ids = BTreeSet::new();
     for action in actions {
         let Some(action) = action.as_object() else {
             continue;
         };
+        if let Some(action_id) = action
+            .get("id")
+            .and_then(JsonValue::as_str)
+            .filter(|action_id| !action_id.trim().is_empty())
+        {
+            if !action_ids.insert(action_id.to_string()) {
+                return Err(invalid_schema(relative_path));
+            }
+        }
         let Some(action_type) = action.get("type").and_then(JsonValue::as_str) else {
             continue;
         };

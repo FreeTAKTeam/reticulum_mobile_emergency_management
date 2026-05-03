@@ -298,10 +298,20 @@ fn validate_settings_schema_actions(
     let Some(actions) = schema.get("actions").and_then(serde_json::Value::as_array) else {
         return Ok(());
     };
+    let mut action_ids = BTreeSet::new();
     for action in actions {
         let Some(action) = action.as_object() else {
             continue;
         };
+        if let Some(action_id) = action
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|action_id| !action_id.trim().is_empty())
+        {
+            if !action_ids.insert(action_id.to_string()) {
+                return Err(invalid_schema(relative_path));
+            }
+        }
         let Some(action_type) = action.get("type").and_then(serde_json::Value::as_str) else {
             continue;
         };
@@ -874,6 +884,42 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("duplicate settings field ids are rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_duplicate_settings_action_ids() {
+        let package = TestTempDir::new("settings-duplicate-action-id");
+        let manifest = valid_manifest();
+        write_valid_package(package.path());
+        write_file(
+            package.path(),
+            "ui/settings.schema.json",
+            br#"{
+                "fields": [
+                    {"id": "destinationHex", "type": "text"},
+                    {"id": "statusMessage", "type": "text"}
+                ],
+                "actions": [
+                    {
+                        "id": "sendStatus",
+                        "type": "send_lxmf",
+                        "messageName": "status_test",
+                        "destinationField": "destinationHex",
+                        "bodyField": "statusMessage"
+                    },
+                    {
+                        "id": "sendStatus",
+                        "type": "send_lxmf",
+                        "messageName": "status_test",
+                        "destinationField": "destinationHex",
+                        "bodyField": "statusMessage"
+                    }
+                ]
+            }"#,
+        );
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("duplicate settings action ids are rejected");
     }
 
     #[test]
