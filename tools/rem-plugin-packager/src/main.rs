@@ -216,6 +216,11 @@ fn validate_package_references(
                     .ok_or(PackagerError::InvalidManifestField {
                         field: "messages.direction",
                     })?;
+                if !matches!(direction, "send" | "receive") {
+                    return Err(PackagerError::InvalidManifestField {
+                        field: "messages.direction",
+                    });
+                }
                 if !seen_directions.insert(direction) {
                     return Err(PackagerError::InvalidManifestField {
                         field: "messages.direction",
@@ -757,6 +762,32 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("malformed message version is rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_unknown_message_direction() {
+        let package = TestTempDir::new("unknown-message-direction");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "native"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send", "broadcast"]
+schema = "schemas/status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("unknown message direction is rejected");
     }
 
     #[test]
