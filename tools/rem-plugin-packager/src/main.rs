@@ -188,6 +188,25 @@ fn validate_package_references(
                     field: "messages.name",
                 });
             }
+            let directions = message
+                .get("direction")
+                .and_then(toml::Value::as_array)
+                .ok_or(PackagerError::InvalidManifestField {
+                    field: "messages.direction",
+                })?;
+            let mut seen_directions = BTreeSet::new();
+            for direction in directions {
+                let direction = direction
+                    .as_str()
+                    .ok_or(PackagerError::InvalidManifestField {
+                        field: "messages.direction",
+                    })?;
+                if !seen_directions.insert(direction) {
+                    return Err(PackagerError::InvalidManifestField {
+                        field: "messages.direction",
+                    });
+                }
+            }
             let schema = message.get("schema").and_then(toml::Value::as_str).ok_or(
                 PackagerError::InvalidManifestField {
                     field: "messages.schema",
@@ -638,6 +657,31 @@ schema = "schemas/status_test.schema.json"
 
         validate_package_references(package.path(), &manifest, true)
             .expect_err("duplicate message names are rejected");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_duplicate_message_directions() {
+        let package = TestTempDir::new("duplicate-message-direction");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+plugin_type = "native"
+rem_api_version = ">=1.0.0,<2.0.0"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send", "send"]
+schema = "schemas/status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses");
+        write_valid_package(package.path());
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect_err("duplicate message directions are rejected");
     }
 
     #[test]

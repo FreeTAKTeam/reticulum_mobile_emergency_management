@@ -32,6 +32,11 @@ pub enum PluginManifestError {
     InvalidMessageName { message_name: String },
     #[error("duplicate plugin message name: {message_name}")]
     DuplicateMessageName { message_name: String },
+    #[error("duplicate plugin message direction for {message_name}: {direction}")]
+    DuplicateMessageDirection {
+        message_name: String,
+        direction: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

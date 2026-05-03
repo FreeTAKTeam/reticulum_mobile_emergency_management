@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
@@ -228,6 +228,16 @@ impl PluginMessageDescriptor {
                 field: "messages.direction",
             });
         }
+        let mut directions = BTreeSet::new();
+        for direction in &self.direction {
+            let direction_name = direction.as_manifest_value();
+            if !directions.insert(direction_name) {
+                return Err(PluginManifestError::DuplicateMessageDirection {
+                    message_name: self.name.clone(),
+                    direction: direction_name.to_string(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -237,6 +247,15 @@ impl PluginMessageDescriptor {
 
     fn allows_direction(&self, direction: PluginMessageDirection) -> bool {
         self.direction.contains(&direction)
+    }
+}
+
+impl PluginMessageDirection {
+    fn as_manifest_value(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Receive => "receive",
+        }
     }
 }
 

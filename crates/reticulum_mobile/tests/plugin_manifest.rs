@@ -382,6 +382,20 @@ fn rejects_duplicate_lxmf_message_names() {
 }
 
 #[test]
+fn rejects_duplicate_lxmf_message_directions() {
+    let err = PluginManifest::from_toml_str(&VALID_MANIFEST.replace(
+        "direction = [\"send\", \"receive\"]",
+        "direction = [\"send\", \"send\"]",
+    ))
+    .expect_err("duplicate message directions are rejected");
+
+    assert!(matches!(
+        err,
+        PluginManifestError::DuplicateMessageDirection { .. }
+    ));
+}
+
+#[test]
 fn c_abi_version_and_status_codes_are_stable() {
     assert_eq!(REM_PLUGIN_ABI_VERSION.major, 1);
     assert_eq!(REM_PLUGIN_ABI_VERSION.minor, 0);
