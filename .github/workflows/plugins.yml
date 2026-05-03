@@ -1,0 +1,76 @@
+name: Plugins
+
+on:
+  push:
+    branches: ["main", "codex/android-plugin-system"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  REM_PLUGIN_TEST_SIGNING_KEY_BASE64: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
+  ANDROID_NDK_VERSION: 27.2.12479018
+
+jobs:
+  plugin-system:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: FreeTAKTeam/LXMF-rs
+          path: LXMF-rs
+
+      - name: Link LXMF dependency path
+        run: ln -s "$GITHUB_WORKSPACE/LXMF-rs" "$GITHUB_WORKSPACE/../LXMF-rs"
+
+      - name: Install Android Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Configure Android NDK
+        run: |
+          sdkmanager "ndk;$ANDROID_NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Test REM Rust runtime
+        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml
+
+      - name: Test plug-in packager
+        run: cargo test --manifest-path tools/rem-plugin-packager/Cargo.toml
+
+      - name: Test example plug-in
+        run: cargo test --manifest-path plugins/example-status-plugin/rust/Cargo.toml
+
+      - name: Lint example plug-in
+        run: cargo clippy --manifest-path plugins/example-status-plugin/rust/Cargo.toml -- -D warnings
+
+      - name: Build example plug-in for Android arm64-v8a
+        run: >
+          cargo ndk
+          -t arm64-v8a
+          -o plugins/example-status-plugin/logic/android
+          build
+          --manifest-path plugins/example-status-plugin/rust/Cargo.toml
+          --release
+
+      - name: Package signed example plug-in
+        run: >
+          cargo run --manifest-path tools/rem-plugin-packager/Cargo.toml --
+          plugins/example-status-plugin
+          target/plugin-artifacts/example-status.remplugin
+          --publisher CI-Test
+          --signing-key-base64 "$REM_PLUGIN_TEST_SIGNING_KEY_BASE64"
+
+      - name: Upload example plug-in artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: example-status-remplugin
+          path: target/plugin-artifacts/example-status.remplugin
