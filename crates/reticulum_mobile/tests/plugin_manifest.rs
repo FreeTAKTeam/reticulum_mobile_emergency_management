@@ -3,8 +3,8 @@ use reticulum_mobile::plugins::{
     PersistedPluginState, PluginCatalog, PluginHostApi, PluginHostError, PluginInstaller,
     PluginInstallerError, PluginLoader, PluginLoaderError, PluginLxmfMessage,
     PluginLxmfMessageError, PluginManifest, PluginManifestError, PluginMessageSchemaMap,
-    PluginPermissions, PluginRegistry, PluginRegistryError, PluginState, RemPluginStatusCode,
-    REM_PLUGIN_ABI_VERSION,
+    PluginPermissions, PluginRegistry, PluginRegistryError, PluginState, RemPluginHostApi,
+    RemPluginStatusCode, REM_PLUGIN_ABI_VERSION,
 };
 use reticulum_mobile::SendMode;
 use serde_json::json;
@@ -184,6 +184,109 @@ pub extern "C" fn rem_plugin_stop() -> i32 {{
 
 #[no_mangle]
 pub extern "C" fn rem_plugin_handle_event(_event: *const std::os::raw::c_char) -> i32 {{
+    0
+}}
+"#
+        ),
+    )
+    .expect("test plugin source is written");
+
+    let output = Command::new("rustc")
+        .arg("--crate-type")
+        .arg("cdylib")
+        .arg(source_path.as_path())
+        .arg("-o")
+        .arg(library_path.as_path())
+        .output()
+        .expect("rustc can be launched");
+    assert!(
+        output.status.success(),
+        "test plugin compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(output.stdout.as_slice()),
+        String::from_utf8_lossy(output.stderr.as_slice())
+    );
+    library_path
+}
+
+fn compile_host_api_asserting_test_plugin_library(plugin_dir: &Path, metadata_id: &str) -> PathBuf {
+    let library_relative_path = format!("logic/android/arm64-v8a/{}", test_dynamic_library_name());
+    let library_path = plugin_dir.join(library_relative_path);
+    let source_path = plugin_dir.join("example_status_plugin.rs");
+    if let Some(parent) = library_path.parent() {
+        fs::create_dir_all(parent).expect("library parent exists");
+    }
+    fs::write(
+        source_path.as_path(),
+        format!(
+            r#"
+use std::os::raw::{{c_char, c_void}};
+
+#[repr(C)]
+pub struct RemPluginHostBuffer {{
+    pub ptr: *mut u8,
+    pub len: usize,
+}}
+
+type StorageGetFn = unsafe extern "C" fn(*mut c_void, *const c_char, *mut RemPluginHostBuffer) -> i32;
+type StorageSetFn = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> i32;
+type SubscribeFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+type PublishEventFn = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> i32;
+type SendLxmfFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+type RaiseNotificationFn = unsafe extern "C" fn(*mut c_void, *const c_char) -> i32;
+type FreeBufferFn = unsafe extern "C" fn(*mut c_void, RemPluginHostBuffer);
+
+#[repr(C)]
+pub struct RemPluginHostApi {{
+    pub abi_major: u16,
+    pub abi_minor: u16,
+    pub ctx: *mut c_void,
+    pub storage_get: Option<StorageGetFn>,
+    pub storage_set: Option<StorageSetFn>,
+    pub subscribe: Option<SubscribeFn>,
+    pub publish_event: Option<PublishEventFn>,
+    pub send_lxmf: Option<SendLxmfFn>,
+    pub raise_notification: Option<RaiseNotificationFn>,
+    pub free_buffer: Option<FreeBufferFn>,
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_metadata() -> *const c_char {{
+    b"{{\"id\":\"{metadata_id}\",\"name\":\"Example Status Plugin\",\"version\":\"0.1.0\",\"rem_api_version\":\">=1.0.0,<2.0.0\",\"abi_major\":1,\"abi_minor\":0}}\0".as_ptr() as *const c_char
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_init(host: *const RemPluginHostApi) -> i32 {{
+    if host.is_null() {{
+        return 1;
+    }}
+    let host = unsafe {{ &*host }};
+    if host.abi_major == 1
+        && host.storage_get.is_some()
+        && host.storage_set.is_some()
+        && host.subscribe.is_some()
+        && host.publish_event.is_some()
+        && host.send_lxmf.is_some()
+        && host.raise_notification.is_some()
+        && host.free_buffer.is_some()
+    {{
+        0
+    }} else {{
+        1
+    }}
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_start() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_stop() -> i32 {{
+    0
+}}
+
+#[no_mangle]
+pub extern "C" fn rem_plugin_handle_event(_event: *const c_char) -> i32 {{
     0
 }}
 "#
@@ -432,6 +535,33 @@ fn c_abi_version_and_status_codes_are_stable() {
 }
 
 #[test]
+fn host_api_exposes_core_callback_table() {
+    let host_api = RemPluginHostApi {
+        abi_major: REM_PLUGIN_ABI_VERSION.major,
+        abi_minor: REM_PLUGIN_ABI_VERSION.minor,
+        ctx: std::ptr::null_mut(),
+        storage_get: None,
+        storage_set: None,
+        subscribe: None,
+        publish_event: None,
+        send_lxmf: None,
+        raise_notification: None,
+        free_buffer: None,
+    };
+
+    assert_eq!(host_api.abi_major, 1);
+    assert_eq!(host_api.abi_minor, 0);
+    assert!(host_api.ctx.is_null());
+    assert!(host_api.storage_get.is_none());
+    assert!(host_api.storage_set.is_none());
+    assert!(host_api.subscribe.is_none());
+    assert!(host_api.publish_event.is_none());
+    assert!(host_api.send_lxmf.is_none());
+    assert!(host_api.raise_notification.is_none());
+    assert!(host_api.free_buffer.is_none());
+}
+
+#[test]
 fn native_loader_loads_test_plugin_and_calls_lifecycle() {
     let install_root = TestTempDir::new("native-loader-root");
     let plugin_dir = install_root.path().join("rem.plugin.example_status");
@@ -456,6 +586,28 @@ fn native_loader_loads_test_plugin_and_calls_lifecycle() {
         .handle_event_json(r#"{"topic":"rem.plugin.started","payload":{}}"#)
         .expect("plugin handles event");
     plugin.stop().expect("plugin stops");
+}
+
+#[test]
+fn native_loader_passes_host_callback_table_to_plugin_init() {
+    let install_root = TestTempDir::new("native-loader-host-api-root");
+    let plugin_dir = install_root.path().join("rem.plugin.example_status");
+    fs::create_dir_all(plugin_dir.as_path()).expect("plugin dir exists");
+    let library_path = compile_host_api_asserting_test_plugin_library(
+        plugin_dir.as_path(),
+        "rem.plugin.example_status",
+    );
+    write_dynamic_plugin_manifest(plugin_dir.as_path(), library_path.as_path());
+
+    let report = PluginLoader::new(install_root.path())
+        .discover_installed_plugins("arm64-v8a")
+        .expect("plugin discovery completes");
+    let candidate = report.candidates.first().expect("plugin is discovered");
+
+    let plugin = NativePluginLibrary::load(candidate).expect("native plugin loads");
+    plugin
+        .initialize()
+        .expect("plugin init receives host callback table");
 }
 
 #[test]

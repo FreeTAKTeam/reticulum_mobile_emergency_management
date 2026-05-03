@@ -134,10 +134,7 @@ impl NativePluginLibrary {
     }
 
     pub fn initialize(&self) -> Result<(), NativePluginLoadError> {
-        let host_api = RemPluginHostApi {
-            abi_major: REM_PLUGIN_ABI_VERSION.major,
-            abi_minor: REM_PLUGIN_ABI_VERSION.minor,
-        };
+        let host_api = RemPluginHostApi::unsupported();
         // SAFETY: The function pointer was resolved from the loaded library with
         // the C ABI signature required by REM. The host API pointer is valid for
         // the duration of the call and the plugin must not retain it.
