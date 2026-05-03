@@ -254,3 +254,188 @@ fn should_skip(relative: &Path) -> bool {
         name == "target" || name == "node_modules" || name == ".git"
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io::Read;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new(label: &str) -> Self {
+            let unique = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = env::temp_dir().join(format!(
+                "rem-packager-{label}-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir_all(path.as_path()).expect("temp dir is created");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            self.path.as_path()
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.path.as_path());
+        }
+    }
+
+    fn write_file(root: &Path, relative_path: &str, contents: &[u8]) {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("parent directory is created");
+        }
+        fs::write(path, contents).expect("file is written");
+    }
+
+    fn valid_manifest() -> toml::Value {
+        r#"
+id = "rem.plugin.example_status"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+x86_64 = "logic/android/x86_64/libexample_status_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "schemas/status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses")
+    }
+
+    fn write_valid_package(root: &Path) {
+        write_file(
+            root,
+            "logic/android/arm64-v8a/libexample_status_plugin.so",
+            b"native-arm64",
+        );
+        write_file(
+            root,
+            "logic/android/x86_64/libexample_status_plugin.so",
+            b"native-x64",
+        );
+        write_file(root, "ui/settings.schema.json", br#"{"type":"object"}"#);
+        write_file(
+            root,
+            "schemas/status_test.schema.json",
+            br#"{"type":"object"}"#,
+        );
+    }
+
+    #[test]
+    fn parse_args_accepts_allow_missing_libraries_flag_after_output() {
+        let args = parse_args([
+            "plugins/example-status-plugin".to_string(),
+            "output/example-status.remplugin".to_string(),
+            "--allow-missing-libraries".to_string(),
+        ])
+        .expect("args parse");
+
+        assert_eq!(
+            args.plugin_dir,
+            PathBuf::from("plugins/example-status-plugin")
+        );
+        assert_eq!(
+            args.output_path,
+            Some(PathBuf::from("output/example-status.remplugin"))
+        );
+        assert!(args.allow_missing_libraries);
+    }
+
+    #[test]
+    fn validate_package_references_requires_android_libraries_by_default() {
+        let package = TestTempDir::new("missing-library");
+        let manifest = valid_manifest();
+        write_file(package.path(), "ui/settings.schema.json", br#"{}"#);
+        write_file(package.path(), "schemas/status_test.schema.json", br#"{}"#);
+
+        let err = validate_package_references(package.path(), &manifest, false)
+            .expect_err("missing library is rejected");
+
+        assert!(matches!(err, PackagerError::MissingPackageFile { .. }));
+    }
+
+    #[test]
+    fn validate_package_references_allows_missing_libraries_only_when_requested() {
+        let package = TestTempDir::new("allow-missing-library");
+        let manifest = valid_manifest();
+        write_file(package.path(), "ui/settings.schema.json", br#"{}"#);
+        write_file(package.path(), "schemas/status_test.schema.json", br#"{}"#);
+
+        validate_package_references(package.path(), &manifest, true)
+            .expect("missing library override is accepted");
+    }
+
+    #[test]
+    fn validate_package_references_rejects_unsafe_message_schema_path() {
+        let package = TestTempDir::new("unsafe-message-schema");
+        let manifest = r#"
+id = "rem.plugin.example_status"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_status_plugin.so"
+
+[[messages]]
+name = "status_test"
+version = "1.0.0"
+direction = ["send"]
+schema = "../status_test.schema.json"
+"#
+        .parse()
+        .expect("manifest parses");
+
+        let err = validate_package_references(package.path(), &manifest, true)
+            .expect_err("unsafe schema path is rejected");
+
+        assert!(matches!(err, PackagerError::UnsafePath { .. }));
+    }
+
+    #[test]
+    fn write_archive_skips_build_and_dependency_directories() {
+        let package = TestTempDir::new("archive");
+        write_file(
+            package.path(),
+            "plugin.toml",
+            b"id = \"rem.plugin.example_status\"",
+        );
+        write_valid_package(package.path());
+        write_file(package.path(), "target/debug/libignored.so", b"ignored");
+        write_file(package.path(), "node_modules/example/index.js", b"ignored");
+
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        write_archive(package.path(), &mut cursor).expect("archive writes");
+        cursor.set_position(0);
+        let mut archive = zip::ZipArchive::new(cursor).expect("archive reads");
+        let mut names = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).expect("entry exists");
+            let mut contents = Vec::new();
+            entry
+                .read_to_end(&mut contents)
+                .expect("entry contents read");
+            names.push(entry.name().to_string());
+        }
+
+        assert!(names.contains(&"plugin.toml".to_string()));
+        assert!(names.contains(&"logic/android/arm64-v8a/libexample_status_plugin.so".to_string()));
+        assert!(!names.iter().any(|name| name.starts_with("target/")));
+        assert!(!names.iter().any(|name| name.starts_with("node_modules/")));
+    }
+}
