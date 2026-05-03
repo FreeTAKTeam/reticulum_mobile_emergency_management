@@ -3,6 +3,7 @@ import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import type { PluginPermissionsRecord } from "@reticulum/node-client";
+import PluginLxmfMessageLog from "../components/plugins/PluginLxmfMessageLog.vue";
 import PluginManagementCard from "../components/plugins/PluginManagementCard.vue";
 import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
@@ -152,6 +153,7 @@ const pluginSettingsSummary = computed(() => {
   const enabledCount = nodeStore.installedPlugins.filter((plugin) => plugin.state !== "Disabled").length;
   return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable`;
 });
+const recentPluginLxmfMessages = computed(() => nodeStore.pluginLxmfMessages.slice(0, 5));
 const activePropagationNodeLabel = computed(() => {
   if (!activePropagationNodeHex.value) {
     return "None";
@@ -997,6 +999,10 @@ async function refreshPluginSettings(): Promise<void> {
             @save="savePluginSettings"
           />
         </div>
+        <PluginLxmfMessageLog
+          v-if="recentPluginLxmfMessages.length > 0"
+          :messages="recentPluginLxmfMessages"
+        />
         <p v-if="nodeStore.installedPlugins.length === 0" class="section-note">
           No plug-ins are installed or enabled for configuration yet.
         </p>

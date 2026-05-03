@@ -135,7 +135,8 @@ Settings contains a fold-out section named **Plugin**. Operators can install a
 local `.remplugin` archive from this section. Each installed plug-in is listed
 with its state, declared/granted permission controls, and declared LXMF message
 count. Plug-ins with a valid Settings schema also get host-rendered
-configuration controls in the same section.
+configuration controls in the same section. The section also shows the most
+recent validated plug-in LXMF receive events observed by the app store.
 
 Android v1 does not execute side-loaded Vue bundles inside Settings.
 
@@ -159,3 +160,8 @@ rem.plugin.message
 ```
 
 This separates plug-in traffic from existing REM/RCH mission and SOS traffic.
+
+Received plug-in LXMF messages are decoded through the native bridge, checked
+against the plug-in manifest and granted `lxmf_receive` permission, emitted to
+the owning native plug-in runtime as `rem.plugin.lxmf.received`, and mirrored to
+the mobile store as `pluginLxmfReceived` for UI observability.

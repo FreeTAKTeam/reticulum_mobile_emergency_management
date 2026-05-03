@@ -5,6 +5,7 @@ import {
   type InstalledPluginRecord,
   type PeerRecord,
   type PluginCatalogDiagnostic,
+  type PluginLxmfMessageRecord,
   type PluginPermissionsRecord,
   type ProjectionInvalidationEvent,
   type ProjectionScope,
@@ -158,6 +159,10 @@ interface UiLogLine {
   at: number;
   level: string;
   message: string;
+}
+
+export interface PluginLxmfMessageLogEntry extends PluginLxmfMessageRecord {
+  receivedAt: number;
 }
 
 type DedicatedFields = Record<string, string>;
@@ -529,6 +534,7 @@ export const useNodeStore = defineStore("node", () => {
   const autoConnectQueueActive = ref(false);
   const installedPlugins = ref<InstalledPluginRecord[]>([]);
   const pluginCatalogErrors = ref<PluginCatalogDiagnostic[]>([]);
+  const pluginLxmfMessages = ref<PluginLxmfMessageLogEntry[]>([]);
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
 
@@ -544,6 +550,20 @@ export const useNodeStore = defineStore("node", () => {
 
   function appendNodeControlEntry(level: string, message: string, at = nowMs()): void {
     nodeControlEntries.value = [{ at, level, message }, ...nodeControlEntries.value].slice(0, 120);
+  }
+
+  function recordPluginLxmfReceived(message: PluginLxmfMessageRecord): void {
+    pluginLxmfMessages.value = [
+      {
+        ...message,
+        receivedAt: nowMs(),
+      },
+      ...pluginLxmfMessages.value,
+    ].slice(0, 50);
+    appendLog(
+      "Debug",
+      `Plug-in LXMF message received plugin=${message.pluginId} message=${message.messageName}.`,
+    );
   }
 
   function toPluginLogLevel(level: string): LogLevel {
@@ -1809,6 +1829,9 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("operationalNotice", (event) => {
         appendNodeControlEntry(event.level, event.message, event.atMs);
       }),
+      nodeClient.on("pluginLxmfReceived", (message: PluginLxmfMessageRecord) => {
+        recordPluginLxmfReceived(message);
+      }),
       nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
         switch (event.scope) {
           case "AppSettings":
@@ -2935,6 +2958,7 @@ export const useNodeStore = defineStore("node", () => {
     telemetryDestinations,
     installedPlugins,
     pluginCatalogErrors,
+    pluginLxmfMessages,
     savedDestinations,
     ready,
     peerDisplayState,
