@@ -4052,13 +4052,8 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return messageIdHex;
   }
 
-  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
-    await this.sendLxmf({
-      destinationHex: request.destinationHex,
-      bodyUtf8: request.bodyUtf8,
-      title: request.title,
-      sendMode: request.sendMode,
-    });
+  async sendPluginLxmf(_request: PluginLxmfSendRequest): Promise<void> {
+    throw new Error("Plug-in LXMF sends require the native REM plug-in host.");
   }
 
   async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
@@ -4618,13 +4613,8 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return messageIdHex;
   }
 
-  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
-    await this.sendLxmf({
-      destinationHex: request.destinationHex,
-      bodyUtf8: request.bodyUtf8,
-      title: request.title,
-      sendMode: request.sendMode,
-    });
+  async sendPluginLxmf(_request: PluginLxmfSendRequest): Promise<void> {
+    throw new Error("Plug-in LXMF sends require the native REM plug-in host.");
   }
 
   async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {

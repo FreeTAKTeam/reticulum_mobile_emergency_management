@@ -158,6 +158,10 @@ Plug-ins submit structured send requests to REM. REM validates the declared
 message, checks `lxmf.send`, builds the host-owned field envelope, and sends the
 message through the existing Rust runtime.
 
+Plug-in LXMF sends are only available through the native REM plug-in host. Web
+and mock TypeScript clients fail the request instead of degrading it to a normal
+LXMF send, because that would bypass manifest, permission, and schema checks.
+
 Plug-in message traffic uses the field key:
 
 ```text
