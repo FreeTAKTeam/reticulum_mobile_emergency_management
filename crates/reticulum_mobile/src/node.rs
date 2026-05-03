@@ -181,6 +181,21 @@ fn emit_plugin_runtime_diagnostics(bus: &EventBus, diagnostics: &[PluginRuntimeD
     }
 }
 
+fn restart_enabled_native_plugin_runtime(inner: &mut NodeInner) {
+    if let Some(mut plugin_runtime) = inner.plugin_runtime.take() {
+        plugin_runtime.stop_all();
+        emit_plugin_runtime_diagnostics(&inner.bus, plugin_runtime.diagnostics());
+    }
+    if inner.runtime.is_none() {
+        return;
+    }
+    inner.plugin_runtime = start_enabled_native_plugins(
+        &inner.app_state,
+        &inner.bus,
+        inner.plugin_android_abi.as_deref(),
+    );
+}
+
 fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
     match AppStateStore::new(storage_dir) {
         Ok(store) => store,
@@ -2735,7 +2750,10 @@ impl Node {
             } else {
                 registry.disable(plugin_id)
             }
-        })
+        })?;
+        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        restart_enabled_native_plugin_runtime(&mut inner);
+        Ok(())
     }
 
     pub fn grant_plugin_permissions(
@@ -4899,6 +4917,18 @@ mod tests {
 
         let inner = node.inner.lock().expect("node lock");
         assert_eq!(inner.plugin_android_abi.as_deref(), Some("arm64-v8a"));
+    }
+
+    #[test]
+    fn restarting_plugin_runtime_is_noop_before_node_start() {
+        let node = Node::new();
+        node.set_plugin_android_abi(Some("arm64-v8a"))
+            .expect("abi stores");
+
+        let mut inner = node.inner.lock().expect("node lock");
+        restart_enabled_native_plugin_runtime(&mut inner);
+
+        assert!(inner.plugin_runtime.is_none());
     }
 
     struct TcpRelayHandle {
