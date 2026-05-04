@@ -53,12 +53,12 @@ jobs:
         run: cargo clippy --manifest-path plugins/example-status-plugin/rust/Cargo.toml -- -D warnings
 
       - name: Build example plug-in for Android arm64-v8a
+        working-directory: plugins/example-status-plugin/rust
         run: >
           cargo ndk
           -t arm64-v8a
-          -o plugins/example-status-plugin/logic/android
+          -o ../logic/android
           build
-          --manifest-path plugins/example-status-plugin/rust/Cargo.toml
           --release
 
       - name: Package signed example plug-in
