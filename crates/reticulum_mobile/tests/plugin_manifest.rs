@@ -218,12 +218,12 @@ fn write_valid_package_archive(archive_path: &Path) {
 fn write_symlink_package_archive(archive_path: &Path) {
     let archive_file = fs::File::create(archive_path).expect("archive file is created");
     let mut archive = zip::ZipWriter::new(archive_file);
-    let symlink_options = SimpleFileOptions::default().unix_permissions(0o120777);
     archive
-        .start_file("plugin.toml", symlink_options)
-        .expect("symlink archive entry starts");
-    archive
-        .write_all(b"logic/android/arm64-v8a/libexample_status_plugin.so")
+        .add_symlink(
+            "plugin.toml",
+            "logic/android/arm64-v8a/libexample_status_plugin.so",
+            SimpleFileOptions::default(),
+        )
         .expect("symlink archive entry writes");
     archive.finish().expect("archive writes");
 }
