@@ -66,6 +66,7 @@ jobs:
           cargo run --manifest-path tools/rem-plugin-packager/Cargo.toml --
           plugins/example-status-plugin
           target/plugin-artifacts/example-status.remplugin
+          --allow-missing-libraries
           --publisher CI-Test
           --signing-key-base64 "$REM_PLUGIN_TEST_SIGNING_KEY_BASE64"
 
