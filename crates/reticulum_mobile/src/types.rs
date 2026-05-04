@@ -877,6 +877,12 @@ pub struct ChecklistUpdateRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistDeleteRequest {
+    pub checklist_uid: String,
+    pub delete_remote: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistTaskStatusSetRequest {
     pub checklist_uid: String,
     pub task_uid: String,

@@ -88,15 +88,12 @@ async function deleteEvent(uid: string): Promise<void> {
           </svg>
           <span>{{ events.length }} EVT</span>
         </span>
-        <button class="utility-chip filter-chip" type="button" aria-label="Filter events">
+        <span class="utility-chip filter-chip" aria-label="Event filter status">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
           </svg>
           <span>Filter: Recent</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m7 10 5 5 5-5" />
-          </svg>
-        </button>
+        </span>
         <button
           class="create-toggle utility-new"
           type="button"

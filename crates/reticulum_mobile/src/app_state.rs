@@ -916,6 +916,7 @@ impl AppStateStore {
         Ok(invalidations)
     }
 
+    #[cfg(test)]
     pub fn delete_checklist(
         &self,
         checklist_uid: &str,
@@ -1314,6 +1315,7 @@ impl AppStateStore {
         Ok(records)
     }
 
+    #[cfg(test)]
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
         self.list_conversations_resolved(&ConversationPeerResolver::default())
     }

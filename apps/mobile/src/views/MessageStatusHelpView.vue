@@ -32,7 +32,7 @@ const rulePoints = [
 
 const operationalGuidance = [
   "Always select the lowest accurate color when uncertain.",
-  "Reassess and resend the EAM if conditions change materially.",
+  "Reassess and resend the action message if conditions change materially.",
   "Unknown status must be resolved as soon as practical.",
   "Consistency across the team improves prioritization.",
   "Color inflation reduces credibility and response effectiveness.",
@@ -172,7 +172,7 @@ function statusLabel(tone: StatusTone): string {
           <path d="M4 12l8 4 8-4" />
           <path d="M4 16l8 4 8-4" />
         </svg>
-        <span>EAM Lines 3-8</span>
+        <span>Action Message Lines 3-8</span>
       </div>
       <div class="utility-chip filter-chip">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">

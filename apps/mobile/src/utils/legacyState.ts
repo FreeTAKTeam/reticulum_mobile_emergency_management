@@ -135,9 +135,9 @@ function normalizeTelemetrySettings(
   return {
     ...defaults,
     ...telemetry,
-    publishIntervalSeconds: Math.min(
-      60,
-      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? defaults.publishIntervalSeconds)),
+    publishIntervalSeconds: Math.max(
+      1,
+      Number(telemetry?.publishIntervalSeconds ?? defaults.publishIntervalSeconds),
     ),
     accuracyThresholdMeters:
       telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
@@ -175,10 +175,7 @@ function normalizeRuntimeSettings(
     displayName:
       normalizeDisplayName(typeof value.displayName === "string" ? value.displayName : "")
       ?? defaults.displayName,
-    autoConnectSaved:
-      typeof value.autoConnectSaved === "boolean"
-        ? value.autoConnectSaved
-        : defaults.autoConnectSaved,
+    autoConnectSaved: false,
     announceCapabilities: ensureRequiredAnnounceCapabilities(
       typeof value.announceCapabilities === "string"
         ? value.announceCapabilities

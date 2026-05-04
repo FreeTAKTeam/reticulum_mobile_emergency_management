@@ -371,17 +371,6 @@ watch(
           </svg>
         </button>
         <button
-          class="utility-chip search-button"
-          type="button"
-          aria-label="Search conversations"
-          title="Search conversations"
-        >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16 16 4 4" />
-          </svg>
-        </button>
-        <button
           class="create-toggle utility-new"
           type="button"
           aria-label="Select connected peer"
@@ -486,7 +475,7 @@ watch(
   display: grid;
   flex-shrink: 0;
   gap: 0.55rem;
-  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.34fr) minmax(2.9rem, 0.34fr) minmax(3.2rem, 0.34fr);
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.34fr) minmax(3.2rem, 0.34fr);
 }
 
 .view-title,
@@ -554,18 +543,12 @@ watch(
   white-space: nowrap;
 }
 
-.peer-chip,
-.search-button {
+.peer-chip {
   cursor: pointer;
 }
 
 .peer-chip .chevron {
   margin-left: auto;
-}
-
-.search-button {
-  justify-content: center;
-  padding-inline: 0;
 }
 
 .inbox-panel {
@@ -722,7 +705,7 @@ watch(
 
   .header-actions {
     gap: 0.42rem;
-    grid-template-columns: minmax(0, 0.98fr) minmax(0, 1.32fr) minmax(2.55rem, 0.32fr) minmax(2.8rem, 0.38fr);
+    grid-template-columns: minmax(0, 0.98fr) minmax(0, 1.32fr) minmax(2.8rem, 0.38fr);
   }
 
   .utility-chip,

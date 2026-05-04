@@ -189,19 +189,27 @@ function deleteMessage(callsign: string): void {
           </svg>
           <span>{{ messagesStore.activeCount }} MSG</span>
         </span>
-        <button
+        <span
           class="utility-chip filter-chip"
-          type="button"
-          aria-label="Filter action messages"
+          aria-label="Action message filter status"
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
           </svg>
           <span>Filter: All</span>
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m7 10 5 5 5-5" />
+        </span>
+        <RouterLink
+          class="utility-chip help-trigger"
+          to="/messages/help"
+          aria-label="Open status color help"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.75 9a2.25 2.25 0 0 1 4.13 1.25c0 1.5-1.88 1.88-1.88 3.25" />
+            <path d="M12 17h.01" />
           </svg>
-        </button>
+          <span>Status Help</span>
+        </RouterLink>
         <button
           class="create-toggle utility-new"
           type="button"
@@ -309,7 +317,7 @@ function deleteMessage(callsign: string): void {
   align-items: center;
   display: grid;
   gap: 0.8rem;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.35fr) minmax(3.2rem, 0.32fr);
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.15fr) minmax(0, 1fr) minmax(3.2rem, 0.32fr);
 }
 
 h1 {
@@ -450,13 +458,10 @@ p {
   cursor: pointer;
   display: inline-flex;
   font-family: var(--font-headline);
-  font-size: 1.2rem;
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
   font-weight: 700;
-  height: 2.3rem;
   justify-content: center;
   line-height: 1;
-  min-width: 2.3rem;
-  padding: 0;
 }
 
 .help-trigger:hover,
@@ -560,7 +565,7 @@ p {
 
   .header-actions {
     gap: 0.55rem;
-    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.34fr) minmax(2.8rem, 0.35fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(2.8rem, 0.42fr) minmax(2.8rem, 0.35fr);
   }
 
   .utility-chip,
@@ -574,6 +579,10 @@ p {
   .utility-chip svg {
     height: 1rem;
     width: 1rem;
+  }
+
+  .help-trigger span {
+    display: none;
   }
 }
 </style>

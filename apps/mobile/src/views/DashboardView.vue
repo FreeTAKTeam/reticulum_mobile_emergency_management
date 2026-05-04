@@ -19,6 +19,11 @@ const { dashboardSummary } = storeToRefs(checklistsStore);
 const eventsStore = useEventsStore();
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
+const dashboardActionTitle = computed(() =>
+  nodeStore.ready
+    ? "Send runtime command"
+    : "Node is not ready yet. Wait for the top-right status to show Ready.",
+);
 
 async function announceNow(): Promise<void> {
   try {
@@ -108,10 +113,22 @@ onMounted(() => {
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <button type="button" class="dashboard-chip action-chip" @click="announceNow">
+        <button
+          type="button"
+          class="dashboard-chip action-chip"
+          :disabled="!nodeStore.ready"
+          :title="dashboardActionTitle"
+          @click="announceNow"
+        >
           Announce
         </button>
-        <button type="button" class="dashboard-chip action-chip" @click="requestSync">
+        <button
+          type="button"
+          class="dashboard-chip action-chip"
+          :disabled="!nodeStore.ready"
+          :title="dashboardActionTitle"
+          @click="requestSync"
+        >
           Sync
         </button>
       </div>
@@ -293,6 +310,11 @@ h1 {
   --btn-border: rgb(73 173 255 / 48%);
   --btn-color: #8fcaff;
   cursor: pointer;
+}
+
+.action-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .panel {

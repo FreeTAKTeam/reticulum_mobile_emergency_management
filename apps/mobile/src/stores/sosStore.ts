@@ -17,6 +17,24 @@ function copySettings(settings: SosSettingsRecord): SosSettingsRecord {
   return { ...settings };
 }
 
+export function normalizeReleaseSosSettings(source: SosSettingsRecord): SosSettingsRecord {
+  return {
+    ...source,
+    countdownSeconds: 0,
+    triggerTapPattern: false,
+    shakeSensitivity: Math.max(1, Number(source.shakeSensitivity || DEFAULT_SOS_SETTINGS.shakeSensitivity)),
+    audioRecording: false,
+    audioDurationSeconds: DEFAULT_SOS_SETTINGS.audioDurationSeconds,
+    periodicUpdates: false,
+    updateIntervalSeconds: DEFAULT_SOS_SETTINGS.updateIntervalSeconds,
+    silentAutoAnswer: false,
+  };
+}
+
+function settingsEqual(left: SosSettingsRecord, right: SosSettingsRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export const useSosStore = defineStore("sos", () => {
   const nodeStore = useNodeStore();
   const settings = reactive<SosSettingsRecord>(copySettings(DEFAULT_SOS_SETTINGS));
@@ -28,6 +46,7 @@ export const useSosStore = defineStore("sos", () => {
   const busy = ref(false);
   const lastError = ref("");
   let unsubs: Array<() => void> = [];
+  let initPromise: Promise<void> | null = null;
 
   const active = computed(() => status.value.state !== "Idle");
   const activeAlerts = computed(() => alerts.value.filter((alert) => alert.active));
@@ -69,6 +88,18 @@ export const useSosStore = defineStore("sos", () => {
     }
   }
 
+  async function persistReleaseSafeSettings(): Promise<void> {
+    const sanitized = normalizeReleaseSosSettings(settings);
+    if (settingsEqual(settings, sanitized)) {
+      return;
+    }
+    try {
+      await saveSettings(sanitized);
+    } catch {
+      // saveSettings already records the error for the Settings UI.
+    }
+  }
+
   function bindEvents(): void {
     for (const unsub of unsubs) {
       unsub();
@@ -93,12 +124,25 @@ export const useSosStore = defineStore("sos", () => {
   }
 
   async function init(): Promise<void> {
+    if (initPromise) {
+      return initPromise;
+    }
     if (initialized.value) {
       return;
     }
-    initialized.value = true;
-    bindEvents();
-    await refresh();
+    if (!nodeStore.initialized) {
+      return;
+    }
+    initPromise = (async () => {
+      bindEvents();
+      await refresh();
+      await persistReleaseSafeSettings();
+      initialized.value = true;
+    })()
+      .finally(() => {
+        initPromise = null;
+      });
+    return initPromise;
   }
 
   async function saveSettings(next: SosSettingsRecord): Promise<void> {

@@ -68,8 +68,11 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   let refreshLivePromise: Promise<void> | null = null;
   let refreshTemplatesPromise: Promise<void> | null = null;
+  let refreshLiveQueued = false;
+  let refreshTemplatesQueued = false;
   const pendingChecklistNotifications = new Map<string, ChecklistNotificationWork>();
   const detailPromises = new Map<string, Promise<void>>();
+  const detailRefreshQueued = new Set<string>();
 
   function client(): ReticulumNodeClient {
     return getProjectionClient(nodeStore.settings.clientMode);
@@ -161,7 +164,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
       key,
       title: `Checklist updated: ${record.name || "Checklist"}`,
       body: checklistNotificationBody(record),
-      route: `/checlklist/${record.uid}`,
+    route: `/checklists/${record.uid}`,
       timer: setTimeout(() => {
         pendingChecklistNotifications.delete(record.uid);
         void notifyOperationalUpdateOnce(
@@ -197,54 +200,64 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   async function refreshLive(): Promise<void> {
     if (refreshLivePromise) {
+      refreshLiveQueued = true;
       await refreshLivePromise;
       return;
     }
-    const promise = (async () => {
-      loadingLive.value = true;
+
+    do {
+      refreshLiveQueued = false;
+      const promise = (async () => {
+        loadingLive.value = true;
+        try {
+          const records = await client().listActiveChecklists();
+          live.value = records;
+          detailById.value = {
+            ...detailById.value,
+            ...Object.fromEntries(records.map((record) => [record.uid, record])),
+          };
+          await notifyForChecklistChanges(records);
+        } finally {
+          loadingLive.value = false;
+        }
+      })();
+      refreshLivePromise = promise;
       try {
-        const records = await client().listActiveChecklists();
-        live.value = records;
-        detailById.value = {
-          ...detailById.value,
-          ...Object.fromEntries(records.map((record) => [record.uid, record])),
-        };
-        await notifyForChecklistChanges(records);
+        await promise;
       } finally {
-        loadingLive.value = false;
+        if (refreshLivePromise === promise) {
+          refreshLivePromise = null;
+        }
       }
-    })();
-    refreshLivePromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (refreshLivePromise === promise) {
-        refreshLivePromise = null;
-      }
-    }
+    } while (refreshLiveQueued);
   }
 
   async function refreshTemplates(): Promise<void> {
     if (refreshTemplatesPromise) {
+      refreshTemplatesQueued = true;
       await refreshTemplatesPromise;
       return;
     }
-    const promise = (async () => {
-      loadingTemplates.value = true;
+
+    do {
+      refreshTemplatesQueued = false;
+      const promise = (async () => {
+        loadingTemplates.value = true;
+        try {
+          templates.value = await client().listChecklistTemplates();
+        } finally {
+          loadingTemplates.value = false;
+        }
+      })();
+      refreshTemplatesPromise = promise;
       try {
-        templates.value = await client().listChecklistTemplates();
+        await promise;
       } finally {
-        loadingTemplates.value = false;
+        if (refreshTemplatesPromise === promise) {
+          refreshTemplatesPromise = null;
+        }
       }
-    })();
-    refreshTemplatesPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (refreshTemplatesPromise === promise) {
-        refreshTemplatesPromise = null;
-      }
-    }
+    } while (refreshTemplatesQueued);
   }
 
   async function refreshDetail(checklistUid: string): Promise<void> {
@@ -255,34 +268,41 @@ export const useChecklistsStore = defineStore("checklists", () => {
     trackedDetailIds.add(normalizedUid);
     const existing = detailPromises.get(normalizedUid);
     if (existing) {
+      detailRefreshQueued.add(normalizedUid);
       await existing;
       return;
     }
-    const promise = (async () => {
-      setDetailLoading(normalizedUid, true);
-      try {
-        let record: RuntimeChecklistDetailRecord | null = await client().getChecklist(normalizedUid);
-        if (!record) {
-          record = getTemplateById(normalizedUid);
+
+    do {
+      detailRefreshQueued.delete(normalizedUid);
+      const promise = (async () => {
+        setDetailLoading(normalizedUid, true);
+        try {
+          let record: RuntimeChecklistDetailRecord | null = await client().getChecklist(normalizedUid);
           if (!record) {
-            await refreshTemplates();
             record = getTemplateById(normalizedUid);
+            if (!record) {
+              await refreshTemplates();
+              record = getTemplateById(normalizedUid);
+            }
           }
+          detailById.value = {
+            ...detailById.value,
+            [normalizedUid]: record,
+          };
+        } finally {
+          setDetailLoading(normalizedUid, false);
         }
-        detailById.value = {
-          ...detailById.value,
-          [normalizedUid]: record,
-        };
+      })();
+      detailPromises.set(normalizedUid, promise);
+      try {
+        await promise;
       } finally {
-        setDetailLoading(normalizedUid, false);
+        if (detailPromises.get(normalizedUid) === promise) {
+          detailPromises.delete(normalizedUid);
+        }
       }
-    })();
-    detailPromises.set(normalizedUid, promise);
-    try {
-      await promise;
-    } finally {
-      detailPromises.delete(normalizedUid);
-    }
+    } while (detailRefreshQueued.has(normalizedUid));
   }
 
   async function refreshAll(): Promise<void> {
@@ -438,8 +458,13 @@ export const useChecklistsStore = defineStore("checklists", () => {
     await refreshAfterMutation(input.checklistUid);
   }
 
-  async function deleteChecklist(checklistUid: string): Promise<void> {
-    await client().deleteChecklist(checklistUid);
+  async function deleteChecklist(
+    checklistUid: string,
+    options: { deleteRemote?: boolean } = {},
+  ): Promise<void> {
+    await client().deleteChecklist(checklistUid, {
+      deleteRemote: options.deleteRemote ?? false,
+    });
     await refreshLive();
     detailById.value = {
       ...detailById.value,

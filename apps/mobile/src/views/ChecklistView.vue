@@ -31,6 +31,13 @@ const deletingChecklistIds = ref<string[]>([]);
 const isChecklistHelpVisible = ref(false);
 const DEFAULT_TARGET_DAYS = 30;
 
+type PendingChecklistDelete = {
+  id: string;
+  title: string;
+};
+
+const pendingDeleteChecklist = ref<PendingChecklistDelete | null>(null);
+
 function toDatetimeLocalValue(date: Date): string {
   const offsetMs = date.getTimezoneOffset() * 60_000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
@@ -192,7 +199,7 @@ function toggleMetadata(checklistId: string): void {
 
 function openChecklist(checklistId: string, edit = false): void {
   void router.push({
-    name: "checlklist-detail",
+    name: "checklist-detail",
     params: { checklistId },
     query: edit ? { edit: "1" } : undefined,
   });
@@ -202,19 +209,32 @@ function isDeletingChecklist(checklistId: string): boolean {
   return deletingChecklistIds.value.includes(checklistId);
 }
 
-async function deleteChecklist(checklistId: string, title: string): Promise<void> {
+function requestDeleteChecklist(checklistId: string, title: string): void {
   if (activeSegment.value !== "live" || isDeletingChecklist(checklistId)) {
     return;
   }
-  if (!window.confirm(`Delete checklist "${title}"?`)) {
+  pendingDeleteChecklist.value = {
+    id: checklistId,
+    title,
+  };
+}
+
+function closeDeleteChecklistPrompt(): void {
+  pendingDeleteChecklist.value = null;
+}
+
+async function confirmDeleteChecklist(deleteRemote: boolean): Promise<void> {
+  const pending = pendingDeleteChecklist.value;
+  if (!pending || activeSegment.value !== "live" || isDeletingChecklist(pending.id)) {
     return;
   }
-  deletingChecklistIds.value = [...deletingChecklistIds.value, checklistId];
+  pendingDeleteChecklist.value = null;
+  deletingChecklistIds.value = [...deletingChecklistIds.value, pending.id];
   try {
-    await checklistsStore.deleteChecklist(checklistId);
-    expandedChecklistIds.value = expandedChecklistIds.value.filter((id) => id !== checklistId);
+    await checklistsStore.deleteChecklist(pending.id, { deleteRemote });
+    expandedChecklistIds.value = expandedChecklistIds.value.filter((id) => id !== pending.id);
   } finally {
-    deletingChecklistIds.value = deletingChecklistIds.value.filter((id) => id !== checklistId);
+    deletingChecklistIds.value = deletingChecklistIds.value.filter((id) => id !== pending.id);
   }
 }
 
@@ -394,6 +414,44 @@ onMounted(() => {
       </section>
     </div>
 
+    <div
+      v-if="pendingDeleteChecklist"
+      class="delete-confirm-screen"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="checklist-delete-title"
+      @click.self="closeDeleteChecklistPrompt"
+    >
+      <section class="delete-confirm-panel">
+        <div class="delete-confirm-header">
+          <h2 id="checklist-delete-title">Delete checklist?</h2>
+          <button
+            type="button"
+            class="help-close"
+            aria-label="Cancel checklist deletion"
+            @click="closeDeleteChecklistPrompt"
+          >
+            x
+          </button>
+        </div>
+        <p>
+          Delete "{{ pendingDeleteChecklist.title }}" from this device only, or also send an LXMF delete signal
+          to connected saved devices?
+        </p>
+        <div class="delete-confirm-actions">
+          <button type="button" class="delete-cancel" @click="closeDeleteChecklistPrompt">
+            Cancel
+          </button>
+          <button type="button" class="delete-local" @click="confirmDeleteChecklist(false)">
+            Delete locally
+          </button>
+          <button type="button" class="delete-remote" @click="confirmDeleteChecklist(true)">
+            Delete locally + remote
+          </button>
+        </div>
+      </section>
+    </div>
+
     <section class="checklist-list">
       <article
         v-for="record in filteredRecords"
@@ -435,7 +493,7 @@ onMounted(() => {
                 :aria-label="`Delete ${record.title}`"
                 title="Delete"
                 :disabled="isDeletingChecklist(record.id)"
-                @click="deleteChecklist(record.id, record.title)"
+                @click="requestDeleteChecklist(record.id, record.title)"
               >
                 <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M3 6h18" />
@@ -936,7 +994,8 @@ onMounted(() => {
   width: 2.15rem;
 }
 
-.help-screen {
+.help-screen,
+.delete-confirm-screen {
   align-items: center;
   background: rgb(2 9 24 / 72%);
   display: flex;
@@ -947,7 +1006,8 @@ onMounted(() => {
   z-index: 20;
 }
 
-.help-panel {
+.help-panel,
+.delete-confirm-panel {
   background:
     linear-gradient(150deg, rgb(9 25 55 / 96%), rgb(7 16 37 / 98%)),
     radial-gradient(circle at 10% 10%, rgb(13 152 255 / 18%), transparent 38%);
@@ -962,25 +1022,58 @@ onMounted(() => {
   width: min(100%, 34rem);
 }
 
-.help-header {
+.help-header,
+.delete-confirm-header {
   align-items: center;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
 }
 
-.help-panel h2 {
+.help-panel h2,
+.delete-confirm-panel h2 {
   color: #f1f8ff;
   font-family: var(--font-headline);
   font-size: 1.3rem;
   margin: 0;
 }
 
-.help-panel p {
+.help-panel p,
+.delete-confirm-panel p {
   color: #b8cdec;
   font-family: var(--font-body);
   line-height: 1.45;
   margin: 0;
+}
+
+.delete-confirm-actions {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.delete-confirm-actions button {
+  min-height: 2.5rem;
+  padding: 0.72rem 0.8rem;
+  width: 100%;
+}
+
+.delete-cancel {
+  background: rgb(9 21 45 / 88%);
+  border: 1px solid rgb(93 127 181 / 48%);
+  color: #cfe2ff;
+}
+
+.delete-local {
+  background: rgb(23 42 72 / 88%);
+  border: 1px solid rgb(112 154 215 / 58%);
+  color: #e8f2ff;
+}
+
+.delete-remote {
+  background: rgb(72 20 35 / 88%);
+  border: 1px solid rgb(255 83 105 / 78%);
+  color: #ffd7dd;
 }
 
 .filter-row {
@@ -1347,6 +1440,10 @@ onMounted(() => {
 
   .filter-field {
     max-width: none;
+  }
+
+  .delete-confirm-actions {
+    grid-template-columns: 1fr;
   }
 
   .card-top-actions {

@@ -1,26 +1,16 @@
 <script setup lang="ts">
 import { DEFAULT_SOS_SETTINGS, type SosSettingsRecord } from "@reticulum/node-client";
-import { computed, defineExpose, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 
-import { useSosStore } from "../../stores/sosStore";
+import { normalizeReleaseSosSettings, useSosStore } from "../../stores/sosStore";
 
 const sosStore = useSosStore();
 const pin = ref("");
 const feedback = ref("");
 const form = reactive<SosSettingsRecord>({ ...DEFAULT_SOS_SETTINGS });
 
-function normalizedSosSettings(source: SosSettingsRecord): SosSettingsRecord {
-  return {
-    ...source,
-    countdownSeconds: Math.max(0, Number(source.countdownSeconds || 0)),
-    shakeSensitivity: Math.max(1, Number(source.shakeSensitivity || 2.5)),
-    audioDurationSeconds: Math.min(60, Math.max(15, Number(source.audioDurationSeconds || 30))),
-    updateIntervalSeconds: Math.max(30, Number(source.updateIntervalSeconds || 120)),
-  };
-}
-
 const dirty = computed(
-  () => JSON.stringify(normalizedSosSettings(form)) !== JSON.stringify(normalizedSosSettings(sosStore.settings)),
+  () => JSON.stringify(normalizeReleaseSosSettings(form)) !== JSON.stringify(sosStore.settings),
 );
 
 const summary = computed(() => {
@@ -29,20 +19,19 @@ const summary = computed(() => {
   }
   const triggers = [
     form.triggerShake ? "shake" : "",
-    form.triggerTapPattern ? "tap" : "",
     form.triggerPowerButton ? "power" : "",
   ].filter(Boolean);
   return triggers.length > 0
-    ? `Enabled | ${triggers.join(", ")} | ${form.countdownSeconds}s`
-    : `Enabled | manual only | ${form.countdownSeconds}s`;
+    ? `Enabled | ${triggers.join(", ")}`
+    : "Enabled | manual only";
 });
 
 function syncFromStore(): void {
-  Object.assign(form, sosStore.settings);
+  Object.assign(form, normalizeReleaseSosSettings(sosStore.settings));
 }
 
 async function save(): Promise<void> {
-  await sosStore.saveSettings(normalizedSosSettings(form));
+  await sosStore.saveSettings(normalizeReleaseSosSettings(form));
   feedback.value = "SOS settings saved.";
 }
 
@@ -103,10 +92,6 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
           Emergency end template
           <textarea v-model="form.cancelMessageTemplate" rows="2" maxlength="180" />
         </label>
-        <label>
-          Countdown seconds
-          <input v-model.number="form.countdownSeconds" min="0" max="30" type="number" />
-        </label>
         <label class="checkbox">
           <input v-model="form.includeLocation" type="checkbox" />
           Include GPS and battery
@@ -117,10 +102,6 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
         <label class="checkbox">
           <input v-model="form.triggerShake" type="checkbox" />
           Shake trigger
-        </label>
-        <label class="checkbox">
-          <input v-model="form.triggerTapPattern" type="checkbox" />
-          Tap pattern trigger
         </label>
         <label class="checkbox">
           <input v-model="form.triggerPowerButton" type="checkbox" />
@@ -134,31 +115,8 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
 
       <div class="grid">
         <label class="checkbox">
-          <input v-model="form.periodicUpdates" type="checkbox" />
-          Periodic updates
-        </label>
-        <label>
-          Update interval seconds
-          <input v-model.number="form.updateIntervalSeconds" min="30" type="number" />
-        </label>
-        <label class="checkbox">
-          <input v-model="form.audioRecording" type="checkbox" />
-          Record ambient audio
-        </label>
-        <label>
-          Audio seconds
-          <input v-model.number="form.audioDurationSeconds" min="15" max="60" type="number" />
-        </label>
-      </div>
-
-      <div class="grid">
-        <label class="checkbox">
           <input v-model="form.floatingButton" type="checkbox" />
           Floating SOS button
-        </label>
-        <label class="checkbox">
-          <input v-model="form.silentAutoAnswer" type="checkbox" />
-          Silent auto-answer
         </label>
         <label>
           Deactivation PIN

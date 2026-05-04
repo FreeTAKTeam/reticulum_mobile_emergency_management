@@ -24,7 +24,9 @@ import {
   type NodeStatus,
   type PeerChangedEvent,
   type ReticulumNodeClient,
+  type SosAudioRecord,
   type StatusChangedEvent,
+  generateDefaultCallSign,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
@@ -85,8 +87,6 @@ const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
-const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
-const AUTO_CONNECT_SERIAL_DELAY_MS = 300;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
 
@@ -129,10 +129,12 @@ interface HubAnnounceCandidate {
   label: string;
 }
 
+const LEGACY_DEFAULT_DISPLAY_NAME = "emergency-ops-mobile";
+
 const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
   clientMode: "auto",
-  autoConnectSaved: true,
+  autoConnectSaved: false,
   announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
   tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
@@ -155,6 +157,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     refreshIntervalSeconds: 3600,
   },
 };
+const RCH_HUB_DIRECTORY_ENABLED = false;
 
 interface UiLogLine {
   at: number;
@@ -176,7 +179,6 @@ type EventPeerRoute = {
   sendMode: SendMode;
 };
 type PacketSendOptions = {
-  dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
   sendMode?: SendMode;
 };
@@ -306,7 +308,11 @@ function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
 }
 
 function normalizeStoredDisplayName(value: unknown): string {
-  return normalizeDisplayName(typeof value === "string" ? value : "") ?? DEFAULT_SETTINGS.displayName;
+  const normalized = normalizeDisplayName(typeof value === "string" ? value : "");
+  if (!normalized || normalized.toLowerCase() === LEGACY_DEFAULT_DISPLAY_NAME) {
+    return generateDefaultCallSign();
+  }
+  return normalized;
 }
 
 function normalizeTelemetrySettings(
@@ -325,9 +331,9 @@ function normalizeTelemetrySettings(
   return {
     ...base,
     ...telemetry,
-    publishIntervalSeconds: Math.min(
-      60,
-      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds)),
+    publishIntervalSeconds: Math.max(
+      1,
+      Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds),
     ),
     accuracyThresholdMeters:
       telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
@@ -351,6 +357,10 @@ function normalizeChecklistSettings(
 }
 
 function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
+  if (!RCH_HUB_DIRECTORY_ENABLED) {
+    return "Autonomous";
+  }
+
   switch (String(value ?? "").trim()) {
     case "Connected":
       return "Connected";
@@ -410,6 +420,14 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
   };
 }
 
+function hubModeWasCoerced(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.hub.mode !== right.hub.mode;
+}
+
+function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -428,6 +446,7 @@ function normalizeAppSettingsRecord(
     ...runtimeSettings,
     displayName: normalizeStoredDisplayName(runtimeSettings.displayName),
     clientMode: normalizeClientMode(uiSettings.clientMode),
+    autoConnectSaved: false,
     announceCapabilities: ensureRequiredAnnounceCapabilities(runtimeSettings.announceCapabilities),
     tcpClients: normalizeTcpCommunityClients(
       runtimeSettings.tcpClients,
@@ -468,7 +487,7 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
 }
 
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
-  const displayName = normalizeDisplayName(settings.displayName) ?? DEFAULT_NODE_CONFIG.name;
+  const displayName = normalizeStoredDisplayName(settings.displayName);
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
@@ -517,8 +536,6 @@ export const useNodeStore = defineStore("node", () => {
   const client = shallowRef<ReticulumNodeClient | null>(null);
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
   const identityResolutionInFlight = new Set<string>();
-  const autoConnectInFlight = new Set<string>();
-  const autoConnectQueue: string[] = [];
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
   let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
@@ -1044,13 +1061,16 @@ export const useNodeStore = defineStore("node", () => {
     refreshSettingsPromise = (async () => {
       const record = await client.value!.getAppSettings();
       if (record) {
-        applySettingsProjection(
-          normalizeAppSettingsRecord(
-            record,
-            loadUiSettingsProjection(DEFAULT_SETTINGS),
-            defaultsWithTcpFallback(),
-          ),
+        const normalizedSettings = normalizeAppSettingsRecord(
+          record,
+          loadUiSettingsProjection(DEFAULT_SETTINGS),
+          defaultsWithTcpFallback(),
         );
+        applySettingsProjection(normalizedSettings);
+        const normalizedRecord = toAppSettingsRecord(normalizedSettings);
+        if (settingsRecordWasNormalized(record, normalizedRecord)) {
+          await client.value!.setAppSettings(normalizedRecord);
+        }
       }
     })()
       .catch((error: unknown) => {
@@ -1342,94 +1362,6 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function shouldAutoConnectSavedPeer(destination: string): boolean {
-    return autoConnectSavedPeerSkipReason(destination) === undefined;
-  }
-
-  function autoConnectSavedPeerSkipReason(destination: string): string | undefined {
-    const normalizedDestination = normalizeDestinationHex(destination);
-    if (!settings.autoConnectSaved || !status.value.running) {
-      return "auto-connect disabled or node not running";
-    }
-    if (isLocalPeerDestination(normalizedDestination) || !savedByDestination[normalizedDestination]) {
-      return "peer is local or not saved";
-    }
-    const peer = discoveredByDestination[normalizedDestination];
-    if (peer?.state === "connecting") {
-      return "peer is already connecting";
-    }
-    if (peer?.activeLink) {
-      return "peer already has an active link";
-    }
-    if (autoConnectInFlight.has(normalizedDestination)) {
-      return "connect already in flight";
-    }
-    return undefined;
-  }
-
-  function scheduleSavedPeerAutoConnect(destination: string, reason: string): void {
-    const normalizedDestination = normalizeDestinationHex(destination);
-    const skipReason = autoConnectSavedPeerSkipReason(normalizedDestination);
-    if (skipReason) {
-      appendLog(
-        "Debug",
-        `[peers] auto-connect not scheduled destination=${normalizedDestination} reason=${reason}: ${skipReason}.`,
-      );
-      return;
-    }
-    autoConnectInFlight.add(normalizedDestination);
-    if (!autoConnectQueue.includes(normalizedDestination)) {
-      autoConnectQueue.push(normalizedDestination);
-    }
-    void drainAutoConnectQueue(reason);
-  }
-
-  async function drainAutoConnectQueue(reason: string): Promise<void> {
-    if (autoConnectQueueActive.value) {
-      return;
-    }
-    autoConnectQueueActive.value = true;
-    try {
-      while (autoConnectQueue.length > 0) {
-        const nextDestination = autoConnectQueue.shift();
-        if (!nextDestination) {
-          continue;
-        }
-        const skipReason = autoConnectSavedPeerSkipReason(nextDestination);
-        if (skipReason) {
-          appendLog(
-            "Debug",
-            `[peers] auto-connect cancelled destination=${nextDestination} reason=${reason}: ${skipReason}.`,
-          );
-          autoConnectInFlight.delete(nextDestination);
-          continue;
-        }
-        await sleep(AUTO_CONNECT_SERIAL_DELAY_MS);
-        try {
-          await connectPeer(nextDestination);
-          appendLog("Debug", `[peers] auto-connected saved peer ${nextDestination} after ${reason}.`);
-        } catch (error: unknown) {
-          appendLog(
-            "Debug",
-            `[peers] auto-connect skipped destination=${nextDestination} after ${reason}: ${errorMessage(error)}.`,
-          );
-        } finally {
-          autoConnectInFlight.delete(nextDestination);
-        }
-      }
-    } finally {
-      autoConnectQueueActive.value = false;
-    }
-  }
-
-  function queueEligibleSavedPeerAutoConnects(reason: string): void {
-    for (const peer of Object.values(savedByDestination)) {
-      if (savedByDestination[peer.destination]) {
-        scheduleSavedPeerAutoConnect(peer.destination, reason);
-      }
-    }
-  }
-
   function applyAnnounceUpdate(
     event: AnnounceReceivedEvent | AnnounceRecord,
     source: "live" | "snapshot" = "live",
@@ -1498,9 +1430,6 @@ export const useNodeStore = defineStore("node", () => {
       },
       "announce",
     );
-    if (source === "live") {
-      scheduleSavedPeerAutoConnect(event.destinationHex, `${event.destinationKind} announce`);
-    }
   }
 
   async function refreshAnnounceState(): Promise<void> {
@@ -1528,7 +1457,7 @@ export const useNodeStore = defineStore("node", () => {
     }, delayMs);
   }
 
-  async function settleStartupDiscovery(reason: string): Promise<void> {
+  async function settleStartupDiscovery(): Promise<void> {
     if (!status.value.running) {
       return;
     }
@@ -1536,7 +1465,6 @@ export const useNodeStore = defineStore("node", () => {
     try {
       await sleep(STARTUP_ANNOUNCE_SETTLE_MS);
       await refreshMessagingState();
-      queueEligibleSavedPeerAutoConnects(`${reason} settle`);
       await refreshMessagingState();
     } finally {
       startupSettling.value = false;
@@ -1998,7 +1926,7 @@ export const useNodeStore = defineStore("node", () => {
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
-      await settleStartupDiscovery("startup");
+      await settleStartupDiscovery();
       await refreshHubRegistrationState(true);
       appendNodeControlEntry("Info", "Node started.");
 
@@ -2046,7 +1974,7 @@ export const useNodeStore = defineStore("node", () => {
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
-      await settleStartupDiscovery("restart");
+      await settleStartupDiscovery();
       await refreshHubRegistrationState(true);
       appendNodeControlEntry("Info", "Node restarted with updated settings.");
 
@@ -2264,9 +2192,7 @@ export const useNodeStore = defineStore("node", () => {
       settings.clientMode = next.clientMode;
       uiSettingsChanged = true;
     }
-    if (typeof next.autoConnectSaved === "boolean") {
-      settings.autoConnectSaved = next.autoConnectSaved;
-    }
+    settings.autoConnectSaved = false;
     if (next.announceCapabilities !== undefined) {
       settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
     }
@@ -2872,6 +2798,10 @@ export const useNodeStore = defineStore("node", () => {
     return requireClient("List SOS audio failed").listSosAudio();
   }
 
+  async function recordSosAudio(audio: SosAudioRecord) {
+    return requireClient("Record SOS audio failed").recordSosAudio(audio);
+  }
+
   async function announceNow(): Promise<void> {
     if (!client.value) {
       return;
@@ -2916,18 +2846,17 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+  async function broadcastJson(payload: unknown): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await broadcastBytes(body, { dedicatedFields });
+    await broadcastBytes(body);
   }
 
   async function sendJson(
     destinationHex: string,
     payload: unknown,
-    dedicatedFields?: DedicatedFields,
   ): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await sendBytes(destinationHex, body, { dedicatedFields });
+    await sendBytes(destinationHex, body);
   }
 
   async function reinitializeClient(): Promise<void> {
@@ -2995,6 +2924,7 @@ export const useNodeStore = defineStore("node", () => {
     pluginCatalogErrors,
     pluginLxmfMessages,
     savedDestinations,
+    initialized,
     ready,
     peerDisplayState,
     peerPresenceTimestamp,
@@ -3043,6 +2973,7 @@ export const useNodeStore = defineStore("node", () => {
     listSosAlerts,
     listSosLocations,
     listSosAudio,
+    recordSosAudio,
     setActivePropagationNode,
     requestLxmfSync,
     broadcastBytes,

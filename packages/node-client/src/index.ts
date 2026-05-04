@@ -139,12 +139,10 @@ export interface PacketReceivedEvent {
   destinationHex: string;
   sourceHex?: string;
   bytes: Uint8Array;
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
 }
 
 export interface PacketSendOptions {
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
   sendMode?: SendMode;
 }
@@ -718,6 +716,10 @@ export interface NodeClientEvents {
   error: NodeErrorEvent;
 }
 
+export type ChecklistDeleteOptions = {
+  deleteRemote?: boolean;
+};
+
 export interface ReticulumNodeClient {
   start(config: NodeConfig): Promise<void>;
   stop(): Promise<void>;
@@ -795,7 +797,7 @@ export interface ReticulumNodeClient {
       startTime?: string;
     };
   }): Promise<void>;
-  deleteChecklist(checklistUid: string): Promise<void>;
+  deleteChecklist(checklistUid: string, options?: ChecklistDeleteOptions): Promise<void>;
   joinChecklist(checklistUid: string): Promise<void>;
   uploadChecklist(checklistUid: string): Promise<void>;
   setChecklistTaskStatus(input: {
@@ -851,6 +853,7 @@ export interface ReticulumNodeClient {
   listSosAlerts(): Promise<SosAlertRecord[]>;
   listSosLocations(): Promise<SosLocationRecord[]>;
   listSosAudio(): Promise<SosAudioRecord[]>;
+  recordSosAudio(audio: SosAudioRecord): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -866,8 +869,41 @@ export interface ReticulumNodeClientFactoryOptions {
   mode?: "auto" | "capacitor" | "web";
 }
 
+const GREEK_CALLSIGN_PREFIXES = [
+  "Alpha",
+  "Beta",
+  "Gamma",
+  "Delta",
+  "Epsilon",
+  "Zeta",
+  "Eta",
+  "Theta",
+  "Iota",
+  "Kappa",
+  "Lambda",
+  "Mu",
+  "Nu",
+  "Xi",
+  "Omicron",
+  "Pi",
+  "Rho",
+  "Sigma",
+  "Tau",
+  "Upsilon",
+  "Phi",
+  "Chi",
+  "Psi",
+  "Omega",
+] as const;
+
+export function generateDefaultCallSign(): string {
+  const prefix = GREEK_CALLSIGN_PREFIXES[Math.floor(Math.random() * GREEK_CALLSIGN_PREFIXES.length)];
+  const suffix = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
+  return `${prefix}${suffix}`;
+}
+
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
-  name: "emergency-ops-mobile",
+  name: generateDefaultCallSign(),
   tcpClients: [],
   broadcast: true,
   announceIntervalSeconds: 1800,
@@ -956,7 +992,6 @@ interface ReticulumNodePlugin {
   send(options: {
     destinationHex: string;
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
     sendMode?: SendMode;
   }): Promise<void>;
@@ -982,7 +1017,6 @@ interface ReticulumNodePlugin {
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
   }): Promise<void>;
   setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
@@ -1052,7 +1086,7 @@ interface ReticulumNodePlugin {
     checklistUid: string;
     patch: Record<string, unknown>;
   }): Promise<void>;
-  deleteChecklist(options: { checklistUid: string }): Promise<void>;
+  deleteChecklist(options: { checklistUid: string; deleteRemote?: boolean }): Promise<void>;
   joinChecklist(options: { checklistUid: string }): Promise<void>;
   uploadChecklist(options: { checklistUid: string }): Promise<void>;
   setChecklistTaskStatus(options: {
@@ -1108,6 +1142,7 @@ interface ReticulumNodePlugin {
   listSosAlerts(): Promise<{ items: Record<string, unknown>[] }>;
   listSosLocations(): Promise<{ items: Record<string, unknown>[] }>;
   listSosAudio(): Promise<{ items: Record<string, unknown>[] }>;
+  recordSosAudio(options: Record<string, unknown>): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -1439,23 +1474,6 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
 }
 
 
-function toDedicatedFields(raw: unknown): Record<string, string> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === "string") {
-      out[String(key)] = value;
-      continue;
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      out[String(key)] = String(value);
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function toPacketReceivedEvent(
   raw: Record<string, unknown>,
 ): PacketReceivedEvent {
@@ -1469,7 +1487,6 @@ function toPacketReceivedEvent(
         ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
         : undefined,
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
-    dedicatedFields: toDedicatedFields(raw.dedicatedFields ?? raw.dedicated_fields),
     fieldsBase64:
       typeof raw.fieldsBase64 === "string"
         ? raw.fieldsBase64
@@ -3202,6 +3219,18 @@ function toSosAudioRecord(raw: Record<string, unknown>): SosAudioRecord {
   };
 }
 
+function sosAudioToPlugin(audio: SosAudioRecord): Record<string, unknown> {
+  return {
+    audioId: audio.audioId,
+    incidentId: audio.incidentId,
+    sourceHex: audio.sourceHex,
+    path: audio.path,
+    mimeType: audio.mimeType,
+    durationSeconds: audio.durationSeconds,
+    createdAtMs: audio.createdAtMs,
+  };
+}
+
 function sosSettingsToPlugin(settings: SosSettingsRecord): Record<string, unknown> {
   return {
     enabled: settings.enabled,
@@ -3423,7 +3452,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.send({
       destinationHex: normalizeHex(destinationHex),
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
       sendMode: options?.sendMode,
     });
@@ -3476,7 +3504,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     await this.plugin.broadcast({
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
     });
   }
@@ -3684,9 +3711,12 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.updateChecklist(input);
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, options: ChecklistDeleteOptions = {}): Promise<void> {
     await this.ready();
-    await this.plugin.deleteChecklist({ checklistUid });
+    await this.plugin.deleteChecklist({
+      checklistUid,
+      deleteRemote: options.deleteRemote ?? false,
+    });
   }
 
   async joinChecklist(checklistUid: string): Promise<void> {
@@ -3856,6 +3886,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const result = await this.plugin.listSosAudio();
     return Array.isArray(result.items) ? result.items.map(toSosAudioRecord) : [];
+  }
+
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.recordSosAudio(sosAudioToPlugin(audio));
   }
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
@@ -4251,7 +4286,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -4324,6 +4359,14 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
@@ -4815,7 +4858,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -4888,6 +4931,14 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
