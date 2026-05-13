@@ -6100,7 +6100,7 @@ schema = "schemas/bad_status.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_receive_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
