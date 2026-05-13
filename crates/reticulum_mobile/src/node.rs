@@ -20,7 +20,7 @@ use crate::plugins::{
     NativePluginRuntime, PersistedPluginRegistry, PluginCatalog, PluginCatalogReport,
     PluginHostApi, PluginHostError, PluginInstaller, PluginLoadCandidate, PluginLoader,
     PluginLxmfMessage, PluginLxmfOutboundRequest, PluginLxmfSendRequest, PluginMessageSchemaMap,
-    PluginPermissions, PluginRegistry, PluginRuntimeDiagnostic, PluginState,
+    PluginPermissions, PluginRegistry, PluginRuntimeDiagnostic, PluginState, PluginTrustPolicy,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -135,6 +135,7 @@ struct NodeInner {
     sos_detector: Arc<Mutex<SosTriggerDetector>>,
     active_config: Option<NodeConfigFingerprint>,
     plugin_android_abi: Option<String>,
+    plugin_trust_policy: PluginTrustPolicy,
     plugin_runtime: Option<NativePluginRuntime>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
@@ -2217,6 +2218,7 @@ impl Node {
                 sos_detector: Arc::new(Mutex::new(SosTriggerDetector::new())),
                 active_config: None,
                 plugin_android_abi: None,
+                plugin_trust_policy: PluginTrustPolicy::production(Vec::new()),
                 plugin_runtime: None,
                 runtime: None,
                 cmd_tx: None,
@@ -2377,6 +2379,16 @@ impl Node {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_plugin_trust_policy(
+        &self,
+        trust_policy: PluginTrustPolicy,
+    ) -> Result<(), NodeError> {
+        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.plugin_trust_policy = trust_policy;
         Ok(())
     }
 
@@ -2971,11 +2983,11 @@ impl Node {
         android_abi: &str,
         package_path: &str,
     ) -> Result<PluginCatalogReport, NodeError> {
-        let (storage_root, install_root) = {
+        let (storage_root, install_root, plugin_trust_policy) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let storage_root = inner.app_state.storage_dir();
             let install_root = storage_root.join("plugins");
-            (storage_root, install_root)
+            (storage_root, install_root, inner.plugin_trust_policy.clone())
         };
         let staged_root = storage_root.join("plugin-packages");
         fs_err::create_dir_all(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
@@ -2987,7 +2999,7 @@ impl Node {
             return Err(NodeError::InvalidConfig {});
         }
 
-        let installer = PluginInstaller::new(install_root);
+        let installer = PluginInstaller::new_with_trust_policy(install_root, plugin_trust_policy);
         if package_path.is_dir() {
             installer
                 .install_from_package_dir(package_path.as_path(), android_abi)
@@ -3030,7 +3042,10 @@ impl Node {
             registry.grant_permissions(plugin_id, |permissions| {
                 *permissions = granted_permissions;
             })
-        })
+        })?;
+        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        restart_enabled_native_plugin_runtime(&mut inner);
+        Ok(())
     }
 
     fn update_persisted_plugin_registry(
@@ -5513,6 +5528,13 @@ mod tests {
         dir
     }
 
+    fn node_with_developer_plugin_installs(storage_dir: &Path) -> Node {
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        node.set_plugin_trust_policy(PluginTrustPolicy::developer_mode())
+            .expect("developer plugin trust policy stores");
+        node
+    }
+
     fn write_test_plugin_file(package_dir: &Path, relative_path: &str, contents: &[u8]) {
         let path = package_dir.join(relative_path);
         if let Some(parent) = path.parent() {
@@ -5721,7 +5743,7 @@ schema = "schemas/status_test.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
 
         let report = node
             .install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
@@ -5738,7 +5760,7 @@ schema = "schemas/status_test.schema.json"
     }
 
     #[test]
-    fn install_plugin_package_dir_installs_archive_from_app_private_staging() {
+    fn install_plugin_package_dir_rejects_unsigned_archive_by_default() {
         let storage_dir = prepare_storage_dir("plugin_install_staged_archive");
         let archive_path = storage_dir
             .join("plugin-packages")
@@ -5747,6 +5769,24 @@ schema = "schemas/status_test.schema.json"
             .expect("create archive parent");
         write_test_plugin_archive(archive_path.as_path());
         let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+
+        let err = node
+            .install_plugin_package_dir("arm64-v8a", archive_path.to_string_lossy().as_ref())
+            .expect_err("unsigned archive is rejected by default");
+
+        assert!(matches!(err, NodeError::InvalidConfig {}));
+    }
+
+    #[test]
+    fn install_plugin_package_dir_installs_archive_with_developer_policy() {
+        let storage_dir = prepare_storage_dir("plugin_install_staged_archive_dev");
+        let archive_path = storage_dir
+            .join("plugin-packages")
+            .join("example-status.remplugin");
+        std::fs::create_dir_all(archive_path.parent().expect("archive parent"))
+            .expect("create archive parent");
+        write_test_plugin_archive(archive_path.as_path());
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
 
         let report = node
             .install_plugin_package_dir("arm64-v8a", archive_path.to_string_lossy().as_ref())
@@ -5764,7 +5804,7 @@ schema = "schemas/status_test.schema.json"
         let package_dir = unique_test_dir("plugin_install_outside_package");
         std::fs::create_dir_all(package_dir.as_path()).expect("create outside package");
         write_test_plugin_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
 
         let err = node
             .install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
@@ -5784,7 +5824,7 @@ schema = "schemas/status_test.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
@@ -5826,7 +5866,7 @@ schema = "schemas/status_test.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
@@ -5897,7 +5937,7 @@ schema = "schemas/bad_status.schema.json"
             "schemas/bad_status.schema.json",
             br#"{"type":"object","required":["badStatus"],"properties":{"badStatus":{"type":"string","minLength":1}},"additionalProperties":false}"#,
         );
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", valid_package_dir.to_string_lossy().as_ref())
             .expect("valid staged package installs");
         node.install_plugin_package_dir("arm64-v8a", bad_package_dir.to_string_lossy().as_ref())
@@ -5934,7 +5974,7 @@ schema = "schemas/bad_status.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
@@ -5967,7 +6007,7 @@ schema = "schemas/bad_status.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_receive_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
@@ -5994,7 +6034,7 @@ schema = "schemas/bad_status.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_receive_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         let mut grants = PluginPermissions::default();
@@ -6023,7 +6063,7 @@ schema = "schemas/bad_status.schema.json"
     #[test]
     fn plugin_lxmf_receive_ignores_non_plugin_fields() {
         let storage_dir = prepare_storage_dir("plugin_lxmf_receive_non_plugin");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         let fields = rmp_serde::to_vec(&json!({ "other": true })).expect("fields encode");
 
         let message = node
@@ -6040,7 +6080,7 @@ schema = "schemas/bad_status.schema.json"
             .join("plugin-packages")
             .join("example-status-package");
         write_test_plugin_receive_package(package_dir.as_path());
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = node_with_developer_plugin_installs(storage_dir.as_path());
         node.install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
             .expect("staged package installs");
         node.set_plugin_enabled("arm64-v8a", "rem.plugin.example_status", true)
