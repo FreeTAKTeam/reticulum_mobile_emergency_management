@@ -3009,6 +3009,7 @@ mod tests {
             checklists: ChecklistSettingsRecord {
                 default_task_due_step_minutes,
             },
+            plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
         }
     }
 

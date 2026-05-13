@@ -64,6 +64,7 @@ export interface NodeConfig {
   name: string;
   storageDir?: string;
   pluginAndroidAbi?: string;
+  pluginTrustedPublishers?: TrustedPluginPublisherRecord[];
   tcpClients: string[];
   broadcast: boolean;
   announceIntervalSeconds: number;
@@ -398,6 +399,15 @@ export interface ChecklistSettingsRecord {
   defaultTaskDueStepMinutes: number;
 }
 
+export interface TrustedPluginPublisherRecord {
+  publisher: string;
+  publicKeyBase64: string;
+}
+
+export interface PluginTrustSettingsRecord {
+  trustedPublishers: TrustedPluginPublisherRecord[];
+}
+
 export interface AppSettingsRecord {
   displayName: string;
   autoConnectSaved: boolean;
@@ -408,6 +418,7 @@ export interface AppSettingsRecord {
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
   checklists: ChecklistSettingsRecord;
+  pluginTrust: PluginTrustSettingsRecord;
 }
 
 export type PluginState =
@@ -904,6 +915,7 @@ export function generateDefaultCallSign(): string {
 
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: generateDefaultCallSign(),
+  pluginTrustedPublishers: [],
   tcpClients: [],
   broadcast: true,
   announceIntervalSeconds: 1800,
@@ -2028,6 +2040,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   const telemetry = (raw.telemetry ?? {}) as Record<string, unknown>;
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
   const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
+  const pluginTrust = (raw.pluginTrust ?? raw.plugin_trust ?? {}) as Record<string, unknown>;
   const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
   return {
     displayName: String(raw.displayName ?? ""),
@@ -2055,7 +2068,34 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
         ? Math.max(1, defaultTaskDueStepMinutes)
         : 30,
     },
+    pluginTrust: {
+      trustedPublishers: normalizeTrustedPluginPublishers(
+        pluginTrust.trustedPublishers ?? pluginTrust.trusted_publishers,
+      ),
+    },
   };
+}
+
+function normalizeTrustedPluginPublishers(value: unknown): TrustedPluginPublisherRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return undefined;
+      }
+      const record = entry as Record<string, unknown>;
+      const publisher = String(record.publisher ?? "").trim();
+      const publicKeyBase64 = String(
+        record.publicKeyBase64 ?? record.public_key_base64 ?? "",
+      ).trim();
+      if (!publisher || !publicKeyBase64) {
+        return undefined;
+      }
+      return { publisher, publicKeyBase64 };
+    })
+    .filter((entry): entry is TrustedPluginPublisherRecord => Boolean(entry));
 }
 
 function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
@@ -3278,6 +3318,10 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     name: config.name,
     storageDir: config.storageDir,
     pluginAndroidAbi: config.pluginAndroidAbi,
+    pluginTrustedPublishers: (config.pluginTrustedPublishers ?? []).map((publisher) => ({
+      publisher: publisher.publisher,
+      publicKeyBase64: publisher.publicKeyBase64,
+    })),
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
     announceIntervalSeconds: config.announceIntervalSeconds,

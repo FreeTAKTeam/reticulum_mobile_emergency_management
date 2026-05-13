@@ -21,6 +21,7 @@ use crate::plugins::{
     PluginHostApi, PluginHostError, PluginInstaller, PluginLoadCandidate, PluginLoader,
     PluginLxmfMessage, PluginLxmfOutboundRequest, PluginLxmfSendRequest, PluginMessageSchemaMap,
     PluginPermissions, PluginRegistry, PluginRuntimeDiagnostic, PluginState, PluginTrustPolicy,
+    TrustedPluginPublisher,
 };
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
 use crate::sos::{
@@ -42,7 +43,7 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord,
+    TelemetryPositionRecord, TrustedPluginPublisherRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -145,6 +146,7 @@ struct NodeInner {
 struct NodeConfigFingerprint {
     name: String,
     storage_dir: Option<String>,
+    plugin_trusted_publishers: Vec<TrustedPluginPublisherRecord>,
     tcp_clients: Vec<String>,
     broadcast: bool,
     announce_interval_seconds: u32,
@@ -167,6 +169,7 @@ impl NodeConfigFingerprint {
         Ok(Self {
             name: name.to_string(),
             storage_dir: config.storage_dir.clone(),
+            plugin_trusted_publishers: config.plugin_trusted_publishers.clone(),
             tcp_clients: config.tcp_clients.clone(),
             broadcast: config.broadcast,
             announce_interval_seconds: config.announce_interval_seconds,
@@ -179,6 +182,28 @@ impl NodeConfigFingerprint {
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
         })
     }
+}
+
+fn plugin_trust_policy_from_publishers(
+    publishers: &[TrustedPluginPublisherRecord],
+) -> PluginTrustPolicy {
+    PluginTrustPolicy::production(
+        publishers
+            .iter()
+            .filter_map(|publisher| {
+                let publisher_name = publisher.publisher.trim();
+                let public_key_base64 = publisher.public_key_base64.trim();
+                if publisher_name.is_empty() || public_key_base64.is_empty() {
+                    None
+                } else {
+                    Some(TrustedPluginPublisher {
+                        publisher: publisher_name.to_string(),
+                        public_key_base64: public_key_base64.to_string(),
+                    })
+                }
+            })
+            .collect(),
+    )
 }
 
 fn start_enabled_native_plugins(
@@ -2301,6 +2326,8 @@ impl Node {
         };
 
         inner.app_state = create_app_state_store(config.storage_dir.as_deref());
+        inner.plugin_trust_policy =
+            plugin_trust_policy_from_publishers(config.plugin_trusted_publishers.as_slice());
         if let Some(prestart_state) = prestart_state {
             inner.app_state.import_legacy_state(&prestart_state)?;
         }
@@ -3276,7 +3303,10 @@ impl Node {
     }
 
     pub fn set_app_settings(&self, settings: AppSettingsRecord) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.plugin_trust_policy = plugin_trust_policy_from_publishers(
+            settings.plugin_trust.trusted_publishers.as_slice(),
+        );
         let invalidation = inner.app_state.set_app_settings(&settings)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         let summary = inner.app_state.bump_projection_revision(
@@ -5337,13 +5367,16 @@ mod tests {
     use super::*;
 
     use crate::mission_sync::parse_mission_sync_metadata;
-    use crate::plugins::{PluginState, PLUGIN_LXMF_FIELD_KEY};
+    use crate::plugins::{PluginManifest, PluginState, PLUGIN_LXMF_FIELD_KEY};
     use crate::types::{
         ChecklistTaskRecord, EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod,
         MessageState, TelemetrySettingsRecord,
     };
     use crate::HubMode;
+    use base64::Engine;
+    use ed25519_dalek::{Signer, SigningKey};
     use rmpv::Value as MsgPackValue;
+    use sha2::{Digest, Sha256};
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
@@ -5588,6 +5621,95 @@ schema = "schemas/status_test.schema.json"
         );
     }
 
+    fn sign_test_plugin_package(
+        package_dir: &Path,
+        signing_key: &SigningKey,
+        publisher: &str,
+    ) -> TrustedPluginPublisherRecord {
+        let manifest = PluginManifest::from_toml_str(
+            std::fs::read_to_string(package_dir.join("plugin.toml"))
+                .expect("manifest reads")
+                .as_str(),
+        )
+        .expect("manifest parses");
+        let manifest_sha256 = test_sha256_hex(
+            std::fs::read(package_dir.join("plugin.toml"))
+                .expect("manifest bytes read")
+                .as_slice(),
+        );
+        let package_sha256 = test_package_sha256(package_dir);
+        let payload = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            manifest.id, manifest.version, manifest_sha256, package_sha256, publisher
+        );
+        let signature = signing_key.sign(payload.as_bytes());
+        let signature_json = json!({
+            "plugin_id": manifest.id,
+            "version": manifest.version,
+            "manifest_sha256": manifest_sha256,
+            "package_sha256": package_sha256,
+            "publisher": publisher,
+            "signature": base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+        });
+        std::fs::write(
+            package_dir.join("signature.json"),
+            serde_json::to_vec_pretty(&signature_json).expect("signature json encodes"),
+        )
+        .expect("signature writes");
+        TrustedPluginPublisherRecord {
+            publisher: publisher.to_string(),
+            public_key_base64: base64::engine::general_purpose::STANDARD
+                .encode(signing_key.verifying_key().to_bytes()),
+        }
+    }
+
+    fn test_package_sha256(package_dir: &Path) -> String {
+        let mut entries = Vec::new();
+        collect_test_package_hash_entries(package_dir, package_dir, &mut entries);
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut hasher = Sha256::new();
+        for (relative_path, file_hash) in entries {
+            hasher.update(relative_path.as_bytes());
+            hasher.update([0]);
+            hasher.update(file_hash.as_bytes());
+            hasher.update([b'\n']);
+        }
+        hex::encode(hasher.finalize())
+    }
+
+    fn collect_test_package_hash_entries(
+        root: &Path,
+        current: &Path,
+        entries: &mut Vec<(String, String)>,
+    ) {
+        for entry in std::fs::read_dir(current).expect("package dir reads") {
+            let entry = entry.expect("package entry reads");
+            let file_type = entry.file_type().expect("file type reads");
+            if file_type.is_dir() {
+                collect_test_package_hash_entries(root, entry.path().as_path(), entries);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let relative_path = entry
+                .path()
+                .strip_prefix(root)
+                .expect("relative path")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if relative_path == "signature.json" {
+                continue;
+            }
+            let contents = std::fs::read(entry.path()).expect("package file reads");
+            entries.push((relative_path, test_sha256_hex(contents.as_slice())));
+        }
+    }
+
+    fn test_sha256_hex(contents: &[u8]) -> String {
+        hex::encode(Sha256::digest(contents))
+    }
+
     fn write_test_plugin_receive_package(package_dir: &Path) {
         write_test_plugin_file(
             package_dir,
@@ -5775,6 +5897,31 @@ schema = "schemas/status_test.schema.json"
             .expect_err("unsigned archive is rejected by default");
 
         assert!(matches!(err, NodeError::InvalidConfig {}));
+    }
+
+    #[test]
+    fn install_plugin_package_dir_accepts_app_settings_trusted_publisher() {
+        let storage_dir = prepare_storage_dir("plugin_install_trusted_publisher");
+        let package_dir = storage_dir
+            .join("plugin-packages")
+            .join("example-status-package");
+        write_test_plugin_package(package_dir.as_path());
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let trusted_publisher =
+            sign_test_plugin_package(package_dir.as_path(), &signing_key, "FreeTAKTeam");
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let mut settings = build_app_settings();
+        settings.plugin_trust.trusted_publishers = vec![trusted_publisher];
+        node.set_app_settings(settings)
+            .expect("trusted publisher settings store");
+
+        let report = node
+            .install_plugin_package_dir("arm64-v8a", package_dir.to_string_lossy().as_ref())
+            .expect("signed package from trusted publisher installs");
+
+        assert!(report.errors.is_empty());
+        assert_eq!(report.items.len(), 1);
+        assert_eq!(report.items[0].id, "rem.plugin.example_status");
     }
 
     #[test]
@@ -6119,6 +6266,7 @@ schema = "schemas/bad_status.schema.json"
         NodeConfig {
             name: name.to_string(),
             storage_dir: Some(storage_dir.to_string_lossy().to_string()),
+            plugin_trusted_publishers: Vec::new(),
             tcp_clients: vec![relay_addr.to_string()],
             broadcast: true,
             announce_interval_seconds: 1,
@@ -6535,6 +6683,7 @@ schema = "schemas/bad_status.schema.json"
                 refresh_interval_seconds: 3600,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
         }
     }
 
@@ -6563,6 +6712,7 @@ schema = "schemas/bad_status.schema.json"
         NodeConfigFingerprint {
             name: "Atlas-1".to_string(),
             storage_dir: None,
+            plugin_trusted_publishers: Vec::new(),
             tcp_clients: Vec::new(),
             broadcast: true,
             announce_interval_seconds: 1800,
@@ -6990,6 +7140,7 @@ schema = "schemas/bad_status.schema.json"
                 refresh_interval_seconds: 0,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
         }
     }
 

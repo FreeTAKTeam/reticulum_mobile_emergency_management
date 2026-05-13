@@ -319,6 +319,19 @@ impl Default for ChecklistSettingsRecord {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedPluginPublisherRecord {
+    pub publisher: String,
+    pub public_key_base64: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginTrustSettingsRecord {
+    #[serde(default)]
+    pub trusted_publishers: Vec<TrustedPluginPublisherRecord>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum NodeError {
     #[error("invalid config")]
@@ -353,6 +366,7 @@ pub enum NodeError {
 pub struct NodeConfig {
     pub name: String,
     pub storage_dir: Option<String>,
+    pub plugin_trusted_publishers: Vec<TrustedPluginPublisherRecord>,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
     pub announce_interval_seconds: u32,
@@ -631,6 +645,8 @@ pub struct AppSettingsRecord {
     pub hub: HubSettingsRecord,
     #[serde(default)]
     pub checklists: ChecklistSettingsRecord,
+    #[serde(default)]
+    pub plugin_trust: PluginTrustSettingsRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

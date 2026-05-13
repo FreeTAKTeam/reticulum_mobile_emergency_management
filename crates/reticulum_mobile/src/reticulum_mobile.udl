@@ -146,6 +146,9 @@ dictionary NodeConfig {
   // When omitted, an in-memory identity derived from `name` is used.
   string? storage_dir;
 
+  // Trusted Ed25519 publisher keys for production plug-in package installs.
+  sequence<TrustedPluginPublisherRecord> plugin_trusted_publishers;
+
   // TCP client interfaces to join (host:port), e.g. "rmap.world:4242".
   sequence<string> tcp_clients;
 
@@ -323,6 +326,15 @@ dictionary ChecklistSettingsRecord {
   u32 default_task_due_step_minutes;
 };
 
+dictionary TrustedPluginPublisherRecord {
+  string publisher;
+  string public_key_base64;
+};
+
+dictionary PluginTrustSettingsRecord {
+  sequence<TrustedPluginPublisherRecord> trusted_publishers;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -333,6 +345,7 @@ dictionary AppSettingsRecord {
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
   ChecklistSettingsRecord checklists;
+  PluginTrustSettingsRecord plugin_trust;
 };
 
 dictionary SavedPeerRecord {

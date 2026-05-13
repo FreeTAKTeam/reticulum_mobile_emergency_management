@@ -302,6 +302,12 @@ export interface NodeUiSettings {
   checklists: {
     defaultTaskDueStepMinutes: number;
   };
+  pluginTrust: {
+    trustedPublishers: Array<{
+      publisher: string;
+      publicKeyBase64: string;
+    }>;
+  };
 }
 
 export type ReplicationMessage =

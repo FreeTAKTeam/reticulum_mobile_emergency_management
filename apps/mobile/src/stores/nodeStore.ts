@@ -149,6 +149,9 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   checklists: {
     defaultTaskDueStepMinutes: 30,
   },
+  pluginTrust: {
+    trustedPublishers: [],
+  },
   hub: {
     mode: "Autonomous",
     identityHash: "",
@@ -388,6 +391,9 @@ function cloneDefaultSettings(): NodeUiSettings {
     ...DEFAULT_SETTINGS,
     telemetry: { ...DEFAULT_SETTINGS.telemetry },
     checklists: { ...DEFAULT_SETTINGS.checklists },
+    pluginTrust: {
+      trustedPublishers: [...DEFAULT_SETTINGS.pluginTrust.trustedPublishers],
+    },
     hub: { ...DEFAULT_SETTINGS.hub },
   };
 }
@@ -409,6 +415,12 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
     },
     checklists: {
       defaultTaskDueStepMinutes: settings.checklists.defaultTaskDueStepMinutes,
+    },
+    pluginTrust: {
+      trustedPublishers: settings.pluginTrust.trustedPublishers.map((publisher) => ({
+        publisher: publisher.publisher,
+        publicKeyBase64: publisher.publicKeyBase64,
+      })),
     },
     hub: {
       mode: settings.hub.mode,
@@ -454,6 +466,9 @@ function normalizeAppSettingsRecord(
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
+    pluginTrust: {
+      trustedPublishers: [...(runtimeSettings.pluginTrust?.trustedPublishers ?? [])],
+    },
     hub: {
       ...DEFAULT_SETTINGS.hub,
       ...runtimeSettings.hub,
@@ -491,6 +506,10 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
+    pluginTrustedPublishers: settings.pluginTrust.trustedPublishers.map((publisher) => ({
+      publisher: publisher.publisher,
+      publicKeyBase64: publisher.publicKeyBase64,
+    })),
     tcpClients: normalizeTcpCommunityClients(settings.tcpClients),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
@@ -2226,6 +2245,14 @@ export const useNodeStore = defineStore("node", () => {
       ) {
         clearHubDirectoryState();
       }
+    }
+    if (next.pluginTrust) {
+      settings.pluginTrust = {
+        trustedPublishers: next.pluginTrust.trustedPublishers.map((publisher) => ({
+          publisher: publisher.publisher.trim(),
+          publicKeyBase64: publisher.publicKeyBase64.trim(),
+        })).filter((publisher) => publisher.publisher && publisher.publicKeyBase64),
+      };
     }
     const nextSettings = normalizeAppSettingsRecord(
       toAppSettingsRecord(settings),

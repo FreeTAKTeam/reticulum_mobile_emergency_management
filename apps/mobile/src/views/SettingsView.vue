@@ -2,7 +2,7 @@
 import { computed, reactive, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
-import type { PluginPermissionsRecord } from "@reticulum/node-client";
+import type { PluginPermissionsRecord, TrustedPluginPublisherRecord } from "@reticulum/node-client";
 import PluginLxmfMessageLog from "../components/plugins/PluginLxmfMessageLog.vue";
 import PluginManagementCard from "../components/plugins/PluginManagementCard.vue";
 import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
@@ -73,6 +73,9 @@ const form = reactive({
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
   hubApiKey: nodeStore.settings.hub.apiKey,
   hubRefreshIntervalSeconds: nodeStore.settings.hub.refreshIntervalSeconds,
+  pluginTrustedPublishers: formatTrustedPluginPublishers(
+    nodeStore.settings.pluginTrust.trustedPublishers,
+  ),
 });
 
 const importText = ref("");
@@ -138,6 +141,39 @@ const hubSummary = computed(() => {
 });
 const hubRegistrationSummary = computed(() => nodeStore.hubRegistrationSummary);
 const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved peers`);
+
+function formatTrustedPluginPublishers(publishers: TrustedPluginPublisherRecord[]): string {
+  return publishers
+    .map((publisher) => `${publisher.publisher}=${publisher.publicKeyBase64}`)
+    .join("\n");
+}
+
+function parseTrustedPluginPublishers(value: string): TrustedPluginPublisherRecord[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0 || separatorIndex === line.length - 1) {
+        throw new Error("Trusted plug-in publishers must use Publisher=base64PublicKey lines.");
+      }
+      const publisher = line.slice(0, separatorIndex).trim();
+      const publicKeyBase64 = line.slice(separatorIndex + 1).trim();
+      if (!publisher || !publicKeyBase64) {
+        throw new Error("Trusted plug-in publisher names and keys are required.");
+      }
+      return { publisher, publicKeyBase64 };
+    });
+}
+
+const normalizedTrustedPluginPublishers = computed(() => {
+  try {
+    return parseTrustedPluginPublishers(form.pluginTrustedPublishers);
+  } catch {
+    return [];
+  }
+});
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
@@ -150,13 +186,17 @@ const pendingPluginActions = reactive<Record<string, boolean>>({});
 const pluginSettingsSummary = computed(() => {
   const pluginCount = nodeStore.installedPlugins.length;
   const configurableCount = pluginSettingsSections.value.length;
+  const trustedPublisherCount = normalizedTrustedPluginPublishers.value.length;
+  const trustSummary = trustedPublisherCount === 0
+    ? ""
+    : ` | ${trustedPublisherCount} trusted publisher${trustedPublisherCount === 1 ? "" : "s"}`;
   if (pluginCount === 0) {
     return configurableCount === 0
-      ? "No installed plug-ins"
-      : `${configurableCount} configurable`;
+      ? `No installed plug-ins${trustSummary}`
+      : `${configurableCount} configurable${trustSummary}`;
   }
   const enabledCount = nodeStore.installedPlugins.filter((plugin) => plugin.state !== "Disabled").length;
-  return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable`;
+  return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable${trustSummary}`;
 });
 const recentPluginLxmfMessages = computed(() => nodeStore.pluginLxmfMessages.slice(0, 5));
 const activePropagationNodeLabel = computed(() => {
@@ -250,7 +290,9 @@ const hasMainSettingsChanges = computed(() =>
   || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
   || form.hubApiKey.trim() !== nodeStore.settings.hub.apiKey
   || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
-    !== nodeStore.settings.hub.refreshIntervalSeconds,
+    !== nodeStore.settings.hub.refreshIntervalSeconds
+  || form.pluginTrustedPublishers.trim()
+    !== formatTrustedPluginPublishers(nodeStore.settings.pluginTrust.trustedPublishers).trim(),
 );
 
 const hasUnsavedSettings = computed(
@@ -352,6 +394,7 @@ async function applySettings(): Promise<void> {
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
   savingSettings.value = true;
   try {
+    const trustedPublishers = parseTrustedPluginPublishers(form.pluginTrustedPublishers);
     nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
@@ -381,6 +424,9 @@ async function applySettings(): Promise<void> {
         apiKey: form.hubApiKey.trim(),
         refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
       },
+      pluginTrust: {
+        trustedPublishers,
+      },
     });
     await sosCardRef.value?.saveSettings();
   } catch (error: unknown) {
@@ -397,6 +443,9 @@ async function applySettings(): Promise<void> {
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
   form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  form.pluginTrustedPublishers = formatTrustedPluginPublishers(
+    nodeStore.settings.pluginTrust.trustedPublishers,
+  );
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
@@ -1008,6 +1057,14 @@ async function refreshPluginSettings(): Promise<void> {
         <p class="section-note">
           Installed plug-ins can be enabled, granted declared permissions, and configured here.
         </p>
+        <label class="full">
+          Trusted publishers
+          <textarea
+            v-model="form.pluginTrustedPublishers"
+            rows="4"
+            placeholder="FreeTAKTeam=base64-ed25519-public-key"
+          ></textarea>
+        </label>
         <input
           ref="pluginArchiveFileInput"
           type="file"

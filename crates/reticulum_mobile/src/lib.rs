@@ -35,7 +35,8 @@ pub use types::{
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
     SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
+    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord, PluginTrustSettingsRecord,
+    TrustedPluginPublisherRecord,
 };
 
 pub fn healthcheck() -> String {

@@ -25,7 +25,7 @@ use crate::types::{
     PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
     SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord,
+    TelemetryPositionRecord, TelemetrySettingsRecord, TrustedPluginPublisherRecord,
 };
 
 const RESULT_OK: jint = 0;
@@ -60,6 +60,7 @@ struct NodeConfigInput {
     name: Option<String>,
     storage_dir: Option<String>,
     plugin_android_abi: Option<String>,
+    plugin_trusted_publishers: Option<Vec<TrustedPluginPublisherRecord>>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
     announce_interval_seconds: Option<u32>,
@@ -231,12 +232,20 @@ struct AppSettingsInput {
     hub: HubSettingsInput,
     #[serde(default)]
     checklists: ChecklistSettingsInput,
+    #[serde(default)]
+    plugin_trust: PluginTrustSettingsInput,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChecklistSettingsInput {
     default_task_due_step_minutes: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginTrustSettingsInput {
+    trusted_publishers: Vec<TrustedPluginPublisherRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -683,6 +692,9 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
                 Some(trimmed)
             }
         }),
+        plugin_trusted_publishers: normalize_trusted_plugin_publishers(
+            input.plugin_trusted_publishers.unwrap_or_default(),
+        ),
         tcp_clients: input
             .tcp_clients
             .unwrap_or_default()
@@ -725,6 +737,26 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
         }),
         hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
     }
+}
+
+fn normalize_trusted_plugin_publishers(
+    publishers: Vec<TrustedPluginPublisherRecord>,
+) -> Vec<TrustedPluginPublisherRecord> {
+    publishers
+        .into_iter()
+        .filter_map(|publisher| {
+            let publisher_name = publisher.publisher.trim().to_string();
+            let public_key_base64 = publisher.public_key_base64.trim().to_string();
+            if publisher_name.is_empty() || public_key_base64.is_empty() {
+                None
+            } else {
+                Some(TrustedPluginPublisherRecord {
+                    publisher: publisher_name,
+                    public_key_base64,
+                })
+            }
+        })
+        .collect()
 }
 
 #[no_mangle]
@@ -906,6 +938,11 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
                 .default_task_due_step_minutes
                 .unwrap_or(crate::types::DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES)
                 .max(1),
+        },
+        plugin_trust: crate::types::PluginTrustSettingsRecord {
+            trusted_publishers: normalize_trusted_plugin_publishers(
+                input.plugin_trust.trusted_publishers,
+            ),
         },
     }
 }

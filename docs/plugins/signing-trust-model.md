@@ -25,8 +25,9 @@ Signed packages include `signature.json` at the package root:
 ```
 
 The signature uses Ed25519. The host trusts publisher public keys configured in
-REM, verifies the manifest hash, and verifies a canonical sorted package hash
-that excludes `signature.json`.
+REM Settings as `Publisher=base64-ed25519-public-key` lines, verifies the
+manifest hash, and verifies a canonical sorted package hash that excludes
+`signature.json`.
 
 ## Packager
 

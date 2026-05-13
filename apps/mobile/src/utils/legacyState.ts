@@ -157,6 +157,32 @@ function normalizeStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+function normalizeTrustedPluginPublishers(
+  value: unknown,
+): NodeUiSettings["pluginTrust"]["trustedPublishers"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      const record = asRecord(entry);
+      if (!record) {
+        return undefined;
+      }
+      const publisher = asTrimmedString(record.publisher);
+      const publicKeyBase64 = asTrimmedString(
+        record.publicKeyBase64 ?? record.public_key_base64,
+      );
+      if (!publisher || !publicKeyBase64) {
+        return undefined;
+      }
+      return { publisher, publicKeyBase64 };
+    })
+    .filter((entry): entry is NodeUiSettings["pluginTrust"]["trustedPublishers"][number] =>
+      Boolean(entry)
+    );
+}
+
 function normalizeUiPreferences(
   value: Partial<NodeUiSettings> | Partial<NodeUiPreferences> | null,
   defaults: Pick<NodeUiSettings, "clientMode">,
@@ -208,6 +234,11 @@ function normalizeRuntimeSettings(
           value.checklists?.defaultTaskDueStepMinutes
             ?? defaults.checklists.defaultTaskDueStepMinutes,
         ),
+      ),
+    },
+    pluginTrust: {
+      trustedPublishers: normalizeTrustedPluginPublishers(
+        value.pluginTrust?.trustedPublishers,
       ),
     },
   };
