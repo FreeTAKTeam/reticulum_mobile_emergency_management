@@ -270,6 +270,9 @@ export function parseMecpMessage(input: string): ParsedMecpMessage {
   const category: MecpCategoryCode | null = isMecpCategoryCode(categoryCandidate)
     ? categoryCandidate
     : null;
+  if (codes.length === 0 || !category) {
+    return invalid;
+  }
 
   return {
     valid: true,

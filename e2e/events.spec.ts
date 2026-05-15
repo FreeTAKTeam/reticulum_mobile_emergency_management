@@ -28,6 +28,11 @@ test("MECP utilities encode and parse compact event bodies", () => {
     severity: null,
     category: null,
   });
+  expect(parseMecpMessage("MECP/2/bridge closed")).toMatchObject({
+    valid: false,
+    codes: [],
+    category: null,
+  });
 });
 
 test("operators can create and remove MECP event timeline entries", async ({ page }) => {
