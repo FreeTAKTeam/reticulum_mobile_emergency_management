@@ -1,10 +1,36 @@
 import { expect, test } from "@playwright/test";
 
+import {
+  encodeMecpMessage,
+  parseMecpMessage,
+} from "../apps/mobile/src/utils/mecp";
 import { gotoApp, seedAppStorage } from "./support/app";
 
 const GREEK_CALLSIGN_PATTERN = /^(Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)\d{3}$/;
 
-test("operators can create and remove event timeline entries", async ({ page }) => {
+test("MECP utilities encode and parse compact event bodies", () => {
+  const message = encodeMecpMessage({
+    severity: 2,
+    code: "T01",
+    details: "#A1",
+  });
+
+  expect(message).toBe("MECP/2/T01 #A1");
+  expect(parseMecpMessage(message)).toMatchObject({
+    valid: true,
+    severity: 2,
+    category: "T",
+    codes: ["T01"],
+    details: "#A1",
+  });
+  expect(parseMecpMessage("Bridge closed near rally point")).toMatchObject({
+    valid: false,
+    severity: null,
+    category: null,
+  });
+});
+
+test("operators can create and remove MECP event timeline entries", async ({ page }) => {
   await seedAppStorage(page);
   await gotoApp(page, "/events");
 
@@ -14,16 +40,67 @@ test("operators can create and remove event timeline entries", async ({ page }) 
   const callsignInput = createForm.getByLabel("Configured call sign");
   await expect(callsignInput).toHaveValue(GREEK_CALLSIGN_PATTERN);
   const callsign = await callsignInput.inputValue();
-  await createForm.getByLabel("Type").fill("Logistics");
-  await createForm.getByLabel("Event summary").fill("Bridge closed near rally point");
+
+  await expect(createForm.getByRole("button", { name: /Severity/ })).toBeVisible();
+  await createForm.getByRole("button", { name: /Severity/ }).click();
+  await expect(createForm.getByRole("button", { name: /Mayday/ })).toBeVisible();
+  await createForm.locator(".severity-menu").getByRole("button", { name: /Urgent/ }).click();
+  await createForm.getByRole("button", { name: /Severity Urgent/ }).click();
+  await createForm.locator(".severity-menu").getByRole("button", { name: /Safety/ }).click();
+  await expect(createForm.getByRole("button", { name: /Terrain \/ Infrastructure/ })).toBeVisible();
+  await expect(createForm.getByRole("button", { name: /T01 Road blocked/ })).toBeVisible();
+  await createForm.getByLabel("Optional details").fill("#A1");
+
   await createForm.getByRole("button", { name: "Add event" }).click();
 
-  await expect(page.getByRole("heading", { name: "Bridge closed near rally point" })).toBeVisible();
-  await expect(page.getByText("Logistics")).toBeVisible();
+  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/T01 #A1" });
+  await expect(timelineEvent.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
+  await expect(timelineEvent.getByText("MECP/2/T01 #A1")).toBeVisible();
+  await expect(timelineEvent.getByText("Terrain / Infrastructure")).toBeVisible();
   await expect(page.getByText(new RegExp(`${callsign} \\|`))).toBeVisible();
 
   await page.getByRole("button", { name: `Delete ${callsign}` }).click();
   await expect(page.getByText("No events yet. Add one locally or wait for a peer snapshot.")).toBeVisible();
+});
+
+test("operators can filter MECP events by severity and category", async ({ page }) => {
+  const now = Date.now();
+  await seedAppStorage(page, {
+    events: [
+      {
+        uid: "evt-safety-road",
+        type: "T",
+        summary: "MECP/2/T01",
+        callsign: "Omega999",
+        updatedAt: now,
+      },
+      {
+        uid: "evt-mayday-weather",
+        type: "W",
+        summary: "MECP/0/W01",
+        callsign: "Omega999",
+        updatedAt: now + 1,
+      },
+    ],
+  });
+  await gotoApp(page, "/events");
+
+  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Event filter status" }).click();
+  await page.getByLabel("Filter by severity").selectOption("Mayday");
+  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeHidden();
+
+  await page.getByLabel("Filter by severity").selectOption("All");
+  await page.getByLabel("Filter by category").selectOption("T");
+  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeHidden();
+
+  await page.getByRole("button", { name: "Reset" }).click();
+  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
 });
 
 test("header shows the connected peer count", async ({ page }) => {

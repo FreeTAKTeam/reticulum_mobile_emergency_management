@@ -16,6 +16,12 @@ import {
   DEFAULT_R3AKT_MISSION_NAME,
   DEFAULT_R3AKT_MISSION_UID,
 } from "../utils/r3akt";
+import {
+  mecpCategoryLabel,
+  mecpEventLabel,
+  mecpSeverityLabel,
+  parseMecpMessage,
+} from "../utils/mecp";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -28,6 +34,15 @@ type EventTimelineRecord = {
   summary: string;
   callsign: string;
   updatedAt: number;
+  mecp?: {
+    raw: string;
+    severity: string;
+    severityStatus: string;
+    category: string;
+    codes: string[];
+    codeLabels: string[];
+    details: string;
+  };
 };
 
 type ProjectionClientCache = typeof globalThis & {
@@ -144,7 +159,9 @@ function getEventContent(record: EventProjectionRecord): string {
 }
 
 function getEventType(record: EventProjectionRecord): string {
-  return decodeEventType(normalizeKeywords(record.args.keywords), "Incident");
+  const parsedMecp = parseMecpMessage(record.args.content);
+  const fallback = parsedMecp.valid && parsedMecp.category ? parsedMecp.category : "Incident";
+  return decodeEventType(normalizeKeywords(record.args.keywords), fallback);
 }
 
 function getEventUpdatedAt(record: EventProjectionRecord): number {
@@ -163,12 +180,38 @@ function isDeletedEvent(record: EventProjectionRecord): boolean {
 }
 
 function toTimelineRecord(record: EventProjectionRecord): EventTimelineRecord {
+  const parsedMecp = parseMecpMessage(getEventContent(record));
+  const mecp = parsedMecp.valid
+    ? {
+        raw: parsedMecp.raw,
+        severity: mecpSeverityLabel(parsedMecp.severity),
+        severityStatus: parsedMecp.severity === 0
+          ? "red"
+          : parsedMecp.severity === 1
+            ? "yellow"
+            : parsedMecp.severity === 2
+              ? "green"
+              : "unknown",
+        category: mecpCategoryLabel(parsedMecp.category),
+        codes: parsedMecp.codes,
+        codeLabels: parsedMecp.codes.map((code) => {
+          const label = mecpEventLabel(code);
+          return label.replace(
+            /^([A-Z]\d{2}) ([A-Z])/,
+            (_match, prefix: string, first: string) => `${prefix} ${first.toLowerCase()}`,
+          );
+        }),
+        details: parsedMecp.details,
+      }
+    : undefined;
+
   return {
     uid: getEventUid(record),
-    type: getEventType(record),
+    type: parsedMecp.valid ? mecpCategoryLabel(parsedMecp.category) : getEventType(record),
     summary: getEventContent(record),
     callsign: asTrimmedString(record.args.callsign) || "Unknown",
     updatedAt: getEventUpdatedAt(record),
+    mecp,
   };
 }
 
@@ -206,7 +249,9 @@ function normalizeEvent(entry: EventProjectionRecord | Record<string, unknown>):
     || sourceDisplayName
     || "Unknown";
   const baseKeywords = normalizeKeywords(rawArgs.keywords ?? raw.keywords);
-  const normalizedType = asTrimmedString(raw.type) || decodeEventType(baseKeywords, "Incident");
+  const parsedMecp = parseMecpMessage(content);
+  const normalizedType = asTrimmedString(raw.type)
+    || decodeEventType(baseKeywords, parsedMecp.category ?? "Incident");
   const serverTime = toIsoString(rawArgs.server_time)
     ?? toIsoString(rawArgs.serverTime)
     ?? toIsoString(raw.serverTime)
