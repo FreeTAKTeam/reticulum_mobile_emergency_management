@@ -197,8 +197,8 @@ function toTimelineRecord(record: EventProjectionRecord): EventTimelineRecord {
         codeLabels: parsedMecp.codes.map((code) => {
           const label = mecpEventLabel(code);
           return label.replace(
-            /^([A-Z]\d{2}) ([A-Z])/,
-            (_match, prefix: string, first: string) => `${prefix} ${first.toLowerCase()}`,
+            /^[A-Z]\d{2} ([A-Z])/,
+            (_match, first: string) => first.toLowerCase(),
           );
         }),
         details: parsedMecp.details,

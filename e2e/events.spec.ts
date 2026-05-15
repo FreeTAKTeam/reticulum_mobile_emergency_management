@@ -54,7 +54,7 @@ test("operators can create and remove MECP event timeline entries", async ({ pag
   await createForm.getByRole("button", { name: "Add event" }).click();
 
   const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/T01 #A1" });
-  await expect(timelineEvent.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
+  await expect(timelineEvent.getByRole("heading", { name: "road blocked" })).toBeVisible();
   await expect(timelineEvent.getByText("MECP/2/T01 #A1")).toBeVisible();
   await expect(timelineEvent.getByText("Terrain / Infrastructure")).toBeVisible();
   await expect(page.getByText(new RegExp(`${callsign} \\|`))).toBeVisible();
@@ -85,22 +85,22 @@ test("operators can filter MECP events by severity and category", async ({ page 
   });
   await gotoApp(page, "/events");
 
-  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
 
   await page.getByRole("button", { name: "Event filter status" }).click();
   await page.getByLabel("Filter by severity").selectOption("Mayday");
-  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked" })).toBeHidden();
 
   await page.getByLabel("Filter by severity").selectOption("All");
   await page.getByLabel("Filter by category").selectOption("T");
-  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "storm approaching" })).toBeHidden();
 
   await page.getByRole("button", { name: "Reset" }).click();
-  await expect(page.getByRole("heading", { name: "T01 road blocked" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "W01 storm approaching" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
 });
 
 test("header shows the connected peer count", async ({ page }) => {
