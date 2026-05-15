@@ -53,8 +53,8 @@ type CreateEventFormState = {
 function createDefaultFormState(): CreateEventFormState {
   return {
     severity: 2,
-    category: "T",
-    eventCode: "T01",
+    category: "P",
+    eventCode: "P01",
     details: "",
   };
 }
