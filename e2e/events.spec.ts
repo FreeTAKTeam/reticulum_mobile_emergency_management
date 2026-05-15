@@ -47,16 +47,16 @@ test("operators can create and remove MECP event timeline entries", async ({ pag
   await createForm.locator(".severity-menu").getByRole("button", { name: /Urgent/ }).click();
   await createForm.getByRole("button", { name: /Severity Urgent/ }).click();
   await createForm.locator(".severity-menu").getByRole("button", { name: /Safety/ }).click();
-  await expect(createForm.getByRole("button", { name: /Terrain \/ Infrastructure/ })).toBeVisible();
-  await expect(createForm.getByRole("button", { name: /T01 Road blocked/ })).toBeVisible();
+  await expect(createForm.getByRole("button", { name: /Position \/ Movement/ })).toBeVisible();
+  await expect(createForm.getByRole("button", { name: /P01 Stranded \/ stuck/ })).toBeVisible();
   await createForm.getByLabel("Optional details").fill("#A1");
 
   await createForm.getByRole("button", { name: "Add event" }).click();
 
-  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/T01 #A1" });
-  await expect(timelineEvent.getByRole("heading", { name: "road blocked" })).toBeVisible();
-  await expect(timelineEvent.getByText("MECP/2/T01 #A1")).toBeVisible();
-  await expect(timelineEvent.getByText("Terrain / Infrastructure")).toBeVisible();
+  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/P01 #A1" });
+  await expect(timelineEvent.getByRole("heading", { name: "stranded / stuck" })).toBeVisible();
+  await expect(timelineEvent.getByText("MECP/2/P01 #A1")).toBeVisible();
+  await expect(timelineEvent.getByText("Position / Movement")).toBeVisible();
   await expect(page.getByText(new RegExp(`${callsign} \\|`))).toBeVisible();
 
   await page.getByRole("button", { name: `Delete ${callsign}` }).click();
