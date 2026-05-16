@@ -254,6 +254,12 @@ Implementation mapping:
 - `crates/reticulum_mobile/src/runtime.rs` does not transform field names on send. It deserializes the raw MsgPack bytes into `message.fields` and separately reads metadata from the same byte slice using `parse_mission_sync_metadata(...)`.
 - Because the bridge passes raw MsgPack bytes through untouched, snake_case field names such as `command_id`, `command_type`, `correlation_id`, `mission_uid`, and `entry_uid` arrive in Rust exactly as produced by TypeScript.
 
+MECP event body contract:
+- REM event content uses compact MECP text in `args.content`, for example `MECP/2/P01 #A1`.
+- The event type keyword remains the MECP category selector, stored as `r3akt:event-type:<category>`.
+- Sender and time remain canonical in the REM envelope through `args.callsign`, `args.server_time`, `args.client_time`, and projection timestamps. Outbound REM events must not duplicate callsign or timestamp tokens inside the MECP body.
+- The MECP codec may decode portable external callsign or timestamp tokens when they are received, but timeline display still prefers the REM envelope for callsign and time.
+
 Additional event forms:
 - Mission bootstrap command:
   - `command_type: "mission.registry.mission.upsert"`

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  decodeMecpMessage,
   encodeMecpMessage,
   parseMecpMessage,
 } from "../apps/mobile/src/utils/mecp";
@@ -11,7 +12,7 @@ const GREEK_CALLSIGN_PATTERN = /^(Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|
 test("MECP utilities encode and parse compact event bodies", () => {
   const message = encodeMecpMessage({
     severity: 2,
-    code: "T01",
+    codes: ["T01"],
     details: "#A1",
   });
 
@@ -33,6 +34,51 @@ test("MECP utilities encode and parse compact event bodies", () => {
     codes: [],
     category: null,
   });
+  expect(parseMecpMessage("MECP/2/")).toMatchObject({
+    valid: false,
+    codes: [],
+    category: null,
+  });
+});
+
+test("MECP utilities encode and decode structured protocol details", () => {
+  const message = encodeMecpMessage({
+    severity: 1,
+    codes: ["R03", "T99"],
+    details: "north gate",
+    extras: {
+      callsign: "EAGLE-1",
+      coordinates: { latitude: 45.5017, longitude: -73.5673 },
+      etaMinutes: 15,
+      language: "EN",
+      pax: 4,
+      references: ["A1"],
+      timestamp: "0930",
+    },
+  });
+
+  expect(message).toBe("MECP/1/R03 T99 4pax 45.5017,-73.5673 #A1 15 @en north gate");
+  expect(message).not.toContain("EAGLE-1");
+  expect(message).not.toContain("@0930");
+
+  const decoded = decodeMecpMessage("MECP/1/R03 T99 4pax 45.5017,-73.5673 #A1 15 @en @0930 ~EAGLE-1 north gate");
+  expect(decoded).toMatchObject({
+    valid: true,
+    severity: 1,
+    category: "R",
+    codes: ["R03", "T99"],
+    details: "4pax 45.5017,-73.5673 #A1 15 @en @0930 ~EAGLE-1 north gate",
+    extras: {
+      callsign: "EAGLE-1",
+      etaMinutes: 15,
+      language: "en",
+      pax: 4,
+      references: ["#A1"],
+      timestamp: "0930",
+    },
+  });
+  expect(decoded.extras.coordinates).toEqual({ latitude: 45.5017, longitude: -73.5673 });
+  expect(decoded.warnings).toContain('Unknown MECP event code "T99".');
 });
 
 test("operators can create and remove MECP event timeline entries", async ({ page }) => {
@@ -54,13 +100,17 @@ test("operators can create and remove MECP event timeline entries", async ({ pag
   await createForm.locator(".severity-menu").getByRole("button", { name: /Safety/ }).click();
   await expect(createForm.getByRole("button", { name: /Position \/ Movement/ })).toBeVisible();
   await expect(createForm.getByRole("button", { name: /P01 Stranded \/ stuck/ })).toBeVisible();
-  await createForm.getByLabel("Optional details").fill("#A1");
+  await expect(createForm.getByText("MECP/2/P01")).toBeVisible();
+  await createForm.getByLabel("MECP reference").fill("A1");
+  await createForm.getByLabel("MECP GPS coordinates").fill("45.5017,-73.5673");
+  await createForm.getByLabel("Optional details").fill("north gate");
 
   await createForm.getByRole("button", { name: "Add event" }).click();
 
-  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/P01 #A1" });
+  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/P01 45.5017,-73.5673 #A1 north gate" });
   await expect(timelineEvent.getByRole("heading", { name: "stranded / stuck" })).toBeVisible();
-  await expect(timelineEvent.getByText("MECP/2/P01 #A1")).toBeVisible();
+  await expect(timelineEvent.getByText("MECP/2/P01 45.5017,-73.5673 #A1 north gate")).toBeVisible();
+  await expect(timelineEvent.getByText("45.50170, -73.56730")).toBeVisible();
   await expect(timelineEvent.getByText("Position / Movement")).toBeVisible();
   await expect(page.getByText(new RegExp(`${callsign} \\|`))).toBeVisible();
 
@@ -75,7 +125,7 @@ test("operators can filter MECP events by severity and category", async ({ page 
       {
         uid: "evt-safety-road",
         type: "T",
-        summary: "MECP/2/T01",
+        summary: "MECP/2/T01 C04 #BRAVO 2pax",
         callsign: "Omega999",
         updatedAt: now,
       },
@@ -90,21 +140,23 @@ test("operators can filter MECP events by severity and category", async ({ page 
   });
   await gotoApp(page, "/events");
 
-  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked + confirm received" })).toBeVisible();
+  await expect(page.getByText("#BRAVO", { exact: true })).toBeVisible();
+  await expect(page.getByText("2 pax")).toBeVisible();
   await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
 
   await page.getByRole("button", { name: "Event filter status" }).click();
   await page.getByLabel("Filter by severity").selectOption("Mayday");
   await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "road blocked" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "road blocked + confirm received" })).toBeHidden();
 
   await page.getByLabel("Filter by severity").selectOption("All");
   await page.getByLabel("Filter by category").selectOption("T");
-  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked + confirm received" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "storm approaching" })).toBeHidden();
 
   await page.getByRole("button", { name: "Reset" }).click();
-  await expect(page.getByRole("heading", { name: "road blocked" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "road blocked + confirm received" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
 });
 

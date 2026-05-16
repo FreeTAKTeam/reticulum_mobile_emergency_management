@@ -9,6 +9,7 @@ import {
   MECP_SEVERITIES,
   encodeMecpMessage,
   type MecpCategoryCode,
+  type MecpCoordinates,
   type MecpSeverity,
 } from "../utils/mecp";
 
@@ -48,6 +49,10 @@ type CreateEventFormState = {
   category: MecpCategoryCode;
   eventCode: string;
   details: string;
+  etaMinutes: string;
+  gps: string;
+  pax: string;
+  reference: string;
 };
 
 function createDefaultFormState(): CreateEventFormState {
@@ -56,6 +61,10 @@ function createDefaultFormState(): CreateEventFormState {
     category: "P",
     eventCode: "P01",
     details: "",
+    etaMinutes: "",
+    gps: "",
+    pax: "",
+    reference: "",
   };
 }
 
@@ -72,11 +81,41 @@ const selectedEvent = computed(() =>
   selectedEventOptions.value.find((event) => event.code === createForm.eventCode)
     ?? selectedEventOptions.value[0],
 );
+const structuredCoordinates = computed<MecpCoordinates | undefined>(() => {
+  const match = createForm.gps.trim().match(/^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) {
+    return undefined;
+  }
+  const latitude = Number.parseFloat(match[1]);
+  const longitude = Number.parseFloat(match[2]);
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    return undefined;
+  }
+  return { latitude, longitude };
+});
+const structuredPax = computed(() => {
+  const value = Number.parseInt(createForm.pax.trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+});
+const structuredEta = computed(() => {
+  const value = Number.parseInt(createForm.etaMinutes.trim(), 10);
+  return selectedEvent.value.code === "R03" && Number.isFinite(value) && value >= 0 ? value : undefined;
+});
+const structuredReferences = computed(() => {
+  const reference = createForm.reference.trim();
+  return reference ? [reference] : [];
+});
 const mecpPreview = computed(() =>
   encodeMecpMessage({
     severity: createForm.severity,
-    code: selectedEvent.value.code,
+    codes: [selectedEvent.value.code],
     details: createForm.details,
+    extras: {
+      coordinates: structuredCoordinates.value,
+      etaMinutes: structuredEta.value,
+      pax: structuredPax.value,
+      references: structuredReferences.value,
+    },
   }),
 );
 const categoryFilters = computed<Array<{ value: EventCategoryFilter; label: string }>>(() => [
@@ -99,8 +138,7 @@ const events = computed(() =>
       return false;
     }
     if (filters.category !== "All") {
-      const categoryLabel = MECP_CATEGORIES.find((category) => category.code === filters.category)?.label;
-      if (event.mecp?.category !== categoryLabel) {
+      if (event.mecp?.categoryCode !== filters.category) {
         return false;
       }
     }
@@ -486,6 +524,41 @@ async function deleteEvent(uid: string): Promise<void> {
           </div>
         </div>
 
+        <div class="structured-fields">
+          <input
+            v-model="createForm.reference"
+            type="text"
+            placeholder="#ref"
+            aria-label="MECP reference"
+            :disabled="!appReady"
+          />
+          <input
+            v-model="createForm.pax"
+            type="number"
+            min="1"
+            inputmode="numeric"
+            placeholder="pax"
+            aria-label="MECP pax count"
+            :disabled="!appReady"
+          />
+          <input
+            v-model="createForm.gps"
+            type="text"
+            placeholder="lat,lon"
+            aria-label="MECP GPS coordinates"
+            :disabled="!appReady"
+          />
+          <input
+            v-model="createForm.etaMinutes"
+            type="number"
+            min="0"
+            inputmode="numeric"
+            placeholder="ETA min"
+            aria-label="MECP ETA minutes"
+            :disabled="!appReady || selectedEvent.code !== 'R03'"
+          />
+        </div>
+
         <input
           v-model="createForm.details"
           type="text"
@@ -545,8 +618,14 @@ async function deleteEvent(uid: string): Promise<void> {
         </div>
         <template v-if="event.mecp">
           <h3>{{ event.mecp.codeLabels.join(" + ") || event.summary }}</h3>
+          <div v-if="event.mecp.extras.length > 0" class="mecp-extra-list" aria-label="Decoded MECP details">
+            <span v-for="extra in event.mecp.extras" :key="extra">{{ extra }}</span>
+          </div>
           <p v-if="event.mecp.details" class="mecp-details">{{ event.mecp.details }}</p>
           <p class="mecp-raw">{{ event.mecp.raw }}</p>
+          <p v-if="event.mecp.warnings.length > 0" class="mecp-warning">
+            {{ event.mecp.warnings.join(" ") }}
+          </p>
         </template>
         <template v-else>
           <h3>{{ event.summary }}</h3>
@@ -880,6 +959,12 @@ h1 {
   overflow-y: auto;
 }
 
+.structured-fields {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .dropdown-row {
   align-items: center;
   background: transparent;
@@ -1142,9 +1227,36 @@ h3 {
   margin: 0.3rem 0 0;
 }
 
+.mecp-extra-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+  margin-top: 0.48rem;
+}
+
+.mecp-extra-list span {
+  background: rgb(122 244 211 / 8%);
+  border: 1px solid rgb(122 244 211 / 22%);
+  border-radius: 6px;
+  color: #aeeedf;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.18rem 0.36rem;
+  text-transform: uppercase;
+}
+
 .mecp-raw {
   color: #7af4d3;
   margin: 0.38rem 0 0;
+}
+
+.mecp-warning {
+  color: #ffd66e;
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  margin: 0.3rem 0 0;
 }
 
 .action {

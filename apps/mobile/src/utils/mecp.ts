@@ -41,8 +41,54 @@ export interface ParsedMecpMessage {
   raw: string;
 }
 
+export interface MecpCoordinates {
+  latitude: number;
+  longitude: number;
+}
+
+export interface MecpDecodedExtras {
+  callsign: string | null;
+  etaMinutes: number | null;
+  language: string | null;
+  pax: number | null;
+  references: string[];
+  coordinates: MecpCoordinates | null;
+  timestamp: string | null;
+}
+
+export interface DecodedMecpCode {
+  code: string;
+  category: MecpCategoryCode;
+  label: string;
+  known: boolean;
+}
+
+export interface DecodedMecpMessage extends ParsedMecpMessage {
+  byteLength: number;
+  codeDetails: DecodedMecpCode[];
+  extras: MecpDecodedExtras;
+  warnings: string[];
+}
+
+export interface MecpEncodeExtras {
+  callsign?: string;
+  coordinates?: MecpCoordinates;
+  etaMinutes?: number;
+  language?: string;
+  pax?: number;
+  references?: string[];
+  timestamp?: string;
+}
+
 const MECP_PREFIX = "MECP/";
 const CODE_PATTERN = /^[A-Z]\d{2}$/;
+const CALLSIGN_PATTERN = /^~([A-Za-z0-9][A-Za-z0-9_-]*)$/;
+const COORDINATE_PATTERN = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/;
+const ETA_PATTERN = /^(\d{1,4})(?:m|min)?$/i;
+const LANGUAGE_PATTERN = /^@([A-Za-z]{2,3})$/;
+const PAX_PATTERN = /^(\d{1,4})pax$/i;
+const REFERENCE_PATTERN = /^#([A-Za-z0-9][A-Za-z0-9_.-]*)$/;
+const TIMESTAMP_PATTERN = /^@([01]\d|2[0-3])([0-5]\d)$/;
 const VALID_SEVERITIES = new Set<number>([0, 1, 2, 3]);
 
 export const MECP_SEVERITIES: MecpSeverityOption[] = [
@@ -223,35 +269,119 @@ export function mecpEventLabel(code: string): string {
   return match ? `${match.code} ${match.label}` : code;
 }
 
-export function encodeMecpMessage(input: {
-  severity: MecpSeverity;
-  code: string;
-  details?: string;
-}): string {
-  const normalizedCode = input.code.trim().toUpperCase();
-  const details = input.details?.trim();
-  const base = `${MECP_PREFIX}${input.severity}/${normalizedCode}`;
-  return details ? `${base} ${details}` : base;
+function createEmptyExtras(): MecpDecodedExtras {
+  return {
+    callsign: null,
+    etaMinutes: null,
+    language: null,
+    pax: null,
+    references: [],
+    coordinates: null,
+    timestamp: null,
+  };
 }
 
-export function parseMecpMessage(input: string): ParsedMecpMessage {
-  const raw = input.trim();
-  const invalid: ParsedMecpMessage = {
+function createInvalidDecodedMecpMessage(raw: string, warnings: string[] = []): DecodedMecpMessage {
+  return {
     valid: false,
     severity: null,
     codes: [],
     category: null,
     details: "",
     raw,
+    byteLength: new TextEncoder().encode(raw).length,
+    codeDetails: [],
+    extras: createEmptyExtras(),
+    warnings,
   };
+}
+
+function findEventCode(code: string): MecpEventCode | undefined {
+  const category = code.charAt(0);
+  if (!isMecpCategoryCode(category)) {
+    return undefined;
+  }
+  return MECP_EVENT_CODES[category].find((event) => event.code === code);
+}
+
+function normalizeCodeList(input: { code?: string; codes?: string[] }): string[] {
+  const rawCodes = input.codes ?? (input.code ? [input.code] : []);
+  return rawCodes
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => code.length > 0);
+}
+
+function formatCoordinate(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : Number.parseFloat(value.toFixed(6)).toString();
+}
+
+function normalizeReference(reference: string): string {
+  const trimmed = reference.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+}
+
+export function encodeMecpMessage(input: {
+  severity: MecpSeverity;
+  code?: string;
+  codes?: string[];
+  details?: string;
+  extras?: MecpEncodeExtras;
+  mode?: "rem" | "portable";
+}): string {
+  const normalizedCodes = normalizeCodeList(input);
+  const details = input.details?.trim();
+  const tokens = normalizedCodes.filter((code) => CODE_PATTERN.test(code));
+  const extras = input.extras;
+  if (extras?.pax !== undefined && Number.isFinite(extras.pax) && extras.pax > 0) {
+    tokens.push(`${Math.floor(extras.pax)}pax`);
+  }
+  if (extras?.coordinates) {
+    tokens.push(`${formatCoordinate(extras.coordinates.latitude)},${formatCoordinate(extras.coordinates.longitude)}`);
+  }
+  for (const reference of extras?.references ?? []) {
+    const normalized = normalizeReference(reference);
+    if (normalized) {
+      tokens.push(normalized);
+    }
+  }
+  if (extras?.etaMinutes !== undefined && Number.isFinite(extras.etaMinutes) && extras.etaMinutes >= 0) {
+    tokens.push(`${Math.floor(extras.etaMinutes)}`);
+  }
+  if (extras?.language) {
+    const language = extras.language.trim().replace(/^@/, "");
+    if (language) {
+      tokens.push(`@${language.toLowerCase()}`);
+    }
+  }
+  if (input.mode === "portable") {
+    const timestamp = extras?.timestamp?.trim().replace(/^@/, "");
+    const callsign = extras?.callsign?.trim().replace(/^~/, "");
+    if (timestamp) {
+      tokens.push(`@${timestamp}`);
+    }
+    if (callsign) {
+      tokens.push(`~${callsign}`);
+    }
+  }
+  if (details) {
+    tokens.push(details);
+  }
+  return `${MECP_PREFIX}${input.severity}/${tokens.join(" ")}`;
+}
+
+export function decodeMecpMessage(input: string): DecodedMecpMessage {
+  const raw = input.trim();
 
   if (!raw.startsWith(MECP_PREFIX)) {
-    return invalid;
+    return createInvalidDecodedMecpMessage(raw);
   }
 
   const severity = Number.parseInt(raw.charAt(5), 10);
   if (!VALID_SEVERITIES.has(severity) || raw.charAt(6) !== "/") {
-    return invalid;
+    return createInvalidDecodedMecpMessage(raw, ["Invalid MECP severity or separator."]);
   }
 
   const tokens = raw.slice(7).split(/\s+/).filter((token) => token.length > 0);
@@ -266,20 +396,89 @@ export function parseMecpMessage(input: string): ParsedMecpMessage {
     codes.push(token);
   }
 
-  const categoryCandidate = codes[0]?.charAt(0) ?? "";
-  const category: MecpCategoryCode | null = isMecpCategoryCode(categoryCandidate)
-    ? categoryCandidate
-    : null;
-  if (codes.length === 0 || !category) {
-    return invalid;
+  if (codes.length === 0) {
+    return createInvalidDecodedMecpMessage(raw, ["MECP message does not contain an event code."]);
+  }
+
+  const codeDetails: DecodedMecpCode[] = [];
+  const warnings: string[] = [];
+  for (const code of codes) {
+    const categoryCandidate = code.charAt(0);
+    if (!isMecpCategoryCode(categoryCandidate)) {
+      return createInvalidDecodedMecpMessage(raw, [`Invalid MECP category "${categoryCandidate}".`]);
+    }
+    const eventCode = findEventCode(code);
+    if (!eventCode) {
+      warnings.push(`Unknown MECP event code "${code}".`);
+    }
+    codeDetails.push({
+      code,
+      category: categoryCandidate,
+      label: eventCode ? eventCode.label : code,
+      known: Boolean(eventCode),
+    });
+  }
+
+  const extras = createEmptyExtras();
+  let etaConsumed = false;
+  for (const token of tokens.slice(detailsStart)) {
+    const timestampMatch = token.match(TIMESTAMP_PATTERN);
+    if (timestampMatch) {
+      extras.timestamp = `${timestampMatch[1]}${timestampMatch[2]}`;
+      continue;
+    }
+    const languageMatch = token.match(LANGUAGE_PATTERN);
+    if (languageMatch) {
+      extras.language = languageMatch[1].toLowerCase();
+      continue;
+    }
+    const callsignMatch = token.match(CALLSIGN_PATTERN);
+    if (callsignMatch) {
+      extras.callsign = callsignMatch[1];
+      continue;
+    }
+    const paxMatch = token.match(PAX_PATTERN);
+    if (paxMatch) {
+      extras.pax = Number.parseInt(paxMatch[1], 10);
+      continue;
+    }
+    const coordinateMatch = token.match(COORDINATE_PATTERN);
+    if (coordinateMatch) {
+      const latitude = Number.parseFloat(coordinateMatch[1]);
+      const longitude = Number.parseFloat(coordinateMatch[2]);
+      if (latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+        extras.coordinates = { latitude, longitude };
+      } else {
+        warnings.push(`Coordinates outside valid range: "${token}".`);
+      }
+      continue;
+    }
+    const referenceMatch = token.match(REFERENCE_PATTERN);
+    if (referenceMatch) {
+      extras.references.push(`#${referenceMatch[1]}`);
+      continue;
+    }
+    const etaMatch = token.match(ETA_PATTERN);
+    if (!etaConsumed && codes.includes("R03") && etaMatch) {
+      extras.etaMinutes = Number.parseInt(etaMatch[1], 10);
+      etaConsumed = true;
+    }
   }
 
   return {
     valid: true,
     severity: severity as MecpSeverity,
     codes,
-    category,
+    category: codeDetails[0].category,
     details: tokens.slice(detailsStart).join(" "),
     raw,
+    byteLength: new TextEncoder().encode(raw).length,
+    codeDetails,
+    extras,
+    warnings,
   };
+}
+
+export function parseMecpMessage(input: string): ParsedMecpMessage {
+  return decodeMecpMessage(input);
 }
