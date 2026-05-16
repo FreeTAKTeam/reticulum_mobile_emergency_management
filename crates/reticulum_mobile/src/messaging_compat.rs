@@ -266,12 +266,12 @@ impl MessagingStore {
         let replaced_destinations = self
             .announce_records
             .iter()
-            .filter_map(|(candidate_destination_hex, record)| {
-                (record.destination_kind == destination_kind
+            .filter(|(candidate_destination_hex, record)| {
+                record.destination_kind == destination_kind
                     && normalize_hex(record.identity_hex.as_str()) == identity_hex
-                    && candidate_destination_hex != &destination_hex)
-                    .then(|| candidate_destination_hex.clone())
+                    && *candidate_destination_hex != &destination_hex
             })
+            .map(|(candidate_destination_hex, _)| candidate_destination_hex.clone())
             .collect::<Vec<_>>();
 
         for replaced_destination_hex in replaced_destinations {

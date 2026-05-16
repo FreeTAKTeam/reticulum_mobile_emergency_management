@@ -13,8 +13,6 @@ use crate::sos::{location_from_alert, received_alert_from_sos};
 use crate::sos_fields::{extract_text_coordinates, looks_like_sos_text, parse_sos_fields};
 use crossbeam_channel as cb;
 use fs_err as fs;
-#[cfg(feature = "legacy-lxmf-runtime")]
-use log::error;
 use log::{debug, info};
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
@@ -24,8 +22,6 @@ use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDesti
 use reticulum::hash::AddressHash;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
-#[cfg(feature = "legacy-lxmf-runtime")]
-use reticulum::packet::LXMF_MAX_PAYLOAD;
 use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
 use reticulum::resource::ResourceEventKind;
 use reticulum::transport::{
@@ -181,7 +177,7 @@ fn derive_eam_overall_status(record: &EamProjectionRecord) -> Option<String> {
 
 #[derive(Debug)]
 enum EamCommandAction {
-    Upsert(EamProjectionRecord),
+    Upsert(Box<EamProjectionRecord>),
     Delete {
         callsign: String,
         deleted_at_ms: u64,
@@ -213,7 +209,7 @@ fn eam_command_action_from_command(
         projection.sync_error = None;
         projection.last_synced_at_ms = Some(received_at_ms);
         projection.updated_at_ms = projection.updated_at_ms.max(received_at_ms);
-        return Some(EamCommandAction::Upsert(projection));
+        return Some(EamCommandAction::Upsert(Box::new(projection)));
     }
 
     if envelope.args.callsign.trim().is_empty()
@@ -265,7 +261,7 @@ fn eam_command_action_from_command(
         last_synced_at_ms: Some(received_at_ms),
     };
     record.overall_status = derive_eam_overall_status(&record);
-    Some(EamCommandAction::Upsert(record))
+    Some(EamCommandAction::Upsert(Box::new(record)))
 }
 
 fn eam_command_action_from_fields(
@@ -350,7 +346,7 @@ fn eam_command_action_from_fields(
             return None;
         }
         record.overall_status = derive_eam_overall_status(&record);
-        return Some(EamCommandAction::Upsert(record));
+        return Some(EamCommandAction::Upsert(Box::new(record)));
     }
 
     None
@@ -369,10 +365,10 @@ async fn persist_received_eam_if_present(
     if metadata.is_none() && parsed_from_fields.is_none() {
         return;
     }
-    if !metadata
+    if metadata
         .and_then(|value| value.command_type.as_deref())
-        .is_some_and(|value| {
-            value == "mission.registry.eam.upsert" || value == "mission.registry.eam.delete"
+        .is_none_or(|value| {
+            value != "mission.registry.eam.upsert" && value != "mission.registry.eam.delete"
         })
         && parsed_from_fields.is_none()
     {
@@ -396,7 +392,7 @@ async fn persist_received_eam_if_present(
     };
 
     match action {
-        EamCommandAction::Upsert(record) => match state.app_state.upsert_eam(&record) {
+        EamCommandAction::Upsert(record) => match state.app_state.upsert_eam(record.as_ref()) {
             Ok(invalidation) => {
                 bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
                 if let Ok(summary) = state.app_state.bump_projection_revision(
@@ -582,9 +578,9 @@ async fn persist_received_telemetry_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
 ) {
-    if !metadata
+    if metadata
         .and_then(|value| value.command_type.as_deref())
-        .is_some_and(|value| value == "mission.registry.telemetry.upsert")
+        .is_none_or(|value| value != "mission.registry.telemetry.upsert")
     {
         return;
     }
@@ -631,9 +627,9 @@ async fn persist_received_event_if_present(
     if metadata.is_none() && parsed_from_fields.is_none() {
         return;
     }
-    if !metadata
+    if metadata
         .and_then(|value| value.command_type.as_deref())
-        .is_some_and(|value| value == "mission.registry.log_entry.upsert")
+        .is_none_or(|value| value != "mission.registry.log_entry.upsert")
         && parsed_from_fields.is_none()
     {
         return;
@@ -869,10 +865,10 @@ fn should_apply_inbound_checklist_create(
         return true;
     }
     incoming_timestamp_is_newer(record.updated_at.as_deref(), timestamp)
-        && !record
+        && record
             .deleted_at
             .as_deref()
-            .is_some_and(|deleted_at| !incoming_timestamp_is_newer(Some(deleted_at), timestamp))
+            .is_none_or(|deleted_at| incoming_timestamp_is_newer(Some(deleted_at), timestamp))
 }
 
 fn checklist_delete_record_from_command(
@@ -1486,10 +1482,10 @@ fn persist_received_checklist_if_present(
                     .and_then(msgpack_string)
                     .unwrap_or_default();
                 let start_time = msgpack_get_named(args, &["start_time"]).and_then(msgpack_string);
-                let existing = match state.app_state.get_checklist_any(checklist_uid.as_str()) {
-                    Ok(value) => value,
-                    Err(_) => None,
-                };
+                let existing = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .unwrap_or_default();
                 if !should_apply_inbound_checklist_create(existing.as_ref(), timestamp.as_str()) {
                     continue;
                 }
@@ -1644,10 +1640,10 @@ fn persist_received_checklist_if_present(
                     continue;
                 };
                 checklist.uid = checklist_uid.clone();
-                let existing = match state.app_state.get_checklist_any(checklist_uid.as_str()) {
-                    Ok(value) => value,
-                    Err(_) => None,
-                };
+                let existing = state
+                    .app_state
+                    .get_checklist_any(checklist_uid.as_str())
+                    .unwrap_or_default();
                 let Some(checklist) = merge_uploaded_checklist_snapshot(
                     existing,
                     checklist,
@@ -2245,10 +2241,10 @@ fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackV
     }
 }
 
-fn msgpack_get_indexed<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
+fn msgpack_get_indexed(
+    entries: &[(MsgPackValue, MsgPackValue)],
     key: i64,
-) -> Option<&'a MsgPackValue> {
+) -> Option<&MsgPackValue> {
     let key_string = key.to_string();
     for (entry_key, entry_value) in entries {
         match entry_key {
@@ -2520,7 +2516,7 @@ fn extract_msgpack_capability_tokens(value: &MsgPackValue) -> Vec<String> {
 
 fn announce_metadata_from_app_data(app_data: &str) -> (Option<String>, Vec<String>) {
     let display_name = app_data
-        .split(|ch: char| ch == ',' || ch == ';')
+        .split([',', ';'])
         .map(str::trim)
         .find_map(|token| token.strip_prefix("name="))
         .and_then(decode_percent_component)
@@ -3558,7 +3554,7 @@ async fn resolve_peer_route(
     let desc = ensure_destination_desc(state, destination, None).await?;
     let identity_hex = desc.identity.address_hash.to_hex_string();
     let lxmf_desc = SingleOutputDestination::new(
-        desc.identity.clone(),
+        desc.identity,
         DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
     )
     .desc;
@@ -3932,19 +3928,6 @@ async fn ensure_destination_desc(
     }
 }
 
-#[cfg(feature = "legacy-lxmf-runtime")]
-async fn resolve_lxmf_destination_desc(
-    state: &NodeRuntimeState,
-    destination: AddressHash,
-) -> Result<DestinationDesc, NodeError> {
-    let desc = ensure_destination_desc(state, destination, None).await?;
-    let lxmf_destination = SingleOutputDestination::new(
-        desc.identity,
-        DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
-    );
-    Ok(lxmf_destination.desc)
-}
-
 async fn ensure_output_link(
     state: &NodeRuntimeState,
     desc: DestinationDesc,
@@ -3990,122 +3973,6 @@ async fn ensure_output_link(
     }
 
     Err(NodeError::Timeout {})
-}
-
-#[cfg(feature = "legacy-lxmf-runtime")]
-async fn ensure_lxmf_output_link(
-    state: &NodeRuntimeState,
-    desc: DestinationDesc,
-) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
-    ensure_output_link(state, desc).await
-}
-
-#[cfg(feature = "legacy-lxmf-runtime")]
-async fn send_lxmf_message(
-    state: &NodeRuntimeState,
-    destination: AddressHash,
-    content: &[u8],
-    fields_bytes: Option<Vec<u8>>,
-) -> Result<LxmfSendReport, NodeError> {
-    let remote_desc = resolve_lxmf_destination_desc(state, destination).await?;
-
-    let mut source = [0u8; 16];
-    source.copy_from_slice(
-        state
-            .lxmf_destination
-            .lock()
-            .await
-            .desc
-            .address_hash
-            .as_slice(),
-    );
-
-    let mut target = [0u8; 16];
-    target.copy_from_slice(remote_desc.address_hash.as_slice());
-
-    let mut message = LxmfMessage::new();
-    message.source_hash = Some(source);
-    message.destination_hash = Some(target);
-    message.set_content_from_bytes(content);
-    message.fields = match fields_bytes.as_ref() {
-        Some(bytes) => Some(
-            rmp_serde::from_slice::<MsgPackValue>(bytes)
-                .map_err(|_| NodeError::InvalidConfig {})?,
-        ),
-        None => None,
-    };
-
-    let signer = lxmf_private_identity(&state.identity)?;
-    let wire = message
-        .to_wire(Some(&signer))
-        .map_err(|_| NodeError::LxmfWireEncodeError {})?;
-    debug!(
-        "[lxmf][debug] send_lxmf_message wire ready requested_destination={} resolved_destination={} content_bytes={} fields_bytes={} wire_bytes={} max_wire_bytes={}",
-        address_hash_to_hex(&destination),
-        address_hash_to_hex(&remote_desc.address_hash),
-        content.len(),
-        fields_bytes.as_ref().map(Vec::len).unwrap_or(0),
-        wire.len(),
-        LXMF_MAX_PAYLOAD,
-    );
-    if wire.len() > LXMF_MAX_PAYLOAD {
-        error!(
-            "[lxmf][events] packet too large requested_destination={} resolved_destination={} content_bytes={} fields_bytes={} wire_bytes={} max_wire_bytes={}",
-            address_hash_to_hex(&destination),
-            address_hash_to_hex(&remote_desc.address_hash),
-            content.len(),
-            fields_bytes.as_ref().map(Vec::len).unwrap_or(0),
-            wire.len(),
-            LXMF_MAX_PAYLOAD,
-        );
-        return Err(NodeError::LxmfPacketTooLarge {});
-    }
-    let message_id_hex = LxmfWireMessage::unpack(&wire)
-        .map(|wire| hex::encode(wire.message_id()))
-        .map_err(|_| NodeError::LxmfMessageIdParseError {})?;
-    let metadata = fields_bytes
-        .as_deref()
-        .and_then(parse_mission_sync_metadata);
-
-    if let Some(metadata) = metadata
-        .as_ref()
-        .filter(|metadata| metadata.is_mission_related())
-    {
-        info!(
-            "[lxmf][mission] attempting send requested_destination={} resolved_destination={} kind={} name={} message_id={} event_uid={} mission_uid={} correlation={}",
-            address_hash_to_hex(&destination),
-            address_hash_to_hex(&remote_desc.address_hash),
-            metadata.primary_kind(),
-            metadata.primary_name().unwrap_or("-"),
-            message_id_hex,
-            metadata.event_uid.as_deref().unwrap_or("-"),
-            metadata.mission_uid.as_deref().unwrap_or("-"),
-            metadata.correlation_id.as_deref().unwrap_or("-"),
-        );
-    }
-
-    let link = ensure_lxmf_output_link(state, remote_desc).await?;
-    let packet = link
-        .lock()
-        .await
-        .data_packet(&wire)
-        .map_err(|_| NodeError::LxmfPacketBuildError {})?;
-    let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
-    let outcome = state.transport.send_packet_with_outcome(packet).await;
-
-    Ok(LxmfSendReport {
-        outcome,
-        message_id_hex,
-        resolved_destination_hex: address_hash_to_hex(&remote_desc.address_hash),
-        metadata,
-        track_delivery_timeout: true,
-        used_propagation_node: false,
-        method: LxmfDeliveryMethod::Direct {},
-        representation: LxmfDeliveryRepresentation::Packet {},
-        relay_destination_hex: None,
-        fallback_stage: None,
-        receipt_hash_hex: Some(receipt_hash_hex),
-    })
 }
 
 async fn register_pending_lxmf_delivery(
@@ -4435,7 +4302,7 @@ async fn emit_received_payload(
                     metadata.correlation_id.as_deref().unwrap_or("-"),
                 );
             }
-            ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), &metadata).await;
+            ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), metadata).await;
             persist_received_eam_if_present(
                 state,
                 bus,
@@ -5298,7 +5165,7 @@ pub async fn run_node(
                         }
                         if destination_kind == "app" {
                             let lxmf_destination_hex = SingleOutputDestination::new(
-                                desc.identity.clone(),
+                                desc.identity,
                                 DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
                             )
                             .desc
@@ -5456,11 +5323,11 @@ pub async fn run_node(
                     let mut guard = pending_lxmf_deliveries.lock().await;
                     let expired_keys = guard
                         .iter()
-                        .filter_map(|(key, pending)| {
-                            (now.saturating_sub(pending.sent_at_ms)
-                                >= DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64)
-                                .then(|| key.clone())
+                        .filter(|(_, pending)| {
+                            now.saturating_sub(pending.sent_at_ms)
+                                >= DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64
                         })
+                        .map(|(key, _)| key.clone())
                         .collect::<Vec<_>>();
                     for key in expired_keys {
                         if let Some(pending) = guard.remove(&key) {
@@ -5849,7 +5716,7 @@ pub async fn run_node(
                                     );
                                     emit_lxmf_delivery(
                                         &bus,
-                                        &pending,
+                                        pending,
                                         lxmf_delivery_status_for(report),
                                         None,
                                     );
@@ -5946,7 +5813,7 @@ pub async fn run_node(
                                     );
                                     emit_lxmf_delivery(
                                         &bus,
-                                        &pending,
+                                        pending,
                                         LxmfDeliveryStatus::Failed {},
                                         Some(failure_detail.clone()),
                                     );

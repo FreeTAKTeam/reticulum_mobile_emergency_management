@@ -581,7 +581,7 @@ impl AppStateStore {
             "SELECT json FROM checklists ORDER BY updated_at_ms DESC, uid ASC",
         )?
         .into_iter()
-        .filter_map(|record| sanitize_active_checklist(record))
+        .filter_map(sanitize_active_checklist)
         .collect())
     }
 

@@ -1,9 +1,16 @@
 node_modules/
+target/
 dist/
+build/
+.cache/
+.venv/
+venv/
+__pycache__/
+.mypy_cache/
+.ruff_cache/
 coverage/
 *.log
 .env
-target/
 .DS_Store
 .vscode/
 .idea/

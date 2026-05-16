@@ -714,6 +714,106 @@ fn build_runtime_mission_replication_targets(
     }
 }
 
+fn should_include_checklist_participant_targets(
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> bool {
+    active_config.is_none_or(|config| {
+        matches!(
+            effective_hub_mode(config.hub_mode, hub_directory_snapshot),
+            HubMode::Autonomous {}
+        )
+    })
+}
+
+fn checklist_participant_replication_send_mode(
+    peers: &[PeerRecord],
+    app_destination_hex: &str,
+    active_propagation_node_hex: Option<&str>,
+) -> SendMode {
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let matched_peer = peers.iter().find(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
+    });
+    if matched_peer.is_some_and(peer_is_directly_reachable) || !has_active_relay {
+        SendMode::Auto {}
+    } else {
+        SendMode::PropagationOnly {}
+    }
+}
+
+fn append_checklist_participant_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    participant_rns_identities: &[String],
+    active_propagation_node_hex: Option<&str>,
+    targets: &mut Vec<MissionReplicationTarget>,
+) {
+    let self_destinations = [
+        normalize_hex_32(status.identity_hex.as_str()),
+        normalize_hex_32(status.app_destination_hex.as_str()),
+        normalize_hex_32(status.lxmf_destination_hex.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<HashSet<_>>();
+    let mut seen_destinations = targets
+        .iter()
+        .map(|target| target.app_destination_hex.clone())
+        .collect::<HashSet<_>>();
+    for participant in participant_rns_identities {
+        let Some(app_destination_hex) = normalize_hex_32(participant.as_str()) else {
+            continue;
+        };
+        if self_destinations.contains(app_destination_hex.as_str())
+            || !seen_destinations.insert(app_destination_hex.clone())
+        {
+            continue;
+        }
+        targets.push(MissionReplicationTarget {
+            send_mode: checklist_participant_replication_send_mode(
+                peers,
+                app_destination_hex.as_str(),
+                active_propagation_node_hex,
+            ),
+            app_destination_hex,
+        });
+    }
+}
+
+fn build_runtime_checklist_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    checklist: Option<&ChecklistRecord>,
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let mut targets = build_runtime_mission_replication_targets(
+        status,
+        peers,
+        saved_peers,
+        active_propagation_node_hex,
+        active_config,
+        hub_directory_snapshot,
+    )?;
+    if should_include_checklist_participant_targets(active_config, hub_directory_snapshot) {
+        if let Some(checklist) = checklist {
+            append_checklist_participant_replication_targets(
+                status,
+                peers,
+                checklist.participant_rns_identities.as_slice(),
+                active_propagation_node_hex,
+                &mut targets,
+            );
+        }
+    }
+    Ok(targets)
+}
+
 fn build_runtime_event_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -1066,6 +1166,7 @@ fn build_checklist_delete_replication_sends(
     active_propagation_node_hex: Option<&str>,
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    checklist: Option<&ChecklistRecord>,
     checklist_uid: &str,
     delete_remote: bool,
 ) -> Result<Vec<ScheduledMissionSend>, NodeError> {
@@ -1073,13 +1174,14 @@ fn build_checklist_delete_replication_sends(
         return Ok(Vec::new());
     }
 
-    let replication_targets = build_runtime_mission_replication_targets(
+    let replication_targets = build_runtime_checklist_replication_targets(
         status,
         peers,
         saved_peers,
         active_propagation_node_hex,
         active_config,
         hub_directory_snapshot,
+        checklist,
     )?;
     let args = checklist_uid_args_json(checklist_uid);
     let mut scheduled_sends = Vec::new();
@@ -1992,6 +2094,12 @@ fn run_sos_fanout(
 
 pub struct Node {
     inner: Mutex<NodeInner>,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Node {
@@ -3032,13 +3140,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&snapshot),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_command_id(
@@ -3186,13 +3295,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_command_id(
@@ -3290,13 +3400,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_snapshot(
@@ -3383,13 +3494,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_update_args_json(&request);
                 for target in replication_targets {
@@ -3446,6 +3561,7 @@ impl Node {
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
             let normalized_uid = request.checklist_uid.trim().to_string();
+            let existing_checklist = inner.app_state.get_checklist_any(normalized_uid.as_str())?;
             let invalidations = inner.app_state.delete_checklist_with_actor(
                 normalized_uid.as_str(),
                 Some(status.identity_hex.as_str()),
@@ -3478,6 +3594,7 @@ impl Node {
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    existing_checklist.as_ref(),
                     normalized_uid.as_str(),
                     request.delete_remote,
                 ) {
@@ -3564,13 +3681,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 let args = checklist_uid_args_json(normalized_uid.as_str());
                 for target in replication_targets {
@@ -3658,13 +3776,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_status_args_json(&request);
                 for target in replication_targets {
@@ -3765,13 +3887,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_add_args_json(&request);
                 for target in replication_targets {
@@ -3860,13 +3986,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_delete_args_json(&request);
                 for target in replication_targets {
@@ -3955,13 +4085,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_style_args_json(&request);
                 for target in replication_targets {
@@ -4050,13 +4184,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_cell_args_json(&request);
                 for target in replication_targets {
@@ -4629,7 +4767,7 @@ impl Node {
                 .lock()
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
-            let values = (
+            (
                 inner.app_state.clone(),
                 inner.bus.clone(),
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
@@ -4637,8 +4775,7 @@ impl Node {
                 settings,
                 inner.app_state.get_saved_peers()?,
                 inner.sos_device_telemetry.clone(),
-            );
-            values
+            )
         };
 
         let incident_id = new_incident_id(status.identity_hex.as_str());
@@ -4711,7 +4848,7 @@ impl Node {
                 .app_state
                 .get_sos_status()?
                 .unwrap_or_else(idle_status);
-            let values = (
+            (
                 inner.app_state.clone(),
                 inner.bus.clone(),
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
@@ -4720,8 +4857,7 @@ impl Node {
                 inner.app_state.get_saved_peers()?,
                 telemetry,
                 current,
-            );
-            values
+            )
         };
         let incident_id = current
             .incident_id
@@ -7976,6 +8112,53 @@ mod tests {
     }
 
     #[test]
+    fn checklist_participant_targets_include_unsaved_source_for_autonomous_return_path() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut targets = build_mission_replication_targets(
+            &status,
+            &[],
+            &[],
+            Some("99999999999999999999999999999999"),
+        );
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[],
+            &[
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                status.identity_hex.clone(),
+                "not-a-destination".to_string(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_do_not_override_connected_hub_mode() {
+        let connected = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
+
+        assert!(!should_include_checklist_participant_targets(
+            Some(&connected),
+            None
+        ));
+    }
+
+    #[test]
     fn checklist_create_online_args_match_supported_contract() {
         let args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
             checklist_uid: Some("chk-001".to_string()),
@@ -8075,6 +8258,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             "chk-001",
             false,
         )
@@ -8103,6 +8287,7 @@ mod tests {
             &status,
             peers.as_slice(),
             &[saved_peer],
+            None,
             None,
             None,
             None,

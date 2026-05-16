@@ -246,10 +246,10 @@ fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackV
     }
 }
 
-fn msgpack_get_indexed<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
+fn msgpack_get_indexed(
+    entries: &[(MsgPackValue, MsgPackValue)],
     key: i64,
-) -> Option<&'a MsgPackValue> {
+) -> Option<&MsgPackValue> {
     let key_string = key.to_string();
     entries
         .iter()
