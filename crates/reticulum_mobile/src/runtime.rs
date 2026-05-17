@@ -446,6 +446,7 @@ async fn persist_received_eam_if_present(
 
 fn event_projection_from_fields(
     fields_bytes: &[u8],
+    content_bytes: Option<&[u8]>,
     received_at_ms: u64,
 ) -> Option<EventProjectionRecord> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
@@ -466,14 +467,23 @@ fn event_projection_from_fields(
         let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries);
         let uid = msgpack_get_named(args, &["entry_uid"]).and_then(msgpack_string)?;
         let mission_uid = msgpack_get_named(args, &["mission_uid"]).and_then(msgpack_string)?;
-        let content = msgpack_get_named(args, &["content"]).and_then(msgpack_string)?;
+        let content = msgpack_get_named(args, &["content"])
+            .and_then(msgpack_string)
+            .or_else(|| {
+                content_bytes.and_then(|bytes| {
+                    let text = String::from_utf8_lossy(bytes).trim().to_string();
+                    (!text.is_empty()).then_some(text)
+                })
+            })?;
         let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
         let timestamp = msgpack_get_named(command_map, &["timestamp"])
             .and_then(msgpack_string)
             .or_else(|| msgpack_get_named(args, &["server_time"]).and_then(msgpack_string))
-            .or_else(|| msgpack_get_named(args, &["client_time"]).and_then(msgpack_string))?;
-        let command_id =
-            msgpack_get_named(command_map, &["command_id"]).and_then(msgpack_string)?;
+            .or_else(|| msgpack_get_named(args, &["client_time"]).and_then(msgpack_string))
+            .unwrap_or_else(current_timestamp_rfc3339);
+        let command_id = msgpack_get_named(command_map, &["command_id"])
+            .and_then(msgpack_string)
+            .unwrap_or_else(|| format!("log-entry-{uid}"));
         let source_identity = msgpack_get_named(args, &["source_identity"])
             .and_then(msgpack_string)
             .or_else(|| {
@@ -621,9 +631,10 @@ async fn persist_received_event_if_present(
     bus: &EventBus,
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
+    content_bytes: Option<&[u8]>,
 ) {
     let parsed_from_fields =
-        fields_bytes.and_then(|value| event_projection_from_fields(value, now_ms()));
+        fields_bytes.and_then(|value| event_projection_from_fields(value, content_bytes, now_ms()));
     if metadata.is_none() && parsed_from_fields.is_none() {
         return;
     }
@@ -4311,8 +4322,14 @@ async fn emit_received_payload(
                 body_utf8.as_str(),
             )
             .await;
-            persist_received_event_if_present(state, bus, Some(metadata), fields_bytes.as_deref())
-                .await;
+            persist_received_event_if_present(
+                state,
+                bus,
+                Some(metadata),
+                fields_bytes.as_deref(),
+                Some(message.content.as_slice()),
+            )
+            .await;
             persist_received_telemetry_if_present(
                 state,
                 bus,
@@ -6358,6 +6375,133 @@ mod tests {
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
         assert!(metadata.is_mission_related());
+    }
+
+    #[test]
+    fn event_projection_from_trimmed_fields_uses_lxmf_body_content() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.log_entry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("source"),
+                    MsgPackValue::Map(vec![(
+                        MsgPackValue::from("rns_identity"),
+                        MsgPackValue::from("identity-1"),
+                    )]),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (MsgPackValue::from("entry_uid"), MsgPackValue::from("evt-1")),
+                        (
+                            MsgPackValue::from("mission_uid"),
+                            MsgPackValue::from("mission-1"),
+                        ),
+                        (MsgPackValue::from("callsign"), MsgPackValue::from("Pixel")),
+                    ]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let record = event_projection_from_fields(&bytes, Some(b"MECP/2/P01"), 1_700_000_000_000)
+            .expect("event projection");
+
+        assert_eq!(record.uid, "evt-1");
+        assert_eq!(record.command_id, "log-entry-evt-1");
+        assert_eq!(record.command_type, "mission.registry.log_entry.upsert");
+        assert_eq!(record.mission_uid, "mission-1");
+        assert_eq!(record.content, "MECP/2/P01");
+        assert_eq!(record.callsign, "Pixel");
+        assert_eq!(record.source_identity, "identity-1");
+        assert!(record.source_display_name.is_none());
+        assert_eq!(record.keywords, Vec::<String>::new());
+        assert_eq!(record.content_hashes, Vec::<String>::new());
+        assert_eq!(record.topics, vec!["mission-1".to_string()]);
+    }
+
+    #[test]
+    fn event_projection_from_verbose_fields_remains_compatible() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-event-1"),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from("corr-event-1"),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.log_entry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("source"),
+                    MsgPackValue::Map(vec![
+                        (
+                            MsgPackValue::from("rns_identity"),
+                            MsgPackValue::from("identity-1"),
+                        ),
+                        (
+                            MsgPackValue::from("display_name"),
+                            MsgPackValue::from("Pixel"),
+                        ),
+                    ]),
+                ),
+                (
+                    MsgPackValue::from("timestamp"),
+                    MsgPackValue::from("2026-05-16T21:26:30Z"),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (MsgPackValue::from("entry_uid"), MsgPackValue::from("evt-1")),
+                        (
+                            MsgPackValue::from("mission_uid"),
+                            MsgPackValue::from("mission-1"),
+                        ),
+                        (
+                            MsgPackValue::from("content"),
+                            MsgPackValue::from("MECP/2/P01 legacy"),
+                        ),
+                        (MsgPackValue::from("callsign"), MsgPackValue::from("Pixel")),
+                        (
+                            MsgPackValue::from("source_identity"),
+                            MsgPackValue::from("identity-1"),
+                        ),
+                        (
+                            MsgPackValue::from("source_display_name"),
+                            MsgPackValue::from("Pixel"),
+                        ),
+                        (
+                            MsgPackValue::from("keywords"),
+                            MsgPackValue::Array(vec![MsgPackValue::from("r3akt:event-type:P")]),
+                        ),
+                    ]),
+                ),
+                (
+                    MsgPackValue::from("topics"),
+                    MsgPackValue::Array(vec![MsgPackValue::from("mission-1")]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let record = event_projection_from_fields(&bytes, None, 1_700_000_000_000)
+            .expect("event projection");
+
+        assert_eq!(record.uid, "evt-1");
+        assert_eq!(record.command_id, "cmd-event-1");
+        assert_eq!(record.content, "MECP/2/P01 legacy");
+        assert_eq!(record.source_display_name.as_deref(), Some("Pixel"));
+        assert_eq!(record.keywords, vec!["r3akt:event-type:P".to_string()]);
+        assert_eq!(record.correlation_id.as_deref(), Some("corr-event-1"));
     }
 
     #[test]

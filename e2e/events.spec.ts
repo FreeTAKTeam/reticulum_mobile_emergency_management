@@ -17,6 +17,7 @@ test("MECP utilities encode and parse compact event bodies", () => {
   });
 
   expect(message).toBe("MECP/2/T01 #A1");
+  expect(encodeMecpMessage({ severity: 2, codes: ["P01"], details: "   " })).toBe("MECP/2/P01");
   expect(parseMecpMessage(message)).toMatchObject({
     valid: true,
     severity: 2,
@@ -101,16 +102,17 @@ test("operators can create and remove MECP event timeline entries", async ({ pag
   await expect(createForm.getByRole("button", { name: /Position \/ Movement/ })).toBeVisible();
   await expect(createForm.getByRole("button", { name: /P01 Stranded \/ stuck/ })).toBeVisible();
   await expect(createForm.getByText("MECP/2/P01")).toBeVisible();
-  await createForm.getByLabel("MECP reference").fill("A1");
-  await createForm.getByLabel("MECP GPS coordinates").fill("45.5017,-73.5673");
+  await expect(createForm.getByLabel("MECP reference")).toHaveCount(0);
+  await expect(createForm.getByLabel("MECP pax count")).toHaveCount(0);
+  await expect(createForm.getByLabel("MECP GPS coordinates")).toHaveCount(0);
+  await expect(createForm.getByLabel("MECP ETA minutes")).toHaveCount(0);
   await createForm.getByLabel("Optional details").fill("north gate");
 
   await createForm.getByRole("button", { name: "Add event" }).click();
 
-  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/P01 45.5017,-73.5673 #A1 north gate" });
+  const timelineEvent = page.getByRole("article").filter({ hasText: "MECP/2/P01 north gate" });
   await expect(timelineEvent.getByRole("heading", { name: "stranded / stuck" })).toBeVisible();
-  await expect(timelineEvent.getByText("MECP/2/P01 45.5017,-73.5673 #A1 north gate")).toBeVisible();
-  await expect(timelineEvent.getByText("45.50170, -73.56730")).toBeVisible();
+  await expect(timelineEvent.getByText("MECP/2/P01 north gate")).toBeVisible();
   await expect(timelineEvent.getByText("Position / Movement")).toBeVisible();
   await expect(page.getByText(new RegExp(`${callsign} \\|`))).toBeVisible();
 

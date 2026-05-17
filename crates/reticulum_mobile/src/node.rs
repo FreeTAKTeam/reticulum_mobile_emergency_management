@@ -5875,6 +5875,96 @@ mod tests {
     }
 
     #[test]
+    fn event_replication_payload_keeps_main_compatible_mecp_text_envelope() {
+        let status = NodeStatus {
+            running: true,
+            name: "Pixel".to_string(),
+            identity_hex: "11111111111111111111111111111111".to_string(),
+            app_destination_hex: "22222222222222222222222222222222".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let record = EventProjectionRecord {
+            uid: "evt-a9f9c462-c439-425a-879d-6d13f13a3b86".to_string(),
+            command_id:
+                "log-entry-evt-a9f9c462-c439-425a-879d-6d13f13a3b86-a25c9832-4ff1-4d6d-bd70-290b7add090c"
+                    .to_string(),
+            source_identity: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
+            source_display_name: Some("Pixel".to_string()),
+            timestamp: "2026-05-16T21:26:30.243Z".to_string(),
+            command_type: "mission.registry.log_entry.upsert".to_string(),
+            mission_uid: "r3akt-default-mission".to_string(),
+            content: "MECP/2/P01 stranded near bridge".to_string(),
+            callsign: "Pixel".to_string(),
+            server_time: Some("2026-05-16T21:26:30.243Z".to_string()),
+            client_time: Some("2026-05-16T21:26:30.243Z".to_string()),
+            keywords: vec!["r3akt:event-type:P".to_string()],
+            content_hashes: vec!["hash-1".to_string()],
+            updated_at_ms: 1_778_966_790_243,
+            deleted_at_ms: None,
+            correlation_id: Some("event-upsert-legacy".to_string()),
+            topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        };
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+
+        let (body, fields) =
+            build_event_replication_payload(&status, &record, &target).expect("event payload");
+
+        assert_eq!(body.as_slice(), record.content.as_bytes());
+        for required_key in [
+            "command_id",
+            "correlation_id",
+            "command_type",
+            "source",
+            "rns_identity",
+            "display_name",
+            "timestamp",
+            "args",
+            "entry_uid",
+            "mission_uid",
+            "content",
+            "callsign",
+            "source_identity",
+            "source_display_name",
+            "server_time",
+            "client_time",
+            "keywords",
+            "content_hashes",
+            "topics",
+            "MECP/2/P01 stranded near bridge",
+            "r3akt:event-type:P",
+            "hash-1",
+            "Pixel",
+            "e6fcf8f02e290ed46f88a729460dfffc",
+        ] {
+            assert!(
+                fields
+                    .windows(required_key.as_bytes().len())
+                    .any(|window| window == required_key.as_bytes()),
+                "main-compatible event fields should include {required_key}"
+            );
+        }
+
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.log_entry.upsert")
+        );
+        assert_eq!(metadata.command_id.as_deref(), Some(record.command_id.as_str()));
+        assert_eq!(
+            metadata.correlation_id.as_deref(),
+            Some("event-upsert-legacy")
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some(record.uid.as_str()));
+        assert_eq!(
+            metadata.mission_uid.as_deref(),
+            Some(record.mission_uid.as_str())
+        );
+    }
+
+    #[test]
     fn populate_eam_defaults_uses_local_app_hash_and_team_color_hash() {
         let status = NodeStatus {
             running: true,

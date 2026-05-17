@@ -9,7 +9,6 @@ import {
   MECP_SEVERITIES,
   encodeMecpMessage,
   type MecpCategoryCode,
-  type MecpCoordinates,
   type MecpSeverity,
 } from "../utils/mecp";
 
@@ -49,10 +48,6 @@ type CreateEventFormState = {
   category: MecpCategoryCode;
   eventCode: string;
   details: string;
-  etaMinutes: string;
-  gps: string;
-  pax: string;
-  reference: string;
 };
 
 function createDefaultFormState(): CreateEventFormState {
@@ -61,10 +56,6 @@ function createDefaultFormState(): CreateEventFormState {
     category: "P",
     eventCode: "P01",
     details: "",
-    etaMinutes: "",
-    gps: "",
-    pax: "",
-    reference: "",
   };
 }
 
@@ -81,41 +72,11 @@ const selectedEvent = computed(() =>
   selectedEventOptions.value.find((event) => event.code === createForm.eventCode)
     ?? selectedEventOptions.value[0],
 );
-const structuredCoordinates = computed<MecpCoordinates | undefined>(() => {
-  const match = createForm.gps.trim().match(/^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/);
-  if (!match) {
-    return undefined;
-  }
-  const latitude = Number.parseFloat(match[1]);
-  const longitude = Number.parseFloat(match[2]);
-  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-    return undefined;
-  }
-  return { latitude, longitude };
-});
-const structuredPax = computed(() => {
-  const value = Number.parseInt(createForm.pax.trim(), 10);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
-});
-const structuredEta = computed(() => {
-  const value = Number.parseInt(createForm.etaMinutes.trim(), 10);
-  return selectedEvent.value.code === "R03" && Number.isFinite(value) && value >= 0 ? value : undefined;
-});
-const structuredReferences = computed(() => {
-  const reference = createForm.reference.trim();
-  return reference ? [reference] : [];
-});
 const mecpPreview = computed(() =>
   encodeMecpMessage({
     severity: createForm.severity,
     codes: [selectedEvent.value.code],
     details: createForm.details,
-    extras: {
-      coordinates: structuredCoordinates.value,
-      etaMinutes: structuredEta.value,
-      pax: structuredPax.value,
-      references: structuredReferences.value,
-    },
   }),
 );
 const categoryFilters = computed<Array<{ value: EventCategoryFilter; label: string }>>(() => [
@@ -522,41 +483,6 @@ async function deleteEvent(uid: string): Promise<void> {
               <span>{{ eventOption.label }}</span>
             </button>
           </div>
-        </div>
-
-        <div class="structured-fields">
-          <input
-            v-model="createForm.reference"
-            type="text"
-            placeholder="#ref"
-            aria-label="MECP reference"
-            :disabled="!appReady"
-          />
-          <input
-            v-model="createForm.pax"
-            type="number"
-            min="1"
-            inputmode="numeric"
-            placeholder="pax"
-            aria-label="MECP pax count"
-            :disabled="!appReady"
-          />
-          <input
-            v-model="createForm.gps"
-            type="text"
-            placeholder="lat,lon"
-            aria-label="MECP GPS coordinates"
-            :disabled="!appReady"
-          />
-          <input
-            v-model="createForm.etaMinutes"
-            type="number"
-            min="0"
-            inputmode="numeric"
-            placeholder="ETA min"
-            aria-label="MECP ETA minutes"
-            :disabled="!appReady || selectedEvent.code !== 'R03'"
-          />
         </div>
 
         <input
