@@ -126,6 +126,7 @@ Run the narrowest command set that proves the change:
   - `npm --workspace apps/mobile run sync`
   - `npm --workspace apps/mobile run android`
   - `npm --workspace apps/mobile run ios`
+  - Current project release work does not target iOS compilation. For Android packaging, prefer `npx cap sync android` from `apps/mobile` instead of full `npm --workspace apps/mobile run sync`, because full sync also tries the iOS CocoaPods step.
 - Type checking:
   - `npm --workspace apps/mobile run typecheck`
 - E2E:
@@ -163,6 +164,7 @@ There is no dedicated root lint script at the moment. For most app changes, `typ
 
 - `crates/reticulum_mobile/Cargo.toml` currently points `lxmf` and `lxmf-sdk` to local path dependencies. Do not replace those paths casually; they reflect this workspace's current development setup.
 - Android signing uses local, ignored configuration under `apps/mobile/android/keystore.properties`.
+- This project currently does not try to compile for iOS. Do not treat iOS build or CocoaPods failures as release blockers unless the user explicitly asks for iOS work.
 - Root Playwright config starts the web app and exercises the app through the browser at `/dashboard`.
 
 ## Definition Of Done
