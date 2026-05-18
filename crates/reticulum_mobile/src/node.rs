@@ -4983,7 +4983,7 @@ mod tests {
     use crate::mission_sync::parse_mission_sync_metadata;
     use crate::types::{
         ChecklistTaskRecord, EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod,
-        MessageState, TelemetrySettingsRecord,
+        MessageState, SyncPhase, TelemetrySettingsRecord,
     };
     use crate::HubMode;
     use rmpv::Value as MsgPackValue;
@@ -5509,6 +5509,34 @@ mod tests {
         (relay, node_a, node_b)
     }
 
+    #[tokio::test]
+    async fn request_lxmf_sync_without_active_relay_fails_status() {
+        let _guard = test_lock().lock().await;
+        let relay = TcpRelayHandle::start().await;
+        let storage = prepare_storage_dir("sync_no_active_relay");
+        let node = Node::new();
+        node.start(build_config(
+            "sync-no-active-relay",
+            storage.as_path(),
+            relay.address().as_str(),
+        ))
+        .expect("start node");
+
+        let result = node.request_lxmf_sync(Some(1));
+
+        assert!(matches!(result, Err(NodeError::InvalidConfig {})));
+        let status = node.get_lxmf_sync_status().expect("sync status");
+        assert!(matches!(status.phase, SyncPhase::Failed {}));
+        assert_eq!(status.messages_received, 0);
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("no active propagation relay selected")
+        );
+
+        stop_node(node).await;
+        relay.shutdown().await;
+    }
+
     async fn stop_node(node: Node) {
         let _ = tokio::task::spawn_blocking(move || node.stop()).await;
     }
@@ -5541,6 +5569,27 @@ mod tests {
                     (Some(_), None) => panic!("expected mission fields"),
                 }
             }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    fn wait_for_operational_ack(
+        subscription: &Arc<EventSubscription>,
+        command_id: &str,
+        command_type: &str,
+    ) -> crate::types::LxmfDeliveryUpdate {
+        match wait_for_event(subscription, TEST_TIMEOUT, |event| {
+            matches!(
+                event,
+                NodeEvent::LxmfDelivery { update }
+                    if matches!(update.status, crate::types::LxmfDeliveryStatus::Acknowledged {})
+                        && update.command_id.as_deref() == Some(command_id)
+                        && update.command_type.as_deref() == Some(command_type)
+            )
+        })
+        .expect("sender received operational acknowledgement")
+        {
+            NodeEvent::LxmfDelivery { update } => update,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -5952,7 +6001,10 @@ mod tests {
             metadata.command_type.as_deref(),
             Some("mission.registry.log_entry.upsert")
         );
-        assert_eq!(metadata.command_id.as_deref(), Some(record.command_id.as_str()));
+        assert_eq!(
+            metadata.command_id.as_deref(),
+            Some(record.command_id.as_str())
+        );
         assert_eq!(
             metadata.correlation_id.as_deref(),
             Some("event-upsert-legacy")
@@ -6807,6 +6859,10 @@ mod tests {
         };
         let (body, fields) =
             build_eam_replication_payload(&node_a_status, &record, &target).expect("eam payload");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("eam metadata");
+        let command_id = metadata.command_id.clone().expect("eam command id");
+        let command_type = metadata.command_type.clone().expect("eam command type");
+        let ack_subscription = node_a.subscribe_events();
 
         node_a
             .send_bytes(
@@ -6839,6 +6895,219 @@ mod tests {
         assert_eq!(
             received.team_member_uid.as_deref(),
             record.team_member_uid.as_deref()
+        );
+        let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
+        assert_eq!(
+            ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+        assert_eq!(ack.destination_hex, node_b_status.lxmf_destination_hex);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_built_event_replication_payload_acknowledges_after_persistence() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("event_payload_ack").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let mut record = build_event();
+        record.uid = "evt-operational-ack".to_string();
+        record.command_id = "cmd-event-operational-ack".to_string();
+        record.correlation_id = Some("corr-event-operational-ack".to_string());
+        record.source_identity = node_a_status.identity_hex.clone();
+        record.source_display_name = Some(node_a_status.name.clone());
+        record.callsign = node_a_status.name.clone();
+        record.content = "Operational ACK event".to_string();
+        let target = MissionReplicationTarget {
+            app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
+        };
+        let (body, fields) = build_event_replication_payload(&node_a_status, &record, &target)
+            .expect("event payload");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("event metadata");
+        let command_id = metadata.command_id.clone().expect("event command id");
+        let command_type = metadata.command_type.clone().expect("event command type");
+        let ack_subscription = node_a.subscribe_events();
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                body,
+                Some(fields),
+                SendMode::Auto {},
+            )
+            .expect("send event replication payload");
+
+        let received_deadline = Instant::now() + TEST_TIMEOUT;
+        let received = loop {
+            let received = node_b
+                .get_events()
+                .expect("get events")
+                .into_iter()
+                .find(|event| event.uid == record.uid);
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted direct event replication payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(received.content, record.content);
+        assert_eq!(received.command_id, record.command_id);
+        let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
+        assert_eq!(
+            ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+        assert_eq!(ack.destination_hex, node_b_status.lxmf_destination_hex);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_built_checklist_replication_payloads_acknowledge_after_persistence() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("checklist_payload_ack").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let target = MissionReplicationTarget {
+            app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
+        };
+        let ack_subscription = node_a.subscribe_events();
+
+        let create_args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-operational-ack".to_string()),
+            mission_uid: Some("mission-operational-ack".to_string()),
+            template_uid: "template-operational-ack".to_string(),
+            name: "Operational ACK checklist".to_string(),
+            description: "Created by operational ACK test".to_string(),
+            start_time: "2026-05-18T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some(node_a_status.identity_hex.clone()),
+            created_by_team_member_display_name: Some(node_a_status.name.clone()),
+        })
+        .expect("checklist create args");
+        let (create_body, create_fields) = build_checklist_replication_payload(
+            &node_a_status,
+            &target,
+            "checklist.create.online",
+            &create_args,
+        )
+        .expect("checklist create payload");
+        let create_metadata =
+            parse_mission_sync_metadata(create_fields.as_slice()).expect("create metadata");
+        let create_command_id = create_metadata
+            .command_id
+            .clone()
+            .expect("create command id");
+        let create_command_type = create_metadata
+            .command_type
+            .clone()
+            .expect("create command type");
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                create_body,
+                Some(create_fields),
+                SendMode::Auto {},
+            )
+            .expect("send checklist create payload");
+
+        let create_deadline = Instant::now() + TEST_TIMEOUT;
+        let received_checklist = loop {
+            let received = node_b
+                .get_checklist("chk-operational-ack".to_string())
+                .expect("get checklist");
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < create_deadline,
+                "node b never persisted direct checklist create payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        assert_eq!(received_checklist.name, "Operational ACK checklist");
+        let create_ack =
+            wait_for_operational_ack(&ack_subscription, &create_command_id, &create_command_type);
+        assert_eq!(
+            create_ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+
+        let status_args = checklist_task_status_args_json(&ChecklistTaskStatusSetRequest {
+            checklist_uid: "chk-operational-ack".to_string(),
+            task_uid: "task-operational-ack".to_string(),
+            user_status: crate::types::ChecklistUserTaskStatus::Complete {},
+            changed_by_team_member_rns_identity: Some(node_a_status.identity_hex.clone()),
+        });
+        let (status_body, status_fields) = build_checklist_replication_payload(
+            &node_a_status,
+            &target,
+            "checklist.task.status.set",
+            &status_args,
+        )
+        .expect("checklist task status payload");
+        let status_metadata =
+            parse_mission_sync_metadata(status_fields.as_slice()).expect("status metadata");
+        let status_command_id = status_metadata
+            .command_id
+            .clone()
+            .expect("status command id");
+        let status_command_type = status_metadata
+            .command_type
+            .clone()
+            .expect("status command type");
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                status_body,
+                Some(status_fields),
+                SendMode::Auto {},
+            )
+            .expect("send checklist task status payload");
+
+        let status_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let received = node_b
+                .get_checklist("chk-operational-ack".to_string())
+                .expect("get checklist")
+                .expect("checklist remains active");
+            let task = received
+                .tasks
+                .into_iter()
+                .find(|task| task.task_uid == "task-operational-ack");
+            if let Some(task) = task {
+                assert_eq!(
+                    task.user_status,
+                    crate::types::ChecklistUserTaskStatus::Complete {}
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < status_deadline,
+                "node b never persisted direct checklist task status payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let status_ack =
+            wait_for_operational_ack(&ack_subscription, &status_command_id, &status_command_type);
+        assert_eq!(
+            status_ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
         );
 
         stop_node(node_a).await;
