@@ -4983,7 +4983,7 @@ mod tests {
     use crate::mission_sync::parse_mission_sync_metadata;
     use crate::types::{
         ChecklistTaskRecord, EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod,
-        MessageState, TelemetrySettingsRecord,
+        MessageState, SyncPhase, TelemetrySettingsRecord,
     };
     use crate::HubMode;
     use rmpv::Value as MsgPackValue;
@@ -5507,6 +5507,34 @@ mod tests {
             .expect("resolve node b");
 
         (relay, node_a, node_b)
+    }
+
+    #[tokio::test]
+    async fn request_lxmf_sync_without_active_relay_fails_status() {
+        let _guard = test_lock().lock().await;
+        let relay = TcpRelayHandle::start().await;
+        let storage = prepare_storage_dir("sync_no_active_relay");
+        let node = Node::new();
+        node.start(build_config(
+            "sync-no-active-relay",
+            storage.as_path(),
+            relay.address().as_str(),
+        ))
+        .expect("start node");
+
+        let result = node.request_lxmf_sync(Some(1));
+
+        assert!(matches!(result, Err(NodeError::InvalidConfig {})));
+        let status = node.get_lxmf_sync_status().expect("sync status");
+        assert!(matches!(status.phase, SyncPhase::Failed {}));
+        assert_eq!(status.messages_received, 0);
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("no active propagation relay selected")
+        );
+
+        stop_node(node).await;
+        relay.shutdown().await;
     }
 
     async fn stop_node(node: Node) {

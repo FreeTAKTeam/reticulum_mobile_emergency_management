@@ -3382,6 +3382,31 @@ fn refresh_sync_status_snapshot(state: &NodeRuntimeState, status: &SyncStatus) -
     changed
 }
 
+async fn emit_sync_status_update(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    phase: sdkmsg::SyncPhase,
+    requested_at_ms: u64,
+    messages_received: u32,
+    detail: Option<String>,
+    completed: bool,
+) -> SyncStatus {
+    let status_update =
+        from_sdk_sync_status(state.messaging.lock().await.update_sync_status(|status| {
+            status.phase = phase;
+            status.requested_at_ms = Some(requested_at_ms);
+            status.completed_at_ms = completed.then(now_ms);
+            status.messages_received = messages_received;
+            status.detail = detail;
+        }));
+    if refresh_sync_status_snapshot(state, &status_update) {
+        bus.emit(NodeEvent::SyncUpdated {
+            status: status_update.clone(),
+        });
+    }
+    status_update
+}
+
 fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
     storage_dir
         .map(str::trim)
@@ -6498,27 +6523,131 @@ pub async fn run_node(
             }
             Command::RequestLxmfSync { limit, resp } => {
                 let requested_at_ms = now_ms();
-                let status_update = from_sdk_sync_status(
-                    state.messaging.lock().await.update_sync_status(|status| {
-                        status.phase = sdkmsg::SyncPhase::Idle;
-                        status.requested_at_ms = Some(requested_at_ms);
-                        status.completed_at_ms = Some(now_ms());
-                        status.messages_received = 0;
-                        status.detail = None;
-                    }),
+                let relay_hex = state.active_propagation_node_hex.lock().await.clone();
+                let Some(relay_hex) = relay_hex.filter(|value| !value.trim().is_empty()) else {
+                    let detail = "no active propagation relay selected".to_string();
+                    emit_sync_status_update(
+                        &state,
+                        &bus,
+                        sdkmsg::SyncPhase::Failed,
+                        requested_at_ms,
+                        0,
+                        Some(detail.clone()),
+                        true,
+                    )
+                    .await;
+                    info!("[sync] propagation sync failed reason={detail}");
+                    let _ = resp.send(Err(NodeError::InvalidConfig {}));
+                    continue;
+                };
+
+                info!(
+                    "[sync] propagation sync started relay={} limit={}",
+                    relay_hex,
+                    limit
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 );
-                if refresh_sync_status_snapshot(&state, &status_update) {
-                    bus.emit(NodeEvent::SyncUpdated {
-                        status: status_update,
-                    });
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::PathRequested,
+                    requested_at_ms,
+                    0,
+                    Some(format!("requesting path to propagation relay {relay_hex}")),
+                    false,
+                )
+                .await;
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::LinkEstablishing,
+                    requested_at_ms,
+                    0,
+                    Some(format!("establishing propagation link {relay_hex}")),
+                    false,
+                )
+                .await;
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::RequestSent,
+                    requested_at_ms,
+                    0,
+                    Some("requesting propagated messages".to_string()),
+                    false,
+                )
+                .await;
+
+                let result = match state.sdk.fetch_propagated_lxmf(limit).await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        let detail = format!("propagation sync failed: {err}");
+                        emit_sync_status_update(
+                            &state,
+                            &bus,
+                            sdkmsg::SyncPhase::Failed,
+                            requested_at_ms,
+                            0,
+                            Some(detail.clone()),
+                            true,
+                        )
+                        .await;
+                        info!(
+                            "[sync] propagation sync failed relay={} reason={}",
+                            relay_hex, err
+                        );
+                        let _ = resp.send(Err(err));
+                        continue;
+                    }
+                };
+
+                let imported_count = result.imported_wires.len() as u32;
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::Receiving,
+                    requested_at_ms,
+                    0,
+                    Some(format!(
+                        "available={} fetched={} decrypt_failed={}",
+                        result.available_count, result.fetched_count, result.failed_count
+                    )),
+                    false,
+                )
+                .await;
+                for wire in result.imported_wires {
+                    emit_received_payload(
+                        &state,
+                        &bus,
+                        &state.sdk,
+                        result.destination_hex.clone(),
+                        wire,
+                        None,
+                    )
+                    .await;
                 }
-                if let Some(value) = limit {
-                    info!(
-                        "[sync] propagation sync request ignored in mobile runtime requested_limit={value}"
-                    );
-                } else {
-                    info!("[sync] propagation sync request ignored in mobile runtime");
-                }
+                let detail = format!(
+                    "available={} fetched={} imported={} failed={}",
+                    result.available_count,
+                    result.fetched_count,
+                    imported_count,
+                    result.failed_count
+                );
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::Complete,
+                    requested_at_ms,
+                    imported_count,
+                    Some(detail.clone()),
+                    true,
+                )
+                .await;
+                info!(
+                    "[sync] propagation sync complete relay={} {}",
+                    relay_hex, detail
+                );
                 let _ = resp.send(Ok(()));
             }
             Command::ListAnnounces { resp } => {

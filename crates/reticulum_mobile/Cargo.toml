@@ -34,6 +34,7 @@ sha2 = "0.10"
 thiserror = "1"
 tokio = { version = "1.44.2", features = ["full"] }
 uniffi = "0.28"
+x25519-dalek = "2.0.1"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
