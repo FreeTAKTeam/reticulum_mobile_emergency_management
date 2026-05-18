@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::announce_compat::{
     display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
 };
-use crate::lxmf_fields::FIELD_COMMANDS;
+use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
 use crate::sos::{location_from_alert, received_alert_from_sos};
@@ -101,6 +101,79 @@ fn current_timestamp_rfc3339() -> String {
     let minute = (seconds_of_day % 3_600) / 60;
     let second = seconds_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+#[derive(Debug, Clone)]
+struct OperationalAck {
+    destination_hex: String,
+    command_id: String,
+    correlation_id: Option<String>,
+    command_type: Option<String>,
+}
+
+fn operational_ack_from_metadata(
+    source_hex: Option<&str>,
+    metadata: Option<&MissionSyncMetadata>,
+) -> Option<OperationalAck> {
+    let metadata = metadata?;
+    if metadata.result_present || !metadata.command_present {
+        return None;
+    }
+    let destination_hex = normalize_hex_32(source_hex?)?;
+    let command_id = metadata
+        .command_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some(OperationalAck {
+        destination_hex,
+        command_id,
+        correlation_id: metadata
+            .correlation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        command_type: metadata
+            .command_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    })
+}
+
+fn build_operational_ack_fields(
+    ack: &OperationalAck,
+    by_identity: &str,
+) -> Result<Vec<u8>, NodeError> {
+    let mut result_entries = vec![
+        (
+            MsgPackValue::from("command_id"),
+            MsgPackValue::from(ack.command_id.as_str()),
+        ),
+        (MsgPackValue::from("status"), MsgPackValue::from("accepted")),
+        (
+            MsgPackValue::from("accepted_at"),
+            MsgPackValue::from(current_timestamp_rfc3339().as_str()),
+        ),
+        (
+            MsgPackValue::from("by_identity"),
+            MsgPackValue::from(by_identity),
+        ),
+    ];
+    if let Some(correlation_id) = ack.correlation_id.as_deref() {
+        result_entries.push((
+            MsgPackValue::from("correlation_id"),
+            MsgPackValue::from(correlation_id),
+        ));
+    }
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_RESULTS),
+        MsgPackValue::Map(result_entries),
+    )]);
+    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
 }
 
 fn telemetry_position_from_sos(
@@ -358,12 +431,12 @@ async fn persist_received_eam_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
     body_utf8: &str,
-) {
+) -> bool {
     let received_at_ms = now_ms();
     let parsed_from_fields =
         fields_bytes.and_then(|value| eam_command_action_from_fields(value, received_at_ms));
     if metadata.is_none() && parsed_from_fields.is_none() {
-        return;
+        return false;
     }
     if metadata
         .and_then(|value| value.command_type.as_deref())
@@ -372,7 +445,7 @@ async fn persist_received_eam_if_present(
         })
         && parsed_from_fields.is_none()
     {
-        return;
+        return false;
     }
 
     let parsed = serde_json::from_str::<EamWireBody>(body_utf8)
@@ -388,7 +461,7 @@ async fn persist_received_eam_if_present(
         .or(parsed_from_fields);
 
     let Some(action) = parsed else {
-        return;
+        return false;
     };
 
     match action {
@@ -404,6 +477,7 @@ async fn persist_received_eam_if_present(
                         invalidation: summary,
                     });
                 }
+                true
             }
             Err(err) => {
                 bus.emit(NodeEvent::Error {
@@ -413,6 +487,7 @@ async fn persist_received_eam_if_present(
                         record.callsign, err
                     ),
                 });
+                false
             }
         },
         EamCommandAction::Delete {
@@ -430,6 +505,7 @@ async fn persist_received_eam_if_present(
                         invalidation: summary,
                     });
                 }
+                true
             }
             Err(err) => {
                 bus.emit(NodeEvent::Error {
@@ -439,6 +515,7 @@ async fn persist_received_eam_if_present(
                         callsign, err
                     ),
                 });
+                false
             }
         },
     }
@@ -632,22 +709,22 @@ async fn persist_received_event_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
     content_bytes: Option<&[u8]>,
-) {
+) -> bool {
     let parsed_from_fields =
         fields_bytes.and_then(|value| event_projection_from_fields(value, content_bytes, now_ms()));
     if metadata.is_none() && parsed_from_fields.is_none() {
-        return;
+        return false;
     }
     if metadata
         .and_then(|value| value.command_type.as_deref())
         .is_none_or(|value| value != "mission.registry.log_entry.upsert")
         && parsed_from_fields.is_none()
     {
-        return;
+        return false;
     }
 
     let Some(record) = parsed_from_fields else {
-        return;
+        return false;
     };
 
     match state.app_state.upsert_event(&record) {
@@ -662,6 +739,7 @@ async fn persist_received_event_if_present(
                     invalidation: summary,
                 });
             }
+            true
         }
         Err(err) => {
             bus.emit(NodeEvent::Error {
@@ -671,6 +749,7 @@ async fn persist_received_event_if_present(
                     record.uid, err
                 ),
             });
+            false
         }
     }
 }
@@ -792,16 +871,22 @@ fn upsert_inbound_checklist(
     bus: &EventBus,
     checklist: &ChecklistRecord,
     reason: &str,
-) {
+) -> bool {
     match state.app_state.upsert_checklist(checklist, reason) {
-        Ok(invalidations) => emit_checklist_invalidations(bus, invalidations),
-        Err(err) => bus.emit(NodeEvent::Error {
-            code: "IoError".to_string(),
-            message: format!(
-                "failed to persist inbound checklist uid={} reason={reason} error={err}",
-                checklist.uid
-            ),
-        }),
+        Ok(invalidations) => {
+            emit_checklist_invalidations(bus, invalidations);
+            true
+        }
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist inbound checklist uid={} reason={reason} error={err}",
+                    checklist.uid
+                ),
+            });
+            false
+        }
     }
 }
 
@@ -1425,24 +1510,25 @@ fn persist_received_checklist_if_present(
     _metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
     content_bytes: Option<&[u8]>,
-) {
+) -> bool {
     let Some(fields_bytes) = fields_bytes else {
-        return;
+        return false;
     };
     let fields = match rmp_serde::from_slice::<MsgPackValue>(fields_bytes) {
         Ok(value) => value,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let Some(field_entries) = msgpack_map_entries(&fields) else {
-        return;
+        return false;
     };
     let Some(commands) = msgpack_get_indexed(field_entries, FIELD_COMMANDS) else {
-        return;
+        return false;
     };
     let MsgPackValue::Array(command_entries) = commands else {
-        return;
+        return false;
     };
 
+    let mut persisted_any = false;
     for command in command_entries {
         let Some(command_map) = msgpack_map_entries(command) else {
             continue;
@@ -1631,7 +1717,8 @@ fn persist_received_checklist_if_present(
                 hydrate_checklist_from_local_template(&state.app_state, &mut checklist);
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
+                persisted_any |=
+                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
             }
             "checklist.upload" => {
                 let Some(checklist_uid) =
@@ -1663,7 +1750,8 @@ fn persist_received_checklist_if_present(
                 ) else {
                     continue;
                 };
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-upload");
+                persisted_any |=
+                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-upload");
             }
             "checklist.update" => {
                 let Some(checklist_uid) =
@@ -1718,7 +1806,8 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-update");
+                persisted_any |=
+                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-update");
             }
             "checklist.delete" => {
                 let Some(checklist_uid) =
@@ -1738,7 +1827,8 @@ fn persist_received_checklist_if_present(
                 ) else {
                     continue;
                 };
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
+                persisted_any |=
+                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
             }
             "checklist.task.row.add" => {
                 let Some(checklist_uid) =
@@ -1854,7 +1944,12 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-row-add");
+                persisted_any |= upsert_inbound_checklist(
+                    state,
+                    bus,
+                    &checklist,
+                    "checklist-received-task-row-add",
+                );
             }
             "checklist.task.row.delete" => {
                 let Some(checklist_uid) =
@@ -1920,7 +2015,7 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(
+                persisted_any |= upsert_inbound_checklist(
                     state,
                     bus,
                     &checklist,
@@ -1992,7 +2087,12 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-status");
+                persisted_any |= upsert_inbound_checklist(
+                    state,
+                    bus,
+                    &checklist,
+                    "checklist-received-task-status",
+                );
             }
             "checklist.task.row.style.set" => {
                 let Some(checklist_uid) =
@@ -2050,7 +2150,7 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(
+                persisted_any |= upsert_inbound_checklist(
                     state,
                     bus,
                     &checklist,
@@ -2158,7 +2258,12 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                upsert_inbound_checklist(state, bus, &checklist, "checklist-received-task-cell");
+                persisted_any |= upsert_inbound_checklist(
+                    state,
+                    bus,
+                    &checklist,
+                    "checklist-received-task-cell",
+                );
             }
             "checklist.join" => {
                 let Some(checklist_uid) =
@@ -2197,12 +2302,14 @@ fn persist_received_checklist_if_present(
                     checklist.updated_at = Some(timestamp.clone());
                     set_checklist_last_changed_by(&mut checklist, Some(changed_by.as_str()));
                     normalize_checklist_record(&mut checklist);
-                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-join");
+                    persisted_any |=
+                        upsert_inbound_checklist(state, bus, &checklist, "checklist-received-join");
                 }
             }
             _ => {}
         }
     }
+    persisted_any
 }
 
 #[derive(Debug, Deserialize)]
@@ -4314,7 +4421,7 @@ async fn emit_received_payload(
                 );
             }
             ack_pending_lxmf_delivery(state, bus, source_hex.as_deref(), metadata).await;
-            persist_received_eam_if_present(
+            let persisted_eam = persist_received_eam_if_present(
                 state,
                 bus,
                 Some(metadata),
@@ -4322,7 +4429,7 @@ async fn emit_received_payload(
                 body_utf8.as_str(),
             )
             .await;
-            persist_received_event_if_present(
+            let persisted_event = persist_received_event_if_present(
                 state,
                 bus,
                 Some(metadata),
@@ -4337,13 +4444,21 @@ async fn emit_received_payload(
                 fields_bytes.as_deref(),
             )
             .await;
-            persist_received_checklist_if_present(
+            let persisted_checklist = persist_received_checklist_if_present(
                 state,
                 bus,
                 Some(metadata),
                 fields_bytes.as_deref(),
                 Some(message.content.as_slice()),
             );
+            send_operational_ack_if_needed(
+                state,
+                bus,
+                source_hex.as_deref(),
+                Some(metadata),
+                persisted_eam || persisted_event || persisted_checklist,
+            )
+            .await;
         }
         if is_sos_message {
             let peer_hex = source_hex
@@ -4470,6 +4585,10 @@ async fn ack_pending_lxmf_delivery(
     source_hex: Option<&str>,
     metadata: &MissionSyncMetadata,
 ) {
+    if !metadata.result_present && !metadata.event_present {
+        return;
+    }
+
     let Some(source_hex) = source_hex else {
         return;
     };
@@ -4555,6 +4674,76 @@ async fn ack_pending_lxmf_delivery(
         pending.correlation_id.as_deref().unwrap_or("-"),
         detail.as_deref().unwrap_or("-"),
     );
+}
+
+async fn send_operational_ack_if_needed(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    source_hex: Option<&str>,
+    metadata: Option<&MissionSyncMetadata>,
+    persisted: bool,
+) {
+    if !persisted {
+        return;
+    }
+    let Some(ack) = operational_ack_from_metadata(source_hex, metadata) else {
+        return;
+    };
+    let local_lxmf_hex = {
+        let destination = state.lxmf_destination.lock().await;
+        address_hash_to_hex(&destination.desc.address_hash)
+    };
+    let local_identity_hex = state.identity.address_hash().to_hex_string();
+    if ack.destination_hex == local_lxmf_hex {
+        return;
+    }
+    let fields = match build_operational_ack_fields(&ack, local_identity_hex.as_str()) {
+        Ok(fields) => fields,
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: node_error_code(&err).to_string(),
+                message: format!(
+                    "operational acknowledgement build failed command={} reason={}",
+                    ack.command_id, err
+                ),
+            });
+            return;
+        }
+    };
+    let ack_metadata = parse_mission_sync_metadata(fields.as_slice());
+    let body = format!("Accepted {}", ack.command_id).into_bytes();
+    match send_lxmf_with_delivery_policy(
+        state,
+        ack.destination_hex.as_str(),
+        body.as_slice(),
+        None,
+        Some(fields),
+        ack_metadata,
+        SendMode::Auto {},
+        SendTaskClass::Mission,
+    )
+    .await
+    {
+        Ok(report) => {
+            info!(
+                "[lxmf][mission] sent received acknowledgement destination={} message_id={} command={} correlation={} type={}",
+                report.resolved_destination_hex,
+                report.message_id_hex,
+                ack.command_id,
+                ack.correlation_id.as_deref().unwrap_or("-"),
+                ack.command_type.as_deref().unwrap_or("-"),
+            );
+        }
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: node_error_code(&err).to_string(),
+                message: format!(
+                    "operational acknowledgement send failed destination={} command={} reason={}",
+                    ack.destination_hex, ack.command_id, err
+                ),
+            });
+        }
+    }
 }
 
 async fn wait_for_link_active(
@@ -6375,6 +6564,77 @@ mod tests {
         assert_eq!(metadata.event_uid.as_deref(), Some("evt-123"));
         assert_eq!(metadata.mission_uid.as_deref(), Some("default"));
         assert!(metadata.is_mission_related());
+    }
+
+    #[test]
+    fn operational_ack_is_only_built_for_inbound_commands() {
+        let metadata = MissionSyncMetadata {
+            command_present: true,
+            command_id: Some("cmd-accepted".to_string()),
+            correlation_id: Some("corr-accepted".to_string()),
+            command_type: Some("mission.registry.eam.upsert".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+
+        let ack = operational_ack_from_metadata(
+            Some("ABCDEF0123456789ABCDEF0123456789"),
+            Some(&metadata),
+        )
+        .expect("command metadata should produce ack request");
+
+        assert_eq!(ack.destination_hex, "abcdef0123456789abcdef0123456789");
+        assert_eq!(ack.command_id, "cmd-accepted");
+        assert_eq!(ack.correlation_id.as_deref(), Some("corr-accepted"));
+        assert_eq!(
+            ack.command_type.as_deref(),
+            Some("mission.registry.eam.upsert")
+        );
+
+        let result_metadata = MissionSyncMetadata {
+            result_present: true,
+            command_id: Some("cmd-accepted".to_string()),
+            result_status: Some("accepted".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        assert!(operational_ack_from_metadata(
+            Some("abcdef0123456789abcdef0123456789"),
+            Some(&result_metadata),
+        )
+        .is_none());
+
+        let missing_id = MissionSyncMetadata {
+            command_present: true,
+            command_type: Some("checklist.create.online".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        assert!(operational_ack_from_metadata(
+            Some("abcdef0123456789abcdef0123456789"),
+            Some(&missing_id),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn operational_ack_fields_use_existing_accepted_result_shape() {
+        let ack = OperationalAck {
+            destination_hex: "abcdef0123456789abcdef0123456789".to_string(),
+            command_id: "cmd-result-shape".to_string(),
+            correlation_id: Some("corr-result-shape".to_string()),
+            command_type: Some("checklist.task.status.set".to_string()),
+        };
+
+        let fields = build_operational_ack_fields(&ack, "0123456789abcdef0123456789abcdef")
+            .expect("ack fields");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+
+        assert!(metadata.result_present);
+        assert!(!metadata.command_present);
+        assert_eq!(metadata.result_status.as_deref(), Some("accepted"));
+        assert_eq!(metadata.command_id.as_deref(), Some("cmd-result-shape"));
+        assert_eq!(
+            metadata.correlation_id.as_deref(),
+            Some("corr-result-shape")
+        );
     }
 
     #[test]
