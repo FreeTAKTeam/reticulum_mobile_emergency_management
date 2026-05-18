@@ -2978,6 +2978,18 @@ fn to_sdk_send_request(request: &SendLxmfRequest) -> sdkmsg::SendMessageRequest 
 }
 
 #[derive(Debug, Clone)]
+struct PendingLxmfResend {
+    requested_destination_hex: String,
+    body: Vec<u8>,
+    title: Option<String>,
+    fields_bytes: Option<Vec<u8>>,
+    metadata: MissionSyncMetadata,
+    send_task_class: SendTaskClass,
+    original_send_mode: SendMode,
+    propagation_fallback_attempted: bool,
+}
+
+#[derive(Debug, Clone)]
 struct PendingLxmfDelivery {
     message_id_hex: String,
     destination_hex: String,
@@ -2990,6 +3002,7 @@ struct PendingLxmfDelivery {
     representation: LxmfDeliveryRepresentation,
     relay_destination_hex: Option<String>,
     fallback_stage: Option<LxmfFallbackStage>,
+    resend: Option<PendingLxmfResend>,
     sent_at_ms: u64,
 }
 
@@ -4096,6 +4109,8 @@ async fn ensure_output_link(
 async fn register_pending_lxmf_delivery(
     state: &NodeRuntimeState,
     report: &LxmfSendReport,
+    resend: Option<PendingLxmfResend>,
+    message_id_override: Option<String>,
 ) -> Option<RegisteredPendingLxmfDelivery> {
     if !report.track_delivery_timeout {
         return None;
@@ -4103,7 +4118,7 @@ async fn register_pending_lxmf_delivery(
     let metadata = report.metadata.as_ref()?;
     let tracking_key = metadata.tracking_key()?.to_string();
     let pending = PendingLxmfDelivery {
-        message_id_hex: report.message_id_hex.clone(),
+        message_id_hex: message_id_override.unwrap_or_else(|| report.message_id_hex.clone()),
         destination_hex: report.resolved_destination_hex.clone(),
         correlation_id: metadata.correlation_id.clone(),
         command_id: metadata.command_id.clone(),
@@ -4114,6 +4129,7 @@ async fn register_pending_lxmf_delivery(
         representation: report.representation,
         relay_destination_hex: report.relay_destination_hex.clone(),
         fallback_stage: report.fallback_stage,
+        resend,
         sent_at_ms: now_ms(),
     };
 
@@ -4131,6 +4147,232 @@ async fn register_pending_lxmf_delivery(
         pending,
         buffered_ack,
     })
+}
+
+fn build_pending_lxmf_resend(
+    report: &LxmfSendReport,
+    requested_destination_hex: &str,
+    body: &[u8],
+    title: Option<String>,
+    fields_bytes: Option<Vec<u8>>,
+    metadata: Option<MissionSyncMetadata>,
+    send_mode: SendMode,
+    send_task_class: SendTaskClass,
+) -> Option<PendingLxmfResend> {
+    if !report.track_delivery_timeout
+        || !matches!(send_mode, SendMode::Auto {})
+        || report.used_propagation_node
+    {
+        return None;
+    }
+    let metadata = metadata?;
+    if !metadata.command_present || metadata.tracking_key().is_none() {
+        return None;
+    }
+    Some(PendingLxmfResend {
+        requested_destination_hex: requested_destination_hex.to_string(),
+        body: body.to_vec(),
+        title,
+        fields_bytes,
+        metadata,
+        send_task_class,
+        original_send_mode: send_mode,
+        propagation_fallback_attempted: false,
+    })
+}
+
+fn pending_tracking_key(pending: &PendingLxmfDelivery) -> Option<String> {
+    pending
+        .correlation_id
+        .as_deref()
+        .or(pending.command_id.as_deref())
+        .map(ToOwned::to_owned)
+}
+
+fn should_retry_pending_ack_timeout_via_propagation(
+    pending: &PendingLxmfDelivery,
+    has_active_relay: bool,
+) -> bool {
+    has_active_relay
+        && pending.resend.as_ref().is_some_and(|resend| {
+            matches!(resend.original_send_mode, SendMode::Auto {})
+                && !resend.propagation_fallback_attempted
+        })
+}
+
+fn record_pending_delivery_timed_out(
+    sdk: &RuntimeLxmfSdk,
+    bus: &EventBus,
+    pending: &PendingLxmfDelivery,
+    detail: &str,
+) {
+    sdk.record_delivery_timed_out(
+        &pending.message_id_hex,
+        &pending.destination_hex,
+        pending.correlation_id.as_deref(),
+        pending.command_id.as_deref(),
+        pending.command_type.as_deref(),
+        pending.event_uid.as_deref(),
+        pending.mission_uid.as_deref(),
+        Some(detail),
+    );
+    emit_lxmf_delivery(
+        bus,
+        pending,
+        LxmfDeliveryStatus::TimedOut {},
+        Some(detail.to_string()),
+    );
+    info!(
+        "[lxmf][mission] timed out message_id={} destination={} command={} correlation={} detail={}",
+        pending.message_id_hex,
+        pending.destination_hex,
+        pending.command_type.as_deref().unwrap_or("-"),
+        pending.correlation_id.as_deref().unwrap_or("-"),
+        detail,
+    );
+}
+
+async fn acknowledge_pending_with_buffered_ack(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    pending: &PendingLxmfDelivery,
+    buffered_ack: PendingLxmfAcknowledgement,
+) -> bool {
+    let tracking_key = pending_tracking_key(pending);
+    if peer_destinations_equivalent(
+        state,
+        pending.destination_hex.as_str(),
+        buffered_ack.source_hex.as_str(),
+    )
+    .await
+    {
+        if let Some(tracking_key) = tracking_key.as_deref() {
+            state
+                .pending_lxmf_deliveries
+                .lock()
+                .await
+                .remove(tracking_key);
+        }
+        state.sdk.record_delivery_acknowledged(
+            &pending.message_id_hex,
+            &pending.destination_hex,
+            Some(buffered_ack.source_hex.as_str()),
+            pending.correlation_id.as_deref(),
+            pending.command_id.as_deref(),
+            pending.command_type.as_deref(),
+            pending.event_uid.as_deref(),
+            pending.mission_uid.as_deref(),
+            buffered_ack.detail.as_deref(),
+        );
+        emit_lxmf_delivery_with_source(
+            bus,
+            pending,
+            Some(buffered_ack.source_hex.clone()),
+            LxmfDeliveryStatus::Acknowledged {},
+            buffered_ack.detail.clone(),
+        );
+        info!(
+            "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
+            pending.message_id_hex,
+            pending.destination_hex,
+            pending.command_type.as_deref().unwrap_or("-"),
+            pending.correlation_id.as_deref().unwrap_or("-"),
+            buffered_ack.detail.as_deref().unwrap_or("-"),
+        );
+        true
+    } else {
+        if let Some(tracking_key) = tracking_key {
+            state
+                .pending_lxmf_acknowledgements
+                .lock()
+                .await
+                .insert(tracking_key, buffered_ack.clone());
+        }
+        info!(
+            "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
+            pending.message_id_hex,
+            pending.destination_hex,
+            buffered_ack.source_hex,
+        );
+        false
+    }
+}
+
+async fn retry_pending_ack_timeout_via_propagation(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    pending: &PendingLxmfDelivery,
+) -> Result<bool, String> {
+    let has_active_relay = has_active_propagation_relay(state).await;
+    if !should_retry_pending_ack_timeout_via_propagation(pending, has_active_relay) {
+        return Ok(false);
+    }
+    let Some(mut resend) = pending.resend.clone() else {
+        return Ok(false);
+    };
+    resend.propagation_fallback_attempted = true;
+    info!(
+        "[lxmf][mission] ack timeout message_id={} destination={} command={} correlation={}; retrying via propagation relay",
+        pending.message_id_hex,
+        pending.destination_hex,
+        pending.command_type.as_deref().unwrap_or("-"),
+        pending.correlation_id.as_deref().unwrap_or("-"),
+    );
+    let report = send_lxmf_with_delivery_policy(
+        state,
+        resend.requested_destination_hex.as_str(),
+        resend.body.as_slice(),
+        resend.title.clone(),
+        resend.fields_bytes.clone(),
+        Some(resend.metadata.clone()),
+        SendMode::PropagationOnly {},
+        resend.send_task_class.propagation_equivalent(),
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
+    if !lxmf_send_succeeded(report.outcome) {
+        return Err(format!("{:?}", send_outcome_to_udl(report.outcome)));
+    }
+
+    let Some(registered) = register_pending_lxmf_delivery(
+        state,
+        &report,
+        Some(resend),
+        Some(pending.message_id_hex.clone()),
+    )
+    .await
+    else {
+        return Err("propagation retry did not register pending delivery".to_string());
+    };
+    let retry_pending = &registered.pending;
+    state.sdk.record_delivery_sent(
+        &retry_pending.message_id_hex,
+        &retry_pending.destination_hex,
+        retry_pending.correlation_id.as_deref(),
+        retry_pending.command_id.as_deref(),
+        retry_pending.command_type.as_deref(),
+        retry_pending.event_uid.as_deref(),
+        retry_pending.mission_uid.as_deref(),
+    );
+    emit_lxmf_delivery(
+        bus,
+        retry_pending,
+        LxmfDeliveryStatus::SentToPropagation {},
+        Some("ack timeout; retrying via propagation".to_string()),
+    );
+    info!(
+        "[lxmf][mission] resent after ack timeout original_message_id={} retry_message_id={} destination={} command={} correlation={}",
+        retry_pending.message_id_hex,
+        report.message_id_hex,
+        retry_pending.destination_hex,
+        retry_pending.command_type.as_deref().unwrap_or("-"),
+        retry_pending.correlation_id.as_deref().unwrap_or("-"),
+    );
+    if let Some(buffered_ack) = registered.buffered_ack {
+        acknowledge_pending_with_buffered_ack(state, bus, retry_pending, buffered_ack).await;
+    }
+    Ok(true)
 }
 
 fn lxmf_send_succeeded(outcome: RnsSendOutcome) -> bool {
@@ -5517,8 +5759,7 @@ pub async fn run_node(
     // Pending LXMF acknowledgement timeout watcher.
     {
         let bus = bus.clone();
-        let sdk = sdk.clone();
-        let pending_lxmf_deliveries = pending_lxmf_deliveries.clone();
+        let state = state.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
@@ -5526,7 +5767,7 @@ pub async fn run_node(
                 let now = now_ms();
                 let mut expired = Vec::<PendingLxmfDelivery>::new();
                 {
-                    let mut guard = pending_lxmf_deliveries.lock().await;
+                    let mut guard = state.pending_lxmf_deliveries.lock().await;
                     let expired_keys = guard
                         .iter()
                         .filter(|(_, pending)| {
@@ -5542,29 +5783,26 @@ pub async fn run_node(
                     }
                 }
                 for pending in expired {
-                    sdk.record_delivery_timed_out(
-                        &pending.message_id_hex,
-                        &pending.destination_hex,
-                        pending.correlation_id.as_deref(),
-                        pending.command_id.as_deref(),
-                        pending.command_type.as_deref(),
-                        pending.event_uid.as_deref(),
-                        pending.mission_uid.as_deref(),
-                        Some("ack timeout"),
-                    );
-                    emit_lxmf_delivery(
-                        &bus,
-                        &pending,
-                        LxmfDeliveryStatus::TimedOut {},
-                        Some("ack timeout".to_string()),
-                    );
-                    info!(
-                        "[lxmf][mission] timed out message_id={} destination={} command={} correlation={}",
-                        pending.message_id_hex,
-                        pending.destination_hex,
-                        pending.command_type.as_deref().unwrap_or("-"),
-                        pending.correlation_id.as_deref().unwrap_or("-"),
-                    );
+                    match retry_pending_ack_timeout_via_propagation(&state, &bus, &pending).await {
+                        Ok(true) => continue,
+                        Ok(false) => {
+                            record_pending_delivery_timed_out(
+                                state.sdk.as_ref(),
+                                &bus,
+                                &pending,
+                                "ack timeout",
+                            );
+                        }
+                        Err(err) => {
+                            let detail = format!("ack timeout; propagation retry failed: {err}");
+                            record_pending_delivery_timed_out(
+                                state.sdk.as_ref(),
+                                &bus,
+                                &pending,
+                                detail.as_str(),
+                            );
+                        }
+                    }
                 }
             }
         });
@@ -5905,7 +6143,19 @@ pub async fn run_node(
                                 }
                             }
 
-                            if let Some(registered) = register_pending_lxmf_delivery(&state, report).await {
+                            let resend = build_pending_lxmf_resend(
+                                report,
+                                destination_hex.as_str(),
+                                bytes.as_slice(),
+                                None,
+                                fields_bytes.clone(),
+                                metadata.clone(),
+                                send_mode,
+                                send_task_class,
+                            );
+                            if let Some(registered) =
+                                register_pending_lxmf_delivery(&state, report, resend, None).await
+                            {
                                 let pending = &registered.pending;
                                 if matches!(
                                     report.outcome,
@@ -5934,75 +6184,18 @@ pub async fn run_node(
                                         pending.correlation_id.as_deref().unwrap_or("-"),
                                     );
                                     if let Some(buffered_ack) = registered.buffered_ack {
-                                        let tracking_key = pending
-                                            .correlation_id
-                                            .as_deref()
-                                            .or(pending.command_id.as_deref())
-                                            .map(ToOwned::to_owned);
-                                        if peer_destinations_equivalent(
+                                        acknowledge_pending_with_buffered_ack(
                                             &state,
-                                            pending.destination_hex.as_str(),
-                                            buffered_ack.source_hex.as_str(),
+                                            &bus,
+                                            pending,
+                                            buffered_ack,
                                         )
-                                        .await
-                                        {
-                                            if let Some(tracking_key) = tracking_key.as_deref() {
-                                                state
-                                                    .pending_lxmf_deliveries
-                                                    .lock()
-                                                    .await
-                                                    .remove(tracking_key);
-                                            }
-                                            state.sdk.record_delivery_acknowledged(
-                                                &pending.message_id_hex,
-                                                &pending.destination_hex,
-                                                Some(buffered_ack.source_hex.as_str()),
-                                                pending.correlation_id.as_deref(),
-                                                pending.command_id.as_deref(),
-                                                pending.command_type.as_deref(),
-                                                pending.event_uid.as_deref(),
-                                                pending.mission_uid.as_deref(),
-                                                buffered_ack.detail.as_deref(),
-                                            );
-                                            emit_lxmf_delivery_with_source(
-                                                &bus,
-                                                pending,
-                                                Some(buffered_ack.source_hex.clone()),
-                                                LxmfDeliveryStatus::Acknowledged {},
-                                                buffered_ack.detail.clone(),
-                                            );
-                                            info!(
-                                                "[lxmf][mission] acknowledged buffered message_id={} destination={} command={} correlation={} detail={}",
-                                                pending.message_id_hex,
-                                                pending.destination_hex,
-                                                pending.command_type.as_deref().unwrap_or("-"),
-                                                pending.correlation_id.as_deref().unwrap_or("-"),
-                                                buffered_ack.detail.as_deref().unwrap_or("-"),
-                                            );
-                                        } else {
-                                            if let Some(tracking_key) = tracking_key {
-                                                state
-                                                    .pending_lxmf_acknowledgements
-                                                    .lock()
-                                                    .await
-                                                    .insert(tracking_key, buffered_ack.clone());
-                                            }
-                                            info!(
-                                                "[lxmf][mission] buffered acknowledgement source mismatch message_id={} destination={} source={}",
-                                                pending.message_id_hex,
-                                                pending.destination_hex,
-                                                buffered_ack.source_hex,
-                                            );
-                                        }
+                                        .await;
                                     }
                                 } else {
                                     let failure_detail = format!("{mapped:?}");
                                     {
-                                        let tracking_key = pending
-                                            .correlation_id
-                                            .as_deref()
-                                            .or(pending.command_id.as_deref())
-                                            .map(ToOwned::to_owned);
+                                        let tracking_key = pending_tracking_key(pending);
                                         if let Some(tracking_key) = tracking_key {
                                             state.pending_lxmf_deliveries.lock().await.remove(&tracking_key);
                                         }
@@ -6635,6 +6828,154 @@ mod tests {
             metadata.correlation_id.as_deref(),
             Some("corr-result-shape")
         );
+    }
+
+    fn test_lxmf_report(
+        metadata: MissionSyncMetadata,
+        track_delivery_timeout: bool,
+        used_propagation_node: bool,
+    ) -> LxmfSendReport {
+        LxmfSendReport {
+            outcome: RnsSendOutcome::SentDirect,
+            message_id_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            resolved_destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            metadata: Some(metadata),
+            track_delivery_timeout,
+            used_propagation_node,
+            method: LxmfDeliveryMethod::Direct {},
+            representation: LxmfDeliveryRepresentation::Packet {},
+            relay_destination_hex: None,
+            fallback_stage: None,
+            receipt_hash_hex: None,
+        }
+    }
+
+    fn test_pending_delivery(resend: Option<PendingLxmfResend>) -> PendingLxmfDelivery {
+        PendingLxmfDelivery {
+            message_id_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            correlation_id: Some("corr-timeout".to_string()),
+            command_id: Some("cmd-timeout".to_string()),
+            command_type: Some("mission.registry.eam.upsert".to_string()),
+            event_uid: None,
+            mission_uid: Some("mission-1".to_string()),
+            method: LxmfDeliveryMethod::Direct {},
+            representation: LxmfDeliveryRepresentation::Packet {},
+            relay_destination_hex: None,
+            fallback_stage: None,
+            resend,
+            sent_at_ms: now_ms(),
+        }
+    }
+
+    #[test]
+    fn ack_timeout_auto_command_delivery_is_eligible_for_propagation_retry() {
+        let metadata = MissionSyncMetadata {
+            command_present: true,
+            command_id: Some("cmd-timeout".to_string()),
+            correlation_id: Some("corr-timeout".to_string()),
+            command_type: Some("mission.registry.eam.upsert".to_string()),
+            mission_uid: Some("mission-1".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        let report = test_lxmf_report(metadata.clone(), true, false);
+        let resend = build_pending_lxmf_resend(
+            &report,
+            "cccccccccccccccccccccccccccccccc",
+            b"body",
+            None,
+            Some(vec![1, 2, 3]),
+            Some(metadata),
+            SendMode::Auto {},
+            SendTaskClass::Mission,
+        )
+        .expect("auto command should retain resend payload");
+        let pending = test_pending_delivery(Some(resend));
+
+        assert!(should_retry_pending_ack_timeout_via_propagation(
+            &pending, true
+        ));
+        assert!(!should_retry_pending_ack_timeout_via_propagation(
+            &pending, false
+        ));
+    }
+
+    #[test]
+    fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
+        let command_metadata = MissionSyncMetadata {
+            command_present: true,
+            command_id: Some("cmd-timeout".to_string()),
+            correlation_id: Some("corr-timeout".to_string()),
+            command_type: Some("checklist.create.online".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        let result_metadata = MissionSyncMetadata {
+            result_present: true,
+            command_id: Some("cmd-timeout".to_string()),
+            correlation_id: Some("corr-timeout".to_string()),
+            result_status: Some("accepted".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+
+        let command_report = test_lxmf_report(command_metadata.clone(), true, false);
+        assert!(build_pending_lxmf_resend(
+            &command_report,
+            "cccccccccccccccccccccccccccccccc",
+            b"body",
+            None,
+            Some(vec![1, 2, 3]),
+            Some(command_metadata.clone()),
+            SendMode::DirectOnly {},
+            SendTaskClass::Mission,
+        )
+        .is_none());
+
+        let propagation_report = test_lxmf_report(command_metadata.clone(), true, true);
+        assert!(build_pending_lxmf_resend(
+            &propagation_report,
+            "cccccccccccccccccccccccccccccccc",
+            b"body",
+            None,
+            Some(vec![1, 2, 3]),
+            Some(command_metadata),
+            SendMode::Auto {},
+            SendTaskClass::Mission,
+        )
+        .is_none());
+
+        let result_report = test_lxmf_report(result_metadata.clone(), false, false);
+        assert!(build_pending_lxmf_resend(
+            &result_report,
+            "cccccccccccccccccccccccccccccccc",
+            b"body",
+            None,
+            Some(vec![1, 2, 3]),
+            Some(result_metadata),
+            SendMode::Auto {},
+            SendTaskClass::Mission,
+        )
+        .is_none());
+
+        let attempted = PendingLxmfResend {
+            requested_destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            body: b"body".to_vec(),
+            title: None,
+            fields_bytes: Some(vec![1, 2, 3]),
+            metadata: MissionSyncMetadata {
+                command_present: true,
+                command_id: Some("cmd-timeout".to_string()),
+                correlation_id: Some("corr-timeout".to_string()),
+                command_type: Some("checklist.create.online".to_string()),
+                ..MissionSyncMetadata::default()
+            },
+            send_task_class: SendTaskClass::Mission,
+            original_send_mode: SendMode::Auto {},
+            propagation_fallback_attempted: true,
+        };
+        assert!(!should_retry_pending_ack_timeout_via_propagation(
+            &test_pending_delivery(Some(attempted)),
+            true,
+        ));
     }
 
     #[test]
