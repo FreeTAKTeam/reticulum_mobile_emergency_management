@@ -90,6 +90,7 @@ const EMPTY_STATUS: NodeStatus = {
   identityHex: "",
   appDestinationHex: "",
   lxmfDestinationHex: "",
+  lastError: undefined,
 };
 
 const EMPTY_SYNC_STATUS: SyncStatus = {
@@ -152,6 +153,15 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   },
 };
 const RCH_HUB_DIRECTORY_ENABLED = false;
+const READINESS_ERROR_LOG_PATTERNS = [
+  /\bnetwork error\b/i,
+  /\blink activation failed\b/i,
+  /\bsend attempt\b.*\berrored\b/i,
+  /\bpropagation send relay attempt failed\b/i,
+  /\bsend_(?:bytes|lxmf) failed\b/i,
+  /\bretry_lxmf failed\b/i,
+  /\bbroadcast_bytes failed\b/i,
+];
 
 interface UiLogLine {
   at: number;
@@ -200,12 +210,14 @@ function asTrimmedString(value: unknown): string {
 }
 
 function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
+  const lastError = asTrimmedString(value?.lastError);
   return {
     running: Boolean(value?.running),
     name: typeof value?.name === "string" ? value.name : "",
     identityHex: typeof value?.identityHex === "string" ? value.identityHex : "",
     appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
     lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
+    lastError: lastError || undefined,
   };
 }
 
@@ -509,6 +521,7 @@ export const useNodeStore = defineStore("node", () => {
   const logs = ref<UiLogLine[]>([]);
   const nodeControlEntries = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
+  const readinessError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
@@ -607,6 +620,31 @@ export const useNodeStore = defineStore("node", () => {
 
   function clearLastError(): void {
     lastError.value = "";
+  }
+
+  function clearReadinessError(): void {
+    readinessError.value = "";
+  }
+
+  function setReadinessError(message: string, at = nowMs()): void {
+    const trimmed = asTrimmedString(message);
+    if (!trimmed) {
+      return;
+    }
+    const wasReady = !asTrimmedString(readinessError.value);
+    readinessError.value = trimmed;
+    lastError.value = trimmed;
+    if (wasReady) {
+      appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
+    }
+  }
+
+  function logIndicatesReadinessError(level: string, message: string): boolean {
+    const normalizedLevel = asTrimmedString(level).toLowerCase();
+    if (normalizedLevel === "error") {
+      return true;
+    }
+    return READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
   }
 
   function errorMessage(error: unknown): string {
@@ -1606,6 +1644,10 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
+        const statusError = asTrimmedString(status.value.lastError);
+        if (statusError) {
+          setReadinessError(statusError);
+        }
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
@@ -1672,9 +1714,13 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
+        if (logIndicatesReadinessError(event.level, event.message)) {
+          setReadinessError(event.message);
+        }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
+        setReadinessError(lastError.value);
         appendNodeControlEntry("Error", lastError.value);
       }),
     ];
@@ -1799,6 +1845,7 @@ export const useNodeStore = defineStore("node", () => {
       }
 
       clearLastError();
+      clearReadinessError();
       await client.value.start(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
@@ -1825,6 +1872,7 @@ export const useNodeStore = defineStore("node", () => {
         return;
       }
       clearLastError();
+      clearReadinessError();
       await client.value.stop();
       appendNodeControlEntry("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
@@ -1847,6 +1895,7 @@ export const useNodeStore = defineStore("node", () => {
         return;
       }
       clearLastError();
+      clearReadinessError();
       await client.value.restart(toNodeConfig(settings));
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
@@ -2371,7 +2420,10 @@ export const useNodeStore = defineStore("node", () => {
   });
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
-  const ready = computed(() => status.value.running);
+  const readinessErrorMessage = computed(() => (
+    asTrimmedString(readinessError.value) || asTrimmedString(status.value.lastError)
+  ));
+  const ready = computed(() => status.value.running && !readinessErrorMessage.value);
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(
     () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),
@@ -2404,6 +2456,9 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function notReadyMessage(action: string): string {
+    if (readinessErrorMessage.value) {
+      return `Cannot ${action} while the node is not ready: ${readinessErrorMessage.value}`;
+    }
     return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
   }
 
@@ -2415,7 +2470,7 @@ export const useNodeStore = defineStore("node", () => {
     const message = notReadyMessage(action);
     logUi(
       "Debug",
-      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value}.`,
+      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value} readiness_error=${readinessErrorMessage.value || "none"}.`,
     );
     lastError.value = message;
     logUi("Warn", message);
@@ -2707,6 +2762,7 @@ export const useNodeStore = defineStore("node", () => {
   async function reinitializeClient(): Promise<void> {
     try {
       clearLastError();
+      clearReadinessError();
       if (client.value) {
         await client.value.dispose().catch(() => undefined);
       }
@@ -2745,6 +2801,7 @@ export const useNodeStore = defineStore("node", () => {
     logs,
     nodeControlEntries,
     lastError,
+    readinessError: readinessErrorMessage,
     lastHubRefreshAt,
     discoveredByDestination,
     savedByDestination,

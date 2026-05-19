@@ -192,12 +192,17 @@ const pageTitle = computed(() => {
   }
 });
 
+const readinessError = computed(() => nodeStore.readinessError.trim());
 const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
-const runningTitle = computed(() =>
-  nodeStore.ready
-    ? "App ready to send and receive events or messages."
-    : "App is still starting. Sending stays blocked until the node is ready.",
-);
+const runningTitle = computed(() => {
+  if (nodeStore.ready) {
+    return "App ready to send and receive events or messages.";
+  }
+  if (readinessError.value) {
+    return `Node is not ready: ${readinessError.value}`;
+  }
+  return "App is still starting. Sending stays blocked until the node is ready.";
+});
 const possiblePeerCount = computed(() => nodeStore.savedPeerCount);
 const connectedPeerCount = computed(() => nodeStore.connectedPeerCount);
 const peerCountLabel = computed(
