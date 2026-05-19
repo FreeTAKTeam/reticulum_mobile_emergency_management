@@ -2,22 +2,30 @@
 
 R.E.M. stands for Reticulum Emergency Management.
 
-It is a field coordination app for teams that may not have normal internet or cellular service. It helps people share status, send chat messages, record events, manage checklists, and see recent positions over Reticulum mesh networking.
+It is a secure Mesh  coordination app for small teams.  It helps people share status, send chat messages, record events, manage checklists, and see recent positions over Reticulum mesh networking.
 
-This manual uses plain operator language. It focuses on what each screen is for, what you can do there, and what to expect.
+This manual uses plain language. It focuses on what each screen is for, what you can do there, and what to expect.
 
 ## Quick Start
 
-1. Open **Settings** and confirm your call sign.
-2. Open **Peers** and save the people or team devices you trust.
-3. Use **Chat** for direct messages.
-4. Use **Action Messages** to report team status.
-5. Use **Dashboard** to see the overall picture.
-6. Use **Events** to add short timeline updates.
-7. Use **Checklists** to track shared tasks.
-8. Use **Map** to see positions when telemetry is enabled.
+- Open **Settings** and confirm your call sign.
+- Open **Peers** and save the people you trust.
+-Use **Chat** for direct messages.
+- Use **Action Emergency Messages** to report team status.
+- Use **Events** to add short timeline updates.
+- Use **Checklists** to track shared tasks.
+- Use **Map** to see positions when telemetry is enabled.
+- Use **Dashboard** to see the overall picture.
 
 ## Main Navigation
+
+The top of the app shows:
+
+- the current page name
+- saved peer and connected peer count
+- whether REM is **Ready**
+
+If the app says **Not Ready**, sending may be limited until the node starts.
 
 The bottom bar gives fast access to:
 
@@ -33,14 +41,6 @@ Use **More** to open:
 - **Events**
 - **Peers**
 - **Settings**
-
-The top of the app shows:
-
-- the current page name
-- saved peer and connected peer count
-- whether the node is **Ready**
-
-If the app says **Not Ready**, sending may be limited until the node starts.
 
 ## Dashboard
 
@@ -76,7 +76,7 @@ If the page is empty, discover and save peers first, or wait for an incoming mes
 
 ![REM action messages](screenshots/rem-action-messages.png)
 
-Action Messages are structured status reports. They feed the Dashboard.
+Action Messages are structured status reports. They also feed the Dashboard.
 
 Use them to tell the team:
 
@@ -94,7 +94,7 @@ The status colors are:
 | Red | Immediate problem or serious limit |
 | Yellow | Limited, degraded, or needs attention |
 | Green | Working or acceptable |
-| Unknown | Not confirmed yet |
+| Unknown | unclear, Not confirmed yet |
 
 Choose the lowest accurate color. Do not choose a better color just because conditions might improve later.
 
@@ -122,6 +122,10 @@ Events are short timeline updates. Use them for things the team should know, suc
 REM Events now use **MECP**, the Mesh Emergency Communication Protocol. MECP is a short text code for emergency and everyday mesh messages. It is designed for low-bandwidth links and for people who may not share the same spoken language. See the MECP project here: [xiang-dev-1/MECP](https://github.com/xiang-dev-1/MECP).
 
 You do not need to memorize MECP codes. REM lets you choose the plain-language options and shows the body before the event is added.
+
+![REM MECP help](screenshots/rem-events-mecp-help.png)
+
+The MECP Help screen explains the short message body, the urgency levels, and the event categories in one place.
 
 ### MECP Event Choices
 
@@ -186,7 +190,7 @@ The checklist page shows task counts and a filter. If no checklist data is loade
 3. Enter a title.
 4. Add a subtitle or assignment label if useful.
 5. Choose the checklist date and time.
-6. Choose a template.
+6. (optional) Choose a template.
 7. Tap **Create checklist**.
 
 ## Map
@@ -221,6 +225,21 @@ Use the Peers page to:
 
 Discovery does not mean trust. Save only the peers you want to work with.
 
+### How Peer Sharing Works Today
+
+When you save or select a peer, you are choosing who REM should try to share information with. This can include chat messages, Action Messages, Events, checklist updates, telemetry, and SOS updates, depending on what is enabled.
+
+In the current version, peer sharing is not fully automatic in both directions. The other person also needs to save or select you on their device. If you select them but they do not select you, your device may try to share with them, but their device may not share the same kind of information back to you.
+
+For a working team setup:
+
+1. You save or select the other peer.
+2. The other peer saves or selects you.
+3. Both devices show Ready.
+4. Send a small chat message or Event to confirm that sharing works.
+
+Think of the peer list as your trusted working group. If someone should receive your operational updates, they should be in your peer list, and you should be in theirs.
+
 ## Settings
 
 ![REM settings](screenshots/rem-settings.png)
@@ -245,11 +264,12 @@ SOS is for urgent distress messages.
 
 When enabled, it can:
 
+- show a floating SOS button
 - send the configured emergency message to saved peers
 - include battery information
-- include GPS position when a recent fix is available
+- include  position if a recent fix is available
 - keep sending updates while the emergency is active
-- show a floating SOS button
+
 - require a PIN to cancel, if configured
 
 Before relying on SOS, test it with trusted peers in a safe setting.
@@ -280,3 +300,28 @@ Some pages start empty on purpose.
 | Peers | No REM announces heard yet |
 
 An empty screen does not always mean something is wrong. It often means the app is waiting for local data, peer traffic, or a ready node.
+
+## Glossary
+
+| Term | Plain meaning |
+| --- | --- |
+| Action Message | A structured team status report. It feeds the Dashboard status rings. |
+| Announce | A Mesh signal that tells REM devices that your device is online. |
+| Call sign | The name your team sees for your device. |
+| Checklist | A shared task list used to track work during an operation. |
+| Connected peer | A saved peer that REM currently has an active connection with. |
+| Dashboard | The screen that summarizes team status, checklist counts, and recent activity. |
+| Destination | The Reticulum cryptographic address used to reach a device. |
+| Event | A short timeline update about something relevant. |
+| LXMF | The message protocol used by Reticulum for direct or delayed messages. |
+| Map | The screen that shows recent positions when telemetry is available. |
+| MECP | Mesh Emergency Communication Protocol. A short text format for clear emergency and field messages. |
+| Node | The local Reticulum part of REM that sends, receives, announces, and connects. |
+| Peer | Another REM-capable device or operator. |
+| Ready | REM is prepared to send and receive through the local node. |
+| RCH | Reticulum Community Hub. A hub service that can help with directory and connected-mode workflows. |
+| Reticulum | The mesh networking system REM uses to communicate without normal internet protocol. |
+| Saved peer | A peer you have chosen to trust and work with. |
+| Selected peer | A peer you have chosen as a sharing target. In the current version, they also need to select you for two-way sharing. |
+| SOS | An emergency mode for sending urgent distress information to trusted peers. |
+| Telemetry | Position information, such as a recent location shown on the Map. |
