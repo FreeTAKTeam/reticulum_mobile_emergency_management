@@ -154,13 +154,17 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
 };
 const RCH_HUB_DIRECTORY_ENABLED = false;
 const READINESS_ERROR_LOG_PATTERNS = [
-  /\bnetwork error\b/i,
+  /\bNetworkError\b/i,
+  /\bnetwork\s*error\b/i,
   /\blink activation failed\b/i,
   /\bsend attempt\b.*\berrored\b/i,
-  /\bpropagation send relay attempt failed\b/i,
   /\bsend_(?:bytes|lxmf) failed\b/i,
   /\bretry_lxmf failed\b/i,
   /\bbroadcast_bytes failed\b/i,
+];
+const PROPAGATION_RELAY_ERROR_LOG_PATTERNS = [
+  /\bpropagation send relay attempt failed\b/i,
+  /\bpropagation relay\b.*\b(?:failed|error|errored)\b/i,
 ];
 
 interface UiLogLine {
@@ -639,12 +643,23 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function logIndicatesReadinessError(level: string, message: string): boolean {
-    const normalizedLevel = asTrimmedString(level).toLowerCase();
-    if (normalizedLevel === "error") {
-      return true;
+  function logIndicatesPropagationRelayError(message: string): boolean {
+    return PROPAGATION_RELAY_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
+  }
+
+  function logIndicatesReadinessError(message: string): boolean {
+    if (logIndicatesPropagationRelayError(message)) {
+      return false;
     }
     return READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
+  }
+
+  function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean {
+    const message = `${event.code}: ${event.message}`;
+    if (logIndicatesPropagationRelayError(message)) {
+      return false;
+    }
+    return event.code === "NetworkError" || logIndicatesReadinessError(message);
   }
 
   function errorMessage(error: unknown): string {
@@ -1714,13 +1729,15 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
-        if (logIndicatesReadinessError(event.level, event.message)) {
+        if (logIndicatesReadinessError(event.message)) {
           setReadinessError(event.message);
         }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
-        setReadinessError(lastError.value);
+        if (nodeErrorIndicatesReadinessError(event)) {
+          setReadinessError(lastError.value);
+        }
         appendNodeControlEntry("Error", lastError.value);
       }),
     ];
