@@ -1,49 +1,288 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
-import PeerRow from "../components/PeerRow.vue";
 import { useNodeStore } from "../stores/nodeStore";
-import type { DiscoveredPeer, SavedPeer } from "../types/domain";
+import type { DiscoveredPeer, HubDirectoryPeerRecord, SavedPeer } from "../types/domain";
+
+type PeerTab = "discovered" | "peers" | "hub";
 
 const nodeStore = useNodeStore();
+const route = useRoute();
 
 const searchText = ref("");
 const feedback = ref("");
-const isSavedSectionOpen = ref(true);
+const activeTab = ref<PeerTab>("discovered");
+let visualMockRefreshInterval: number | undefined;
 
-const filteredDiscovered = computed(() => {
-  const query = searchText.value.trim().toLowerCase();
-  return nodeStore.discoveredPeers.filter((peer: DiscoveredPeer) => {
-    if (!query) {
-      return true;
+const mockNow = Date.now();
+const mockPeerRecords: DiscoveredPeer[] = [
+  {
+    destination: "a13f6e2b94cd08ff31a92765db4e10c2",
+    identityHex: "fdd5d08e476a4602bc51d0f37d72dd21",
+    lxmfDestinationHex: "3ac7e918b5f1407bb759b0f3f4d41c9a",
+    announceLastSeenAt: mockNow - 90_000,
+    lxmfLastSeenAt: mockNow - 50_000,
+    label: "Field Team Alpha",
+    announcedName: "ALPHA-1",
+    lastSeenAt: mockNow - 50_000,
+    hops: 1,
+    interfaceHex: "001a2b3c4d5e6f70",
+    appData: "R3AKT,EmergencyMessages,Telemetry,LXMF",
+    sources: ["announce", "import"],
+    state: "connected",
+    saved: true,
+    stale: false,
+    activeLink: true,
+    lastResolutionAttemptAt: mockNow - 120_000,
+  },
+  {
+    destination: "b06c8af91de44070983f6ec2a51b7d35",
+    identityHex: "0e2bf871c1444ed197ed77df5f8632ae",
+    lxmfDestinationHex: "967fd03e8c3245e7af2d7f691e86b580",
+    announceLastSeenAt: mockNow - 8 * 60_000,
+    lxmfLastSeenAt: mockNow - 7 * 60_000,
+    label: "Medical relay",
+    announcedName: "MED-RELAY",
+    lastSeenAt: mockNow - 7 * 60_000,
+    hops: 2,
+    interfaceHex: "701f6e5d4c3b2a10",
+    appData: "R3AKT,EmergencyMessages,TelemetryRelay",
+    sources: ["announce", "hub", "import"],
+    state: "connecting",
+    saved: true,
+    stale: false,
+    activeLink: false,
+    lastResolutionAttemptAt: mockNow - 30_000,
+  },
+  {
+    destination: "c974de6aa1f8417a8c2e0bb5332ac01f",
+    identityHex: "31397ec9c46d4caea5739f50821cecd7",
+    lxmfDestinationHex: "18a738f903344a11a8c56695454da331",
+    announceLastSeenAt: mockNow - 3 * 60 * 60_000,
+    lxmfLastSeenAt: mockNow - 3 * 60 * 60_000,
+    label: "North checkpoint",
+    announcedName: "NORTH-CP",
+    lastSeenAt: mockNow - 3 * 60 * 60_000,
+    hops: 4,
+    interfaceHex: "89abcdef01234567",
+    appData: "R3AKT,EmergencyMessages,Checklists,GroupChat",
+    sources: ["announce", "import"],
+    state: "disconnected",
+    saved: false,
+    stale: true,
+    activeLink: false,
+    lastError: "Link closed by peer",
+    lastResolutionError: "Path request timed out after 2 attempts",
+    lastResolutionAttemptAt: mockNow - 15 * 60_000,
+  },
+  {
+    destination: "f08ad9c21be64737a5bb68fd4434e912",
+    identityHex: "e1b68f14e71d4cde8629ffbc5471459b",
+    lxmfDestinationHex: "9b8fe7dc314446438d4ceab380208f6a",
+    announceLastSeenAt: mockNow - 12 * 60_000,
+    lxmfLastSeenAt: mockNow - 11 * 60_000,
+    announcedName: "TRIAGE-2",
+    lastSeenAt: mockNow - 11 * 60_000,
+    hops: 2,
+    interfaceHex: "445566778899aabb",
+    appData: "R3AKT,EmergencyMessages,Medical",
+    sources: ["announce"],
+    state: "disconnected",
+    saved: false,
+    stale: false,
+    activeLink: false,
+    lastResolutionAttemptAt: mockNow - 10 * 60_000,
+  },
+  {
+    destination: "d5b31a670cef4d3a99861177e6a00b8c",
+    identityHex: "77f0de549fb84e189d1544f4f9d3d056",
+    lxmfDestinationHex: "4192a8f785b34ee7b0685dd0a6ec4b29",
+    announceLastSeenAt: mockNow - 35_000,
+    lxmfLastSeenAt: mockNow - 35_000,
+    label: "Drone operations",
+    announcedName: "DRONE-OPS",
+    lastSeenAt: mockNow - 35_000,
+    hops: 1,
+    interfaceHex: "0fedcba987654321",
+    appData: "R3AKT,Telemetry,Imagery",
+    sources: ["announce", "import"],
+    state: "disconnected",
+    saved: true,
+    stale: false,
+    activeLink: false,
+    lastResolutionAttemptAt: mockNow - 20_000,
+  },
+];
+
+const mockHubDirectoryPeers: HubDirectoryPeerRecord[] = [
+  {
+    identity: "fdd5d08e476a4602bc51d0f37d72dd21",
+    destinationHash: "a13f6e2b94cd08ff31a92765db4e10c2",
+    displayName: "ALPHA-1",
+    announceCapabilities: ["r3akt", "emergency_messages", "telemetry", "lxmf"],
+    clientType: "rem-mobile",
+    registeredMode: "connected",
+    lastSeen: new Date(mockNow - 50_000).toISOString(),
+    status: "active",
+  },
+  {
+    identity: "0e2bf871c1444ed197ed77df5f8632ae",
+    destinationHash: "b06c8af91de44070983f6ec2a51b7d35",
+    displayName: "MED-RELAY",
+    announceCapabilities: ["r3akt", "emergency_messages", "telemetry_relay"],
+    clientType: "rem-mobile",
+    registeredMode: "semi_autonomous",
+    lastSeen: new Date(mockNow - 7 * 60_000).toISOString(),
+    status: "syncing",
+  },
+  {
+    identity: "da0ca1b6e4c14a24bd139563a756e932",
+    destinationHash: "ef4c2bb30a0d4ec588e797674e385119",
+    displayName: "CACHE-TEAM",
+    announceCapabilities: ["r3akt", "emergency_messages"],
+    clientType: "rem-field",
+    registeredMode: "autonomous",
+    lastSeen: new Date(mockNow - 26 * 60 * 60_000).toISOString(),
+    status: "stale",
+  },
+];
+
+function applyVisualMockData(): void {
+  for (const destination of Object.keys(nodeStore.discoveredByDestination)) {
+    delete nodeStore.discoveredByDestination[destination];
+  }
+  for (const destination of Object.keys(nodeStore.savedByDestination)) {
+    delete nodeStore.savedByDestination[destination];
+  }
+
+  for (const peer of mockPeerRecords) {
+    nodeStore.discoveredByDestination[peer.destination] = { ...peer };
+    if (peer.saved) {
+      nodeStore.savedByDestination[peer.destination] = {
+        destination: peer.destination,
+        label: peer.label,
+        savedAt: mockNow - (peer.activeLink ? 2 * 60 * 60_000 : 14 * 60 * 60_000),
+      };
     }
-    return (
-      peer.destination.includes(query) ||
-      (peer.label ?? "").toLowerCase().includes(query) ||
-      (peer.announcedName ?? "").toLowerCase().includes(query) ||
-      (peer.appData ?? "").toLowerCase().includes(query)
-    );
-  });
+  }
+
+  nodeStore.hubDirectorySnapshot = {
+    effectiveConnectedMode: true,
+    items: mockHubDirectoryPeers,
+    receivedAtMs: mockNow,
+  };
+  nodeStore.lastHubRefreshAt = mockNow;
+  feedback.value = "Visual mock peer data loaded.";
+}
+
+function isVisualMockMode(): boolean {
+  return import.meta.env.DEV && route.query.mockPeers === "1";
+}
+
+onMounted(() => {
+  if (isVisualMockMode()) {
+    applyVisualMockData();
+    window.setTimeout(applyVisualMockData, 500);
+    window.setTimeout(applyVisualMockData, 1500);
+    visualMockRefreshInterval = window.setInterval(applyVisualMockData, 2000);
+  }
 });
+
+onUnmounted(() => {
+  if (visualMockRefreshInterval !== undefined) {
+    window.clearInterval(visualMockRefreshInterval);
+  }
+});
+
+watch(activeTab, () => {
+  if (isVisualMockMode()) {
+    window.setTimeout(applyVisualMockData, 0);
+  }
+});
+
+function isSaved(destination: string): boolean {
+  return nodeStore.savedDestinations.has(destination);
+}
+
+function peerMatchesQuery(peer: DiscoveredPeer, query: string): boolean {
+  return (
+    peer.destination.includes(query) ||
+    (peer.label ?? "").toLowerCase().includes(query) ||
+    (peer.announcedName ?? "").toLowerCase().includes(query) ||
+    (peer.appData ?? "").toLowerCase().includes(query)
+  );
+}
 
 function announcedNameFor(destination: string): string | undefined {
   return nodeStore.discoveredByDestination[destination]?.announcedName;
 }
 
-const filteredSaved = computed(() => {
+function savedPeerMatchesQuery(peer: SavedPeer, query: string): boolean {
+  const announcedName = announcedNameFor(peer.destination)?.toLowerCase() ?? "";
+  return (
+    peer.destination.includes(query) ||
+    (peer.label ?? "").toLowerCase().includes(query) ||
+    announcedName.includes(query)
+  );
+}
+
+const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
-  return nodeStore.savedPeers.filter((peer: SavedPeer) => {
+  return nodeStore.remAnnouncedPeers
+    .filter((peer: DiscoveredPeer) => !query || peerMatchesQuery(peer, query))
+    .sort((left, right) => right.lastSeenAt - left.lastSeenAt);
+});
+
+const filteredPeers = computed(() => {
+  const query = searchText.value.trim().toLowerCase();
+  return nodeStore.savedPeers.filter((peer: SavedPeer) => !query || savedPeerMatchesQuery(peer, query));
+});
+
+const filteredHubPeers = computed(() => {
+  const query = searchText.value.trim().toLowerCase();
+  return nodeStore.hubDirectoryPeers.filter((peer: HubDirectoryPeerRecord) => {
     if (!query) {
       return true;
     }
-    const announcedName = announcedNameFor(peer.destination)?.toLowerCase() ?? "";
     return (
-      peer.destination.includes(query) ||
-      (peer.label ?? "").toLowerCase().includes(query) ||
-      announcedName.includes(query)
+      peer.identity.toLowerCase().includes(query) ||
+      peer.destinationHash.toLowerCase().includes(query) ||
+      (peer.displayName ?? "").toLowerCase().includes(query) ||
+      peer.announceCapabilities.some((capability) => capability.toLowerCase().includes(query))
     );
   });
 });
+
+function peerName(peer: Pick<DiscoveredPeer, "announcedName" | "label" | "destination">): string {
+  return peer.announcedName || peer.label || peer.destination;
+}
+
+function savedPeerName(peer: SavedPeer): string {
+  return announcedNameFor(peer.destination) || peer.label || "No label";
+}
+
+function seenLabel(lastSeenAt?: number): string {
+  if (!lastSeenAt) {
+    return "never seen";
+  }
+  const elapsedMs = Math.max(0, Date.now() - lastSeenAt);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 60) {
+    return `seen ${Math.max(1, elapsedMinutes)} min ago`;
+  }
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `seen ${elapsedHours} hr ago`;
+  }
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `seen ${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
+}
+
+function discoveredMeta(peer: DiscoveredPeer): string {
+  const hops = typeof peer.hops === "number" ? ` | ${peer.hops} hops` : "";
+  return `${seenLabel(peer.lastSeenAt)}${hops}`;
+}
 
 function savedPeerConnectionLabel(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
@@ -61,6 +300,34 @@ function savedPeerConnectionMessage(destination: string): string {
   return "Disconnected";
 }
 
+function savedPeerStatusLabel(destination: string): "Connected" | "Disconnected" {
+  return nodeStore.discoveredByDestination[destination]?.activeLink ? "Connected" : "Disconnected";
+}
+
+function savedPeerMeta(destination: string): string {
+  const peer = nodeStore.discoveredByDestination[destination];
+  return seenLabel(peer?.lastSeenAt);
+}
+
+function resolutionLabel(destination: string): string {
+  const peer = nodeStore.discoveredByDestination[destination];
+  const error = peer?.lastResolutionError?.trim();
+  if (error) {
+    return `Resolution error: ${error}`;
+  }
+  if (peer?.lastResolutionAttemptAt) {
+    return "Resolution attempted";
+  }
+  return "No resolution attempts";
+}
+
+async function onAddPeer(destination: string): Promise<void> {
+  await runNodeAction(
+    () => nodeStore.savePeer(destination),
+    `Peer ${destination} added.`,
+  );
+}
+
 async function onSavedPeerConnectToggle(destination: string): Promise<void> {
   const disconnecting = savedPeerConnectionLabel(destination) === "Disconnect";
   await runNodeAction(
@@ -69,38 +336,6 @@ async function onSavedPeerConnectToggle(destination: string): Promise<void> {
       ? `Disconnect requested for ${destination}.`
       : `Connect requested for ${destination}.`,
   );
-}
-
-function isSaved(destination: string): boolean {
-  return nodeStore.savedDestinations.has(destination);
-}
-
-async function onSaveToggle(destination: string, next: boolean): Promise<void> {
-  try {
-    if (next) {
-      await nodeStore.savePeer(destination);
-    } else {
-      await nodeStore.unsavePeer(destination);
-    }
-  } catch (error: unknown) {
-    feedback.value = error instanceof Error ? error.message : String(error);
-  }
-}
-
-async function onConnectToggle(destination: string, next: boolean): Promise<void> {
-  if (next && !isSaved(destination)) {
-    feedback.value = `Save peer ${destination} before connecting.`;
-    return;
-  }
-  try {
-    if (next) {
-      await nodeStore.connectPeer(destination);
-    } else {
-      await nodeStore.disconnectPeer(destination);
-    }
-  } catch (error: unknown) {
-    feedback.value = error instanceof Error ? error.message : String(error);
-  }
 }
 
 async function runNodeAction(action: () => Promise<void>, successMessage: string): Promise<void> {
@@ -124,7 +359,7 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
             <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
             <path d="M16 3.13a3 3 0 0 1 0 5.74" />
           </svg>
-          <span>{{ nodeStore.savedPeerCount }} Saved</span>
+          <span>{{ nodeStore.savedPeerCount }} Peers</span>
         </span>
         <span class="utility-chip stat-chip">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -162,42 +397,75 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
       </div>
     </header>
 
-    <section class="panel">
-      <h2>Discovered</h2>
-        <p class="section-meta">
-          {{ nodeStore.savedPeerCount }}/{{ nodeStore.connectedPeerCount }} saved/connected |
-          {{ filteredDiscovered.length }} peers visible
-        </p>
-      <div class="rows">
-        <PeerRow
-          v-for="peer in filteredDiscovered"
-          :key="peer.destination"
-          :peer="peer"
-          :is-saved="isSaved(peer.destination)"
-          @save-toggle="onSaveToggle"
-          @connect-toggle="onConnectToggle"
-          @label-change="nodeStore.setPeerLabel"
-        />
-      </div>
-    </section>
-
-    <section class="panel saved-panel">
+    <nav class="peer-tabs" aria-label="Peer sections">
       <button
         type="button"
-        class="saved-toggle"
-        :aria-expanded="isSavedSectionOpen"
-        @click="isSavedSectionOpen = !isSavedSectionOpen"
+        class="tab-button"
+        :class="{ active: activeTab === 'discovered' }"
+        @click="activeTab = 'discovered'"
       >
-        <div class="saved-toggle-copy">
-          <h2>Saved</h2>
-          <p class="section-meta">{{ filteredSaved.length }} peers saved locally</p>
-        </div>
-        <span class="saved-toggle-icon" :class="{ open: isSavedSectionOpen }" aria-hidden="true">
-          ▾
-        </span>
+        <span>Discovered</span>
+        <strong>{{ filteredDiscovered.length }}</strong>
       </button>
-      <div v-show="isSavedSectionOpen" class="saved-section-body">
-        <div class="actions saved-actions">
+      <button
+        type="button"
+        class="tab-button"
+        :class="{ active: activeTab === 'peers' }"
+        @click="activeTab = 'peers'"
+      >
+        <span>Peers</span>
+        <strong>{{ filteredPeers.length }}</strong>
+      </button>
+      <button
+        type="button"
+        class="tab-button"
+        :class="{ active: activeTab === 'hub' }"
+        @click="activeTab = 'hub'"
+      >
+        <span>Hub</span>
+        <strong>{{ filteredHubPeers.length }}</strong>
+      </button>
+    </nav>
+
+    <section v-if="activeTab === 'discovered'" class="panel">
+      <div class="section-header">
+        <h2>Discovered</h2>
+        <p>{{ filteredDiscovered.length }} REM clients heard through announces</p>
+      </div>
+      <div v-if="filteredDiscovered.length > 0" class="peer-list">
+        <article
+          v-for="peer in filteredDiscovered"
+          :key="peer.destination"
+          class="peer-item compact"
+        >
+          <div class="peer-copy">
+            <p class="dest">{{ peer.destination }}</p>
+            <div class="peer-name-line">
+              <span v-if="isSaved(peer.destination)" class="peer-state">Peer</span>
+              <p class="peer-name">{{ peerName(peer) }}</p>
+            </div>
+            <p class="peer-meta">{{ discoveredMeta(peer) }}</p>
+          </div>
+          <div v-if="!isSaved(peer.destination)" class="actions inline-actions">
+            <button
+              type="button"
+              @click="onAddPeer(peer.destination)"
+            >
+              Add
+            </button>
+          </div>
+        </article>
+      </div>
+      <p v-else class="empty-copy">No REM-capable announces match this search.</p>
+    </section>
+
+    <section v-else-if="activeTab === 'peers'" class="panel">
+      <div class="section-header split-header">
+        <div>
+          <h2>Peers</h2>
+          <p>{{ filteredPeers.length }} managed peers | {{ nodeStore.connectedPeerCount }} online</p>
+        </div>
+        <div class="actions header-inline-actions">
           <button
             type="button"
             @click="
@@ -215,72 +483,90 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
             Disconnect all
           </button>
         </div>
-        <div v-if="filteredSaved.length > 0" class="saved-list">
-          <article v-for="peer in filteredSaved" :key="peer.destination" class="saved-item">
-            <div>
-              <p class="dest">{{ peer.destination }}</p>
-              <p class="saved-label">{{ peer.label || "No label" }}</p>
-              <p class="saved-state">{{ savedPeerConnectionMessage(peer.destination) }}</p>
-            </div>
-            <div class="actions">
-              <button type="button" @click="onSavedPeerConnectToggle(peer.destination)">
-                {{ savedPeerConnectionLabel(peer.destination) }}
-              </button>
-              <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
-            </div>
-          </article>
-        </div>
-        <p v-else class="saved-empty">No saved peers yet.</p>
-        <p v-if="feedback" class="feedback">{{ feedback }}</p>
       </div>
+      <div v-if="filteredPeers.length > 0" class="peer-list">
+        <article v-for="peer in filteredPeers" :key="peer.destination" class="peer-item">
+          <div class="peer-copy">
+            <p class="dest">{{ peer.destination }}</p>
+            <div class="peer-name-line">
+              <span
+                class="peer-connection-pill"
+                :class="savedPeerStatusLabel(peer.destination).toLowerCase()"
+              >
+                {{ savedPeerStatusLabel(peer.destination) }}
+              </span>
+              <p class="peer-name">{{ savedPeerName(peer) }}</p>
+            </div>
+            <p class="peer-meta">{{ savedPeerMeta(peer.destination) }}</p>
+            <p class="peer-resolution">{{ resolutionLabel(peer.destination) }}</p>
+          </div>
+          <div class="actions inline-actions">
+            <button type="button" @click="onSavedPeerConnectToggle(peer.destination)">
+              {{ savedPeerConnectionLabel(peer.destination) }}
+            </button>
+            <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
+          </div>
+        </article>
+      </div>
+      <p v-else class="empty-copy">No peers saved locally.</p>
     </section>
 
-    <section class="panel">
-      <div class="section-header">
-        <h2>Directory (Hub)</h2>
-        <p>
-          Mode: {{ nodeStore.settings.hub.mode }} | Last refresh:
-          {{
-            nodeStore.lastHubRefreshAt
-              ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString()
-              : "never"
-          }}
-        </p>
+    <section v-else class="panel">
+      <div class="section-header split-header">
+        <div>
+          <h2>Hub</h2>
+          <p>
+            Mode: {{ nodeStore.settings.hub.mode }} | Last refresh:
+            {{
+              nodeStore.lastHubRefreshAt
+                ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString()
+                : "never"
+            }}
+          </p>
+        </div>
+        <div class="actions header-inline-actions">
+          <button
+            type="button"
+            @click="
+              runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')
+            "
+          >
+            Refresh hub list
+          </button>
+        </div>
       </div>
-      <div class="actions">
-        <button
-          type="button"
-          @click="
-            runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')
-          "
+      <div v-if="filteredHubPeers.length > 0" class="peer-list">
+        <article
+          v-for="peer in filteredHubPeers"
+          :key="peer.destinationHash"
+          class="peer-item hub-item"
         >
-          Refresh hub list
-        </button>
+          <div class="peer-copy">
+            <p class="dest">{{ peer.destinationHash }}</p>
+            <p class="peer-name">{{ peer.displayName || peer.identity }}</p>
+            <p class="peer-meta">
+              {{ peer.status || "unknown" }} | {{ peer.registeredMode || "unregistered" }} |
+              {{ peer.clientType || "unknown client" }}
+            </p>
+            <p class="peer-resolution">{{ peer.announceCapabilities.join(", ") }}</p>
+          </div>
+        </article>
       </div>
+      <p v-else class="empty-copy">No hub peers cached.</p>
     </section>
+
+    <p v-if="feedback" class="feedback">{{ feedback }}</p>
   </section>
 </template>
 
 <style scoped>
 .view {
   display: grid;
-  gap: 1rem;
+  gap: 0.82rem;
 }
 
 .view-header {
   display: block;
-}
-
-h1 {
-  font-family: var(--font-headline);
-  font-size: clamp(1.4rem, 3vw, 2.4rem);
-  margin: 0;
-}
-
-.view-header p {
-  color: #9cb3d6;
-  font-family: var(--font-body);
-  margin: 0.25rem 0 0;
 }
 
 .header-actions {
@@ -288,43 +574,6 @@ h1 {
   display: grid;
   gap: 0.55rem;
   grid-template-columns: minmax(0, 0.82fr) minmax(0, 0.92fr) minmax(0, 1.62fr) minmax(6.6rem, 0.86fr);
-}
-
-.badge {
-  background:
-    linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
-  border: 1px solid rgb(74 133 207 / 45%);
-  border-radius: 999px;
-  box-shadow:
-    inset 0 1px 0 rgb(209 244 255 / 10%),
-    0 8px 18px rgb(2 14 32 / 18%);
-  color: #8fdbff;
-  display: inline-flex;
-  font-family: var(--font-ui);
-  font-size: 0.78rem;
-  font-weight: 700;
-  justify-content: center;
-  letter-spacing: 0.08em;
-  min-height: 32px;
-  padding: 0 0.82rem;
-  text-transform: uppercase;
-}
-
-.badge-button {
-  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
-  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
-  --btn-border: rgb(74 133 207 / 45%);
-  --btn-border-pressed: rgb(224 248 255 / 86%);
-  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
-  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
-  --btn-color: #8fdbff;
-  --btn-color-pressed: #042541;
-  cursor: pointer;
-}
-
-.badge-button:focus-visible {
-  outline: 2px solid rgb(111 219 255 / 70%);
-  outline-offset: 2px;
 }
 
 .utility-chip {
@@ -390,6 +639,48 @@ h1 {
   justify-content: center;
 }
 
+.peer-tabs {
+  background: rgb(5 17 39 / 76%);
+  border: 1px solid rgb(73 173 255 / 34%);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0.34rem;
+}
+
+.tab-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: none;
+  color: #8aa5d1;
+  display: flex;
+  font-family: var(--font-ui);
+  font-size: 0.84rem;
+  font-weight: 700;
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  min-height: 2.45rem;
+  padding: 0 0.72rem;
+  text-transform: uppercase;
+}
+
+.tab-button.active {
+  background: linear-gradient(180deg, rgb(12 43 88 / 92%), rgb(7 27 63 / 96%));
+  border-color: rgb(82 180 255 / 58%);
+  box-shadow:
+    inset 0 1px 0 rgb(213 245 255 / 12%),
+    0 0 20px rgb(35 159 255 / 12%);
+  color: #d8f3ff;
+}
+
+.tab-button strong {
+  color: #7fd8ff;
+  font-size: 0.82rem;
+}
+
 .panel {
   background: rgb(9 24 52 / 86%);
   border: 1px solid rgb(72 114 184 / 33%);
@@ -403,10 +694,8 @@ h2 {
   margin: 0;
 }
 
-.section-meta {
-  color: #90a9d2;
-  font-family: var(--font-body);
-  margin: 0.25rem 0 0.65rem;
+.section-header {
+  margin-bottom: 0.75rem;
 }
 
 .section-header p {
@@ -415,107 +704,135 @@ h2 {
   margin: 0.2rem 0 0;
 }
 
-.rows {
+.split-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.8rem;
+  justify-content: space-between;
+}
+
+.peer-list {
   display: grid;
   gap: 0.56rem;
 }
 
-.saved-list {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.saved-panel {
-  gap: 0.75rem;
-}
-
-.saved-toggle {
+.peer-item {
   align-items: center;
-  background: transparent;
-  border: 0;
-  color: inherit;
-  display: flex;
-  justify-content: space-between;
-  padding: 0;
-  text-align: left;
-  width: 100%;
+  background: rgb(12 27 58 / 74%);
+  border: 1px solid rgb(78 123 196 / 26%);
+  border-radius: 13px;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.74rem 0.86rem;
 }
 
-.saved-toggle-copy {
+.peer-item.compact {
+  min-height: 6rem;
+}
+
+.peer-copy {
   min-width: 0;
 }
 
-.saved-toggle-copy .section-meta {
-  margin-bottom: 0;
+.dest {
+  color: #ddf1ff;
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
-.saved-toggle-icon {
-  color: #7fd8ff;
-  font-size: 1.1rem;
-  line-height: 1;
-  transform: rotate(-90deg);
-  transition: transform 160ms ease;
+.peer-name {
+  color: #7be4ff;
+  font-family: var(--font-headline);
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin: 0.22rem 0 0;
 }
 
-.saved-toggle-icon.open {
-  transform: rotate(0deg);
+.peer-name-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.48rem;
+  margin-top: 0.22rem;
 }
 
-.saved-section-body {
-  border-top: 1px solid rgb(71 112 176 / 22%);
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-}
-
-.saved-actions {
+.peer-name-line .peer-name {
   margin-top: 0;
 }
 
-.saved-item {
+.peer-connection-pill {
   align-items: center;
-  background: rgb(9 24 50 / 70%);
-  border: 1px solid rgb(71 112 176 / 29%);
-  border-radius: 11px;
-  display: flex;
-  justify-content: space-between;
-  padding: 0.6rem 0.74rem;
-}
-
-.dest {
-  color: #d5eaff;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
   font-family: var(--font-ui);
-  font-size: 0.89rem;
-  letter-spacing: 0.06em;
-  margin: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.45rem;
+  text-transform: uppercase;
 }
 
-.saved-label {
-  color: #8aa5d1;
+.peer-connection-pill.connected {
+  background: rgb(14 67 42 / 82%);
+  border-color: rgb(71 214 145 / 40%);
+  color: #8df3c1;
+}
+
+.peer-connection-pill.disconnected {
+  background: rgb(82 25 35 / 82%);
+  border-color: rgb(248 113 113 / 42%);
+  color: #fecaca;
+}
+
+.peer-meta,
+.peer-resolution {
+  color: #8ea8d1;
   font-family: var(--font-body);
+  font-size: 0.9rem;
   margin: 0.15rem 0 0;
 }
 
-.saved-state {
-  color: #7fd8ff;
-  font-family: var(--font-body);
-  font-size: 0.84rem;
-  margin: 0.12rem 0 0;
+.peer-resolution {
+  color: #9db9e1;
 }
 
-.saved-empty {
-  color: #8aa5d1;
-  font-family: var(--font-body);
-  margin: 0;
+.peer-state {
+  align-items: center;
+  background: rgb(14 67 42 / 82%);
+  border: 1px solid rgb(71 214 145 / 40%);
+  border-radius: 999px;
+  color: #8df3c1;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  min-height: 1.6rem;
+  padding: 0.1rem 0.55rem;
+  text-transform: uppercase;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-top: 0.65rem;
+  margin-top: 0;
 }
 
-button:not(.saved-toggle):not(.badge-button) {
+.inline-actions {
+  justify-content: flex-end;
+}
+
+.header-inline-actions {
+  flex: 0 0 auto;
+}
+
+button:not(.tab-button) {
   --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
   --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
   --btn-border: rgb(74 133 207 / 45%);
@@ -539,50 +856,20 @@ button:not(.saved-toggle):not(.badge-button) {
   text-transform: uppercase;
 }
 
-.checkbox {
-  align-items: center;
-  color: #9bb3d7;
-  display: flex;
-  font-family: var(--font-body);
-  gap: 0.45rem;
-  margin-top: 0.7rem;
-}
-
-input,
-textarea {
-  background: rgb(6 18 39 / 82%);
-  border: 1px solid rgb(70 110 172 / 43%);
-  border-radius: 10px;
-  color: #d8ecff;
-  font-family: var(--font-body);
-  font-size: 0.96rem;
-  padding: 0.5rem 0.56rem;
-}
-
-textarea {
-  margin-top: 0.6rem;
-  resize: vertical;
-  width: 100%;
-}
-
+.empty-copy,
 .feedback {
   color: #96afd5;
   font-family: var(--font-body);
-  margin: 0.58rem 0 0;
+  margin: 0;
+}
+
+.feedback {
+  margin-top: -0.25rem;
 }
 
 @media (max-width: 760px) {
-  h1 {
-    font-size: 1.1rem;
-  }
-
   .header-actions {
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr);
-  }
-
-  .search-chip,
-  .announce-chip {
-    grid-column: span 1;
   }
 
   .utility-chip {
@@ -597,10 +884,28 @@ textarea {
     width: 0.95rem;
   }
 
-  .saved-item {
-    align-items: flex-start;
+  .peer-tabs {
+    gap: 0.25rem;
+  }
+
+  .tab-button {
+    font-size: 0.72rem;
+    padding-inline: 0.5rem;
+  }
+
+  .split-header,
+  .peer-item {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .split-header {
     flex-direction: column;
-    gap: 0.55rem;
+  }
+
+  .inline-actions,
+  .header-inline-actions {
+    justify-content: flex-start;
   }
 }
 </style>

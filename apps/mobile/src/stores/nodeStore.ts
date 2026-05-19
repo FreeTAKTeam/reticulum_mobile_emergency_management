@@ -65,6 +65,7 @@ import {
   formatAnnounceAppData,
   hasCapability,
   isValidDestinationHex,
+  matchesEmergencyCapabilities,
   normalizeDisplayName,
   normalizeDestinationHex,
   parseCapabilityTokens,
@@ -1666,8 +1667,8 @@ export const useNodeStore = defineStore("node", () => {
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        presenceNow.value = event.receivedAtMs;
         upsertNativeAnnounceRecord(event);
+        applyAnnounceUpdate(event, "live");
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
         const destination = normalizeDestinationHex(event.change.destinationHex);
@@ -2336,6 +2337,14 @@ export const useNodeStore = defineStore("node", () => {
   );
   const allPeers = discoveredPeers;
 
+  const remAnnouncedPeers = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => peer.sources.includes("announce"))
+      .filter((peer) => matchesEmergencyCapabilities(peer.appData ?? ""))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
+
   const autoFanoutPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
@@ -2824,6 +2833,7 @@ export const useNodeStore = defineStore("node", () => {
     savedByDestination,
     allPeers,
     discoveredPeers,
+    remAnnouncedPeers,
     savedPeers,
     savedVisiblePeers,
     connectedPeers,
