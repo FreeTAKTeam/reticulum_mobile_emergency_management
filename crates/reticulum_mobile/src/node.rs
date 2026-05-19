@@ -296,6 +296,9 @@ fn telemetry_targets_from_peers_with_relay(
         if !has_capability_token(peer.app_data.as_deref(), "telemetry") {
             continue;
         }
+        if !peer.saved && !peer.active_link {
+            continue;
+        }
 
         let relay_ready = has_active_relay && peer_can_use_propagation_fallback(peer);
         let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
@@ -6298,15 +6301,15 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_use_direct_for_unsaved_peers_when_relay_is_active() {
+    fn telemetry_targets_skip_unsaved_discovered_peers_when_relay_is_active() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             false,
-            true,
-            true,
+            false,
+            false,
         );
 
         let destinations = build_runtime_telemetry_destinations(
@@ -6318,12 +6321,7 @@ mod tests {
         )
         .expect("telemetry fallback targets");
 
-        assert_eq!(destinations.len(), 1);
-        assert_eq!(
-            destinations[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert!(destinations.is_empty());
     }
 
     #[test]
