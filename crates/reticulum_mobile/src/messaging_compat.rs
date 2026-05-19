@@ -384,6 +384,16 @@ impl MessagingStore {
         current_time_ms().saturating_sub(record.received_at_ms) <= self.peer_stale_after_ms
     }
 
+    pub fn saved_peer_has_direct_current_app_announce(&self, destination_hex: &str) -> bool {
+        let normalized = normalize_hex(destination_hex);
+        if !self.saved_peer_has_current_app_announce(normalized.as_str()) {
+            return false;
+        }
+        self.announce_records
+            .get(normalized.as_str())
+            .is_some_and(|record| record.hops <= 1)
+    }
+
     pub fn record_resolution_attempt(&mut self, destination_hex: &str, attempted_at_ms: u64) {
         let normalized = normalize_hex(destination_hex);
         if normalized.is_empty() {
@@ -975,6 +985,7 @@ mod tests {
         assert_eq!(peers[0].announce_last_seen_at_ms, None);
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
         assert!(store.saved_peer_has_current_app_announce("appdest"));
+        assert!(!store.saved_peer_has_direct_current_app_announce("appdest"));
 
         store.record_announce(AnnounceRecord {
             destination_hex: "appdest".into(),
@@ -993,6 +1004,7 @@ mod tests {
         assert_eq!(peers[0].last_seen_at_ms, 0);
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
         assert!(store.saved_peer_has_current_app_announce("appdest"));
+        assert!(store.saved_peer_has_direct_current_app_announce("appdest"));
 
         store.record_resolution_result("appdest", "identity", "lxmfdest", now.saturating_add(2));
 

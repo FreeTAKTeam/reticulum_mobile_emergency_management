@@ -43,6 +43,8 @@ use crate::types::{
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
 const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATION_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+const PROPAGATION_FETCH_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
+const PROPAGATION_FETCH_BATCH_SIZE: usize = 1;
 const PROPAGATION_FETCH_TRANSFER_LIMIT_KB: u64 = 10_240;
 const COMPAT_EVENT_RETENTION_LIMIT: usize = 2_048;
 const COMPAT_DELIVERY_RETENTION_LIMIT: usize = 1_024;
@@ -108,6 +110,14 @@ fn transport_method_for_send_mode(
                 TransportMethod::Direct
             }
         }
+    }
+}
+
+fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String {
+    match send_mode {
+        SendMode::PropagationOnly {} => format!("{base_key}:propagation"),
+        SendMode::DirectOnly {} => format!("{base_key}:direct"),
+        SendMode::Auto {} => base_key.to_string(),
     }
 }
 
@@ -792,7 +802,8 @@ impl RuntimeLxmfSdk {
             .as_ref()
             .and_then(|value| value.tracking_key().map(ToOwned::to_owned))
         {
-            request = request.with_idempotency_key(idempotency_key);
+            request = request
+                .with_idempotency_key(idempotency_key_for_send_mode(&idempotency_key, send_mode));
         }
 
         let client = self.client.clone();
@@ -839,9 +850,11 @@ impl RuntimeLxmfSdk {
         })
     }
 
-    pub(crate) async fn fetch_propagated_lxmf(
+    pub(crate) async fn fetch_propagated_lxmf_from_relay(
         &self,
+        relay_hex: &str,
         limit: Option<u32>,
+        direct_iface_hex: Option<&str>,
     ) -> Result<PropagationFetchResult, NodeError> {
         let state = self
             .client
@@ -849,14 +862,11 @@ impl RuntimeLxmfSdk {
             .transport
             .as_ref()
             .ok_or(NodeError::InternalError {})?;
-        let relay_hex = state
-            .active_propagation_node_hex
-            .lock()
-            .await
-            .clone()
-            .filter(|value| !value.is_empty())
-            .ok_or(NodeError::InvalidConfig {})?;
-        compat_fetch_propagated_lxmf(state, relay_hex.as_str(), limit).await
+        let relay_hex = relay_hex.trim();
+        if relay_hex.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        compat_fetch_propagated_lxmf(state, relay_hex, limit, direct_iface_hex).await
     }
 
     pub(crate) fn record_packet_received(
@@ -1491,9 +1501,11 @@ async fn compat_fetch_propagated_lxmf(
     state: &SdkTransportState,
     relay_hex: &str,
     limit: Option<u32>,
+    direct_iface_hex: Option<&str>,
 ) -> Result<PropagationFetchResult, NodeError> {
     let relay_hash = parse_address_hash(relay_hex)?;
     let relay_desc = resolve_propagation_destination_desc(state, relay_hash).await?;
+    let direct_iface = direct_iface_hex.and_then(|value| parse_address_hash(value).ok());
     let (destination_hex, destination_hash, local_identity) = {
         let destination = state.lxmf_destination.lock().await;
         (
@@ -1509,6 +1521,8 @@ async fn compat_fetch_propagated_lxmf(
         "/get",
         rmpv::Value::Array(vec![rmpv::Value::Nil, rmpv::Value::Nil]),
         PROPAGATION_CONTROL_TIMEOUT,
+        direct_iface,
+        1,
     )
     .await?;
     let mut transient_ids = rmpv_binary_array(&available_value)?;
@@ -1522,6 +1536,7 @@ async fn compat_fetch_propagated_lxmf(
         transient_ids.len()
     );
     if transient_ids.is_empty() {
+        clear_lxmf_output_link(state, &relay_desc.address_hash).await;
         return Ok(PropagationFetchResult {
             destination_hex,
             available_count,
@@ -1531,29 +1546,90 @@ async fn compat_fetch_propagated_lxmf(
         });
     }
 
-    let fetch_ids = rmpv::Value::Array(
-        transient_ids
-            .iter()
-            .cloned()
-            .map(rmpv::Value::Binary)
-            .collect(),
-    );
-    let fetched_value = propagation_remote_control_request(
-        state,
-        relay_desc,
-        "/get",
-        rmpv::Value::Array(vec![
-            fetch_ids,
-            rmpv::Value::Nil,
-            rmpv::Value::from(PROPAGATION_FETCH_TRANSFER_LIMIT_KB),
-        ]),
-        PROPAGATION_CONTROL_TIMEOUT,
-    )
-    .await?;
-    let payloads = rmpv_binary_array(&fetched_value)?;
+    let mut payloads = Vec::new();
+    let mut failed_count = 0usize;
+    let mut last_fetch_error: Option<NodeError> = None;
+    let mut fetch_queue = propagation_fetch_batches(transient_ids.as_slice())
+        .into_iter()
+        .enumerate()
+        .collect::<VecDeque<_>>();
+    while let Some((batch_index, batch)) = fetch_queue.pop_front() {
+        let batch_len = batch.len();
+        let fetch_ids =
+            rmpv::Value::Array(batch.clone().into_iter().map(rmpv::Value::Binary).collect());
+        let fetched_value = match propagation_remote_control_request(
+            state,
+            relay_desc.clone(),
+            "/get",
+            rmpv::Value::Array(vec![
+                fetch_ids,
+                rmpv::Value::Nil,
+                rmpv::Value::from(PROPAGATION_FETCH_TRANSFER_LIMIT_KB),
+            ]),
+            PROPAGATION_FETCH_CONTROL_TIMEOUT,
+            direct_iface,
+            1,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                if batch_len > 1 {
+                    info!(
+                        "[sync] propagation sync fetch batch split relay={} destination={} batch={} size={} reason={}",
+                        relay_hex, destination_hex, batch_index, batch_len, err
+                    );
+                    for transient_id in batch.into_iter().rev() {
+                        fetch_queue.push_front((batch_index, vec![transient_id]));
+                    }
+                    continue;
+                }
+                failed_count = failed_count.saturating_add(batch_len);
+                info!(
+                    "[sync] propagation sync fetch batch failed relay={} destination={} batch={} reason={}",
+                    relay_hex, destination_hex, batch_index, err
+                );
+                last_fetch_error = Some(err);
+                continue;
+            }
+        };
+        match rmpv_propagation_payload_array(&fetched_value) {
+            Ok(mut batch_payloads) => payloads.append(&mut batch_payloads),
+            Err(err) => {
+                if batch_len > 1 {
+                    info!(
+                        "[sync] propagation sync malformed fetch batch split relay={} destination={} batch={} size={} shape={}",
+                        relay_hex,
+                        destination_hex,
+                        batch_index,
+                        batch_len,
+                        rmpv_shape(&fetched_value)
+                    );
+                    for transient_id in batch.into_iter().rev() {
+                        fetch_queue.push_front((batch_index, vec![transient_id]));
+                    }
+                    continue;
+                }
+                failed_count = failed_count.saturating_add(batch_len);
+                info!(
+                    "[sync] propagation sync malformed fetch response relay={} destination={} batch={} shape={}",
+                    relay_hex,
+                    destination_hex,
+                    batch_index,
+                    rmpv_shape(&fetched_value)
+                );
+                last_fetch_error = Some(err);
+            }
+        }
+    }
+    clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+    if payloads.is_empty() {
+        if let Some(err) = last_fetch_error {
+            return Err(err);
+        }
+    }
     let fetched_count = payloads.len();
     let mut imported_wires = Vec::with_capacity(fetched_count);
-    let mut failed_count = 0usize;
     for (index, payload) in payloads.into_iter().enumerate() {
         match decrypt_local_propagated_wire(&local_identity, &destination_hash, payload.as_slice())
         {
@@ -1583,32 +1659,89 @@ async fn propagation_remote_control_request(
     path: &str,
     data: rmpv::Value,
     timeout: Duration,
+    direct_iface: Option<AddressHash>,
+    max_attempts: usize,
 ) -> Result<rmpv::Value, NodeError> {
-    let link = ensure_lxmf_output_link(state, relay_desc).await?;
-    let link_id = *link.lock().await.id();
-    let identify_payload = build_link_identify_payload(&state.identity, &link_id);
-    send_link_context_packet(
-        &state.transport,
-        &link,
-        PacketContext::LinkIdentify,
-        identify_payload.as_slice(),
-    )
-    .await?;
-
-    let mut data_rx = state.transport.received_data_events();
-    let mut resource_rx = state.transport.resource_events();
-    let request_payload = build_link_request_payload(path, data)?;
-    let request_id = send_link_context_packet(
-        &state.transport,
-        &link,
-        PacketContext::Request,
-        request_payload.as_slice(),
-    )
-    .await?
-    .ok_or(NodeError::InternalError {})?;
-
-    wait_for_link_request_response(&mut data_rx, &mut resource_rx, link_id, request_id, timeout)
+    let mut last_error = None;
+    for attempt in 0..max_attempts.max(1) {
+        let link = ensure_lxmf_output_link(state, relay_desc.clone()).await?;
+        let link_id = *link.lock().await.id();
+        let identify_payload = build_link_identify_payload(&state.identity, &link_id);
+        if let Err(err) = send_link_context_packet(
+            &state.transport,
+            &link,
+            PacketContext::LinkIdentify,
+            identify_payload.as_slice(),
+            direct_iface,
+        )
         .await
+        {
+            clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+            info!(
+                "[sync] propagation control identify failed relay={} path={} attempt={} reason={}",
+                relay_desc.address_hash.to_hex_string(),
+                path,
+                attempt + 1,
+                err
+            );
+            last_error = Some(err);
+            continue;
+        }
+
+        let mut data_rx = state.transport.received_data_events();
+        let mut resource_rx = state.transport.resource_events();
+        let request_payload = build_link_request_payload(path, data.clone())?;
+        let request_id = match send_link_context_packet(
+            &state.transport,
+            &link,
+            PacketContext::Request,
+            request_payload.as_slice(),
+            direct_iface,
+        )
+        .await
+        {
+            Ok(Some(request_id)) => request_id,
+            Ok(None) => return Err(NodeError::InternalError {}),
+            Err(err) => {
+                clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+                info!(
+                    "[sync] propagation control request failed relay={} path={} attempt={} reason={}",
+                    relay_desc.address_hash.to_hex_string(),
+                    path,
+                    attempt + 1,
+                    err
+                );
+                last_error = Some(err);
+                continue;
+            }
+        };
+
+        match wait_for_link_request_response(
+            &mut data_rx,
+            &mut resource_rx,
+            relay_desc.address_hash,
+            link_id,
+            request_id,
+            timeout,
+        )
+        .await
+        {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+                debug!(
+                    "[sync] propagation control response unavailable relay={} path={} attempt={} reason={}",
+                    relay_desc.address_hash.to_hex_string(),
+                    path,
+                    attempt + 1,
+                    err
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or(NodeError::Timeout {}))
 }
 
 fn build_link_identify_payload(identity: &PrivateIdentity, link_id: &AddressHash) -> Vec<u8> {
@@ -1647,6 +1780,7 @@ async fn send_link_context_packet(
     link: &Arc<TokioMutex<Link>>,
     context: PacketContext,
     payload: &[u8],
+    direct_iface: Option<AddressHash>,
 ) -> Result<Option<[u8; 16]>, NodeError> {
     let packet = {
         let guard = link.lock().await;
@@ -1690,6 +1824,11 @@ async fn send_link_context_packet(
         None
     };
 
+    if let Some(iface) = direct_iface {
+        transport.send_direct(iface, packet).await;
+        return Ok(request_id);
+    }
+
     let outcome = transport.send_packet_with_outcome(packet).await;
     if !matches!(
         outcome,
@@ -1703,6 +1842,7 @@ async fn send_link_context_packet(
 async fn wait_for_link_request_response(
     data_rx: &mut tokio::sync::broadcast::Receiver<reticulum::transport::ReceivedData>,
     resource_rx: &mut tokio::sync::broadcast::Receiver<reticulum::resource::ResourceEvent>,
+    expected_destination: AddressHash,
     expected_link_id: AddressHash,
     request_id: [u8; 16],
     timeout: Duration,
@@ -1722,7 +1862,11 @@ async fn wait_for_link_request_response(
             result = data_rx.recv() => {
                 match result {
                     Ok(event) => {
-                        if event.destination != expected_link_id {
+                        if !link_response_destination_matches(
+                            event.destination,
+                            expected_destination,
+                            expected_link_id,
+                        ) {
                             continue;
                         }
                         if let Some((response_id, payload)) =
@@ -1764,6 +1908,14 @@ async fn wait_for_link_request_response(
             }
         }
     }
+}
+
+fn link_response_destination_matches(
+    actual: AddressHash,
+    expected_destination: AddressHash,
+    expected_link_id: AddressHash,
+) -> bool {
+    actual == expected_link_id || actual == expected_destination
 }
 
 fn parse_link_response_frame(bytes: &[u8]) -> Option<([u8; 16], rmpv::Value)> {
@@ -1810,10 +1962,68 @@ fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
         .collect()
 }
 
+fn rmpv_propagation_payload_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    let rmpv::Value::Array(values) = value else {
+        return Err(NodeError::InternalError {});
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            rmpv::Value::Binary(bytes) => Ok(bytes.clone()),
+            rmpv::Value::String(text) => {
+                let value = text.as_str().ok_or(NodeError::InternalError {})?;
+                hex::decode(value).map_err(|_| NodeError::InternalError {})
+            }
+            rmpv::Value::Array(entries) => {
+                if entries.len() >= 2 {
+                    if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
+                        return Ok(bytes);
+                    }
+                }
+                Err(NodeError::InternalError {})
+            }
+            _ => Err(NodeError::InternalError {}),
+        })
+        .collect()
+}
+
+fn rmpv_shape(value: &rmpv::Value) -> String {
+    match value {
+        rmpv::Value::Nil => "nil".to_string(),
+        rmpv::Value::Boolean(_) => "bool".to_string(),
+        rmpv::Value::Integer(_) => "int".to_string(),
+        rmpv::Value::F32(_) | rmpv::Value::F64(_) => "float".to_string(),
+        rmpv::Value::String(_) => "string".to_string(),
+        rmpv::Value::Binary(bytes) => format!("bin({})", bytes.len()),
+        rmpv::Value::Array(values) => {
+            let preview = values
+                .iter()
+                .take(4)
+                .map(rmpv_shape)
+                .collect::<Vec<_>>()
+                .join(",");
+            if values.len() > 4 {
+                format!("array({})[{preview},...]", values.len())
+            } else {
+                format!("array({})[{preview}]", values.len())
+            }
+        }
+        rmpv::Value::Map(values) => format!("map({})", values.len()),
+        rmpv::Value::Ext(_, bytes) => format!("ext({})", bytes.len()),
+    }
+}
+
 fn apply_fetch_limit(transient_ids: &mut Vec<Vec<u8>>, limit: Option<u32>) {
     if let Some(limit) = limit {
         transient_ids.truncate(limit as usize);
     }
+}
+
+fn propagation_fetch_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
+    transient_ids
+        .chunks(PROPAGATION_FETCH_BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect()
 }
 
 fn decrypt_local_propagated_wire(
@@ -1972,21 +2182,34 @@ async fn ensure_lxmf_output_link(
                 if let Some(stale) = stale {
                     stale.lock().await.close();
                 }
+                if attempt + 1 == MAX_ATTEMPTS {
+                    info!(
+                        "[lxmf][events][sdk] link activation failed destination={} attempt={} reason={}",
+                        desc.address_hash.to_hex_string(),
+                        attempt + 1,
+                        err,
+                    );
+                    return Err(err);
+                }
                 info!(
-                    "[lxmf][events][sdk] link activation failed destination={} attempt={} reason={}",
+                    "[lxmf][events][sdk] link activation retry destination={} attempt={} reason={}",
                     desc.address_hash.to_hex_string(),
                     attempt + 1,
                     err,
                 );
-                if attempt + 1 == MAX_ATTEMPTS {
-                    return Err(err);
-                }
                 tokio::time::sleep(RETRY_DELAY).await;
             }
         }
     }
 
     Err(NodeError::Timeout {})
+}
+
+async fn clear_lxmf_output_link(state: &SdkTransportState, destination: &AddressHash) {
+    let stale = state.out_links.lock().await.remove(destination);
+    if let Some(stale) = stale {
+        stale.lock().await.close();
+    }
 }
 
 async fn wait_for_link_active(
@@ -2065,6 +2288,22 @@ mod tests {
                 .get(EXT_FIELDS_BASE64)
                 .and_then(JsonValue::as_str),
             Some(fields_payload.as_str())
+        );
+    }
+
+    #[test]
+    fn propagation_retry_idempotency_key_does_not_reuse_direct_send() {
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::Auto {}),
+            "mission-corr-1"
+        );
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::DirectOnly {}),
+            "mission-corr-1:direct"
+        );
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::PropagationOnly {}),
+            "mission-corr-1:propagation"
         );
     }
 
@@ -2267,6 +2506,21 @@ mod tests {
     }
 
     #[test]
+    fn propagation_fetch_payload_array_accepts_binary_and_id_payload_pairs() {
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(vec![1, 2, 3]),
+            rmpv::Value::Array(vec![
+                rmpv::Value::Binary(vec![0xAA; 32]),
+                rmpv::Value::Binary(vec![4, 5, 6]),
+            ]),
+        ]);
+
+        let parsed = rmpv_propagation_payload_array(&value).expect("payload array");
+
+        assert_eq!(parsed, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+    }
+
+    #[test]
     fn propagation_link_response_frame_rejects_malformed_payloads() {
         let request_id = [0x11; 16];
         let valid = rmp_serde::to_vec(&rmpv::Value::Array(vec![
@@ -2294,6 +2548,28 @@ mod tests {
     }
 
     #[test]
+    fn propagation_response_destination_accepts_link_or_destination() {
+        let expected_destination = AddressHash::new([0xAA; 16]);
+        let expected_link_id = AddressHash::new([0xBB; 16]);
+
+        assert!(link_response_destination_matches(
+            expected_link_id,
+            expected_destination,
+            expected_link_id,
+        ));
+        assert!(link_response_destination_matches(
+            expected_destination,
+            expected_destination,
+            expected_link_id,
+        ));
+        assert!(!link_response_destination_matches(
+            AddressHash::new([0xCC; 16]),
+            expected_destination,
+            expected_link_id,
+        ));
+    }
+
+    #[test]
     fn propagation_fetch_limit_truncates_transient_ids() {
         let mut ids = vec![vec![1], vec![2], vec![3]];
 
@@ -2302,6 +2578,24 @@ mod tests {
         assert_eq!(ids, vec![vec![1], vec![2]]);
         apply_fetch_limit(&mut ids, None);
         assert_eq!(ids, vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn propagation_fetch_batches_are_bounded() {
+        let ids = vec![vec![1], vec![2], vec![3], vec![4], vec![5]];
+
+        let batches = propagation_fetch_batches(ids.as_slice());
+
+        assert_eq!(
+            batches,
+            vec![
+                vec![vec![1]],
+                vec![vec![2]],
+                vec![vec![3]],
+                vec![vec![4]],
+                vec![vec![5]]
+            ]
+        );
     }
 
     #[test]

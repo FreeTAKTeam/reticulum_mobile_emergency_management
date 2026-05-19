@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::announce_compat::{
@@ -13,7 +16,7 @@ use crate::sos::{location_from_alert, received_alert_from_sos};
 use crate::sos_fields::{extract_text_coordinates, looks_like_sos_text, parse_sos_fields};
 use crossbeam_channel as cb;
 use fs_err as fs;
-use log::{debug, info};
+use log::{debug, info, warn};
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
 use rand_core::OsRng;
@@ -31,6 +34,7 @@ use reticulum::transport::{
 use rmpv::Value as MsgPackValue;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 
 #[path = "runtime_projection.rs"]
@@ -59,6 +63,7 @@ use self::runtime_projection::RuntimeProjectionJournal;
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
@@ -72,8 +77,18 @@ const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
+const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
+const PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS: usize = 6;
+#[cfg(not(test))]
+const PROPAGATION_SYNC_RELAY_SELECTION_WAIT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const PROPAGATION_SYNC_RELAY_SELECTION_WAIT: Duration = Duration::from_millis(50);
+#[cfg(not(test))]
+const PROPAGATION_SYNC_RELAY_SELECTION_POLL: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const PROPAGATION_SYNC_RELAY_SELECTION_POLL: Duration = Duration::from_millis(10);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
 const MISSION_SEND_TASK_RESERVED_LIMIT: usize = 2;
 const MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT: usize = 1;
@@ -607,7 +622,7 @@ fn event_projection_from_fields(
                 .and_then(msgpack_string_vec)
                 .unwrap_or_default(),
             updated_at_ms: received_at_ms,
-            deleted_at_ms: None,
+            deleted_at_ms: msgpack_get_named(args, &["deleted_at_ms"]).and_then(msgpack_u64),
             correlation_id: msgpack_get_named(command_map, &["correlation_id"])
                 .and_then(msgpack_string),
             topics,
@@ -664,18 +679,18 @@ async fn persist_received_telemetry_if_present(
     bus: &EventBus,
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
-) {
+) -> bool {
     if metadata
         .and_then(|value| value.command_type.as_deref())
         .is_none_or(|value| value != "mission.registry.telemetry.upsert")
     {
-        return;
+        return false;
     }
 
     let Some(record) =
         fields_bytes.and_then(|value| telemetry_position_from_fields(value, now_ms()))
     else {
-        return;
+        return false;
     };
 
     match state.app_state.record_local_telemetry_fix(&record) {
@@ -690,6 +705,7 @@ async fn persist_received_telemetry_if_present(
                     invalidation: summary,
                 });
             }
+            true
         }
         Err(err) => {
             bus.emit(NodeEvent::Error {
@@ -699,6 +715,7 @@ async fn persist_received_telemetry_if_present(
                     record.callsign, err
                 ),
             });
+            false
         }
     }
 }
@@ -3464,6 +3481,24 @@ fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
     peer.active_link || matches!(peer.state, sdkmsg::PeerState::Connected)
 }
 
+fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay: bool) -> bool {
+    if !sdk_peer_is_directly_reachable(peer) {
+        return false;
+    }
+
+    if !has_active_relay {
+        return true;
+    }
+
+    !peer.stale
+        && peer.announce_last_seen_at_ms.is_some()
+        && peer.lxmf_last_seen_at_ms.is_some()
+        && peer
+            .lxmf_destination_hex
+            .as_deref()
+            .is_some_and(|destination| normalize_hex_32(destination).is_some())
+}
+
 async fn saved_peer_prefers_propagation(
     state: &NodeRuntimeState,
     requested_destination_hex: &str,
@@ -3494,7 +3529,7 @@ async fn saved_peer_prefers_propagation(
     else {
         return true;
     };
-    !sdk_peer_is_directly_reachable(&peer)
+    !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
 }
 
 async fn emit_peer_resolved_for_destination(
@@ -3638,7 +3673,8 @@ async fn has_active_propagation_relay(state: &NodeRuntimeState) -> bool {
 fn propagation_candidate_sort_key(
     announce: &sdkmsg::AnnounceRecord,
     preferred_destination_hex: Option<&str>,
-) -> (u8, u8, u64, String) {
+    current_destination_hex: Option<&str>,
+) -> (u8, u8, u8, u64, String) {
     let preferred_rank = if preferred_destination_hex.is_some_and(|preferred| {
         preferred == announce.destination_hex || preferred == announce.identity_hex
     }) {
@@ -3646,12 +3682,280 @@ fn propagation_candidate_sort_key(
     } else {
         1
     };
+    let current_rank = if preferred_destination_hex.is_none()
+        && current_destination_hex.is_some_and(|current| current == announce.destination_hex)
+    {
+        0
+    } else {
+        1
+    };
     (
         preferred_rank,
         announce.hops,
-        u64::MAX - announce.received_at_ms,
+        current_rank,
+        u64::MAX.saturating_sub(announce.received_at_ms),
         announce.destination_hex.clone(),
     )
+}
+
+fn propagation_sync_candidate_relays(
+    announces: &[sdkmsg::AnnounceRecord],
+    active_relay_hex: &str,
+    preferred_destination_hex: Option<&str>,
+) -> Vec<String> {
+    let active_relay_hex = active_relay_hex.trim();
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    let active_matches_preferred =
+        preferred_destination_hex.is_some_and(|preferred| preferred == active_relay_hex);
+    if !active_relay_hex.is_empty()
+        && (preferred_destination_hex.is_none() || active_matches_preferred)
+        && seen.insert(active_relay_hex.to_string())
+    {
+        candidates.push(active_relay_hex.to_string());
+    }
+
+    let mut relay_announces = announces
+        .iter()
+        .filter(|record| record.destination_kind == "lxmf_propagation")
+        .collect::<Vec<_>>();
+    relay_announces.sort_by_key(|record| {
+        propagation_candidate_sort_key(record, preferred_destination_hex, Some(active_relay_hex))
+    });
+    for record in relay_announces {
+        if candidates.len() >= PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS {
+            break;
+        }
+        if seen.insert(record.destination_hex.clone()) {
+            candidates.push(record.destination_hex.clone());
+        }
+    }
+    if candidates.is_empty()
+        && !active_relay_hex.is_empty()
+        && seen.insert(active_relay_hex.to_string())
+    {
+        candidates.push(active_relay_hex.to_string());
+    }
+    candidates
+}
+
+fn relay_candidate_interface_hex(
+    announces: &[sdkmsg::AnnounceRecord],
+    relay_hex: &str,
+) -> Option<String> {
+    let relay_hex = relay_hex.trim();
+    announces
+        .iter()
+        .find(|record| {
+            record.destination_kind == "lxmf_propagation"
+                && (record.destination_hex == relay_hex || record.identity_hex == relay_hex)
+                && normalize_hex_32(record.interface_hex.as_str()).is_some()
+        })
+        .and_then(|record| normalize_hex_32(record.interface_hex.as_str()))
+}
+
+async fn run_propagation_sync_job(
+    state: NodeRuntimeState,
+    bus: EventBus,
+    limit: Option<u32>,
+    requested_at_ms: u64,
+    relay_hex: String,
+) {
+    let mut announces = state.messaging.lock().await.list_announces();
+    let mut relay_candidates = propagation_sync_candidate_relays(
+        announces.as_slice(),
+        relay_hex.as_str(),
+        state.preferred_propagation_node_hex.as_deref(),
+    );
+
+    info!(
+        "[sync] propagation sync started relay={} candidates={} limit={}",
+        relay_hex,
+        relay_candidates.len(),
+        limit
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    let mut last_failure: Option<(String, NodeError)> = None;
+    let mut attempted_relays = HashSet::new();
+    while attempted_relays.len() < PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS {
+        let Some(relay_candidate) = relay_candidates
+            .iter()
+            .find(|candidate| !attempted_relays.contains(candidate.as_str()))
+            .cloned()
+        else {
+            break;
+        };
+        attempted_relays.insert(relay_candidate.clone());
+        let attempt_number = attempted_relays.len();
+        *state.active_propagation_node_hex.lock().await = Some(relay_candidate.clone());
+        let active_status = from_sdk_sync_status(
+            state
+                .messaging
+                .lock()
+                .await
+                .set_active_propagation_node(Some(relay_candidate.clone())),
+        );
+        if refresh_sync_status_snapshot(&state, &active_status) {
+            bus.emit(NodeEvent::SyncUpdated {
+                status: active_status,
+            });
+        }
+
+        info!(
+            "[sync] propagation sync relay attempt relay={} attempt={}/{}",
+            relay_candidate, attempt_number, PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+        );
+        emit_sync_status_update(
+            &state,
+            &bus,
+            sdkmsg::SyncPhase::PathRequested,
+            requested_at_ms,
+            0,
+            Some(format!(
+                "requesting path to propagation relay {relay_candidate} ({attempt_number}/{})",
+                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+            )),
+            false,
+        )
+        .await;
+        emit_sync_status_update(
+            &state,
+            &bus,
+            sdkmsg::SyncPhase::LinkEstablishing,
+            requested_at_ms,
+            0,
+            Some(format!(
+                "establishing propagation link {relay_candidate} ({attempt_number}/{})",
+                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+            )),
+            false,
+        )
+        .await;
+        emit_sync_status_update(
+            &state,
+            &bus,
+            sdkmsg::SyncPhase::RequestSent,
+            requested_at_ms,
+            0,
+            Some(format!(
+                "requesting propagated messages ({attempt_number}/{})",
+                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+            )),
+            false,
+        )
+        .await;
+
+        let result = match state
+            .sdk
+            .fetch_propagated_lxmf_from_relay(
+                relay_candidate.as_str(),
+                limit,
+                relay_candidate_interface_hex(announces.as_slice(), relay_candidate.as_str())
+                    .as_deref(),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                info!(
+                    "[sync] propagation sync relay attempt failed relay={} attempt={}/{} reason={}",
+                    relay_candidate, attempt_number, PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS, err
+                );
+                last_failure = Some((relay_candidate.clone(), err));
+                sync_auto_propagation_node(&state, &bus).await;
+                announces = state.messaging.lock().await.list_announces();
+                let active_relay = state
+                    .active_propagation_node_hex
+                    .lock()
+                    .await
+                    .clone()
+                    .unwrap_or_else(|| relay_hex.clone());
+                for refreshed_candidate in propagation_sync_candidate_relays(
+                    announces.as_slice(),
+                    active_relay.as_str(),
+                    state.preferred_propagation_node_hex.as_deref(),
+                ) {
+                    if !attempted_relays.contains(refreshed_candidate.as_str())
+                        && !relay_candidates.contains(&refreshed_candidate)
+                    {
+                        relay_candidates.push(refreshed_candidate);
+                    }
+                }
+                continue;
+            }
+        };
+
+        let destination_hex = result.destination_hex.clone();
+        let available_count = result.available_count;
+        let fetched_count = result.fetched_count;
+        let failed_count = result.failed_count;
+        let imported_count = result.imported_wires.len() as u32;
+        emit_sync_status_update(
+            &state,
+            &bus,
+            sdkmsg::SyncPhase::Receiving,
+            requested_at_ms,
+            0,
+            Some(format!(
+                "available={available_count} fetched={fetched_count} decrypt_failed={failed_count}"
+            )),
+            false,
+        )
+        .await;
+        for wire in result.imported_wires {
+            emit_received_payload(
+                &state,
+                &bus,
+                &state.sdk,
+                destination_hex.clone(),
+                wire,
+                None,
+            )
+            .await;
+        }
+        let detail = format!(
+            "available={available_count} fetched={fetched_count} imported={imported_count} failed={failed_count}"
+        );
+        emit_sync_status_update(
+            &state,
+            &bus,
+            sdkmsg::SyncPhase::Complete,
+            requested_at_ms,
+            imported_count,
+            Some(detail.clone()),
+            true,
+        )
+        .await;
+        info!(
+            "[sync] propagation sync complete relay={} {}",
+            relay_candidate, detail
+        );
+        state
+            .propagation_sync_inflight
+            .store(false, Ordering::Release);
+        return;
+    }
+
+    let (failed_relay, err) =
+        last_failure.unwrap_or_else(|| (relay_hex.clone(), NodeError::InvalidConfig {}));
+    let detail = format!(
+        "propagation sync failed: all relay attempts failed (last relay {failed_relay}: {err})"
+    );
+    emit_sync_status_update(
+        &state,
+        &bus,
+        sdkmsg::SyncPhase::Failed,
+        requested_at_ms,
+        0,
+        Some(detail.clone()),
+        true,
+    )
+    .await;
+    info!("[sync] propagation sync failed reason={detail}");
+    state
+        .propagation_sync_inflight
+        .store(false, Ordering::Release);
 }
 
 async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
@@ -3659,11 +3963,16 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
         let messaging = state.messaging.lock().await;
         messaging.list_announces()
     };
+    let current_destination = state.active_propagation_node_hex.lock().await.clone();
     let desired_destination = announces
         .iter()
         .filter(|record| record.destination_kind == "lxmf_propagation")
         .min_by_key(|record| {
-            propagation_candidate_sort_key(record, state.preferred_propagation_node_hex.as_deref())
+            propagation_candidate_sort_key(
+                record,
+                state.preferred_propagation_node_hex.as_deref(),
+                current_destination.as_deref(),
+            )
         })
         .map(|record| record.destination_hex.clone());
 
@@ -3690,6 +3999,29 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
     );
     if refresh_sync_status_snapshot(state, &status) {
         bus.emit(NodeEvent::SyncUpdated { status });
+    }
+}
+
+async fn wait_for_active_propagation_relay(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + PROPAGATION_SYNC_RELAY_SELECTION_WAIT;
+    loop {
+        sync_auto_propagation_node(state, bus).await;
+        if let Some(relay_hex) = state
+            .active_propagation_node_hex
+            .lock()
+            .await
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        {
+            return Some(relay_hex);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(PROPAGATION_SYNC_RELAY_SELECTION_POLL).await;
     }
 }
 
@@ -3783,7 +4115,8 @@ fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destina
         let result = async {
             let should_connect = {
                 let messaging = state.messaging.lock().await;
-                messaging.saved_peer_has_current_app_announce(normalized_destination.as_str())
+                messaging
+                    .saved_peer_has_direct_current_app_announce(normalized_destination.as_str())
             };
             if !should_connect {
                 return Ok(());
@@ -4016,6 +4349,7 @@ struct NodeRuntimeState {
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
     preferred_propagation_node_hex: Option<String>,
+    propagation_sync_inflight: Arc<AtomicBool>,
     send_task_permits: SendTaskPermits,
 }
 
@@ -4223,6 +4557,17 @@ fn should_retry_pending_ack_timeout_via_propagation(
             matches!(resend.original_send_mode, SendMode::Auto {})
                 && !resend.propagation_fallback_attempted
         })
+}
+
+fn pending_ack_timeout_elapsed(pending: &PendingLxmfDelivery, now: u64) -> bool {
+    let timeout = if matches!(pending.method, LxmfDeliveryMethod::Propagated {})
+        || pending.relay_destination_hex.is_some()
+    {
+        PROPAGATED_LXMF_ACK_TIMEOUT
+    } else {
+        DEFAULT_LXMF_ACK_TIMEOUT
+    };
+    now.saturating_sub(pending.sent_at_ms) >= timeout.as_millis() as u64
 }
 
 fn record_pending_delivery_timed_out(
@@ -4443,6 +4788,12 @@ fn is_retriable_lxmf_error(err: &NodeError) -> bool {
     )
 }
 
+fn is_accepted_result_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata.result_present && metadata.result_status.as_deref() == Some("accepted")
+    })
+}
+
 async fn send_lxmf_with_delivery_policy(
     state: &NodeRuntimeState,
     requested_destination_hex: &str,
@@ -4456,7 +4807,9 @@ async fn send_lxmf_with_delivery_policy(
     const DIRECT_ATTEMPTS: usize = 5;
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     let has_active_relay = has_active_propagation_relay(state).await;
+    let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
+        && !is_accepted_result
         && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
 
     if matches!(send_mode, SendMode::PropagationOnly {}) || prefer_propagation {
@@ -4704,7 +5057,7 @@ async fn emit_received_payload(
                 Some(message.content.as_slice()),
             )
             .await;
-            persist_received_telemetry_if_present(
+            let persisted_telemetry = persist_received_telemetry_if_present(
                 state,
                 bus,
                 Some(metadata),
@@ -4723,7 +5076,7 @@ async fn emit_received_payload(
                 bus,
                 source_hex.as_deref(),
                 Some(metadata),
-                persisted_eam || persisted_event || persisted_checklist,
+                persisted_eam || persisted_event || persisted_telemetry || persisted_checklist,
             )
             .await;
         }
@@ -5269,6 +5622,50 @@ async fn refresh_hub_directory_lxmf(
     }
 }
 
+fn tcp_endpoint_connect_addr(endpoint: &str) -> &str {
+    endpoint
+        .trim()
+        .strip_prefix("tcp://")
+        .unwrap_or_else(|| endpoint.trim())
+}
+
+fn spawn_reachable_tcp_client(transport: Arc<Transport>, endpoint: String) {
+    tokio::spawn(async move {
+        let connect_addr = tcp_endpoint_connect_addr(&endpoint).to_string();
+        if connect_addr.is_empty() {
+            return;
+        }
+
+        match tokio::time::timeout(
+            TCP_CLIENT_CONNECT_TIMEOUT,
+            TcpStream::connect(connect_addr.clone()),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => {
+                info!("tcp_client: preflight connected to <{}>", connect_addr);
+                transport.iface_manager().lock().await.spawn(
+                    TcpClient::new_from_stream(connect_addr.as_str(), stream),
+                    TcpClient::spawn,
+                );
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    "tcp_client: skipping unavailable endpoint <{}>: {}",
+                    connect_addr, err
+                );
+            }
+            Err(_) => {
+                warn!(
+                    "tcp_client: skipping unavailable endpoint <{}>: connect timed out after {}ms",
+                    connect_addr,
+                    TCP_CLIENT_CONNECT_TIMEOUT.as_millis()
+                );
+            }
+        }
+    });
+}
+
 pub async fn run_node(
     config: NodeConfig,
     identity: PrivateIdentity,
@@ -5315,18 +5712,6 @@ pub async fn run_node(
         }))
         .await;
 
-    for endpoint in &config.tcp_clients {
-        let endpoint = endpoint.trim();
-        if endpoint.is_empty() {
-            continue;
-        }
-        transport
-            .iface_manager()
-            .lock()
-            .await
-            .spawn(TcpClient::new(endpoint), TcpClient::spawn);
-    }
-
     let app_destination = transport
         .add_destination(
             identity.clone(),
@@ -5341,6 +5726,10 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
+    for endpoint in config.tcp_clients.iter().cloned() {
+        spawn_reachable_tcp_client(transport.clone(), endpoint);
+    }
+
     let app_destination_hex = app_destination
         .lock()
         .await
@@ -5370,6 +5759,7 @@ pub async fn run_node(
     )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
+    let propagation_sync_inflight = Arc::new(AtomicBool::new(false));
     let send_task_permits = SendTaskPermits::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
         projection_journal_path(config.storage_dir.as_deref()),
@@ -5411,6 +5801,7 @@ pub async fn run_node(
             .hub_identity_hash
             .as_ref()
             .and_then(|value| normalize_hex_32(value)),
+        propagation_sync_inflight: propagation_sync_inflight.clone(),
         send_task_permits: send_task_permits.clone(),
     };
 
@@ -5795,10 +6186,7 @@ pub async fn run_node(
                     let mut guard = state.pending_lxmf_deliveries.lock().await;
                     let expired_keys = guard
                         .iter()
-                        .filter(|(_, pending)| {
-                            now.saturating_sub(pending.sent_at_ms)
-                                >= DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64
-                        })
+                        .filter(|(_, pending)| pending_ack_timeout_elapsed(pending, now))
                         .map(|(key, _)| key.clone())
                         .collect::<Vec<_>>();
                     for key in expired_keys {
@@ -6523,9 +6911,26 @@ pub async fn run_node(
             }
             Command::RequestLxmfSync { limit, resp } => {
                 let requested_at_ms = now_ms();
-                let relay_hex = state.active_propagation_node_hex.lock().await.clone();
-                let Some(relay_hex) = relay_hex.filter(|value| !value.trim().is_empty()) else {
-                    let detail = "no active propagation relay selected".to_string();
+                if state.propagation_sync_inflight.load(Ordering::Acquire) {
+                    info!("[sync] propagation sync request ignored reason=inflight");
+                    let _ = resp.send(Ok(()));
+                    continue;
+                }
+                emit_sync_status_update(
+                    &state,
+                    &bus,
+                    sdkmsg::SyncPhase::PathRequested,
+                    requested_at_ms,
+                    0,
+                    Some("waiting for propagation relay selection".to_string()),
+                    false,
+                )
+                .await;
+                let Some(relay_hex) = wait_for_active_propagation_relay(&state, &bus).await else {
+                    let detail = format!(
+                        "no active propagation relay selected after {}s",
+                        PROPAGATION_SYNC_RELAY_SELECTION_WAIT.as_secs()
+                    );
                     emit_sync_status_update(
                         &state,
                         &bus,
@@ -6540,114 +6945,29 @@ pub async fn run_node(
                     let _ = resp.send(Err(NodeError::InvalidConfig {}));
                     continue;
                 };
-
+                if state
+                    .propagation_sync_inflight
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    info!("[sync] propagation sync request ignored reason=inflight");
+                    let _ = resp.send(Ok(()));
+                    continue;
+                }
                 info!(
-                    "[sync] propagation sync started relay={} limit={}",
+                    "[sync] propagation sync scheduled relay={} limit={}",
                     relay_hex,
                     limit
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "none".to_string())
                 );
-                emit_sync_status_update(
-                    &state,
-                    &bus,
-                    sdkmsg::SyncPhase::PathRequested,
+                tokio::spawn(run_propagation_sync_job(
+                    state.clone(),
+                    bus.clone(),
+                    limit,
                     requested_at_ms,
-                    0,
-                    Some(format!("requesting path to propagation relay {relay_hex}")),
-                    false,
-                )
-                .await;
-                emit_sync_status_update(
-                    &state,
-                    &bus,
-                    sdkmsg::SyncPhase::LinkEstablishing,
-                    requested_at_ms,
-                    0,
-                    Some(format!("establishing propagation link {relay_hex}")),
-                    false,
-                )
-                .await;
-                emit_sync_status_update(
-                    &state,
-                    &bus,
-                    sdkmsg::SyncPhase::RequestSent,
-                    requested_at_ms,
-                    0,
-                    Some("requesting propagated messages".to_string()),
-                    false,
-                )
-                .await;
-
-                let result = match state.sdk.fetch_propagated_lxmf(limit).await {
-                    Ok(result) => result,
-                    Err(err) => {
-                        let detail = format!("propagation sync failed: {err}");
-                        emit_sync_status_update(
-                            &state,
-                            &bus,
-                            sdkmsg::SyncPhase::Failed,
-                            requested_at_ms,
-                            0,
-                            Some(detail.clone()),
-                            true,
-                        )
-                        .await;
-                        info!(
-                            "[sync] propagation sync failed relay={} reason={}",
-                            relay_hex, err
-                        );
-                        let _ = resp.send(Err(err));
-                        continue;
-                    }
-                };
-
-                let imported_count = result.imported_wires.len() as u32;
-                emit_sync_status_update(
-                    &state,
-                    &bus,
-                    sdkmsg::SyncPhase::Receiving,
-                    requested_at_ms,
-                    0,
-                    Some(format!(
-                        "available={} fetched={} decrypt_failed={}",
-                        result.available_count, result.fetched_count, result.failed_count
-                    )),
-                    false,
-                )
-                .await;
-                for wire in result.imported_wires {
-                    emit_received_payload(
-                        &state,
-                        &bus,
-                        &state.sdk,
-                        result.destination_hex.clone(),
-                        wire,
-                        None,
-                    )
-                    .await;
-                }
-                let detail = format!(
-                    "available={} fetched={} imported={} failed={}",
-                    result.available_count,
-                    result.fetched_count,
-                    imported_count,
-                    result.failed_count
-                );
-                emit_sync_status_update(
-                    &state,
-                    &bus,
-                    sdkmsg::SyncPhase::Complete,
-                    requested_at_ms,
-                    imported_count,
-                    Some(detail.clone()),
-                    true,
-                )
-                .await;
-                info!(
-                    "[sync] propagation sync complete relay={} {}",
-                    relay_hex, detail
-                );
+                    relay_hex,
+                ));
                 let _ = resp.send(Ok(()));
             }
             Command::ListAnnounces { resp } => {
@@ -6792,6 +7112,19 @@ mod tests {
     use super::*;
     use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_EVENT, FIELD_RESULTS};
     use tokio::sync::oneshot;
+
+    #[test]
+    fn tcp_endpoint_connect_addr_accepts_plain_and_tcp_urls() {
+        assert_eq!(
+            tcp_endpoint_connect_addr("rns.beleth.net:4242"),
+            "rns.beleth.net:4242"
+        );
+        assert_eq!(
+            tcp_endpoint_connect_addr(" tcp://127.0.0.1:4242 "),
+            "127.0.0.1:4242"
+        );
+        assert_eq!(tcp_endpoint_connect_addr(""), "");
+    }
 
     #[test]
     fn sos_field_telemetry_promotes_to_regular_telemetry_position() {
@@ -6959,6 +7292,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn accepted_result_metadata_is_identified_for_direct_ack_return() {
+        let accepted = MissionSyncMetadata {
+            result_present: true,
+            result_status: Some("accepted".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        assert!(is_accepted_result_metadata(Some(&accepted)));
+
+        let command = MissionSyncMetadata {
+            command_present: true,
+            command_type: Some("checklist.task.status.set".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+        assert!(!is_accepted_result_metadata(Some(&command)));
+    }
+
     fn test_lxmf_report(
         metadata: MissionSyncMetadata,
         track_delivery_timeout: bool,
@@ -7108,6 +7458,114 @@ mod tests {
     }
 
     #[test]
+    fn propagated_pending_deliveries_keep_waiting_for_late_acknowledgements() {
+        let now = now_ms();
+        let mut direct = test_pending_delivery(None);
+        direct.sent_at_ms = now.saturating_sub(DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64);
+        assert!(pending_ack_timeout_elapsed(&direct, now));
+
+        let mut propagated = direct.clone();
+        propagated.method = LxmfDeliveryMethod::Propagated {};
+        propagated.relay_destination_hex = Some("cccccccccccccccccccccccccccccccc".to_string());
+        assert!(!pending_ack_timeout_elapsed(&propagated, now));
+
+        propagated.sent_at_ms = now.saturating_sub(PROPAGATED_LXMF_ACK_TIMEOUT.as_millis() as u64);
+        assert!(pending_ack_timeout_elapsed(&propagated, now));
+    }
+
+    fn propagation_announce(
+        destination_hex: &str,
+        hops: u8,
+        received_at_ms: u64,
+    ) -> sdkmsg::AnnounceRecord {
+        sdkmsg::AnnounceRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: format!("id-{destination_hex}"),
+            destination_kind: "lxmf_propagation".to_string(),
+            app_data: String::new(),
+            display_name: None,
+            hops,
+            interface_hex: String::new(),
+            received_at_ms,
+        }
+    }
+
+    #[test]
+    fn propagation_auto_selection_keeps_current_equal_hop_relay_stable() {
+        let current = propagation_announce("11111111111111111111111111111111", 1, 100);
+        let newer_equal_hop = propagation_announce("22222222222222222222222222222222", 1, 200);
+        let lower_hop = propagation_announce("33333333333333333333333333333333", 0, 300);
+
+        let stable_choice = [&current, &newer_equal_hop]
+            .into_iter()
+            .min_by_key(|record| {
+                propagation_candidate_sort_key(
+                    record,
+                    None,
+                    Some("11111111111111111111111111111111"),
+                )
+            })
+            .expect("stable relay");
+        assert_eq!(stable_choice.destination_hex, current.destination_hex);
+
+        let lower_hop_choice = [&current, &lower_hop]
+            .into_iter()
+            .min_by_key(|record| {
+                propagation_candidate_sort_key(
+                    record,
+                    None,
+                    Some("11111111111111111111111111111111"),
+                )
+            })
+            .expect("lower hop relay");
+        assert_eq!(lower_hop_choice.destination_hex, lower_hop.destination_hex);
+    }
+
+    #[test]
+    fn propagation_auto_selection_prefers_fresh_equal_hop_relay_without_current() {
+        let stale_equal_hop = propagation_announce("11111111111111111111111111111111", 1, 100);
+        let fresh_equal_hop = propagation_announce("22222222222222222222222222222222", 1, 200);
+
+        let choice = [&stale_equal_hop, &fresh_equal_hop]
+            .into_iter()
+            .min_by_key(|record| propagation_candidate_sort_key(record, None, None))
+            .expect("fresh relay");
+
+        assert_eq!(choice.destination_hex, fresh_equal_hop.destination_hex);
+    }
+
+    #[test]
+    fn propagation_sync_candidates_include_active_then_alternate_relays() {
+        let active = "11111111111111111111111111111111";
+        let announces = vec![
+            propagation_announce(active, 1, 200),
+            propagation_announce("22222222222222222222222222222222", 1, 100),
+            propagation_announce("33333333333333333333333333333333", 2, 50),
+            sdkmsg::AnnounceRecord {
+                destination_hex: "44444444444444444444444444444444".to_string(),
+                identity_hex: "non-propagation".to_string(),
+                destination_kind: "lxmf_delivery".to_string(),
+                app_data: String::new(),
+                display_name: None,
+                hops: 0,
+                interface_hex: String::new(),
+                received_at_ms: 1,
+            },
+        ];
+
+        let candidates = propagation_sync_candidate_relays(announces.as_slice(), active, None);
+
+        assert_eq!(
+            candidates,
+            vec![
+                active.to_string(),
+                "22222222222222222222222222222222".to_string(),
+                "33333333333333333333333333333333".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn event_projection_from_trimmed_fields_uses_lxmf_body_content() {
         let fields = MsgPackValue::Map(vec![(
             MsgPackValue::from(FIELD_COMMANDS),
@@ -7232,6 +7690,63 @@ mod tests {
         assert_eq!(record.source_display_name.as_deref(), Some("Pixel"));
         assert_eq!(record.keywords, vec!["r3akt:event-type:P".to_string()]);
         assert_eq!(record.correlation_id.as_deref(), Some("corr-event-1"));
+    }
+
+    #[test]
+    fn event_projection_from_fields_preserves_tombstone_timestamp() {
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-event-delete-1"),
+                ),
+                (
+                    MsgPackValue::from("correlation_id"),
+                    MsgPackValue::from("corr-event-delete-1"),
+                ),
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("mission.registry.log_entry.upsert"),
+                ),
+                (
+                    MsgPackValue::from("source"),
+                    MsgPackValue::Map(vec![(
+                        MsgPackValue::from("rns_identity"),
+                        MsgPackValue::from("identity-1"),
+                    )]),
+                ),
+                (
+                    MsgPackValue::from("args"),
+                    MsgPackValue::Map(vec![
+                        (MsgPackValue::from("entry_uid"), MsgPackValue::from("evt-1")),
+                        (
+                            MsgPackValue::from("mission_uid"),
+                            MsgPackValue::from("mission-1"),
+                        ),
+                        (
+                            MsgPackValue::from("content"),
+                            MsgPackValue::from("MECP/2/P01 deleted"),
+                        ),
+                        (MsgPackValue::from("callsign"), MsgPackValue::from("Pixel")),
+                        (
+                            MsgPackValue::from("source_identity"),
+                            MsgPackValue::from("identity-1"),
+                        ),
+                        (
+                            MsgPackValue::from("deleted_at_ms"),
+                            MsgPackValue::from(1_700_000_050_000_u64),
+                        ),
+                    ]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+        let record = event_projection_from_fields(&bytes, None, 1_700_000_060_000).expect("event");
+
+        assert_eq!(record.uid, "evt-1");
+        assert_eq!(record.deleted_at_ms, Some(1_700_000_050_000));
     }
 
     #[test]
