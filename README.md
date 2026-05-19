@@ -1,4 +1,4 @@
-# Reticulum Mobile Emergency_Management
+# Reticulum Emergency Management REM
 
 This app answers a simple question during an incident:
 
@@ -28,9 +28,8 @@ It is designed to be simple enough for anyone to use, even under stress.
 This app assumes information is updated by the people who know the facts.
 
 - Anyone in the mesh can create a status for someone and update it later.
-- Example: if Joe created a status for Aunt Emma, Mary can update it after she visits her and has newer information.
 
-The goal is one shared, evolving picture of the situation, not “who created the record”.
+The goal is one shared, evolving picture of the situation,
 
 ## Events / Logs
 
