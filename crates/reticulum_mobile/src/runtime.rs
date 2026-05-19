@@ -3482,21 +3482,19 @@ fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
 }
 
 fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay: bool) -> bool {
-    if !sdk_peer_is_directly_reachable(peer) {
-        return false;
-    }
-
-    if !has_active_relay {
-        return true;
-    }
-
-    !peer.stale
+    let has_fresh_lxmf_route = !peer.stale
         && peer.announce_last_seen_at_ms.is_some()
         && peer.lxmf_last_seen_at_ms.is_some()
         && peer
             .lxmf_destination_hex
             .as_deref()
-            .is_some_and(|destination| normalize_hex_32(destination).is_some())
+            .is_some_and(|destination| normalize_hex_32(destination).is_some());
+
+    if !has_active_relay {
+        return sdk_peer_is_directly_reachable(peer) || has_fresh_lxmf_route;
+    }
+
+    sdk_peer_is_directly_reachable(peer) || has_fresh_lxmf_route
 }
 
 async fn saved_peer_prefers_propagation(
@@ -4841,17 +4839,16 @@ async fn send_lxmf_with_delivery_policy(
                 requested_destination_hex,
             ),
         );
-        return state
-            .sdk
-            .send_lxmf(
-                destination,
-                body,
-                title,
-                fields_bytes,
-                metadata,
-                SendMode::PropagationOnly {},
-            )
-            .await;
+        return send_lxmf_via_propagation_candidates(
+            state,
+            destination,
+            requested_destination_hex,
+            body,
+            title,
+            fields_bytes,
+            metadata,
+        )
+        .await;
     }
 
     let mut last_error: Option<NodeError> = None;
@@ -4967,19 +4964,85 @@ async fn send_lxmf_with_delivery_policy(
             requested_destination_hex,
         ),
     );
-    let mut report = state
-        .sdk
-        .send_lxmf(
-            destination,
-            body,
-            title,
-            fields_bytes,
-            metadata,
-            SendMode::PropagationOnly {},
-        )
-        .await?;
+    let mut report = send_lxmf_via_propagation_candidates(
+        state,
+        destination,
+        requested_destination_hex,
+        body,
+        title,
+        fields_bytes,
+        metadata,
+    )
+    .await?;
     report.fallback_stage = Some(LxmfFallbackStage::AfterDirectRetryBudget {});
     Ok(report)
+}
+
+async fn send_lxmf_via_propagation_candidates(
+    state: &NodeRuntimeState,
+    destination: AddressHash,
+    requested_destination_hex: &str,
+    body: &[u8],
+    title: Option<String>,
+    fields_bytes: Option<Vec<u8>>,
+    metadata: Option<MissionSyncMetadata>,
+) -> Result<LxmfSendReport, NodeError> {
+    let original_relay = state.active_propagation_node_hex.lock().await.clone();
+    let active_relay_hex = original_relay.as_deref().unwrap_or("");
+    let announces = state.messaging.lock().await.list_announces();
+    let mut relay_candidates = propagation_sync_candidate_relays(
+        announces.as_slice(),
+        active_relay_hex,
+        state.preferred_propagation_node_hex.as_deref(),
+    );
+    if relay_candidates.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let mut last_error = None;
+    for (index, relay_candidate) in relay_candidates.drain(..).enumerate() {
+        let attempt_number = index + 1;
+        *state.active_propagation_node_hex.lock().await = Some(relay_candidate.clone());
+        info!(
+            "[lxmf][mission] propagation send relay attempt relay={} attempt={}/{} destination={}",
+            relay_candidate,
+            attempt_number,
+            PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS,
+            requested_destination_hex,
+        );
+
+        match state
+            .sdk
+            .send_lxmf(
+                destination,
+                body,
+                title.clone(),
+                fields_bytes.clone(),
+                metadata.clone(),
+                SendMode::PropagationOnly {},
+            )
+            .await
+        {
+            Ok(report) if lxmf_send_succeeded(report.outcome) => return Ok(report),
+            Ok(report) => {
+                info!(
+                    "[lxmf][mission] propagation send relay attempt failed relay={} destination={} outcome={:?}",
+                    relay_candidate, requested_destination_hex, report.outcome,
+                );
+                last_error = Some(NodeError::NetworkError {});
+            }
+            Err(err) => {
+                info!(
+                    "[lxmf][mission] propagation send relay attempt failed relay={} destination={} reason={}",
+                    relay_candidate, requested_destination_hex, err,
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    *state.active_propagation_node_hex.lock().await = original_relay;
+    Err(last_error.unwrap_or(NodeError::NetworkError {}))
 }
 
 async fn emit_received_payload(

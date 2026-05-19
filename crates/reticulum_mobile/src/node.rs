@@ -298,9 +298,8 @@ fn telemetry_targets_from_peers_with_relay(
         }
 
         let relay_ready = has_active_relay && peer_can_use_propagation_fallback(peer);
-        let direct_ready = !has_active_relay
-            && peer.saved
-            && peer_is_direct_delivery_ready(peer, has_active_relay);
+        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if !direct_ready && !relay_ready {
             continue;
         }
@@ -387,7 +386,7 @@ fn build_runtime_telemetry_destinations(
                 .is_some()
             {
                 if let Some(snapshot) = hub_directory_snapshot {
-                    let mut targets = build_transient_replication_targets(
+                    let targets = build_transient_replication_targets(
                         status,
                         peers,
                         &telemetry_destinations_from_hub_snapshot(
@@ -396,14 +395,6 @@ fn build_runtime_telemetry_destinations(
                         ),
                         active_propagation_node_hex,
                     );
-                    if active_propagation_node_hex
-                        .and_then(normalize_hex_32)
-                        .is_some()
-                    {
-                        for target in &mut targets {
-                            target.send_mode = SendMode::PropagationOnly {};
-                        }
-                    }
                     return Ok(targets);
                 }
             }
@@ -540,22 +531,31 @@ fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
 }
 
 fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
-    if !has_active_relay {
-        return peer_is_directly_reachable(peer);
-    }
-
-    if !peer.active_link {
-        return false;
-    }
-
-    !peer.stale
+    let has_fresh_lxmf_route = !peer.stale
         && has_known_lxmf_route(peer)
         && peer.announce_last_seen_at_ms.is_some()
-        && peer.lxmf_last_seen_at_ms.is_some()
+        && peer.lxmf_last_seen_at_ms.is_some();
+
+    if !has_active_relay {
+        return peer_is_directly_reachable(peer) || has_fresh_lxmf_route;
+    }
+
+    peer_is_directly_reachable(peer) || has_fresh_lxmf_route
 }
 
 fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
     !peer.stale && has_known_lxmf_route(peer)
+}
+
+fn peer_has_usable_propagation_route(peer: &PeerRecord, has_active_relay: bool) -> bool {
+    has_active_relay && peer_can_use_propagation_fallback(peer)
+}
+
+fn peer_can_use_direct_when_relay_route_is_missing(
+    peer: &PeerRecord,
+    has_active_relay: bool,
+) -> bool {
+    !peer_has_usable_propagation_route(peer, has_active_relay) && peer_is_directly_reachable(peer)
 }
 
 fn build_mission_replication_targets(
@@ -591,7 +591,8 @@ fn build_mission_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay);
+        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
             direct_targets.push(MissionReplicationTarget {
@@ -668,7 +669,8 @@ fn build_event_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay);
+        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
             direct_targets.push(MissionReplicationTarget {
@@ -737,10 +739,11 @@ fn build_transient_replication_targets(
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
         });
-        let send_mode = if matched_peer
-            .is_some_and(|peer| peer.saved && peer_is_direct_delivery_ready(peer, has_active_relay))
-            || !has_active_relay
-        {
+        let send_mode = if !has_active_relay
+            || matched_peer.is_some_and(|peer| {
+                (peer.saved && peer_is_direct_delivery_ready(peer, has_active_relay))
+                    || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
+            }) {
             SendMode::Auto {}
         } else {
             SendMode::PropagationOnly {}
@@ -840,8 +843,10 @@ fn checklist_participant_replication_send_mode(
     let matched_peer = peers.iter().find(|peer| {
         normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
     });
-    if matched_peer.is_some_and(|peer| peer_is_direct_delivery_ready(peer, has_active_relay))
-        || !has_active_relay
+    if matched_peer.is_some_and(|peer| {
+        peer_is_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
+    }) || !has_active_relay
     {
         SendMode::Auto {}
     } else {
@@ -6202,7 +6207,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_use_propagation_until_lxmf_announce_is_current() {
+    fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let mut peer = build_peer_record(
@@ -6229,14 +6234,11 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(
-            destinations[0].send_mode,
-            SendMode::PropagationOnly {}
-        ));
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     #[test]
-    fn telemetry_targets_use_propagation_for_saved_peers_when_relay_is_active() {
+    fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -6261,14 +6263,42 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(
-            destinations[0].send_mode,
-            SendMode::PropagationOnly {}
-        ));
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     #[test]
-    fn telemetry_targets_use_propagation_for_unsaved_peers_when_relay_is_active() {
+    fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_use_direct_for_unsaved_peers_when_relay_is_active() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -6293,15 +6323,11 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(
-            destinations[0].send_mode,
-            SendMode::PropagationOnly {}
-        ));
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     #[test]
-    fn telemetry_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists()
-    {
+    fn telemetry_targets_use_direct_for_connected_peer_without_active_link_when_relay_exists() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -6326,10 +6352,7 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(
-            destinations[0].send_mode,
-            SendMode::PropagationOnly {}
-        ));
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -8669,7 +8692,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists(
+    fn event_replication_targets_use_direct_for_connected_peer_without_active_link_when_relay_exists(
     ) {
         let status = NodeStatus {
             running: true,
@@ -8703,7 +8726,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -8720,6 +8743,22 @@ mod tests {
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
         };
+        let mut saved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            true,
+            false,
+            false,
+        );
+        saved_relay_peer.lxmf_last_seen_at_ms = None;
+        let mut unsaved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            false,
+            false,
+            false,
+        );
+        unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8728,20 +8767,8 @@ mod tests {
                 true,
                 true,
             ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                true,
-                false,
-                false,
-            ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                false,
-                false,
-                false,
-            ),
+            saved_relay_peer,
+            unsaved_relay_peer,
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
@@ -8888,6 +8915,22 @@ mod tests {
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
         };
+        let mut saved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            true,
+            false,
+            false,
+        );
+        saved_relay_peer.lxmf_last_seen_at_ms = None;
+        let mut unsaved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            false,
+            false,
+            false,
+        );
+        unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8896,20 +8939,8 @@ mod tests {
                 true,
                 true,
             ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                true,
-                false,
-                false,
-            ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                false,
-                false,
-                false,
-            ),
+            saved_relay_peer,
+            unsaved_relay_peer,
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
@@ -9010,7 +9041,46 @@ mod tests {
     }
 
     #[test]
-    fn eam_replication_targets_use_propagation_until_lxmf_announce_is_current() {
+    fn eam_replication_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-direct".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_keep_direct_peer_before_lxmf_announce_is_current() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9040,7 +9110,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -9053,13 +9123,15 @@ mod tests {
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
         let saved_peer = build_saved_peer();
-        let peers = vec![build_peer_record(
+        let mut peer = build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             false,
             false,
-        )];
+        );
+        peer.lxmf_last_seen_at_ms = None;
+        let peers = vec![peer];
 
         let targets = build_mission_replication_targets(
             &status,
@@ -9086,13 +9158,15 @@ mod tests {
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
         let saved_peer = build_saved_peer();
-        let peers = vec![build_peer_record(
+        let mut peer = build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             false,
             false,
-        )];
+        );
+        peer.lxmf_last_seen_at_ms = None;
+        let peers = vec![peer];
 
         let targets = build_event_replication_targets(
             &status,
@@ -9186,6 +9260,43 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_keep_direct_return_path_when_relay_is_active_before_lxmf_route_is_known(
+    ) {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+        let mut targets = Vec::new();
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[peer],
+            &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
