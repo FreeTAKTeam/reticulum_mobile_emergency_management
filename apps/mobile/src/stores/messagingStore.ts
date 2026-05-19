@@ -241,6 +241,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   const selectedConversationId = ref<string>("");
   const selectedTargetMessageId = ref<string>("");
   const pendingConversation = ref<ConversationListItem | null>(null);
+  const visualMockDeletedConversationIds = ref<Set<string>>(new Set());
   const initialized = ref(false);
   const hydrated = ref(false);
   const cleanups: Array<() => void> = [];
@@ -758,6 +759,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
       await client.deleteConversation(normalizedConversationId);
     }
+    markVisualMockConversationDeleted(normalizedConversationId, conversationIds, knownDestinations);
 
     const nextMessages: StoredMessages = {};
     for (const message of Object.values(byMessageId.value)) {
@@ -773,6 +775,13 @@ export const useMessagingStore = defineStore("messaging", () => {
       }
     }
     byMessageId.value = nextMessages;
+    nativeConversations.value = nativeConversations.value.filter((record) => {
+      const conversationRecordId = normalizeDestinationHex(record.conversationId);
+      const peerDestination = normalizeDestinationHex(record.peerDestinationHex);
+      return !conversationIds.has(record.conversationId)
+        && !conversationIds.has(conversationRecordId)
+        && !knownDestinations.has(peerDestination);
+    });
 
     if (pendingConversation.value?.conversationId === normalizedConversationId) {
       pendingConversation.value = null;
@@ -848,6 +857,36 @@ export const useMessagingStore = defineStore("messaging", () => {
     };
     pendingConversation.value = nextPendingConversation;
     selectedConversationId.value = nextPendingConversation.conversationId;
+  }
+
+  function markVisualMockConversationDeleted(
+    conversationId: string,
+    conversationIds: Set<string>,
+    knownDestinations: Set<string>,
+  ): void {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    const next = new Set(visualMockDeletedConversationIds.value);
+    for (const id of conversationIds) {
+      next.add(normalizeDestinationHex(id));
+    }
+    for (const destination of knownDestinations) {
+      next.add(normalizeDestinationHex(destination));
+    }
+    next.add(normalizeDestinationHex(conversationId));
+    visualMockDeletedConversationIds.value = next;
+  }
+
+  function isVisualMockConversationDeleted(value: string | undefined): boolean {
+    const normalized = normalizeDestinationHex(value ?? "");
+    return Boolean(normalized && visualMockDeletedConversationIds.value.has(normalized));
+  }
+
+  function messageBelongsToDeletedVisualMockConversation(message: MessageRecord): boolean {
+    return isVisualMockConversationDeleted(message.conversationId)
+      || isVisualMockConversationDeleted(message.destinationHex)
+      || isVisualMockConversationDeleted(message.sourceHex);
   }
 
   function applyVisualMockChatData(): void {
@@ -943,6 +982,7 @@ export const useMessagingStore = defineStore("messaging", () => {
 
     const composedMockMessages = Object.values(byMessageId.value)
       .filter((message) => message.messageIdHex.startsWith("900000000000000000000000"))
+      .filter((message) => !messageBelongsToDeletedVisualMockConversation(message))
       .map((message) => cloneMessage(message));
     const messages: MessageRecord[] = [
       {
@@ -1037,13 +1077,26 @@ export const useMessagingStore = defineStore("messaging", () => {
       ...composedMockMessages,
     ];
 
-    nativeConversations.value = conversations;
-    byMessageId.value = Object.fromEntries(messages.map((message) => [message.messageIdHex, message]));
+    const visibleConversations = conversations.filter((conversation) =>
+      !isVisualMockConversationDeleted(conversation.conversationId)
+        && !isVisualMockConversationDeleted(conversation.peerDestinationHex),
+    );
+    const visibleMessages = messages.filter((message) =>
+      !messageBelongsToDeletedVisualMockConversation(message),
+    );
+
+    nativeConversations.value = visibleConversations;
+    byMessageId.value = Object.fromEntries(visibleMessages.map((message) => [message.messageIdHex, message]));
     pendingConversation.value = null;
-    if (!selectedConversationId.value || !conversations.some((item) => item.conversationId === selectedConversationId.value)) {
-      selectedConversationId.value = conversations[0]?.conversationId ?? "";
+    if (
+      !selectedConversationId.value
+      || !visibleConversations.some((item) => item.conversationId === selectedConversationId.value)
+    ) {
+      selectedConversationId.value = visibleConversations[0]?.conversationId ?? "";
     }
-    selectedTargetMessageId.value = "20000000000000000000000000000001";
+    selectedTargetMessageId.value = isVisualMockConversationDeleted(peerRecords[2].lxmfDestinationHex)
+      ? ""
+      : "20000000000000000000000000000001";
     hydrated.value = true;
   }
 

@@ -300,9 +300,13 @@ function savedPeerConnectionMessage(destination: string): string {
   return "Disconnected";
 }
 
+function savedPeerStatusLabel(destination: string): "Connected" | "Disconnected" {
+  return nodeStore.discoveredByDestination[destination]?.activeLink ? "Connected" : "Disconnected";
+}
+
 function savedPeerMeta(destination: string): string {
   const peer = nodeStore.discoveredByDestination[destination];
-  return `${savedPeerConnectionMessage(destination)} | ${seenLabel(peer?.lastSeenAt)}`;
+  return seenLabel(peer?.lastSeenAt);
 }
 
 function resolutionLabel(destination: string): string {
@@ -436,18 +440,19 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
         >
           <div class="peer-copy">
             <p class="dest">{{ peer.destination }}</p>
-            <p class="peer-name">{{ peerName(peer) }}</p>
+            <div class="peer-name-line">
+              <span v-if="isSaved(peer.destination)" class="peer-state">Peer</span>
+              <p class="peer-name">{{ peerName(peer) }}</p>
+            </div>
             <p class="peer-meta">{{ discoveredMeta(peer) }}</p>
           </div>
-          <div class="actions inline-actions">
+          <div v-if="!isSaved(peer.destination)" class="actions inline-actions">
             <button
-              v-if="!isSaved(peer.destination)"
               type="button"
               @click="onAddPeer(peer.destination)"
             >
               Add
             </button>
-            <span v-else class="peer-state">Peer</span>
           </div>
         </article>
       </div>
@@ -483,7 +488,15 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
         <article v-for="peer in filteredPeers" :key="peer.destination" class="peer-item">
           <div class="peer-copy">
             <p class="dest">{{ peer.destination }}</p>
-            <p class="peer-name">{{ savedPeerName(peer) }}</p>
+            <div class="peer-name-line">
+              <span
+                class="peer-connection-pill"
+                :class="savedPeerStatusLabel(peer.destination).toLowerCase()"
+              >
+                {{ savedPeerStatusLabel(peer.destination) }}
+              </span>
+              <p class="peer-name">{{ savedPeerName(peer) }}</p>
+            </div>
             <p class="peer-meta">{{ savedPeerMeta(peer.destination) }}</p>
             <p class="peer-resolution">{{ resolutionLabel(peer.destination) }}</p>
           </div>
@@ -737,6 +750,43 @@ h2 {
   font-size: 1.02rem;
   font-weight: 700;
   margin: 0.22rem 0 0;
+}
+
+.peer-name-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.48rem;
+  margin-top: 0.22rem;
+}
+
+.peer-name-line .peer-name {
+  margin-top: 0;
+}
+
+.peer-connection-pill {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.45rem;
+  text-transform: uppercase;
+}
+
+.peer-connection-pill.connected {
+  background: rgb(14 67 42 / 82%);
+  border-color: rgb(71 214 145 / 40%);
+  color: #8df3c1;
+}
+
+.peer-connection-pill.disconnected {
+  background: rgb(82 25 35 / 82%);
+  border-color: rgb(248 113 113 / 42%);
+  color: #fecaca;
 }
 
 .peer-meta,
