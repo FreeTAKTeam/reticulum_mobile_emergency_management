@@ -76,6 +76,10 @@ import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   normalizeTcpCommunityClients,
 } from "../utils/tcpCommunityServers";
+import {
+  logIndicatesReadinessError,
+  nodeErrorIndicatesReadinessError,
+} from "../utils/readinessErrors";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
@@ -154,20 +158,6 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   },
 };
 const RCH_HUB_DIRECTORY_ENABLED = false;
-const READINESS_ERROR_LOG_PATTERNS = [
-  /\bNetworkError\b/i,
-  /\bnetwork\s*error\b/i,
-  /\blink activation failed\b/i,
-  /\bsend attempt\b.*\berrored\b/i,
-  /\bsend_(?:bytes|lxmf) failed\b/i,
-  /\bretry_lxmf failed\b/i,
-  /\bbroadcast_bytes failed\b/i,
-];
-const PROPAGATION_RELAY_ERROR_LOG_PATTERNS = [
-  /\bpropagation send relay attempt failed\b/i,
-  /\bpropagation relay\b.*\b(?:failed|error|errored)\b/i,
-];
-
 interface UiLogLine {
   at: number;
   level: string;
@@ -642,25 +632,6 @@ export const useNodeStore = defineStore("node", () => {
     if (wasReady) {
       appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
     }
-  }
-
-  function logIndicatesPropagationRelayError(message: string): boolean {
-    return PROPAGATION_RELAY_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
-  }
-
-  function logIndicatesReadinessError(message: string): boolean {
-    if (logIndicatesPropagationRelayError(message)) {
-      return false;
-    }
-    return READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
-  }
-
-  function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean {
-    const message = `${event.code}: ${event.message}`;
-    if (logIndicatesPropagationRelayError(message)) {
-      return false;
-    }
-    return event.code === "NetworkError" || logIndicatesReadinessError(message);
   }
 
   function errorMessage(error: unknown): string {
@@ -2666,7 +2637,11 @@ export const useNodeStore = defineStore("node", () => {
         sendMode,
       });
     } catch (error: unknown) {
-      throw captureActionError(`LXMF send failed (${destinationHex})`, error);
+      const captured = captureActionError(`LXMF send failed (${destinationHex})`, error);
+      setReadinessError(
+        `LXMF send failed after all available direct/propagation attempts (${destinationHex}): ${captured.message}`,
+      );
+      throw captured;
     }
   }
 
