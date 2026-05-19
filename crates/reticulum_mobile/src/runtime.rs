@@ -5023,7 +5023,10 @@ async fn send_lxmf_via_propagation_candidates(
             )
             .await
         {
-            Ok(report) if lxmf_send_succeeded(report.outcome) => return Ok(report),
+            Ok(report) if lxmf_send_succeeded(report.outcome) => {
+                *state.active_propagation_node_hex.lock().await = original_relay;
+                return Ok(report);
+            }
             Ok(report) => {
                 info!(
                     "[lxmf][mission] propagation send relay attempt failed relay={} destination={} outcome={:?}",
