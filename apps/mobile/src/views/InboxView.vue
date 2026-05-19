@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from "vue";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
@@ -23,6 +23,7 @@ const router = useRouter();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 const isPeerPickerVisible = shallowRef(false);
+let visualMockRefreshInterval: number | undefined;
 
 interface ConnectedPeerOption {
   value: string;
@@ -55,6 +56,10 @@ function destinationsMatch(left: unknown, right: unknown): boolean {
 
 function isDraftConversationId(value: string): boolean {
   return safeLower(value).startsWith("draft:");
+}
+
+function isVisualMockMode(): boolean {
+  return import.meta.env.DEV && route.query.mockChat === "1";
 }
 
 const selectedConversation = computed(() => messagingStore.selectedConversation);
@@ -114,15 +119,16 @@ const selectedPeer = computed(() => {
   return nodeStore.discoveredByDestination[destinationHex]
     ?? Object.values(nodeStore.discoveredByDestination).find((peer) =>
       safeLower(peer.destination) === destinationHex
-      || safeLower(peer.lxmfDestinationHex) === destinationHex,
+      || safeLower(peer.lxmfDestinationHex) === destinationHex
+      || safeLower(peer.identityHex) === destinationHex,
     )
     ?? null;
 });
 const selectedPeerDisplayName = computed(() =>
   safeTrim(selectedPeer.value?.announcedName)
-  || safeTrim(selectedPeer.value?.label)
   || safeTrim(selectedConversation.value?.displayName)
   || safeTrim(activeThreadConversation.value?.displayName)
+  || safeTrim(selectedPeer.value?.label)
   || selectedDestinationHex.value,
 );
 function findConversationForSelection(
@@ -297,6 +303,10 @@ async function send(bodyUtf8: string): Promise<void> {
   if (!destinationHex) {
     return;
   }
+  if (isVisualMockMode()) {
+    messagingStore.appendVisualMockOutboundMessage(destinationHex, bodyUtf8);
+    return;
+  }
   await messagingStore.sendMessage(destinationHex, bodyUtf8);
   const matchingConversation = messagingStore.selectedConversation
     ?? findConversationForSelection(destinationHex, selectedPeer.value);
@@ -337,6 +347,21 @@ watch(
   },
   { immediate: true },
 );
+
+onMounted(() => {
+  if (isVisualMockMode()) {
+    messagingStore.applyVisualMockChatData();
+    visualMockRefreshInterval = window.setInterval(() => {
+      messagingStore.applyVisualMockChatData();
+    }, 2000);
+  }
+});
+
+onUnmounted(() => {
+  if (visualMockRefreshInterval !== undefined) {
+    window.clearInterval(visualMockRefreshInterval);
+  }
+});
 </script>
 
 <template>
