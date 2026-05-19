@@ -3,6 +3,7 @@ import ActionMessagesView from "./views/ActionMessagesView.vue";
 import ChecklistView from "./views/ChecklistView.vue";
 import ChecklistDetailView from "./views/ChecklistDetailView.vue";
 import DashboardView from "./views/DashboardView.vue";
+import EventMecpHelpView from "./views/EventMecpHelpView.vue";
 import EventsView from "./views/EventsView.vue";
 import InboxView from "./views/InboxView.vue";
 import MessageStatusHelpView from "./views/MessageStatusHelpView.vue";
@@ -45,6 +46,11 @@ const routes = [
     path: "/events",
     name: "events",
     component: EventsView,
+  },
+  {
+    path: "/events/help",
+    name: "event-mecp-help",
+    component: EventMecpHelpView,
   },
   {
     path: "/dashboard",
