@@ -3104,6 +3104,10 @@ impl SendTaskClass {
     }
 }
 
+fn should_emit_global_send_bytes_error(send_task_class: SendTaskClass) -> bool {
+    !matches!(send_task_class, SendTaskClass::MissionPropagation)
+}
+
 #[derive(Clone)]
 struct SendTaskPermits {
     general: Arc<Semaphore>,
@@ -6718,6 +6722,14 @@ pub async fn run_node(
                     }
                     .await;
                     if let Err(err) = &result {
+                        if !should_emit_global_send_bytes_error(send_task_class) {
+                            info!(
+                                "[lxmf][mission] propagation send exhausted destination={} reason={}",
+                                destination_hex, err
+                            );
+                            let _ = resp.send(result);
+                            return;
+                        }
                         bus.emit(NodeEvent::Error {
                             code: node_error_code(err).to_string(),
                             message: format!(
@@ -8707,6 +8719,15 @@ mod tests {
             blocked_propagation.is_err(),
             "propagation mission pool should remain saturated while the original permit is held"
         );
+    }
+
+    #[test]
+    fn propagation_mission_failures_do_not_emit_global_send_bytes_error() {
+        assert!(!should_emit_global_send_bytes_error(
+            SendTaskClass::MissionPropagation
+        ));
+        assert!(should_emit_global_send_bytes_error(SendTaskClass::Mission));
+        assert!(should_emit_global_send_bytes_error(SendTaskClass::General));
     }
 
     #[test]
