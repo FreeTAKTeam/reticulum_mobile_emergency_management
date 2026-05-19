@@ -80,6 +80,7 @@ export interface NodeStatus {
   identityHex: string;
   appDestinationHex: string;
   lxmfDestinationHex: string;
+  lastError?: string;
 }
 
 export interface PeerChange {
@@ -1118,6 +1119,12 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
     lxmfDestinationHex: String(
       raw.lxmfDestinationHex ?? raw.lxmf_destination_hex ?? "",
     ),
+    lastError:
+      typeof raw.lastError === "string"
+        ? raw.lastError
+        : typeof raw.last_error === "string"
+          ? raw.last_error
+          : undefined,
   };
 }
 
