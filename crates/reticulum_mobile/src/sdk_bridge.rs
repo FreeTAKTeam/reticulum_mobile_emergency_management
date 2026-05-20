@@ -1203,9 +1203,14 @@ async fn compat_send_lxmf(
         });
     }
 
-    let link = ensure_lxmf_output_link(&state, remote_desc)
-        .await
-        .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
+    let link = ensure_lxmf_output_link(
+        &state,
+        remote_desc,
+        Some(requested_destination_hex.as_str()),
+        Some(resolved_destination_hex.as_str()),
+    )
+    .await
+    .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
     let link_id = *link.lock().await.id();
     if matches!(representation, LxmfRepresentation::Resource) {
         let mut resource_events = state.transport.resource_events();
@@ -1355,9 +1360,14 @@ async fn compat_send_lxmf_via_propagation(
     );
 
     if propagated_payload.len() > LXMF_MAX_PAYLOAD {
-        let link = ensure_lxmf_output_link(state, relay_desc)
-            .await
-            .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
+        let link = ensure_lxmf_output_link(
+            state,
+            relay_desc,
+            Some(requested_destination_hex),
+            Some(resolved_destination_hex),
+        )
+        .await
+        .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
         let link_id = *link.lock().await.id();
         let mut resource_events = state.transport.resource_events();
         let resource_hash = state
@@ -1664,7 +1674,14 @@ async fn propagation_remote_control_request(
 ) -> Result<rmpv::Value, NodeError> {
     let mut last_error = None;
     for attempt in 0..max_attempts.max(1) {
-        let link = ensure_lxmf_output_link(state, relay_desc.clone()).await?;
+        let relay_destination_hex = relay_desc.address_hash.to_hex_string();
+        let link = ensure_lxmf_output_link(
+            state,
+            relay_desc.clone(),
+            Some(path),
+            Some(relay_destination_hex.as_str()),
+        )
+        .await?;
         let link_id = *link.lock().await.id();
         let identify_payload = build_link_identify_payload(&state.identity, &link_id);
         if let Err(err) = send_link_context_packet(
@@ -2154,6 +2171,8 @@ async fn resolve_propagation_destination_desc(
 async fn ensure_lxmf_output_link(
     state: &SdkTransportState,
     desc: DestinationDesc,
+    requested_destination_hex: Option<&str>,
+    resolved_destination_hex: Option<&str>,
 ) -> Result<Arc<TokioMutex<Link>>, NodeError> {
     const MAX_ATTEMPTS: usize = 3;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -2183,19 +2202,23 @@ async fn ensure_lxmf_output_link(
                     stale.lock().await.close();
                 }
                 if attempt + 1 == MAX_ATTEMPTS {
-                    info!(
-                        "[lxmf][events][sdk] link activation failed destination={} attempt={} reason={}",
-                        desc.address_hash.to_hex_string(),
+                    log_lxmf_link_activation_failure(
+                        "failed",
+                        &desc,
+                        requested_destination_hex,
+                        resolved_destination_hex,
                         attempt + 1,
-                        err,
+                        &err,
                     );
                     return Err(err);
                 }
-                info!(
-                    "[lxmf][events][sdk] link activation retry destination={} attempt={} reason={}",
-                    desc.address_hash.to_hex_string(),
+                log_lxmf_link_activation_failure(
+                    "retry",
+                    &desc,
+                    requested_destination_hex,
+                    resolved_destination_hex,
                     attempt + 1,
-                    err,
+                    &err,
                 );
                 tokio::time::sleep(RETRY_DELAY).await;
             }
@@ -2203,6 +2226,36 @@ async fn ensure_lxmf_output_link(
     }
 
     Err(NodeError::Timeout {})
+}
+
+fn log_lxmf_link_activation_failure(
+    status: &str,
+    desc: &DestinationDesc,
+    requested_destination_hex: Option<&str>,
+    resolved_destination_hex: Option<&str>,
+    attempt: usize,
+    err: &NodeError,
+) {
+    if let (Some(requested_destination_hex), Some(resolved_destination_hex)) =
+        (requested_destination_hex, resolved_destination_hex)
+    {
+        info!(
+            "[lxmf][events][sdk] link activation {status} requested_destination={} resolved_destination={} link_destination={} attempt={} reason={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            desc.address_hash.to_hex_string(),
+            attempt,
+            err,
+        );
+        return;
+    }
+
+    info!(
+        "[lxmf][events][sdk] link activation {status} destination={} attempt={} reason={}",
+        desc.address_hash.to_hex_string(),
+        attempt,
+        err,
+    );
 }
 
 async fn clear_lxmf_output_link(state: &SdkTransportState, destination: &AddressHash) {

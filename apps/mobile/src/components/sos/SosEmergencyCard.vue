@@ -35,6 +35,14 @@ async function save(): Promise<void> {
   feedback.value = "SOS settings saved.";
 }
 
+async function triggerManual(): Promise<void> {
+  if (dirty.value) {
+    await save();
+  }
+  await sosStore.trigger("Manual");
+  feedback.value = "SOS triggered.";
+}
+
 function hasUnsavedChanges(): boolean {
   return dirty.value;
 }
@@ -129,7 +137,7 @@ watch(() => ({ ...sosStore.settings }), syncFromStore);
       </div>
 
       <div class="actions">
-        <button type="button" class="danger" @click="sosStore.trigger('Manual')">Trigger SOS</button>
+        <button type="button" class="danger" @click="triggerManual">Trigger SOS</button>
       </div>
       <p v-if="feedback" class="feedback">{{ feedback }}</p>
       <p v-if="sosStore.lastError" class="feedback">{{ sosStore.lastError }}</p>

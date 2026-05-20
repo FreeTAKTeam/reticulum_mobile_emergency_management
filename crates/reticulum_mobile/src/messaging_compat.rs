@@ -394,6 +394,22 @@ impl MessagingStore {
             .is_some_and(|record| record.hops <= 1)
     }
 
+    pub fn current_lxmf_announce_destination(&self, destination_hex: &str) -> Option<String> {
+        let normalized = normalize_hex(destination_hex);
+        if normalized.is_empty() {
+            return None;
+        }
+
+        let record = self.announce_records.get(normalized.as_str())?;
+        if record.destination_kind != "lxmf_delivery" {
+            return None;
+        }
+
+        let current =
+            current_time_ms().saturating_sub(record.received_at_ms) <= self.peer_stale_after_ms;
+        current.then_some(record.destination_hex.clone())
+    }
+
     pub fn record_resolution_attempt(&mut self, destination_hex: &str, attempted_at_ms: u64) {
         let normalized = normalize_hex(destination_hex);
         if normalized.is_empty() {
@@ -1013,6 +1029,55 @@ mod tests {
         assert!(!peers[0].stale);
         assert_eq!(peers[0].last_seen_at_ms, now.saturating_add(1));
         assert_eq!(peers[0].last_resolution_error, None);
+    }
+
+    #[test]
+    fn current_lxmf_announce_destination_requires_fresh_lxmf_announce() {
+        let mut store = MessagingStore::new(1);
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data: "Peer".to_string(),
+            display_name: Some("Peer".to_string()),
+            hops: 1,
+            interface_hex: String::new(),
+            received_at_ms: now,
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            identity_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+            destination_kind: "app".to_string(),
+            app_data: "R3AKT,EMergencyMessages".to_string(),
+            display_name: Some("Peer".to_string()),
+            hops: 1,
+            interface_hex: String::new(),
+            received_at_ms: now,
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+            identity_hex: "ffffffffffffffffffffffffffffffff".to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data: "Peer".to_string(),
+            display_name: Some("Peer".to_string()),
+            hops: 1,
+            interface_hex: String::new(),
+            received_at_ms: now.saturating_sub(120_000),
+        });
+
+        assert_eq!(
+            store.current_lxmf_announce_destination("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+        );
+        assert_eq!(
+            store.current_lxmf_announce_destination("cccccccccccccccccccccccccccccccc"),
+            None
+        );
+        assert_eq!(
+            store.current_lxmf_announce_destination("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            None
+        );
     }
 
     #[test]

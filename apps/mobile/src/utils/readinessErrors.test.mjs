@@ -24,11 +24,40 @@ test("intermediate propagation relay failures do not mark the node not ready", (
   );
 });
 
+test("direct link activation failures do not mark the node not ready", () => {
+  assert.equal(
+    logIndicatesReadinessError(
+      "[lxmf][events][sdk] link activation failed destination=fb4c70e20cfac047b899ca2f3671b50a attempt=3 reason=timeout",
+    ),
+    false,
+  );
+});
+
+test("direct link activation network errors do not mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "NetworkError",
+      message: "failed to activate lxmf link",
+    }),
+    false,
+  );
+});
+
 test("final network errors still mark the node not ready", () => {
   assert.equal(
     nodeErrorIndicatesReadinessError({
       code: "NetworkError",
       message: "LXMF send failed after direct and propagation attempts",
+    }),
+    true,
+  );
+});
+
+test("delivery acknowledgement timeout marks the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "NetworkError",
+      message: "lxmf delivery acknowledgement timeout destination=abc command=sos.status",
     }),
     true,
   );
