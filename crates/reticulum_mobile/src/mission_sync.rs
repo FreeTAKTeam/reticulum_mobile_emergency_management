@@ -25,9 +25,9 @@ pub(crate) struct MissionSyncMetadata {
 
 impl MissionSyncMetadata {
     pub(crate) fn tracking_key(&self) -> Option<&str> {
-        self.correlation_id
+        self.command_id
             .as_deref()
-            .or(self.command_id.as_deref())
+            .or(self.correlation_id.as_deref())
     }
 
     pub(crate) fn primary_kind(&self) -> &'static str {
@@ -340,6 +340,21 @@ mod checklist_tests {
     fn metadata_from_fields(fields: MsgPackValue) -> MissionSyncMetadata {
         let bytes = rmp_serde::to_vec(&fields).expect("msgpack fields");
         parse_mission_sync_metadata(&bytes).expect("mission sync metadata")
+    }
+
+    #[test]
+    fn tracking_key_prefers_command_id_over_shared_correlation() {
+        let metadata = MissionSyncMetadata {
+            command_present: true,
+            correlation_id: Some("incident-1".to_string()),
+            command_id: Some("sos:incident-1:cancelled:1000".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+
+        assert_eq!(
+            metadata.tracking_key(),
+            Some("sos:incident-1:cancelled:1000")
+        );
     }
 
     #[test]

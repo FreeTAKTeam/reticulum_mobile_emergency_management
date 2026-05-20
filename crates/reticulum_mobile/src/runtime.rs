@@ -95,6 +95,8 @@ const MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT: usize = 1;
 const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize = SEND_TASK_CONCURRENCY_LIMIT
     - MISSION_SEND_TASK_RESERVED_LIMIT
     - MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT;
+const CHAT_DELIVERY_ACK_TITLE: &str = "REM delivery ack";
+const CHAT_DELIVERY_ACK_PREFIX: &str = "REM_DELIVERY_ACK:";
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
 
 pub(crate) fn now_ms() -> u64 {
@@ -3590,6 +3592,70 @@ fn equivalent_peer_destinations(peer: &sdkmsg::PeerRecord) -> impl Iterator<Item
     .flatten()
 }
 
+fn peer_is_current_send_target(peer: &sdkmsg::PeerRecord) -> bool {
+    !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
+}
+
+fn resolve_current_lxmf_destination_from_peers(
+    peers: &[sdkmsg::PeerRecord],
+    destination_hex: &str,
+) -> Result<String, NodeError> {
+    let normalized_destination =
+        normalize_hex_32(destination_hex).ok_or(NodeError::InvalidConfig {})?;
+
+    if let Some(peer) = peers.iter().find(|peer| {
+        peer_matches_hex(peer, normalized_destination.as_str()) && peer_is_current_send_target(peer)
+    }) {
+        if peer
+            .lxmf_destination_hex
+            .as_deref()
+            .is_some_and(|value| value == normalized_destination)
+        {
+            return Ok(normalized_destination);
+        }
+
+        return Ok(peer
+            .lxmf_destination_hex
+            .clone()
+            .unwrap_or_else(|| peer.destination_hex.clone()));
+    }
+
+    let stale_equivalent = peers
+        .iter()
+        .find(|peer| peer_matches_hex(peer, normalized_destination.as_str()));
+    let Some(stale_equivalent) = stale_equivalent else {
+        return Err(NodeError::InvalidConfig {});
+    };
+    let identity_hex = stale_equivalent.identity_hex.as_deref();
+    let lxmf_destination_hex = stale_equivalent
+        .lxmf_destination_hex
+        .as_deref()
+        .or_else(|| {
+            if normalized_destination == stale_equivalent.destination_hex {
+                None
+            } else {
+                Some(stale_equivalent.destination_hex.as_str())
+            }
+        });
+
+    peers
+        .iter()
+        .find(|peer| {
+            peer_is_current_send_target(peer)
+                && (lxmf_destination_hex.is_some_and(|destination| {
+                    peer_matches_hex(peer, destination)
+                        || peer.lxmf_destination_hex.as_deref() == Some(destination)
+                }) || identity_hex
+                    .is_some_and(|identity| peer.identity_hex.as_deref() == Some(identity)))
+        })
+        .map(|peer| {
+            peer.lxmf_destination_hex
+                .clone()
+                .unwrap_or_else(|| peer.destination_hex.clone())
+        })
+        .ok_or(NodeError::InvalidConfig {})
+}
+
 async fn peer_for_any_destination_hex(
     state: &NodeRuntimeState,
     destination_hex: &str,
@@ -3606,6 +3672,32 @@ async fn peer_for_any_destination_hex(
         })
 }
 
+async fn resolve_current_lxmf_destination_hex(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> Result<String, NodeError> {
+    let messaging = state.messaging.lock().await;
+    let peers = messaging.list_peers();
+    match resolve_current_lxmf_destination_from_peers(peers.as_slice(), destination_hex) {
+        Ok(destination) => Ok(destination),
+        Err(err) => {
+            let normalized_destination =
+                normalize_hex_32(destination_hex).ok_or(NodeError::InvalidConfig {})?;
+            let lxmf_candidates = peers
+                .iter()
+                .filter(|peer| peer_matches_hex(peer, normalized_destination.as_str()))
+                .flat_map(equivalent_peer_destinations)
+                .chain(std::iter::once(normalized_destination.as_str()));
+            for candidate in lxmf_candidates {
+                if let Some(destination) = messaging.current_lxmf_announce_destination(candidate) {
+                    return Ok(destination);
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
 async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
@@ -3619,6 +3711,18 @@ async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex:
         return normalized_destination;
     }
     peer.lxmf_destination_hex.unwrap_or(peer.destination_hex)
+}
+
+async fn resolve_lxmf_destination_for_send(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+    require_current_peer: bool,
+) -> Result<String, NodeError> {
+    if require_current_peer {
+        resolve_current_lxmf_destination_hex(state, destination_hex).await
+    } else {
+        Ok(resolve_lxmf_destination_hex(state, destination_hex).await)
+    }
 }
 
 async fn canonical_app_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
@@ -4522,7 +4626,11 @@ fn build_pending_lxmf_resend(
 ) -> Option<PendingLxmfResend> {
     if !report.track_delivery_timeout
         || !matches!(send_mode, SendMode::Auto {})
-        || report.used_propagation_node
+        || (report.used_propagation_node
+            && !matches!(
+                report.fallback_stage,
+                Some(LxmfFallbackStage::AfterDirectRetryBudget {})
+            ))
     {
         return None;
     }
@@ -4538,16 +4646,30 @@ fn build_pending_lxmf_resend(
         metadata,
         send_task_class,
         original_send_mode: send_mode,
-        propagation_fallback_attempted: false,
+        propagation_fallback_attempted: matches!(
+            report.fallback_stage,
+            Some(LxmfFallbackStage::AfterDirectRetryBudget {})
+        ),
     })
 }
 
 fn pending_tracking_key(pending: &PendingLxmfDelivery) -> Option<String> {
     pending
-        .correlation_id
+        .command_id
         .as_deref()
-        .or(pending.command_id.as_deref())
+        .or(pending.correlation_id.as_deref())
         .map(ToOwned::to_owned)
+}
+
+fn chat_delivery_ack_body(message_id_hex: &str) -> String {
+    format!("{CHAT_DELIVERY_ACK_PREFIX}{message_id_hex}")
+}
+
+fn parse_chat_delivery_ack_body(body: &str) -> Option<String> {
+    let message_id_hex = body.trim().strip_prefix(CHAT_DELIVERY_ACK_PREFIX)?.trim();
+    let valid_message_id =
+        message_id_hex.len() == 64 && message_id_hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    valid_message_id.then(|| message_id_hex.to_ascii_lowercase())
 }
 
 fn should_retry_pending_ack_timeout_via_propagation(
@@ -4562,8 +4684,13 @@ fn should_retry_pending_ack_timeout_via_propagation(
 }
 
 fn pending_ack_timeout_elapsed(pending: &PendingLxmfDelivery, now: u64) -> bool {
-    let timeout = if matches!(pending.method, LxmfDeliveryMethod::Propagated {})
-        || pending.relay_destination_hex.is_some()
+    let is_propagation_fallback = pending
+        .resend
+        .as_ref()
+        .is_some_and(|resend| resend.propagation_fallback_attempted);
+    let timeout = if !is_propagation_fallback
+        && (matches!(pending.method, LxmfDeliveryMethod::Propagated {})
+            || pending.relay_destination_hex.is_some())
     {
         PROPAGATED_LXMF_ACK_TIMEOUT
     } else {
@@ -4594,6 +4721,15 @@ fn record_pending_delivery_timed_out(
         LxmfDeliveryStatus::TimedOut {},
         Some(detail.to_string()),
     );
+    bus.emit(NodeEvent::Error {
+        code: "NetworkError".to_string(),
+        message: format!(
+            "lxmf delivery acknowledgement timeout destination={} command={} correlation={} detail={detail}",
+            pending.destination_hex,
+            pending.command_type.as_deref().unwrap_or("-"),
+            pending.correlation_id.as_deref().unwrap_or("-"),
+        ),
+    });
     info!(
         "[lxmf][mission] timed out message_id={} destination={} command={} correlation={} detail={}",
         pending.message_id_hex,
@@ -4810,6 +4946,7 @@ async fn send_lxmf_with_delivery_policy(
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     let has_active_relay = has_active_propagation_relay(state).await;
     let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
+    let require_current_peer = !is_accepted_result;
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
@@ -4822,8 +4959,12 @@ async fn send_lxmf_with_delivery_policy(
                 requested_destination_hex,
             );
         }
-        let resolved_destination_hex =
-            resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+        let resolved_destination_hex = resolve_lxmf_destination_for_send(
+            state,
+            requested_destination_hex,
+            require_current_peer,
+        )
+        .await?;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
         log_send_task(
             propagation_task_class,
@@ -4858,8 +4999,12 @@ async fn send_lxmf_with_delivery_policy(
     let mut last_error: Option<NodeError> = None;
 
     for attempt in 1..=DIRECT_ATTEMPTS {
-        let resolved_destination_hex =
-            resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+        let resolved_destination_hex = resolve_lxmf_destination_for_send(
+            state,
+            requested_destination_hex,
+            require_current_peer,
+        )
+        .await?;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
         log_send_task(
             send_task_class,
@@ -4947,7 +5092,8 @@ async fn send_lxmf_with_delivery_policy(
         requested_destination_hex,
     );
     let resolved_destination_hex =
-        resolve_lxmf_destination_hex(state, requested_destination_hex).await;
+        resolve_lxmf_destination_for_send(state, requested_destination_hex, require_current_peer)
+            .await?;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
     let propagation_task_class = send_task_class.propagation_equivalent();
     log_send_task(
@@ -5213,6 +5359,14 @@ async fn emit_received_payload(
                 }
             }
             bus.emit(NodeEvent::SosAlertChanged { alert });
+            send_operational_ack_if_needed(
+                state,
+                bus,
+                source_hex.as_deref(),
+                metadata.as_ref(),
+                true,
+            )
+            .await;
         } else if !metadata
             .as_ref()
             .is_some_and(MissionSyncMetadata::is_mission_related)
@@ -5223,22 +5377,33 @@ async fn emit_received_payload(
             let message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
                 .map(|wire| hex::encode(wire.message_id()))
                 .unwrap_or_else(|_| hex::encode(destination_hex.as_bytes()));
-            let record = MessageRecord {
-                message_id_hex,
-                conversation_id: conversation_id_for(peer_hex.as_str()),
-                direction: MessageDirection::Inbound {},
-                destination_hex: peer_hex.clone(),
-                source_hex: source_hex.clone(),
-                title,
-                body_utf8,
-                method: MessageMethod::Direct {},
-                state: MessageState::Received {},
-                detail: None,
-                sent_at_ms: None,
-                received_at_ms: Some(now_ms()),
-                updated_at_ms: now_ms(),
-            };
-            upsert_message_record(state, bus, record, true).await;
+            if !acknowledge_chat_delivery(state, bus, source_hex.as_deref(), body_utf8.as_str())
+                .await
+            {
+                let record = MessageRecord {
+                    message_id_hex: message_id_hex.clone(),
+                    conversation_id: conversation_id_for(peer_hex.as_str()),
+                    direction: MessageDirection::Inbound {},
+                    destination_hex: peer_hex.clone(),
+                    source_hex: source_hex.clone(),
+                    title,
+                    body_utf8: body_utf8.clone(),
+                    method: MessageMethod::Direct {},
+                    state: MessageState::Received {},
+                    detail: None,
+                    sent_at_ms: None,
+                    received_at_ms: Some(now_ms()),
+                    updated_at_ms: now_ms(),
+                };
+                upsert_message_record(state, bus, record, true).await;
+                send_chat_delivery_ack_if_needed(
+                    state,
+                    source_hex.as_deref(),
+                    message_id_hex.as_str(),
+                    body_utf8.as_str(),
+                )
+                .await;
+            }
         }
         sdk.record_packet_received(
             &destination_hex,
@@ -5324,9 +5489,9 @@ async fn ack_pending_lxmf_delivery(
     };
     if !peer_destinations_equivalent(state, pending.destination_hex.as_str(), source_hex).await {
         if let Some(tracking_key) = pending
-            .correlation_id
+            .command_id
             .as_deref()
-            .or(pending.command_id.as_deref())
+            .or(pending.correlation_id.as_deref())
             .map(ToOwned::to_owned)
         {
             state
@@ -5432,6 +5597,91 @@ async fn send_operational_ack_if_needed(
                     ack.destination_hex, ack.command_id, err
                 ),
             });
+        }
+    }
+}
+
+async fn acknowledge_chat_delivery(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    source_hex: Option<&str>,
+    body_utf8: &str,
+) -> bool {
+    let Some(message_id_hex) = parse_chat_delivery_ack_body(body_utf8) else {
+        return false;
+    };
+    let maybe_record = state
+        .messaging
+        .lock()
+        .await
+        .update_message(
+            message_id_hex.as_str(),
+            sdkmsg::MessageState::Delivered,
+            Some("chat delivery ack".to_string()),
+            now_ms(),
+        )
+        .map(from_sdk_message_record);
+
+    if let Some(record) = maybe_record {
+        state.sdk.record_delivery_acknowledged(
+            &record.message_id_hex,
+            &record.destination_hex,
+            source_hex,
+            None,
+            None,
+            None,
+            None,
+            None,
+            record.detail.as_deref(),
+        );
+        bus.emit(NodeEvent::MessageUpdated {
+            message: record.clone(),
+        });
+        info!(
+            "[lxmf][chat] acknowledged message_id={} source={}",
+            record.message_id_hex,
+            source_hex.unwrap_or("-"),
+        );
+    }
+    true
+}
+
+async fn send_chat_delivery_ack_if_needed(
+    state: &NodeRuntimeState,
+    source_hex: Option<&str>,
+    message_id_hex: &str,
+    body_utf8: &str,
+) {
+    if parse_chat_delivery_ack_body(body_utf8).is_some() {
+        return;
+    }
+    let Some(source_hex) = source_hex else {
+        return;
+    };
+    let body = chat_delivery_ack_body(message_id_hex);
+    match send_lxmf_with_delivery_policy(
+        state,
+        source_hex,
+        body.as_bytes(),
+        Some(CHAT_DELIVERY_ACK_TITLE.to_string()),
+        None,
+        None,
+        SendMode::Auto {},
+        SendTaskClass::General,
+    )
+    .await
+    {
+        Ok(report) => {
+            info!(
+                "[lxmf][chat] sent delivery acknowledgement destination={} message_id={} acked_message_id={}",
+                report.resolved_destination_hex, report.message_id_hex, message_id_hex,
+            );
+        }
+        Err(err) => {
+            warn!(
+                "[lxmf][chat] delivery acknowledgement send failed destination={} acked_message_id={} reason={}",
+                source_hex, message_id_hex, err,
+            );
         }
     }
 }
@@ -7551,6 +7801,48 @@ mod tests {
         assert!(pending_ack_timeout_elapsed(&propagated, now));
     }
 
+    #[test]
+    fn propagation_fallback_pending_deliveries_use_direct_ack_timeout() {
+        let now = now_ms();
+        let mut propagated = test_pending_delivery(Some(PendingLxmfResend {
+            requested_destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+            body: b"body".to_vec(),
+            title: None,
+            fields_bytes: Some(vec![1, 2, 3]),
+            metadata: MissionSyncMetadata {
+                command_present: true,
+                command_id: Some("cmd-timeout".to_string()),
+                correlation_id: Some("corr-timeout".to_string()),
+                command_type: Some("sos.status".to_string()),
+                ..MissionSyncMetadata::default()
+            },
+            send_task_class: SendTaskClass::Mission,
+            original_send_mode: SendMode::Auto {},
+            propagation_fallback_attempted: true,
+        }));
+        propagated.method = LxmfDeliveryMethod::Propagated {};
+        propagated.relay_destination_hex = Some("dddddddddddddddddddddddddddddddd".to_string());
+        propagated.sent_at_ms = now.saturating_sub(DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64);
+
+        assert!(pending_ack_timeout_elapsed(&propagated, now));
+    }
+
+    #[test]
+    fn chat_delivery_ack_body_round_trips_message_id() {
+        let message_id = "482ecb36f44826e45aea88562e6ebda4a66d30575eb42557732adced08e0db7d";
+        let body = chat_delivery_ack_body(message_id);
+
+        assert_eq!(
+            parse_chat_delivery_ack_body(body.as_str()),
+            Some(message_id.to_string())
+        );
+        assert_eq!(
+            parse_chat_delivery_ack_body("REM_DELIVERY_ACK:not-hex"),
+            None
+        );
+        assert_eq!(parse_chat_delivery_ack_body("regular chat"), None);
+    }
+
     fn propagation_announce(
         destination_hex: &str,
         hops: u8,
@@ -8728,6 +9020,171 @@ mod tests {
         ));
         assert!(should_emit_global_send_bytes_error(SendTaskClass::Mission));
         assert!(should_emit_global_send_bytes_error(SendTaskClass::General));
+    }
+
+    fn send_peer(
+        destination_hex: &str,
+        identity_hex: Option<&str>,
+        lxmf_destination_hex: Option<&str>,
+        stale: bool,
+        active_link: bool,
+        announce_last_seen_at_ms: Option<u64>,
+    ) -> sdkmsg::PeerRecord {
+        sdkmsg::PeerRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: identity_hex.map(ToOwned::to_owned),
+            lxmf_destination_hex: lxmf_destination_hex.map(ToOwned::to_owned),
+            display_name: Some("Peer".to_string()),
+            app_data: Some("R3AKT,EMergencyMessages".to_string()),
+            state: if active_link {
+                sdkmsg::PeerState::Connected
+            } else {
+                sdkmsg::PeerState::Disconnected
+            },
+            saved: false,
+            stale,
+            active_link,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: None,
+            last_seen_at_ms: announce_last_seen_at_ms.unwrap_or_default(),
+            announce_last_seen_at_ms,
+            lxmf_last_seen_at_ms: lxmf_destination_hex
+                .map(|_| announce_last_seen_at_ms.unwrap_or(1)),
+        }
+    }
+
+    #[test]
+    fn send_destination_resolution_requires_current_peer() {
+        let peers = vec![send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            false,
+            Some(1),
+        )];
+
+        assert_eq!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .expect("current app peer should resolve"),
+            "cccccccccccccccccccccccccccccccc"
+        );
+        assert_eq!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            )
+            .expect("current identity should resolve"),
+            "cccccccccccccccccccccccccccccccc"
+        );
+        assert!(matches!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "dddddddddddddddddddddddddddddddd"
+            ),
+            Err(NodeError::InvalidConfig {})
+        ));
+    }
+
+    #[test]
+    fn send_destination_resolution_rejects_stale_or_unannounced_peers() {
+        let peers = vec![
+            send_peer(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                Some("cccccccccccccccccccccccccccccccc"),
+                true,
+                false,
+                Some(1),
+            ),
+            send_peer(
+                "dddddddddddddddddddddddddddddddd",
+                Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+                Some("ffffffffffffffffffffffffffffffff"),
+                false,
+                false,
+                None,
+            ),
+        ];
+
+        assert!(matches!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            Err(NodeError::InvalidConfig {})
+        ));
+        assert!(matches!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "dddddddddddddddddddddddddddddddd"
+            ),
+            Err(NodeError::InvalidConfig {})
+        ));
+    }
+
+    #[test]
+    fn send_destination_resolution_uses_current_lxmf_route_for_stale_app_peer() {
+        let peers = vec![
+            send_peer(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                Some("cccccccccccccccccccccccccccccccc"),
+                true,
+                false,
+                Some(1),
+            ),
+            send_peer(
+                "cccccccccccccccccccccccccccccccc",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                Some("cccccccccccccccccccccccccccccccc"),
+                false,
+                false,
+                Some(2),
+            ),
+        ];
+
+        assert_eq!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .expect("current lxmf route should satisfy stale equivalent app peer"),
+            "cccccccccccccccccccccccccccccccc"
+        );
+    }
+
+    #[test]
+    fn send_destination_resolution_rejects_stale_app_peer_without_current_route() {
+        let peers = vec![
+            send_peer(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                Some("cccccccccccccccccccccccccccccccc"),
+                true,
+                false,
+                Some(1),
+            ),
+            send_peer(
+                "cccccccccccccccccccccccccccccccc",
+                Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                Some("cccccccccccccccccccccccccccccccc"),
+                true,
+                false,
+                Some(2),
+            ),
+        ];
+
+        assert!(matches!(
+            resolve_current_lxmf_destination_from_peers(
+                peers.as_slice(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            Err(NodeError::InvalidConfig {})
+        ));
     }
 
     #[test]

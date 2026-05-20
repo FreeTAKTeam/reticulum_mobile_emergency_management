@@ -87,11 +87,22 @@ pub(crate) fn extract_text_coordinates(body: &str) -> Option<(f64, f64)> {
 }
 
 fn command_to_msgpack(command: &SosCommand) -> MsgPackValue {
+    let state = sos_kind_to_str(command.state);
+    let command_id = format!("sos:{}:{state}:{}", command.incident_id, command.sent_at_ms);
     let mut entries = vec![
         (
-            MsgPackValue::from("sos_state"),
-            MsgPackValue::from(sos_kind_to_str(command.state)),
+            MsgPackValue::from("command_id"),
+            MsgPackValue::from(command_id.as_str()),
         ),
+        (
+            MsgPackValue::from("correlation_id"),
+            MsgPackValue::from(command.incident_id.as_str()),
+        ),
+        (
+            MsgPackValue::from("command_type"),
+            MsgPackValue::from("sos.status"),
+        ),
+        (MsgPackValue::from("sos_state"), MsgPackValue::from(state)),
         (
             MsgPackValue::from("incident_id"),
             MsgPackValue::from(command.incident_id.as_str()),
@@ -103,6 +114,20 @@ fn command_to_msgpack(command: &SosCommand) -> MsgPackValue {
         (
             MsgPackValue::from("sent_at_ms"),
             MsgPackValue::from(command.sent_at_ms),
+        ),
+        (
+            MsgPackValue::from("args"),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("incident_id"),
+                    MsgPackValue::from(command.incident_id.as_str()),
+                ),
+                (MsgPackValue::from("sos_state"), MsgPackValue::from(state)),
+                (
+                    MsgPackValue::from("trigger_source"),
+                    MsgPackValue::from(trigger_source_to_str(command.trigger_source)),
+                ),
+            ]),
         ),
     ];
     if let Some(audio_id) = command.audio_id.as_deref() {
@@ -354,6 +379,7 @@ pub(crate) fn trigger_source_to_str(value: SosTriggerSource) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mission_sync::parse_mission_sync_metadata;
 
     #[test]
     fn sos_fields_round_trip_command_and_telemetry() {
@@ -382,6 +408,13 @@ mod tests {
         let entries = msgpack_map_entries(&fields).expect("map entries");
 
         assert!(msgpack_get_indexed(entries, FIELD_COMMANDS).is_some());
+        let metadata = parse_mission_sync_metadata(&encoded).expect("mission metadata");
+        assert_eq!(metadata.command_type.as_deref(), Some("sos.status"));
+        assert_eq!(metadata.correlation_id.as_deref(), Some("incident-1"));
+        assert!(metadata
+            .command_id
+            .as_deref()
+            .is_some_and(|value| { value.starts_with("sos:incident-1:active:") }));
         assert_eq!(parsed.command.expect("command"), command);
         let parsed_telemetry = parsed.telemetry.expect("telemetry");
         assert_eq!(parsed_telemetry.lat.expect("lat").round(), 46.0);

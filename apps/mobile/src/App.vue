@@ -171,6 +171,8 @@ const pageTitle = computed(() => {
       return "Action Messages";
     case "events":
       return "Events";
+    case "event-mecp-help":
+      return "MECP Help";
     case "inbox":
       return "Chat";
     case "checklists":
@@ -227,6 +229,7 @@ function isTabActive(path: string): boolean {
 const moreRouteNames = new Set([
   "messages",
   "events",
+  "event-mecp-help",
   "message-status-help",
   "peers",
   "settings",

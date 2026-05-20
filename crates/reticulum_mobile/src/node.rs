@@ -259,6 +259,9 @@ fn telemetry_targets_from_peers(
         if self_destination_hex == Some(destination_hex.as_str()) {
             continue;
         }
+        if !peer_is_current_replication_target(peer) {
+            continue;
+        }
         if !peer.active_link || !has_capability_token(peer.app_data.as_deref(), "telemetry") {
             continue;
         }
@@ -284,7 +287,8 @@ fn telemetry_targets_from_peers_with_relay(
     let has_active_relay = active_propagation_node_hex
         .and_then(normalize_hex_32)
         .is_some();
-    let mut targets = Vec::new();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
     let mut seen = HashSet::<String>::new();
     for peer in peers {
         let Some(destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
@@ -294,6 +298,9 @@ fn telemetry_targets_from_peers_with_relay(
             continue;
         }
         if !has_capability_token(peer.app_data.as_deref(), "telemetry") {
+            continue;
+        }
+        if !peer_is_current_replication_target(peer) {
             continue;
         }
         if !peer.saved && !peer.active_link {
@@ -307,17 +314,25 @@ fn telemetry_targets_from_peers_with_relay(
             continue;
         }
         if seen.insert(destination_hex.clone()) {
-            targets.push(MissionReplicationTarget {
+            let target = MissionReplicationTarget {
                 app_destination_hex: destination_hex,
                 send_mode: if direct_ready {
                     SendMode::Auto {}
                 } else {
                     SendMode::PropagationOnly {}
                 },
-            });
+            };
+            if matches!(target.send_mode, SendMode::Auto {}) {
+                direct_targets.push(target);
+            } else {
+                relay_targets.push(target);
+            }
         }
     }
-    targets
+    if direct_targets.is_empty() {
+        direct_targets.extend(relay_targets);
+    }
+    direct_targets
 }
 
 fn telemetry_destinations_from_hub_snapshot(
@@ -371,11 +386,13 @@ fn build_runtime_telemetry_destinations(
         )),
         HubMode::Connected {} => {
             let app_destination_hex = configured_hub_destination(config)?;
-            let send_mode = checklist_participant_replication_send_mode(
+            let Some(send_mode) = current_replication_send_mode(
                 peers,
                 app_destination_hex.as_str(),
                 active_propagation_node_hex,
-            );
+            ) else {
+                return Ok(Vec::new());
+            };
             Ok(vec![MissionReplicationTarget {
                 app_destination_hex,
                 send_mode,
@@ -533,6 +550,10 @@ fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
     peer.active_link || matches!(peer.state, PeerState::Connected {})
 }
 
+fn peer_is_current_replication_target(peer: &PeerRecord) -> bool {
+    !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
+}
+
 fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
     let has_fresh_lxmf_route = !peer.stale
         && has_known_lxmf_route(peer)
@@ -547,7 +568,7 @@ fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> b
 }
 
 fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
-    !peer.stale && has_known_lxmf_route(peer)
+    peer_is_current_replication_target(peer) && has_known_lxmf_route(peer)
 }
 
 fn peer_has_usable_propagation_route(peer: &PeerRecord, has_active_relay: bool) -> bool {
@@ -594,6 +615,9 @@ fn build_mission_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
+        if !peer_is_current_replication_target(peer) {
+            continue;
+        }
         let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
@@ -616,11 +640,14 @@ fn build_mission_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
+                    && peer_is_current_replication_target(peer)
                     && peer_can_use_propagation_fallback(peer)
             });
             if !relay_ready {
                 continue;
             }
+        } else {
+            continue;
         }
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
@@ -632,7 +659,9 @@ fn build_mission_replication_targets(
         });
     }
 
-    direct_targets.extend(relay_targets);
+    if direct_targets.is_empty() {
+        direct_targets.extend(relay_targets);
+    }
     direct_targets
 }
 
@@ -672,6 +701,9 @@ fn build_event_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
+        if !peer_is_current_replication_target(peer) {
+            continue;
+        }
         let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
@@ -694,11 +726,14 @@ fn build_event_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
+                    && peer_is_current_replication_target(peer)
                     && peer_can_use_propagation_fallback(peer)
             });
             if !relay_ready {
                 continue;
             }
+        } else {
+            continue;
         }
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
@@ -710,7 +745,9 @@ fn build_event_replication_targets(
         });
     }
 
-    direct_targets.extend(relay_targets);
+    if direct_targets.is_empty() {
+        direct_targets.extend(relay_targets);
+    }
     direct_targets
 }
 
@@ -720,7 +757,8 @@ fn build_transient_replication_targets(
     directory_destinations: &[String],
     active_propagation_node_hex: Option<&str>,
 ) -> Vec<MissionReplicationTarget> {
-    let mut targets = Vec::new();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
     let mut seen = HashSet::<String>::new();
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let has_active_relay = active_propagation_node_hex
@@ -742,22 +780,69 @@ fn build_transient_replication_targets(
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
         });
-        let send_mode = if !has_active_relay
-            || matched_peer.is_some_and(|peer| {
-                (peer.saved && peer_is_direct_delivery_ready(peer, has_active_relay))
-                    || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
-            }) {
-            SendMode::Auto {}
-        } else {
-            SendMode::PropagationOnly {}
+        let Some(matched_peer) = matched_peer else {
+            continue;
         };
-        targets.push(MissionReplicationTarget {
+        if !peer_is_current_replication_target(matched_peer) {
+            continue;
+        }
+        let send_mode = if !has_active_relay
+            || ((matched_peer.saved
+                && peer_is_direct_delivery_ready(matched_peer, has_active_relay))
+                || peer_can_use_direct_when_relay_route_is_missing(matched_peer, has_active_relay))
+        {
+            SendMode::Auto {}
+        } else if peer_can_use_propagation_fallback(matched_peer) {
+            SendMode::PropagationOnly {}
+        } else {
+            continue;
+        };
+        let target = MissionReplicationTarget {
             app_destination_hex,
             send_mode,
-        });
+        };
+        if matches!(target.send_mode, SendMode::Auto {}) {
+            direct_targets.push(target);
+        } else {
+            relay_targets.push(target);
+        }
     }
 
-    targets
+    if direct_targets.is_empty() {
+        direct_targets.extend(relay_targets);
+    }
+    direct_targets
+}
+
+fn has_current_replication_peer(peers: &[PeerRecord], app_destination_hex: &str) -> bool {
+    peers.iter().any(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
+            && peer_is_current_replication_target(peer)
+    })
+}
+
+fn current_replication_send_mode(
+    peers: &[PeerRecord],
+    app_destination_hex: &str,
+    active_propagation_node_hex: Option<&str>,
+) -> Option<SendMode> {
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let peer = peers.iter().find(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
+            && peer_is_current_replication_target(peer)
+    })?;
+
+    if peer_is_direct_delivery_ready(peer, has_active_relay)
+        || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
+    {
+        Some(SendMode::Auto {})
+    } else if peer_can_use_propagation_fallback(peer) && has_active_relay {
+        Some(SendMode::PropagationOnly {})
+    } else {
+        None
+    }
 }
 
 fn build_runtime_mission_replication_targets(
@@ -787,7 +872,10 @@ fn build_runtime_mission_replication_targets(
         HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
             app_destination_hex: configured_hub_destination(config)?,
             send_mode: SendMode::Auto {},
-        }]),
+        }]
+        .into_iter()
+        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
+        .collect()),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -835,28 +923,6 @@ fn should_include_checklist_participant_targets(
     })
 }
 
-fn checklist_participant_replication_send_mode(
-    peers: &[PeerRecord],
-    app_destination_hex: &str,
-    active_propagation_node_hex: Option<&str>,
-) -> SendMode {
-    let has_active_relay = active_propagation_node_hex
-        .and_then(normalize_hex_32)
-        .is_some();
-    let matched_peer = peers.iter().find(|peer| {
-        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
-    });
-    if matched_peer.is_some_and(|peer| {
-        peer_is_direct_delivery_ready(peer, has_active_relay)
-            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
-    }) || !has_active_relay
-    {
-        SendMode::Auto {}
-    } else {
-        SendMode::PropagationOnly {}
-    }
-}
-
 fn append_checklist_participant_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -876,6 +942,9 @@ fn append_checklist_participant_replication_targets(
         .iter()
         .map(|target| target.app_destination_hex.clone())
         .collect::<HashSet<_>>();
+    let mut has_direct_target = targets
+        .iter()
+        .any(|target| matches!(target.send_mode, SendMode::Auto {}));
     for participant in participant_rns_identities {
         let Some(app_destination_hex) = normalize_hex_32(participant.as_str()) else {
             continue;
@@ -885,14 +954,23 @@ fn append_checklist_participant_replication_targets(
         {
             continue;
         }
+        let Some(send_mode) = current_replication_send_mode(
+            peers,
+            app_destination_hex.as_str(),
+            active_propagation_node_hex,
+        ) else {
+            continue;
+        };
+        if has_direct_target && matches!(send_mode, SendMode::PropagationOnly {}) {
+            continue;
+        }
         targets.push(MissionReplicationTarget {
-            send_mode: checklist_participant_replication_send_mode(
-                peers,
-                app_destination_hex.as_str(),
-                active_propagation_node_hex,
-            ),
+            send_mode,
             app_destination_hex,
         });
+        if matches!(send_mode, SendMode::Auto {}) {
+            has_direct_target = true;
+        }
     }
 }
 
@@ -954,7 +1032,10 @@ fn build_runtime_event_replication_targets(
         HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
             app_destination_hex: configured_hub_destination(config)?,
             send_mode: SendMode::Auto {},
-        }]),
+        }]
+        .into_iter()
+        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
+        .collect()),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -2121,6 +2202,10 @@ fn run_sos_fanout(
     status: NodeStatus,
     settings: SosSettingsRecord,
     saved_peers: Vec<SavedPeerRecord>,
+    peers: Vec<PeerRecord>,
+    active_propagation_node_hex: Option<String>,
+    active_config: Option<NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<HubDirectorySnapshot>,
     telemetry: Option<SosDeviceTelemetryRecord>,
     incident_id: String,
     trigger_source: SosTriggerSource,
@@ -2153,11 +2238,25 @@ fn run_sos_fanout(
     }
 
     let body = compose_sos_body(&settings, kind, telemetry.as_ref());
-    for peer in saved_peers {
-        let destination_hex = peer.destination_hex.trim().to_ascii_lowercase();
-        if destination_hex.is_empty() {
-            continue;
+    let targets = match build_runtime_mission_replication_targets(
+        &status,
+        peers.as_slice(),
+        saved_peers.as_slice(),
+        active_propagation_node_hex.as_deref(),
+        active_config.as_ref(),
+        hub_directory_snapshot.as_ref(),
+    ) {
+        Ok(targets) => targets,
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("sos target resolution failed reason={err}"),
+            });
+            Vec::new()
         }
+    };
+    for target in targets {
+        let destination_hex = target.app_destination_hex.clone();
         let command = SosCommand {
             state: kind,
             incident_id: incident_id.clone(),
@@ -2191,7 +2290,11 @@ fn run_sos_fanout(
             source_hex: Some(status.lxmf_destination_hex.clone()),
             title: Some("SOS Emergency".to_string()),
             body_utf8: body.clone(),
-            method: MessageMethod::Direct {},
+            method: if matches!(target.send_mode, SendMode::PropagationOnly {}) {
+                MessageMethod::Propagated {}
+            } else {
+                MessageMethod::Direct {}
+            },
             state: MessageState::Queued {},
             detail: Some(format!("sos:{}", crate::sos::sos_kind_label(kind))),
             sent_at_ms: Some(now),
@@ -2212,7 +2315,7 @@ fn run_sos_fanout(
                 destination_hex: destination_hex.clone(),
                 bytes: body.as_bytes().to_vec(),
                 fields_bytes: Some(fields),
-                send_mode: SendMode::Auto {},
+                send_mode: target.send_mode,
                 resp: resp_tx,
             },
         ) {
@@ -4985,7 +5088,19 @@ impl Node {
     }
 
     pub fn trigger_sos(&self, source: SosTriggerSource) -> Result<SosStatusRecord, NodeError> {
-        let (app_state, bus, tx, status, settings, saved_peers, telemetry_store) = {
+        let (
+            app_state,
+            bus,
+            tx,
+            status,
+            settings,
+            saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
+            telemetry_store,
+        ) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
                 .app_state
@@ -5007,6 +5122,22 @@ impl Node {
                 .lock()
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
+            let peers = inner
+                .peers_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let active_propagation_node_hex = inner
+                .sync_status_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .active_propagation_node_hex
+                .clone();
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
             (
                 inner.app_state.clone(),
                 inner.bus.clone(),
@@ -5014,6 +5145,10 @@ impl Node {
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
+                peers,
+                active_propagation_node_hex,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
                 inner.sos_device_telemetry.clone(),
             )
         };
@@ -5037,6 +5172,10 @@ impl Node {
                     status,
                     settings,
                     saved_peers,
+                    peers,
+                    active_propagation_node_hex,
+                    active_config,
+                    hub_directory_snapshot,
                     telemetry,
                     incident_id,
                     source,
@@ -5054,6 +5193,10 @@ impl Node {
             status,
             settings,
             saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
             telemetry,
             incident_id,
             source,
@@ -5064,7 +5207,20 @@ impl Node {
     }
 
     pub fn deactivate_sos(&self, pin: Option<String>) -> Result<SosStatusRecord, NodeError> {
-        let (app_state, bus, tx, status, settings, saved_peers, telemetry, current) = {
+        let (
+            app_state,
+            bus,
+            tx,
+            status,
+            settings,
+            saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
+            telemetry,
+            current,
+        ) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
                 .app_state
@@ -5088,6 +5244,22 @@ impl Node {
                 .app_state
                 .get_sos_status()?
                 .unwrap_or_else(idle_status);
+            let peers = inner
+                .peers_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let active_propagation_node_hex = inner
+                .sync_status_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .active_propagation_node_hex
+                .clone();
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
             (
                 inner.app_state.clone(),
                 inner.bus.clone(),
@@ -5095,6 +5267,10 @@ impl Node {
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
+                peers,
+                active_propagation_node_hex,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
                 telemetry,
                 current,
             )
@@ -5110,6 +5286,10 @@ impl Node {
             status,
             settings,
             saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
             telemetry,
             incident_id,
             SosTriggerSource::Manual {},
@@ -5947,12 +6127,19 @@ mod tests {
     }
 
     #[test]
-    fn semi_autonomous_replication_targets_use_hub_directory_peers() {
+    fn semi_autonomous_replication_targets_use_current_hub_directory_peers() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(
             HubMode::SemiAutonomous {},
             Some("56565656565656565656565656565656"),
         );
+        let peers = vec![build_peer_record(
+            "abababababababababababababababab",
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            false,
+            true,
+            true,
+        )];
         let snapshot = HubDirectorySnapshot {
             effective_connected_mode: false,
             items: vec![crate::types::HubDirectoryPeerRecord {
@@ -5970,7 +6157,7 @@ mod tests {
 
         let targets = build_runtime_mission_replication_targets(
             &status,
-            &[],
+            peers.as_slice(),
             &[],
             None,
             Some(&config),
@@ -6034,16 +6221,28 @@ mod tests {
     }
 
     #[test]
-    fn connected_telemetry_destinations_route_only_to_hub() {
+    fn connected_telemetry_destinations_route_only_to_current_hub() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(
             HubMode::Connected {},
             Some("56565656565656565656565656565656"),
         );
+        let peers = vec![build_peer_record(
+            "56565656565656565656565656565656",
+            "abababababababababababababababab",
+            true,
+            true,
+            true,
+        )];
 
-        let destinations =
-            build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
-                .expect("connected telemetry destinations");
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            None,
+            Some(&config),
+            None,
+        )
+        .expect("connected telemetry destinations");
 
         assert_eq!(destinations.len(), 1);
         assert_eq!(
@@ -6072,7 +6271,7 @@ mod tests {
             Some("56565656565656565656565656565656"),
         );
         let peers = vec![build_peer_record(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "abababababababababababababababab",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             true,
@@ -6270,6 +6469,63 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_targets_do_not_mix_direct_and_propagation_fanout() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "efefefefefefefefefefefefefefefef",
+            true,
+            false,
+            false,
+        );
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[direct_peer, relay_peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_skip_stale_peers_without_relay() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut stale_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        stale_peer.stale = true;
+
+        let destinations =
+            build_runtime_telemetry_destinations(&status, &[stale_peer], None, Some(&config), None)
+                .expect("telemetry fallback targets");
+
+        assert!(destinations.is_empty());
+    }
+
+    #[test]
     fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
@@ -6304,13 +6560,14 @@ mod tests {
     fn telemetry_targets_skip_unsaved_discovered_peers_when_relay_is_active() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
-        let peer = build_peer_record(
+        let mut peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             false,
             false,
             false,
         );
+        peer.lxmf_last_seen_at_ms = None;
 
         let destinations = build_runtime_telemetry_destinations(
             &status,
@@ -8900,6 +9157,50 @@ mod tests {
     }
 
     #[test]
+    fn mission_replication_targets_do_not_mix_direct_and_propagation_fanout() {
+        let status = build_status_for_tests();
+        let direct_saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("Pixel".to_string()),
+            saved_at_ms: 1,
+        };
+        let relay_saved_peer = SavedPeerRecord {
+            destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            label: Some("RelayOnly".to_string()),
+            saved_at_ms: 2,
+        };
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "11111111111111111111111111111111",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[direct_peer, relay_peer],
+            &[direct_saved_peer, relay_saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
     fn eam_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
         let status = NodeStatus {
             running: true,
@@ -9182,7 +9483,7 @@ mod tests {
     }
 
     #[test]
-    fn eam_replication_targets_keep_saved_peer_target_without_active_relay() {
+    fn eam_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9194,16 +9495,11 @@ mod tests {
 
         let targets = build_mission_replication_targets(&status, &[], &[saved_peer], None);
 
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert!(targets.is_empty());
     }
 
     #[test]
-    fn event_replication_targets_keep_saved_peer_target_without_active_relay() {
+    fn event_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9215,16 +9511,11 @@ mod tests {
 
         let targets = build_event_replication_targets(&status, &[], &[saved_peer], None);
 
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert!(targets.is_empty());
     }
 
     #[test]
-    fn checklist_participant_targets_include_unsaved_source_for_autonomous_return_path() {
+    fn checklist_participant_targets_include_current_unsaved_source_for_autonomous_return_path() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9232,16 +9523,24 @@ mod tests {
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            false,
+            false,
+        );
+        peer.lxmf_last_seen_at_ms = None;
         let mut targets = build_mission_replication_targets(
             &status,
-            &[],
+            &[peer.clone()],
             &[],
             Some("99999999999999999999999999999999"),
         );
 
         append_checklist_participant_replication_targets(
             &status,
-            &[],
+            &[peer],
             &[
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
                 status.identity_hex.clone(),
@@ -9258,6 +9557,28 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_skip_source_without_current_peer() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut targets = Vec::new();
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[],
+            &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert!(targets.is_empty());
     }
 
     #[test]
@@ -9295,6 +9616,44 @@ mod tests {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_skip_propagation_participants_when_direct_target_exists() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let direct_target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccccccccccccc",
+            false,
+            false,
+            false,
+        );
+        relay_peer.lxmf_last_seen_at_ms = None;
+        let mut targets = vec![direct_target];
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[relay_peer],
+            &["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     #[test]

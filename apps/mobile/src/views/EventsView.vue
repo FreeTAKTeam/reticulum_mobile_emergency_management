@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, shallowRef, watch } from "vue";
+import { RouterLink } from "vue-router";
 
 import { useEventsStore } from "../stores/eventsStore";
 import { useNodeStore } from "../stores/nodeStore";
@@ -304,6 +305,18 @@ async function deleteEvent(uid: string): Promise<void> {
           </svg>
           <span>Filter: {{ filterSummary }}</span>
         </button>
+        <RouterLink
+          class="utility-chip help-trigger"
+          to="/events/help"
+          aria-label="Open MECP event help"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.75 9a2.25 2.25 0 0 1 4.13 1.25c0 1.5-1.88 1.88-1.88 3.25" />
+            <path d="M12 17h.01" />
+          </svg>
+          <span>MECP Help</span>
+        </RouterLink>
         <button
           class="create-toggle utility-new"
           type="button"
@@ -582,7 +595,7 @@ async function deleteEvent(uid: string): Promise<void> {
   align-items: center;
   display: grid;
   gap: 0.8rem;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.35fr) minmax(3.2rem, 0.32fr);
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr) minmax(0, 0.92fr) minmax(3.2rem, 0.32fr);
 }
 
 h1 {
@@ -723,6 +736,29 @@ h1 {
   min-height: 3rem;
   min-width: 3.2rem;
   padding: 0.48rem;
+}
+
+.help-trigger {
+  align-items: center;
+  background: rgb(8 28 58 / 92%);
+  border: 1px solid rgb(93 171 255 / 42%);
+  border-radius: 12px;
+  color: #8fdbff;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-headline);
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.help-trigger:hover,
+.help-trigger:focus-visible {
+  border-color: rgb(102 219 255 / 76%);
+  box-shadow: 0 0 0 1px rgb(9 55 95 / 75%), 0 0 20px rgb(40 178 255 / 18%);
+  color: #d8f8ff;
 }
 
 .create-toggle:disabled,
@@ -1243,7 +1279,7 @@ h3 {
 
   .header-actions {
     gap: 0.55rem;
-    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.34fr) minmax(2.8rem, 0.35fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(2.8rem, 0.42fr) minmax(2.8rem, 0.35fr);
   }
 
   .utility-chip,
@@ -1262,6 +1298,10 @@ h3 {
   .filter-panel {
     align-items: stretch;
     grid-template-columns: 1fr;
+  }
+
+  .help-trigger span {
+    display: none;
   }
 }
 </style>
