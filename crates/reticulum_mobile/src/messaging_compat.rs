@@ -649,6 +649,45 @@ impl MessagingStore {
         Some(record.clone())
     }
 
+    pub fn delete_conversation_messages<'a, I>(&mut self, conversation_keys: I) -> bool
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let keys = conversation_keys
+            .into_iter()
+            .map(normalize_hex)
+            .filter(|key| !key.is_empty())
+            .collect::<HashSet<_>>();
+        if keys.is_empty() {
+            return false;
+        }
+
+        let removed_ids = self
+            .message_records
+            .iter()
+            .filter_map(|(message_id_hex, record)| {
+                let conversation_id = normalize_hex(record.conversation_id.as_str());
+                let destination_hex = normalize_hex(record.destination_hex.as_str());
+                let source_hex = record.source_hex.as_deref().map(normalize_hex);
+                (keys.contains(conversation_id.as_str())
+                    || keys.contains(destination_hex.as_str())
+                    || source_hex
+                        .as_deref()
+                        .is_some_and(|value| keys.contains(value)))
+                .then_some(message_id_hex.clone())
+            })
+            .collect::<HashSet<_>>();
+        if removed_ids.is_empty() {
+            return false;
+        }
+
+        self.message_records
+            .retain(|message_id_hex, _| !removed_ids.contains(message_id_hex));
+        self.message_order
+            .retain(|message_id_hex| !removed_ids.contains(message_id_hex));
+        true
+    }
+
     pub fn list_messages(&self, conversation_id: Option<&str>) -> Vec<MessageRecord> {
         let mut out = Vec::<MessageRecord>::new();
         for message_id_hex in &self.message_order {
@@ -1146,6 +1185,63 @@ mod tests {
         let conversations = store.list_conversations();
         assert_eq!(conversations.len(), 1);
         assert_eq!(conversations[0].peer_display_name.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn delete_conversation_messages_removes_matching_alias_thread() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "outbound".into(),
+            conversation_id: "identity".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "appdest".into(),
+            source_hex: None,
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::Delivered,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+        store.upsert_message(MessageRecord {
+            message_id_hex: "inbound".into(),
+            conversation_id: "identity".into(),
+            direction: MessageDirection::Inbound,
+            destination_hex: "local".into(),
+            source_hex: Some("lxmfdest".into()),
+            title: None,
+            body_utf8: "copy".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::Received,
+            detail: None,
+            sent_at_ms: None,
+            received_at_ms: Some(20),
+            updated_at_ms: 20,
+        });
+        store.upsert_message(MessageRecord {
+            message_id_hex: "unrelated".into(),
+            conversation_id: "other".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "other".into(),
+            source_hex: None,
+            title: None,
+            body_utf8: "keep".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::Delivered,
+            detail: None,
+            sent_at_ms: Some(30),
+            received_at_ms: None,
+            updated_at_ms: 30,
+        });
+
+        assert!(store.delete_conversation_messages(["appdest", "lxmfdest", "identity"]));
+
+        let remaining = store.list_messages(None);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].message_id_hex, "unrelated");
+        assert_eq!(store.list_conversations().len(), 1);
     }
 
     #[test]

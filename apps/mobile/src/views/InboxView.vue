@@ -70,7 +70,7 @@ const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
   const seen = new Set<string>();
   return nodeStore.discoveredPeers
     .filter((peer) => peer.activeLink)
-    .filter((peer) => peer.saved || nodeStore.savedDestinations.has(peer.destination))
+    .filter((peer) => nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
       const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
       const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
@@ -252,6 +252,26 @@ const targetLongitudeLabel = computed(() =>
     ? formatCoordinate(targetTelemetryPosition.value.lon, "E", "W")
     : "",
 );
+const targetEamHref = computed(() => {
+  const callsign = safeTrim(selectedTargetMessage.value?.callsign) || safeTrim(selectedPeerDisplayName.value);
+  if (!callsign) {
+    return "";
+  }
+  const params = new URLSearchParams({ callsign });
+  return `/messages?${params.toString()}`;
+});
+const targetMapHref = computed(() => {
+  const position = targetTelemetryPosition.value;
+  if (!position) {
+    return "";
+  }
+  const params = new URLSearchParams({
+    callsign: position.callsign,
+    lat: String(position.lat),
+    lon: String(position.lon),
+  });
+  return `/telemetry?${params.toString()}`;
+});
 
 function handleSelectConversation(conversationId: string): void {
   messagingStore.selectConversation(conversationId);
@@ -462,6 +482,8 @@ onUnmounted(() => {
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
+          :target-eam-href="targetEamHref"
+          :target-map-href="targetMapHref"
           :target-message-id="messagingStore.selectedTargetMessageId"
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"

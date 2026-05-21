@@ -22,10 +22,10 @@ watch(
   },
 );
 
-const saveStateLabel = computed(() => (props.isSaved || props.peer.saved ? "Saved" : "Unsaved"));
+const saveStateLabel = computed(() => (props.isSaved ? "Saved" : "Unsaved"));
 const staleLabel = computed(() => (props.peer.stale ? "Stale" : "Current"));
 const linkLabel = computed(() => (props.peer.activeLink ? "Connected" : "Not connected"));
-const connectButtonDisabled = computed(() => !props.isSaved && !props.peer.saved);
+const connectButtonDisabled = computed(() => !props.isSaved);
 const connectButtonLabel = computed(() => {
   if (props.peer.activeLink) {
     return "Disconnect";

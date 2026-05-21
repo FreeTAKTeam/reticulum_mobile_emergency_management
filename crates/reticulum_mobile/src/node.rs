@@ -2931,11 +2931,18 @@ impl Node {
     pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                return inner.app_state.list_announces();
+            }
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::ListAnnounces { resp: resp_tx })?;
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::ListAnnounces { resp: resp_tx },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -3026,20 +3033,42 @@ impl Node {
     }
 
     pub fn delete_conversation(&self, conversation_id: String) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let peers = inner
-            .peers_snapshot
-            .lock()
-            .map_err(|_| NodeError::InternalError {})?
-            .clone();
-        let resolver = conversation_peer_resolver(&peers);
-        for invalidation in inner
-            .app_state
-            .delete_conversation_resolved(conversation_id.as_str(), &resolver)?
-        {
-            emit_projection_invalidation(&inner.bus, invalidation);
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let resolver = conversation_peer_resolver(&peers);
+                for invalidation in inner
+                    .app_state
+                    .delete_conversation_resolved(conversation_id.as_str(), &resolver)?
+                {
+                    emit_projection_invalidation(&inner.bus, invalidation);
+                }
+                None
+            }
+        };
+
+        if let Some(tx) = tx {
+            let (resp_tx, resp_rx) = cb::bounded(1);
+            dispatch_command(
+                &tx,
+                Command::DeleteConversation {
+                    conversation_id,
+                    resp: resp_tx,
+                },
+            )?;
+            resp_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or(Err(NodeError::Timeout {}))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {

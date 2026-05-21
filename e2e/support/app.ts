@@ -9,6 +9,8 @@ const STORAGE_KEYS = {
   settings: "reticulum.mobile.settings.v1",
   savedPeers: "reticulum.mobile.savedPeers.v1",
   setupWizard: "reticulum.mobile.setupWizard.v1",
+  inbox: "reticulum.mobile.inbox.v1",
+  notificationActivity: "reticulum.mobile.notificationActivity.v1",
 } as const;
 
 export interface ActionMessageSeed {
@@ -124,6 +126,8 @@ interface StorageSeed {
   messages?: ActionMessageSeed[];
   events?: EventSeed[];
   telemetry?: TelemetrySeed[];
+  inboxMessages?: Array<Record<string, unknown>>;
+  notificationActivities?: Array<Record<string, unknown>>;
   settings?: SettingsSeed;
   savedPeers?: SavedPeerSeed[];
   setupWizardCompleted?: boolean;
@@ -169,6 +173,17 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
         window.localStorage.setItem(keys.telemetry, JSON.stringify(payload.telemetry));
       }
 
+      if (payload.inboxMessages) {
+        window.localStorage.setItem(keys.inbox, JSON.stringify(payload.inboxMessages));
+      }
+
+      if (payload.notificationActivities) {
+        window.localStorage.setItem(
+          keys.notificationActivity,
+          JSON.stringify(payload.notificationActivities),
+        );
+      }
+
       if (payload.settings) {
         window.localStorage.setItem(keys.settings, JSON.stringify(payload.settings));
       }
@@ -192,6 +207,8 @@ export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promis
         messages: seed.messages,
         events: seed.events,
         telemetry: seed.telemetry,
+        inboxMessages: seed.inboxMessages,
+        notificationActivities: seed.notificationActivities,
         settings: seed.settings,
         savedPeers: seed.savedPeers,
         setupWizardCompleted: seed.setupWizardCompleted ?? true,

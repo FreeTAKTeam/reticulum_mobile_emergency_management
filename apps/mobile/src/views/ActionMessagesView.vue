@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
@@ -19,6 +20,7 @@ import {
 
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
+const route = useRoute();
 
 const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
@@ -57,6 +59,10 @@ const isCreateFormVisible = shallowRef(false);
 const editingCallsign = shallowRef<string | null>(null);
 
 const messages = computed(() => messagesStore.messages);
+const selectedCallsign = computed(() => {
+  const value = route.query.callsign;
+  return Array.isArray(value) ? (value[0]?.trim() ?? "") : (value?.trim() ?? "");
+});
 const editableCallsigns = computed(() =>
   messages.value
     .filter((message) => messagesStore.canManageMessage(message))
@@ -285,6 +291,7 @@ function deleteMessage(callsign: string): void {
       <ActionMessageTable
         :messages="messages"
         :editable-callsigns="editableCallsigns"
+        :selected-callsign="selectedCallsign"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"
@@ -294,6 +301,7 @@ function deleteMessage(callsign: string): void {
       <ActionMessageList
         :messages="messages"
         :editable-callsigns="editableCallsigns"
+        :selected-callsign="selectedCallsign"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"

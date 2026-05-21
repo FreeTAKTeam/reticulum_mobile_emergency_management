@@ -52,11 +52,25 @@ pub(crate) fn parse_sos_fields(fields_bytes: &[u8]) -> Option<SosFields> {
     (parsed.command.is_some() || parsed.telemetry.is_some()).then_some(parsed)
 }
 
-pub(crate) fn looks_like_sos_text(body: &str) -> bool {
+pub(crate) fn sos_kind_from_text(body: &str) -> Option<SosMessageKind> {
     let normalized = body.trim_start().to_ascii_uppercase();
-    normalized.starts_with("SOS")
-        || normalized.starts_with("URGENCE")
-        || normalized.starts_with("EMERGENCY")
+    if !normalized.starts_with("SOS")
+        && !normalized.starts_with("URGENCE")
+        && !normalized.starts_with("EMERGENCY")
+    {
+        return None;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("cancelled")
+        || lower.contains("canceled")
+        || lower.contains("cancel")
+        || lower.contains("ended")
+        || lower.contains("i am safe")
+        || lower.contains("i'm safe")
+    {
+        return Some(SosMessageKind::Cancelled {});
+    }
+    Some(SosMessageKind::Active {})
 }
 
 pub(crate) fn extract_text_coordinates(body: &str) -> Option<(f64, f64)> {
@@ -462,10 +476,35 @@ mod tests {
 
     #[test]
     fn text_detection_accepts_legacy_prefixes() {
-        assert!(looks_like_sos_text("SOS! I need help"));
-        assert!(looks_like_sos_text("urgence besoin aide"));
-        assert!(looks_like_sos_text("Emergency at 45.1,-63.2"));
-        assert!(!looks_like_sos_text("normal chat"));
+        assert!(matches!(
+            sos_kind_from_text("SOS! I need help"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("urgence besoin aide"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("Emergency at 45.1,-63.2"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(sos_kind_from_text("normal chat").is_none());
+    }
+
+    #[test]
+    fn text_detection_classifies_legacy_cancel_messages() {
+        assert!(matches!(
+            sos_kind_from_text("SOS Cancelled - I am safe."),
+            Some(SosMessageKind::Cancelled {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("SOS ended. I am safe at base."),
+            Some(SosMessageKind::Cancelled {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("SOS! I need help"),
+            Some(SosMessageKind::Active {})
+        ));
     }
 
     #[test]

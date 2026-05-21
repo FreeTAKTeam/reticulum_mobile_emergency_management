@@ -7,18 +7,19 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 
 use crate::runtime::now_ms;
+use crate::sos_fields::sos_kind_from_text;
 use crate::types::{
-    AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-    ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest, ChecklistMode,
-    ChecklistOriginType, ChecklistRecord, ChecklistSyncState, ChecklistTaskCellSetRequest,
-    ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
-    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
-    ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord, ChecklistUpdateRequest,
-    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
-    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
-    DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
+    ChecklistColumnType, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
+    ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSyncState,
+    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
+    ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, MessageDirection,
+    MessageRecord, NodeError, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    SosAlertRecord, SosAudioRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord,
+    TelemetryPositionRecord, DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
 };
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
@@ -179,6 +180,18 @@ impl AppStateStore {
                     message_id_hex TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL,
                     updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS announces (
+                    destination_hex TEXT PRIMARY KEY,
+                    identity_hex TEXT NOT NULL,
+                    destination_kind TEXT NOT NULL,
+                    announce_class TEXT NOT NULL,
+                    app_data TEXT NOT NULL,
+                    display_name TEXT,
+                    hops INTEGER NOT NULL,
+                    interface_hex TEXT NOT NULL,
+                    received_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS telemetry_positions (
@@ -406,6 +419,124 @@ impl AppStateStore {
         )?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(invalidation)
+    }
+
+    pub fn upsert_announce(&self, record: &AnnounceRecord) -> Result<(), NodeError> {
+        let destination_hex = record.destination_hex.trim().to_ascii_lowercase();
+        if destination_hex.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let connection = self.connect()?;
+        let existing: Option<(i64, Option<String>)> = connection
+            .query_row(
+                "SELECT received_at_ms, display_name FROM announces WHERE destination_hex = ?1",
+                params![destination_hex],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        if existing
+            .as_ref()
+            .is_some_and(|(received_at_ms, _)| *received_at_ms > record.received_at_ms as i64)
+        {
+            return Ok(());
+        }
+
+        let mut normalized = record.clone();
+        normalized.destination_hex = destination_hex;
+        normalized.identity_hex = record.identity_hex.trim().to_ascii_lowercase();
+        normalized.destination_kind = record.destination_kind.trim().to_ascii_lowercase();
+        normalized.interface_hex = record.interface_hex.trim().to_ascii_lowercase();
+        normalized.display_name = normalize_optional_string(record.display_name.as_deref())
+            .or_else(|| {
+                existing.as_ref().and_then(|(_, display_name)| {
+                    normalize_optional_string(display_name.as_deref())
+                })
+            });
+        let announce_class = announce_class_name(normalized.announce_class);
+        let json = serialize_json(&normalized)?;
+        connection
+            .execute(
+                "INSERT INTO announces (
+                    destination_hex,
+                    identity_hex,
+                    destination_kind,
+                    announce_class,
+                    app_data,
+                    display_name,
+                    hops,
+                    interface_hex,
+                    received_at_ms,
+                    json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(destination_hex) DO UPDATE SET
+                    identity_hex = excluded.identity_hex,
+                    destination_kind = excluded.destination_kind,
+                    announce_class = excluded.announce_class,
+                    app_data = excluded.app_data,
+                    display_name = excluded.display_name,
+                    hops = excluded.hops,
+                    interface_hex = excluded.interface_hex,
+                    received_at_ms = excluded.received_at_ms,
+                    json = excluded.json",
+                params![
+                    normalized.destination_hex,
+                    normalized.identity_hex,
+                    normalized.destination_kind,
+                    announce_class,
+                    normalized.app_data,
+                    normalized.display_name,
+                    i64::from(normalized.hops),
+                    normalized.interface_hex,
+                    normalized.received_at_ms as i64,
+                    json,
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    destination_hex,
+                    identity_hex,
+                    destination_kind,
+                    announce_class,
+                    app_data,
+                    display_name,
+                    hops,
+                    interface_hex,
+                    received_at_ms
+                 FROM announces
+                 ORDER BY received_at_ms DESC, destination_hex ASC",
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| {
+                let announce_class: String = row.get(3)?;
+                let hops: i64 = row.get(6)?;
+                let received_at_ms: i64 = row.get(8)?;
+                Ok(AnnounceRecord {
+                    destination_hex: row.get(0)?,
+                    identity_hex: row.get(1)?,
+                    destination_kind: row.get(2)?,
+                    announce_class: announce_class_from_name(announce_class.as_str()),
+                    app_data: row.get(4)?,
+                    display_name: row.get(5)?,
+                    hops: hops.clamp(0, u8::MAX as i64) as u8,
+                    interface_hex: row.get(7)?,
+                    received_at_ms: received_at_ms.max(0) as u64,
+                })
+            })
+            .map_err(|_| NodeError::IoError {})?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row.map_err(|_| NodeError::IoError {})?);
+        }
+        Ok(records)
     }
 
     pub fn get_eams(&self) -> Result<Vec<EamProjectionRecord>, NodeError> {
@@ -1362,12 +1493,19 @@ impl AppStateStore {
         ids.push(canonical_id.clone());
         ids.sort();
         ids.dedup();
+        let normalized_ids = ids
+            .iter()
+            .map(|id| normalize_message_peer_key(id.as_str()))
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
 
         let mut connection = self.connect()?;
         self.repair_message_conversations(&connection, resolver)?;
         let transaction = connection
             .transaction()
             .map_err(|_| NodeError::IoError {})?;
+        let removed_sos =
+            self.delete_sos_records_for_conversations_tx(&transaction, normalized_ids.as_slice())?;
         for id in &ids {
             transaction
                 .execute(
@@ -1388,8 +1526,22 @@ impl AppStateStore {
             None,
             Some("conversation-deleted".to_string()),
         )?;
+        let sos = if removed_sos {
+            Some(self.bump_projection_revision_tx(
+                &transaction,
+                ProjectionScope::Sos {},
+                None,
+                Some("conversation-deleted".to_string()),
+            )?)
+        } else {
+            None
+        };
         transaction.commit().map_err(|_| NodeError::IoError {})?;
-        Ok(vec![messages, conversations])
+        let mut invalidations = vec![messages, conversations];
+        if let Some(invalidation) = sos {
+            invalidations.push(invalidation);
+        }
+        Ok(invalidations)
     }
 
     pub fn get_telemetry_positions(&self) -> Result<Vec<TelemetryPositionRecord>, NodeError> {
@@ -1518,10 +1670,56 @@ impl AppStateStore {
     }
 
     pub fn list_sos_alerts(&self) -> Result<Vec<SosAlertRecord>, NodeError> {
-        query_json_records(
-            &self.connect()?,
+        let connection = self.connect()?;
+        let records: Vec<SosAlertRecord> = query_json_records(
+            &connection,
             "SELECT json FROM sos_alerts ORDER BY updated_at_ms DESC, incident_id ASC",
-        )
+        )?;
+        let mut filtered = Vec::new();
+        for alert in records {
+            if alert.active {
+                if matches!(
+                    sos_kind_from_text(alert.body_utf8.as_str()),
+                    Some(crate::types::SosMessageKind::Cancelled {})
+                ) {
+                    continue;
+                }
+                if !conversation_has_messages(&connection, alert.conversation_id.as_str())?
+                    || conversation_has_sos_cancellation(
+                        &connection,
+                        alert.conversation_id.as_str(),
+                        alert.updated_at_ms,
+                    )?
+                {
+                    continue;
+                }
+            }
+            filtered.push(alert);
+        }
+        Ok(filtered)
+    }
+
+    pub(crate) fn latest_active_sos_alert_for_source(
+        &self,
+        source_hex: &str,
+    ) -> Result<Option<SosAlertRecord>, NodeError> {
+        let normalized = source_hex.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM sos_alerts
+                 WHERE source_hex = ?1 AND active = 1
+                 ORDER BY updated_at_ms DESC, incident_id ASC
+                 LIMIT 1",
+                params![normalized],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
     }
 
     pub fn upsert_sos_alert(
@@ -1944,6 +2142,51 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn delete_sos_records_for_conversations_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        conversation_ids: &[String],
+    ) -> Result<bool, NodeError> {
+        if conversation_ids.is_empty() {
+            return Ok(false);
+        }
+
+        let mut statement = transaction
+            .prepare("SELECT json FROM sos_alerts")
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| NodeError::IoError {})?;
+        let mut records_to_delete = Vec::<(String, String)>::new();
+        for row in rows {
+            let alert: SosAlertRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+            let alert_conversation = normalize_message_peer_key(alert.conversation_id.as_str());
+            if conversation_ids.iter().any(|id| id == &alert_conversation) {
+                records_to_delete.push((alert.incident_id, alert.source_hex));
+            }
+        }
+        drop(statement);
+
+        records_to_delete.sort();
+        records_to_delete.dedup();
+        for (incident_id, source_hex) in &records_to_delete {
+            transaction
+                .execute(
+                    "DELETE FROM sos_locations WHERE incident_id = ?1 AND source_hex = ?2",
+                    params![incident_id, source_hex],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+            transaction
+                .execute(
+                    "DELETE FROM sos_alerts WHERE incident_id = ?1 AND source_hex = ?2",
+                    params![incident_id, source_hex],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+
+        Ok(!records_to_delete.is_empty())
+    }
+
     fn bump_projection_revision_tx(
         &self,
         transaction: &Transaction<'_>,
@@ -2009,6 +2252,28 @@ fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, No
     serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
 }
 
+fn announce_class_name(class: AnnounceClass) -> &'static str {
+    match class {
+        AnnounceClass::PeerApp {} => "PeerApp",
+        AnnounceClass::RchHubServer {} => "RchHubServer",
+        AnnounceClass::PropagationNode {} => "PropagationNode",
+        AnnounceClass::LxmfDelivery {} => "LxmfDelivery",
+        AnnounceClass::Other {} => "Other",
+    }
+}
+
+fn announce_class_from_name(value: &str) -> AnnounceClass {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "peerapp" | "peer_app" | "peer-app" => AnnounceClass::PeerApp {},
+        "rchhubserver" | "rch_hub_server" | "rch-hub-server" => AnnounceClass::RchHubServer {},
+        "propagationnode" | "propagation_node" | "propagation-node" => {
+            AnnounceClass::PropagationNode {}
+        }
+        "lxmfdelivery" | "lxmf_delivery" | "lxmf-delivery" => AnnounceClass::LxmfDelivery {},
+        _ => AnnounceClass::Other {},
+    }
+}
+
 pub(crate) fn canonicalize_chat_message(message: &MessageRecord) -> MessageRecord {
     canonicalize_chat_message_with_resolver(message, &ConversationPeerResolver::default())
 }
@@ -2048,6 +2313,60 @@ fn canonical_message_peer_key(message: &MessageRecord) -> String {
 
 fn normalize_message_peer_key(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn conversation_has_messages(
+    connection: &Connection,
+    conversation_id: &str,
+) -> Result<bool, NodeError> {
+    let normalized = normalize_message_peer_key(conversation_id);
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(1) FROM messages WHERE conversation_id = ?1 LIMIT 1",
+            params![normalized],
+            |row| row.get(0),
+        )
+        .map_err(|_| NodeError::IoError {})?;
+    Ok(count > 0)
+}
+
+fn conversation_has_sos_cancellation(
+    connection: &Connection,
+    conversation_id: &str,
+    since_ms: u64,
+) -> Result<bool, NodeError> {
+    let normalized = normalize_message_peer_key(conversation_id);
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT json FROM messages
+             WHERE conversation_id = ?1 AND updated_at_ms >= ?2
+             ORDER BY updated_at_ms DESC, message_id_hex ASC",
+        )
+        .map_err(|_| NodeError::IoError {})?;
+    let rows = statement
+        .query_map(params![normalized, since_ms as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| NodeError::IoError {})?;
+    for row in rows {
+        let message: MessageRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+        let detail = message.detail.as_deref().unwrap_or("").to_ascii_lowercase();
+        if detail.contains("sos:cancelled")
+            || matches!(
+                sos_kind_from_text(message.body_utf8.as_str()),
+                Some(crate::types::SosMessageKind::Cancelled {})
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn truncate_preview(value: &str) -> Option<String> {
@@ -2898,14 +3217,16 @@ mod tests {
 
     use super::*;
     use crate::types::{
-        AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-        ChecklistCreateFromTemplateRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
-        ChecklistSettingsRecord, ChecklistStatusCounts, ChecklistSystemColumnKey,
-        ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
-        ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
-        ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch,
-        ChecklistUpdateRequest, ChecklistUserTaskStatus, HubMode, HubSettingsRecord,
-        MessageDirection, MessageMethod, MessageState, ProjectionScope, TelemetrySettingsRecord,
+        AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord,
+        ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
+        ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSettingsRecord,
+        ChecklistStatusCounts, ChecklistSystemColumnKey, ChecklistTaskCellSetRequest,
+        ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+        ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
+        ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
+        ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
+        MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
+        TelemetrySettingsRecord,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2970,6 +3291,65 @@ mod tests {
             sent_at_ms: Some(updated_at_ms),
             received_at_ms: None,
             updated_at_ms,
+        }
+    }
+
+    fn announce(
+        destination_hex: &str,
+        display_name: Option<&str>,
+        received_at_ms: u64,
+    ) -> AnnounceRecord {
+        AnnounceRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: "11112222333344445555666677778888".to_string(),
+            destination_kind: "app".to_string(),
+            announce_class: AnnounceClass::PeerApp {},
+            app_data: "R3AKT,EMergencyMessages".to_string(),
+            display_name: display_name.map(str::to_string),
+            hops: 2,
+            interface_hex: "aabbccdd".to_string(),
+            received_at_ms,
+        }
+    }
+
+    fn sos_alert(
+        incident_id: &str,
+        source_hex: &str,
+        conversation_id: &str,
+        active: bool,
+        updated_at_ms: u64,
+    ) -> SosAlertRecord {
+        SosAlertRecord {
+            incident_id: incident_id.to_string(),
+            source_hex: source_hex.to_string(),
+            conversation_id: conversation_id.to_string(),
+            state: if active {
+                SosMessageKind::Active {}
+            } else {
+                SosMessageKind::Cancelled {}
+            },
+            active,
+            body_utf8: "SOS".to_string(),
+            lat: Some(44.6488),
+            lon: Some(-63.5752),
+            battery_percent: None,
+            audio_id: None,
+            message_id_hex: Some(format!("message-{incident_id}")),
+            received_at_ms: updated_at_ms,
+            updated_at_ms,
+        }
+    }
+
+    fn sos_location(incident_id: &str, source_hex: &str, recorded_at_ms: u64) -> SosLocationRecord {
+        SosLocationRecord {
+            incident_id: incident_id.to_string(),
+            source_hex: source_hex.to_string(),
+            lat: 44.6488,
+            lon: -63.5752,
+            alt: None,
+            accuracy: None,
+            battery_percent: None,
+            recorded_at_ms,
         }
     }
 
@@ -3129,6 +3509,65 @@ mod tests {
     }
 
     #[test]
+    fn latest_announce_is_one_row_per_destination_and_preserves_display_name() {
+        let storage_dir = test_storage_dir("latest-announce");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        store
+            .upsert_announce(&announce(
+                "aaaabbbbccccddddeeeeffff00001111",
+                Some("Alpha Peer"),
+                1_000,
+            ))
+            .expect("insert announce");
+        store
+            .upsert_announce(&announce("aaaabbbbccccddddeeeeffff00001111", None, 2_000))
+            .expect("update announce");
+        store
+            .upsert_announce(&announce(
+                "aaaabbbbccccddddeeeeffff00001111",
+                Some("Stale Name"),
+                1_500,
+            ))
+            .expect("ignore older announce");
+
+        let announces = store.list_announces().expect("list announces");
+        assert_eq!(announces.len(), 1);
+        assert_eq!(
+            announces[0].destination_hex,
+            "aaaabbbbccccddddeeeeffff00001111"
+        );
+        assert_eq!(announces[0].received_at_ms, 2_000);
+        assert_eq!(announces[0].display_name.as_deref(), Some("Alpha Peer"));
+    }
+
+    #[test]
+    fn announces_are_available_after_store_restart() {
+        let storage_dir = test_storage_dir("restart-announces");
+        let storage_dir_str = storage_dir.to_string_lossy();
+        let store = AppStateStore::new(Some(storage_dir_str.as_ref())).expect("create store");
+        store
+            .upsert_announce(&announce(
+                "bbbbccccddddeeeeffff000011112222",
+                Some("Offline Peer"),
+                3_000,
+            ))
+            .expect("insert announce");
+        drop(store);
+
+        let restarted = AppStateStore::new(Some(storage_dir_str.as_ref())).expect("reopen store");
+        let announces = restarted.list_announces().expect("list announces");
+        assert_eq!(announces.len(), 1);
+        assert_eq!(
+            announces[0].destination_hex,
+            "bbbbccccddddeeeeffff000011112222"
+        );
+        assert_eq!(announces[0].display_name.as_deref(), Some("Offline Peer"));
+        assert_eq!(announces[0].received_at_ms, 3_000);
+    }
+
+    #[test]
     fn peer_identity_aliases_fold_existing_split_threads() {
         let storage_dir = test_storage_dir("identity-alias-thread");
         let store =
@@ -3241,6 +3680,131 @@ mod tests {
             .expect("list remaining messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id_hex, "delete-unrelated");
+    }
+
+    #[test]
+    fn active_sos_alert_requires_existing_conversation_messages() {
+        let storage_dir = test_storage_dir("sos-alert-orphan");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let alert = sos_alert(
+            "incident-orphan",
+            "source-orphan",
+            "orphan-thread",
+            true,
+            10,
+        );
+
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        assert!(store
+            .list_sos_alerts()
+            .expect("list orphan sos alerts")
+            .is_empty());
+
+        let message = message(
+            "sos-message",
+            "orphan-thread",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("orphan-thread"),
+            11,
+        );
+        store.upsert_message(&message).expect("persist sos message");
+        assert_eq!(
+            store
+                .list_sos_alerts()
+                .expect("list attached sos alerts")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn active_sos_alert_is_hidden_after_legacy_cancel_message() {
+        let storage_dir = test_storage_dir("sos-alert-legacy-cancel");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let active_message = message(
+            "sos-active-message",
+            "legacy-thread",
+            MessageDirection::Outbound {},
+            "legacy-thread",
+            Some("LOCAL"),
+            10,
+        );
+        let mut cancel_message = message(
+            "sos-cancel-message",
+            "legacy-thread",
+            MessageDirection::Outbound {},
+            "legacy-thread",
+            Some("LOCAL"),
+            12,
+        );
+        cancel_message.body_utf8 = "SOS Cancelled - I am safe.".to_string();
+        let alert = sos_alert("incident-legacy", "legacypeer", "legacy-thread", true, 11);
+
+        store
+            .upsert_message(&active_message)
+            .expect("persist active message");
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        assert_eq!(store.list_sos_alerts().expect("list active alert").len(), 1);
+
+        store
+            .upsert_message(&cancel_message)
+            .expect("persist cancel message");
+        assert!(store
+            .list_sos_alerts()
+            .expect("list after legacy cancel")
+            .is_empty());
+        assert_eq!(
+            store
+                .latest_active_sos_alert_for_source("legacypeer")
+                .expect("latest active")
+                .expect("active row remains for runtime reconciliation")
+                .incident_id,
+            "incident-legacy"
+        );
+    }
+
+    #[test]
+    fn delete_conversation_removes_sos_alert_and_locations() {
+        let storage_dir = test_storage_dir("sos-delete-conversation");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let message = message(
+            "sos-delete-message",
+            "sos-thread",
+            MessageDirection::Outbound {},
+            "sos-thread",
+            Some("LOCAL"),
+            20,
+        );
+        let alert = sos_alert("incident-delete", "sospeer", "sos-thread", true, 21);
+        let location = sos_location("incident-delete", "sospeer", 22);
+
+        store.upsert_message(&message).expect("persist sos message");
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        store
+            .upsert_sos_location(&location)
+            .expect("persist sos location");
+        assert_eq!(store.list_sos_alerts().expect("list alerts").len(), 1);
+        assert_eq!(store.list_sos_locations().expect("list locations").len(), 1);
+
+        let invalidations = store
+            .delete_conversation_resolved("sos-thread", &ConversationPeerResolver::default())
+            .expect("delete sos conversation");
+
+        assert!(invalidations
+            .iter()
+            .any(|invalidation| matches!(invalidation.scope, ProjectionScope::Sos {})));
+        assert!(store
+            .list_sos_alerts()
+            .expect("list alerts after delete")
+            .is_empty());
+        assert!(store
+            .list_sos_locations()
+            .expect("list locations after delete")
+            .is_empty());
     }
 
     #[test]

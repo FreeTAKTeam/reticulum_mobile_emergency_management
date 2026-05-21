@@ -54,6 +54,12 @@ function handleContextMenu(event: MouseEvent, conversationId: string): void {
   emit("delete", conversationId);
 }
 
+function handleDeleteClick(event: MouseEvent, conversationId: string): void {
+  event.stopPropagation();
+  clearLongPressTimer();
+  emit("delete", conversationId);
+}
+
 function hasReadablePeerName(displayName: string, destinationHex: string): boolean {
   const normalizedName = String(displayName ?? "").trim();
   const normalizedDestination = String(destinationHex ?? "").trim();
@@ -85,37 +91,58 @@ function conversationStateLabel(state: string): string {
     <p v-if="items.length === 0" class="conversation-empty">
       No conversations yet. Discover a peer or receive an LXMF message to start a thread.
     </p>
-    <button
+    <article
       v-for="item in items"
       :key="item.conversationId"
-      type="button"
       class="conversation-item"
       :class="{
         active: item.conversationId === selectedConversationId,
         sos: activeSosConversationIds?.has(item.conversationId),
       }"
-      @click="handleConversationClick(item.conversationId)"
       @contextmenu="handleContextMenu($event, item.conversationId)"
       @pointercancel="clearLongPressTimer"
       @pointerdown="startLongPress(item.conversationId)"
       @pointerleave="clearLongPressTimer"
       @pointerup="clearLongPressTimer"
     >
-      <div class="conversation-topline">
-        <p class="conversation-name">{{ item.displayName }}</p>
-        <span class="conversation-time">{{ new Date(item.updatedAtMs).toLocaleTimeString() }}</span>
-      </div>
-      <p class="conversation-preview">{{ item.preview }}</p>
-      <p
-        v-if="!hasReadablePeerName(item.displayName, item.destinationHex)"
-        class="conversation-destination"
+      <button
+        type="button"
+        class="conversation-select"
+        @click="handleConversationClick(item.conversationId)"
       >
-        {{ item.destinationHex }}
-      </p>
-      <span class="conversation-state">
-        {{ activeSosConversationIds?.has(item.conversationId) ? "SOS ACTIVE" : conversationStateLabel(item.state) }}
-      </span>
-    </button>
+        <div class="conversation-topline">
+          <p class="conversation-name">{{ item.displayName }}</p>
+          <span class="conversation-time">{{ new Date(item.updatedAtMs).toLocaleTimeString() }}</span>
+        </div>
+        <p class="conversation-preview">{{ item.preview }}</p>
+        <p
+          v-if="!hasReadablePeerName(item.displayName, item.destinationHex)"
+          class="conversation-destination"
+        >
+          {{ item.destinationHex }}
+        </p>
+        <span class="conversation-state">
+          {{ activeSosConversationIds?.has(item.conversationId) ? "SOS ACTIVE" : conversationStateLabel(item.state) }}
+        </span>
+      </button>
+      <button
+        type="button"
+        class="conversation-delete"
+        :aria-label="`Delete conversation with ${item.displayName}`"
+        title="Delete conversation"
+        @click="handleDeleteClick($event, item.conversationId)"
+        @pointerdown.stop
+        @pointerup.stop
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 6h18" />
+          <path d="M8 6V4h8v2" />
+          <path d="M6 6l1 15h10l1-15" />
+          <path d="M10 10v7" />
+          <path d="M14 10v7" />
+        </svg>
+      </button>
+    </article>
   </aside>
 </template>
 
@@ -142,15 +169,59 @@ function conversationStateLabel(state: string): string {
 }
 
 .conversation-item {
+  align-items: start;
   background: rgb(5 20 44 / 78%);
   border: 1px solid rgb(73 119 184 / 28%);
   border-radius: 14px;
   color: inherit;
+  display: grid;
+  gap: 0.3rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.82rem 0.88rem;
+  text-align: left;
+}
+
+.conversation-select {
+  background: transparent;
+  border: 0;
+  color: inherit;
   cursor: pointer;
   display: grid;
   gap: 0.3rem;
-  padding: 0.82rem 0.88rem;
+  min-width: 0;
+  padding: 0;
   text-align: left;
+}
+
+.conversation-delete {
+  --btn-bg: rgb(12 31 64 / 78%);
+  --btn-bg-pressed: rgb(29 61 105 / 88%);
+  --btn-border: rgb(118 154 202 / 36%);
+  --btn-border-pressed: rgb(250 113 113 / 82%);
+  --btn-shadow: none;
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 10%);
+  --btn-color: #9fb7d9;
+  --btn-color-pressed: #fecaca;
+  align-items: center;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 8px;
+  color: var(--btn-color);
+  cursor: pointer;
+  display: inline-flex;
+  height: 2.1rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.1rem;
+}
+
+.conversation-delete svg {
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
 }
 
 .conversation-item.active {
