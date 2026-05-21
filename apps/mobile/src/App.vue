@@ -168,7 +168,7 @@ const pageTitle = computed(() => {
     case "dashboard":
       return "Dashboard";
     case "messages":
-      return "Action Messages";
+      return "EAM";
     case "events":
       return "Events";
     case "event-mecp-help":

@@ -3,6 +3,9 @@ import { LocalNotifications, type ActionPerformed } from "@capacitor/local-notif
 
 const UPDATES_CHANNEL_ID = "operational-updates";
 const UPDATES_GROUP_ID = "operational-updates";
+const NOTIFICATION_ACTIVITY_STORAGE_KEY = "reticulum.mobile.notificationActivity.v1";
+const NOTIFICATION_ACTIVITY_CHANGED_EVENT = "reticulum-mobile-notification-activity";
+const MAX_NOTIFICATION_ACTIVITY_RECORDS = 20;
 let initState: Promise<boolean> | null = null;
 let nextNotificationId = Number(Date.now() % 2_000_000_000);
 let actionListenerRegistered = false;
@@ -17,6 +20,13 @@ export interface NotificationNavigationTarget {
 
 export type NotificationExtra = NotificationNavigationTarget & Record<string, unknown>;
 
+export interface NotificationActivityRecord extends NotificationNavigationTarget {
+  id: number;
+  title: string;
+  body: string;
+  at: number;
+}
+
 function isNotificationRuntimeSupported(): boolean {
   return Capacitor.getPlatform() !== "web";
 }
@@ -24,6 +34,88 @@ function isNotificationRuntimeSupported(): boolean {
 function getNextNotificationId(): number {
   nextNotificationId = (nextNotificationId % 2_000_000_000) + 1;
   return nextNotificationId;
+}
+
+function normalizeActivityRecord(value: unknown): NotificationActivityRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = Number(record.id);
+  const at = Number(record.at);
+  const title = typeof record.title === "string" ? record.title.trim() : "";
+  const body = typeof record.body === "string" ? record.body.trim() : "";
+  if (!Number.isFinite(id) || !Number.isFinite(at) || !title) {
+    return null;
+  }
+  const target = notificationTargetFromExtra(record);
+  return {
+    id,
+    title,
+    body,
+    at,
+    ...(target ?? {}),
+  };
+}
+
+export function listNotificationActivity(): NotificationActivityRecord[] {
+  try {
+    const raw = localStorage.getItem(NOTIFICATION_ACTIVITY_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as unknown[];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((record) => normalizeActivityRecord(record))
+      .filter((record): record is NotificationActivityRecord => Boolean(record))
+      .sort((left, right) => right.at - left.at)
+      .slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS);
+  } catch {
+    return [];
+  }
+}
+
+function saveNotificationActivity(records: NotificationActivityRecord[]): void {
+  try {
+    localStorage.setItem(
+      NOTIFICATION_ACTIVITY_STORAGE_KEY,
+      JSON.stringify(records.slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS)),
+    );
+    window.dispatchEvent(new CustomEvent(NOTIFICATION_ACTIVITY_CHANGED_EVENT));
+  } catch {
+    // Activity history is best-effort and must never block notifications.
+  }
+}
+
+function appendNotificationActivity(
+  id: number,
+  title: string,
+  body: string,
+  extra: NotificationExtra,
+): void {
+  const target = notificationTargetFromExtra(extra);
+  saveNotificationActivity([
+    {
+      id,
+      title,
+      body,
+      at: Date.now(),
+      ...(target ?? {}),
+    },
+    ...listNotificationActivity().filter((record) => record.id !== id),
+  ]);
+}
+
+export function subscribeNotificationActivity(listener: () => void): () => void {
+  window.addEventListener(NOTIFICATION_ACTIVITY_CHANGED_EVENT, listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    window.removeEventListener(NOTIFICATION_ACTIVITY_CHANGED_EVENT, listener);
+    window.removeEventListener("storage", listener);
+  };
 }
 
 async function ensureNotificationsReady(): Promise<boolean> {
@@ -151,11 +243,13 @@ export async function notifyOperationalUpdate(
   if (!(await ensureNotificationsReady().catch(() => false))) {
     return;
   }
+  const id = getNextNotificationId();
+  appendNotificationActivity(id, title, body, extra);
 
   await LocalNotifications.schedule({
     notifications: [
       {
-        id: getNextNotificationId(),
+        id,
         title,
         body,
         channelId: Capacitor.getPlatform() === "android" ? UPDATES_CHANNEL_ID : undefined,

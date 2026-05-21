@@ -8,6 +8,12 @@ interface SosMessageMapTarget {
   messageIdHex?: string;
 }
 
+interface MessageBodySegment {
+  type: "text" | "link";
+  text: string;
+  href?: string;
+}
+
 const props = defineProps<{
   destinationHex?: string;
   displayName?: string;
@@ -16,6 +22,8 @@ const props = defineProps<{
   targetTeam?: string;
   targetLatitude?: string;
   targetLongitude?: string;
+  targetEamHref?: string;
+  targetMapHref?: string;
   targetMessageId?: string;
   sosMapTargets?: Record<string, SosMessageMapTarget>;
   messages: MessageRecord[];
@@ -46,6 +54,8 @@ const hasTargetPosition = computed(() =>
 );
 const visibleTargetStatus = computed(() => safeTrim(props.targetStatus) || "Unknown");
 const visibleTargetTeam = computed(() => safeTrim(props.targetTeam) || "Unknown Team");
+const targetEamHref = computed(() => safeTrim(props.targetEamHref));
+const targetMapHref = computed(() => safeTrim(props.targetMapHref));
 
 function submit(): void {
   const bodyUtf8 = draft.value.trim();
@@ -72,6 +82,46 @@ function visibleMessageBody(message: MessageRecord): string {
     .filter((line) => !safeTrim(line).toLowerCase().startsWith("gps:"))
     .join("\n")
     .trim();
+}
+
+function splitTrailingUrlPunctuation(value: string): { url: string; trailing: string } {
+  let url = value;
+  let trailing = "";
+  while (url.length > 0 && /[),.!?;:]/.test(url[url.length - 1])) {
+    trailing = `${url[url.length - 1]}${trailing}`;
+    url = url.slice(0, -1);
+  }
+  return { url, trailing };
+}
+
+function linkHref(value: string): string {
+  return value.toLowerCase().startsWith("www.") ? `https://${value}` : value;
+}
+
+function messageBodySegments(message: MessageRecord): MessageBodySegment[] {
+  const body = visibleMessageBody(message);
+  const urlPattern = /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+  const segments: MessageBodySegment[] = [];
+  let cursor = 0;
+  for (let match = urlPattern.exec(body); match; match = urlPattern.exec(body)) {
+    const raw = match[0];
+    const { url, trailing } = splitTrailingUrlPunctuation(raw);
+    if (!url) {
+      continue;
+    }
+    if (match.index > cursor) {
+      segments.push({ type: "text", text: body.slice(cursor, match.index) });
+    }
+    segments.push({ type: "link", text: url, href: linkHref(url) });
+    if (trailing) {
+      segments.push({ type: "text", text: trailing });
+    }
+    cursor = match.index + raw.length;
+  }
+  if (cursor < body.length) {
+    segments.push({ type: "text", text: body.slice(cursor) });
+  }
+  return segments.length > 0 ? segments : [{ type: "text", text: body }];
 }
 
 function messageStateLabel(state: string): string {
@@ -187,11 +237,32 @@ watch(
             <p class="target-team">{{ visibleTargetTeam }}</p>
             <div class="target-status-block">
               <p class="target-label">Status</p>
-              <p class="target-status">{{ visibleTargetStatus }}</p>
+              <RouterLink
+                v-if="targetEamHref"
+                class="target-status target-detail-link sos-map-link"
+                :to="targetEamHref"
+                :aria-label="`Open EAM details for ${displayName || destinationHex || 'peer'}`"
+                :title="`Open EAM details for ${displayName || destinationHex || 'peer'}`"
+              >
+                {{ visibleTargetStatus }}
+              </RouterLink>
+              <p v-else class="target-status">{{ visibleTargetStatus }}</p>
             </div>
             <div v-if="hasTargetPosition" class="target-coordinates">
-              <p v-if="targetLatitude" class="target-position-value">{{ targetLatitude }}</p>
-              <p v-if="targetLongitude" class="target-position-value">{{ targetLongitude }}</p>
+              <RouterLink
+                v-if="targetMapHref"
+                class="target-position-link target-detail-link sos-map-link"
+                :to="targetMapHref"
+                :aria-label="`Open ${targetLatitude} ${targetLongitude} on telemetry map`"
+                title="Open position on telemetry map"
+              >
+                <span v-if="targetLatitude" class="target-position-value">{{ targetLatitude }}</span>
+                <span v-if="targetLongitude" class="target-position-value">{{ targetLongitude }}</span>
+              </RouterLink>
+              <template v-else>
+                <p v-if="targetLatitude" class="target-position-value">{{ targetLatitude }}</p>
+                <p v-if="targetLongitude" class="target-position-value">{{ targetLongitude }}</p>
+              </template>
             </div>
           </div>
         </div>
@@ -218,7 +289,23 @@ watch(
         >
           <span v-if="isSosMessage(message)" class="sos-badge">SOS EMERGENCY</span>
           <p v-if="message.title" class="bubble-title">{{ message.title }}</p>
-          <p class="bubble-content">{{ visibleMessageBody(message) }}</p>
+          <p class="bubble-content">
+            <template
+              v-for="(segment, segmentIndex) in messageBodySegments(message)"
+              :key="`${message.messageIdHex}:${segmentIndex}`"
+            >
+              <a
+                v-if="segment.type === 'link'"
+                :href="segment.href"
+                class="message-link sos-map-link"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {{ segment.text }}
+              </a>
+              <span v-else>{{ segment.text }}</span>
+            </template>
+          </p>
           <a
             v-if="isSosMessage(message) && sosMapTarget(message)"
             :href="sosMapHref(message)"
@@ -416,10 +503,19 @@ watch(
   font-size: 0.78rem;
 }
 
+.target-detail-link {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16rem;
+}
+
 .target-coordinates {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.8rem;
+}
+
+.target-position-link {
+  gap: 0.8rem;
 }
 
 .thread-subtitle,
@@ -476,6 +572,10 @@ watch(
   justify-self: start;
   padding: 0;
   text-decoration: underline;
+}
+
+.target-position-link .target-position-value {
+  color: inherit;
 }
 
 .thread-body {

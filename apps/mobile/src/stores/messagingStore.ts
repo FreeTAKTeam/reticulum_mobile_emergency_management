@@ -1183,7 +1183,18 @@ export const useMessagingStore = defineStore("messaging", () => {
       });
     }
 
-    return [...byConversation.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    const nextConversations = [...byConversation.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    const currentPending = pendingConversation.value;
+    if (
+      currentPending
+      && !nextConversations.some((conversation) =>
+        normalizeDestinationHex(conversation.destinationHex)
+          === normalizeDestinationHex(currentPending.destinationHex),
+      )
+    ) {
+      return [currentPending, ...nextConversations];
+    }
+    return nextConversations;
   });
 
   const selectedConversation = computed(() =>

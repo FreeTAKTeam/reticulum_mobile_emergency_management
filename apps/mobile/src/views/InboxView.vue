@@ -70,7 +70,7 @@ const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
   const seen = new Set<string>();
   return nodeStore.discoveredPeers
     .filter((peer) => peer.activeLink)
-    .filter((peer) => peer.saved || nodeStore.savedDestinations.has(peer.destination))
+    .filter((peer) => nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
       const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
       const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
@@ -252,6 +252,26 @@ const targetLongitudeLabel = computed(() =>
     ? formatCoordinate(targetTelemetryPosition.value.lon, "E", "W")
     : "",
 );
+const targetEamHref = computed(() => {
+  const callsign = safeTrim(selectedTargetMessage.value?.callsign) || safeTrim(selectedPeerDisplayName.value);
+  if (!callsign) {
+    return "";
+  }
+  const params = new URLSearchParams({ callsign });
+  return `/messages?${params.toString()}`;
+});
+const targetMapHref = computed(() => {
+  const position = targetTelemetryPosition.value;
+  if (!position) {
+    return "";
+  }
+  const params = new URLSearchParams({
+    callsign: position.callsign,
+    lat: String(position.lat),
+    lon: String(position.lon),
+  });
+  return `/telemetry?${params.toString()}`;
+});
 
 function handleSelectConversation(conversationId: string): void {
   messagingStore.selectConversation(conversationId);
@@ -436,14 +456,6 @@ onUnmounted(() => {
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
-        <header class="inbox-panel-header">
-          <div>
-            <p class="panel-kicker">Conversations</p>
-          </div>
-        </header>
-        <p class="panel-copy">
-          {{ conversationCount }} conversation{{ conversationCount === 1 ? "" : "s" }} available.
-        </p>
         <ConversationList
           :items="messagingStore.conversations"
           :selected-conversation-id="activeConversationId"
@@ -462,6 +474,8 @@ onUnmounted(() => {
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
+          :target-eam-href="targetEamHref"
+          :target-map-href="targetMapHref"
           :target-message-id="messagingStore.selectedTargetMessageId"
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
@@ -578,38 +592,8 @@ onUnmounted(() => {
 
 .inbox-panel {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.65rem;
   min-height: 0;
-}
-
-.inbox-panel-header {
-  align-items: start;
-  display: flex;
-  gap: 0.85rem;
-  justify-content: space-between;
-}
-
-.inbox-panel-header > div {
-  min-width: 0;
-}
-
-.panel-kicker,
-.panel-copy {
-  margin: 0;
-}
-
-.panel-kicker {
-  color: #60d8ff;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.panel-copy {
-  color: #8ea8d1;
-  font-family: var(--font-body);
-  font-size: 0.92rem;
 }
 
 .inbox-layout {

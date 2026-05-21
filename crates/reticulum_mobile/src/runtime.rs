@@ -13,7 +13,7 @@ use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
 use crate::sos::{location_from_alert, received_alert_from_sos};
-use crate::sos_fields::{extract_text_coordinates, looks_like_sos_text, parse_sos_fields};
+use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_from_text};
 use crossbeam_channel as cb;
 use fs_err as fs;
 use log::{debug, info, warn};
@@ -43,7 +43,7 @@ mod runtime_projection;
 use crate::app_state::{
     canonicalize_chat_message, checklist_task_status_for, find_checklist_task_mut,
     normalize_checklist_record, normalize_optional_string, set_checklist_last_changed_by,
-    AppStateStore,
+    AppStateStore, ConversationPeerResolver,
 };
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
@@ -2980,6 +2980,75 @@ fn from_sdk_sync_status(status: sdkmsg::SyncStatus) -> SyncStatus {
     }
 }
 
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn conversation_peer_resolver(peers: &[PeerRecord]) -> ConversationPeerResolver {
+    let mut resolver = ConversationPeerResolver::default();
+    for peer in peers {
+        let destination_hex = match trimmed_non_empty(Some(peer.destination_hex.as_str())) {
+            Some(value) => value,
+            None => continue,
+        };
+        let lxmf_destination_hex = trimmed_non_empty(peer.lxmf_destination_hex.as_deref());
+        let identity_hex = trimmed_non_empty(peer.identity_hex.as_deref());
+        let canonical_id = identity_hex
+            .clone()
+            .or_else(|| lxmf_destination_hex.clone())
+            .unwrap_or_else(|| destination_hex.clone());
+        let peer_destination_hex = lxmf_destination_hex
+            .clone()
+            .unwrap_or_else(|| destination_hex.clone());
+        let mut aliases = vec![destination_hex];
+        if let Some(lxmf_destination_hex) = lxmf_destination_hex {
+            aliases.push(lxmf_destination_hex);
+        }
+        if let Some(identity_hex) = identity_hex {
+            aliases.push(identity_hex);
+        }
+        resolver.insert(
+            aliases,
+            canonical_id,
+            peer_destination_hex,
+            peer.display_name.clone(),
+        );
+    }
+    resolver
+}
+
+fn conversation_delete_keys(conversation_id: &str, peers: &[PeerRecord]) -> Vec<String> {
+    let normalized_conversation_id = conversation_id.trim().to_ascii_lowercase();
+    if normalized_conversation_id.is_empty() {
+        return Vec::new();
+    }
+
+    let mut keys = HashSet::from([normalized_conversation_id.clone()]);
+    for peer in peers {
+        let aliases = [
+            trimmed_non_empty(Some(peer.destination_hex.as_str())),
+            trimmed_non_empty(peer.lxmf_destination_hex.as_deref()),
+            trimmed_non_empty(peer.identity_hex.as_deref()),
+        ];
+        let matches_peer = aliases.iter().flatten().any(|alias| {
+            alias
+                .trim()
+                .eq_ignore_ascii_case(normalized_conversation_id.as_str())
+        });
+        if matches_peer {
+            for alias in aliases.into_iter().flatten() {
+                keys.insert(alias.trim().to_ascii_lowercase());
+            }
+        }
+    }
+    let mut out = keys.into_iter().collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
 fn to_sdk_sync_status(status: SyncStatus) -> Option<sdkmsg::SyncStatus> {
     serde_json::to_value(status)
         .ok()
@@ -4332,6 +4401,34 @@ async fn upsert_message_record(
     }
 }
 
+async fn delete_conversation_records(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    conversation_id: &str,
+) -> Result<(), NodeError> {
+    let peers = state
+        .peers_snapshot
+        .lock()
+        .map_err(|_| NodeError::InternalError {})?
+        .clone();
+    let resolver = conversation_peer_resolver(&peers);
+    for invalidation in state
+        .app_state
+        .delete_conversation_resolved(conversation_id, &resolver)?
+    {
+        bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+    }
+
+    let delete_keys = conversation_delete_keys(conversation_id, &peers);
+    let delete_key_refs = delete_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    state
+        .messaging
+        .lock()
+        .await
+        .delete_conversation_messages(delete_key_refs);
+    Ok(())
+}
+
 async fn message_records_snapshot(
     state: &NodeRuntimeState,
     conversation_id: Option<&str>,
@@ -4417,6 +4514,10 @@ pub enum Command {
     ListMessages {
         conversation_id: Option<String>,
         resp: cb::Sender<Result<Vec<MessageRecord>, NodeError>>,
+    },
+    DeleteConversation {
+        conversation_id: String,
+        resp: cb::Sender<Result<(), NodeError>>,
     },
     GetLxmfSyncStatus {
         resp: cb::Sender<Result<SyncStatus, NodeError>>,
@@ -5239,7 +5340,8 @@ async fn emit_received_payload(
         let sos_command = sos_fields
             .as_ref()
             .and_then(|fields| fields.command.clone());
-        let is_sos_message = sos_command.is_some() || looks_like_sos_text(body_utf8.as_str());
+        let text_sos_kind = sos_kind_from_text(body_utf8.as_str());
+        let is_sos_message = sos_command.is_some() || text_sos_kind.is_some();
         let metadata = fields_bytes
             .as_deref()
             .and_then(parse_mission_sync_metadata);
@@ -5306,10 +5408,21 @@ async fn emit_received_payload(
             let state_kind = sos_command
                 .as_ref()
                 .map(|command| command.state)
+                .or(text_sos_kind)
                 .unwrap_or(SosMessageKind::Active {});
             let incident_id = sos_command
                 .as_ref()
                 .map(|command| command.incident_id.clone())
+                .or_else(|| {
+                    matches!(state_kind, SosMessageKind::Cancelled {}).then(|| {
+                        state
+                            .app_state
+                            .latest_active_sos_alert_for_source(peer_hex.as_str())
+                            .ok()
+                            .flatten()
+                            .map(|alert| alert.incident_id)
+                    })?
+                })
                 .unwrap_or_else(|| format!("legacy-sos-{}-{}", peer_hex, now_ms()));
             let received_at_ms = now_ms();
             let record = MessageRecord {
@@ -6137,6 +6250,13 @@ pub async fn run_node(
         seed_runtime_projection_snapshot(&state, &restored_snapshot).await;
     }
 
+    if let Ok(announces) = state.app_state.list_announces() {
+        let mut messaging = state.messaging.lock().await;
+        for announce in announces {
+            messaging.record_announce(to_sdk_announce_record(announce));
+        }
+    }
+
     let restored_saved_destinations = {
         let saved_peers = state.app_state.get_saved_peers().unwrap_or_default();
         let mut messaging = state.messaging.lock().await;
@@ -6304,21 +6424,31 @@ pub async fn run_node(
                         let announce_class = classify_announce(&destination_kind, &app_data);
                         let interface_hex = hex::encode(event.interface);
                         let received_at_ms = now_ms();
+                        let announce_record = AnnounceRecord {
+                            destination_hex: destination_hex.clone(),
+                            identity_hex: identity_hex.clone(),
+                            destination_kind: destination_kind.clone(),
+                            announce_class,
+                            app_data: app_data.clone(),
+                            display_name: display_name.clone(),
+                            hops: event.hops,
+                            interface_hex: interface_hex.clone(),
+                            received_at_ms,
+                        };
                         state
                             .messaging
                             .lock()
                             .await
-                            .record_announce(to_sdk_announce_record(AnnounceRecord {
-                                destination_hex: destination_hex.clone(),
-                                identity_hex: identity_hex.clone(),
-                                destination_kind: destination_kind.clone(),
-                                announce_class,
-                                app_data: app_data.clone(),
-                                display_name: display_name.clone(),
-                                hops: event.hops,
-                                interface_hex: interface_hex.clone(),
-                                received_at_ms,
-                            }));
+                            .record_announce(to_sdk_announce_record(announce_record.clone()));
+                        if let Err(err) = state.app_state.upsert_announce(&announce_record) {
+                            bus.emit(NodeEvent::Error {
+                                code: "IoError".to_string(),
+                                message: format!(
+                                    "failed to persist announce destination={} reason={}",
+                                    destination_hex, err
+                                ),
+                            });
+                        }
                         sdk.record_announce_received(
                             &destination_hex,
                             &identity_hex,
@@ -7324,6 +7454,14 @@ pub async fn run_node(
                     conversation_id.as_deref(),
                 )
                 .await));
+            }
+            Command::DeleteConversation {
+                conversation_id,
+                resp,
+            } => {
+                let _ = resp.send(
+                    delete_conversation_records(&state, &bus, conversation_id.as_str()).await,
+                );
             }
             Command::GetLxmfSyncStatus { resp } => {
                 let _ = resp.send(Ok(from_sdk_sync_status(

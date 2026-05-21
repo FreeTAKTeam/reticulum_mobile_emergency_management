@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue";
+import { computed, nextTick, ref, shallowRef, watch } from "vue";
 
 import StatusPill from "./StatusPill.vue";
 
@@ -16,6 +16,7 @@ import { formatR3aktTeamColor } from "../utils/r3akt";
 const props = defineProps<{
   message: ActionMessage;
   editable: boolean;
+  selected?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 }>();
 
 const isExpanded = shallowRef(false);
+const itemElement = ref<HTMLElement | null>(null);
 
 const formattedTeam = computed(() => formatR3aktTeamColor(props.message.groupName));
 const overallScore = computed(() => getMessageOverallScore(props.message));
@@ -71,10 +73,23 @@ function cycleStatus(field: ActionMessageStatusField): void {
   }
   emit("cycle", props.message.callsign, field);
 }
+
+watch(
+  () => props.selected,
+  async (selected) => {
+    if (!selected) {
+      return;
+    }
+    isExpanded.value = true;
+    await nextTick();
+    itemElement.value?.scrollIntoView({ block: "center" });
+  },
+  { immediate: true },
+);
 </script>
 
 <template>
-  <article class="item">
+  <article ref="itemElement" class="item" :class="{ selected: props.selected }">
     <header class="item-header">
       <div class="identity">
         <div class="identity-copy">
@@ -182,6 +197,13 @@ function cycleStatus(field: ActionMessageStatusField): void {
   border: 1px solid rgb(90 142 220 / 25%);
   border-radius: 16px;
   padding: 1rem;
+}
+
+.item.selected {
+  border-color: rgb(73 173 255 / 82%);
+  box-shadow:
+    0 0 0 1px rgb(73 173 255 / 22%),
+    0 0 28px rgb(73 173 255 / 18%);
 }
 
 .item-header {

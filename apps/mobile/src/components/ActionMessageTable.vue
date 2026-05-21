@@ -6,6 +6,7 @@ import type { ActionMessage } from "../types/domain";
 const props = defineProps<{
   messages: ActionMessage[];
   editableCallsigns: string[];
+  selectedCallsign?: string;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +30,13 @@ function handleCycle(callsign: string, field: keyof ActionMessage): void {
 function isEditable(message: ActionMessage): boolean {
   return props.editableCallsigns.includes(message.callsign);
 }
+
+function isSelected(message: ActionMessage): boolean {
+  return Boolean(
+    props.selectedCallsign
+    && props.selectedCallsign.trim().toLowerCase() === message.callsign.trim().toLowerCase(),
+  );
+}
 </script>
 
 <template>
@@ -38,6 +46,7 @@ function isEditable(message: ActionMessage): boolean {
       :key="message.callsign"
       :message="message"
       :editable="isEditable(message)"
+      :selected="isSelected(message)"
       @edit="handleEdit"
       @delete="handleDelete"
       @cycle="handleCycle"

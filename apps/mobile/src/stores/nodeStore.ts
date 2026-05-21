@@ -1018,6 +1018,11 @@ export const useNodeStore = defineStore("node", () => {
         continue;
       }
       peer.sources = peer.sources.filter((source) => source !== "import");
+      peer.saved = false;
+      peer.activeLink = false;
+      peer.state = "disconnected";
+      peer.lastError = undefined;
+      peer.lastResolutionError = undefined;
     }
   }
 
@@ -1632,8 +1637,10 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
         const statusError = asTrimmedString(status.value.lastError);
-        if (statusError) {
+        if (statusError && logIndicatesReadinessError(statusError)) {
           setReadinessError(statusError);
+        } else if (event.status.running && !statusError) {
+          clearReadinessError();
         }
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
@@ -1929,8 +1936,7 @@ export const useNodeStore = defineStore("node", () => {
       throw new Error(message);
     }
     const savedPeer = savedByDestination[destination];
-    const existingPeer = discoveredByDestination[destination];
-    if (!savedPeer && !existingPeer?.saved) {
+    if (!savedPeer) {
       throw new Error(`Save peer ${destination} before connecting.`);
     }
 
@@ -2253,7 +2259,7 @@ export const useNodeStore = defineStore("node", () => {
     peer: Pick<DiscoveredPeer, "destination" | "saved">,
     savedDestinations: Set<string>,
   ): boolean {
-    return peer.saved || savedDestinations.has(peer.destination);
+    return savedDestinations.has(peer.destination);
   }
 
   function peerHasConnectedSession(
@@ -2376,7 +2382,7 @@ export const useNodeStore = defineStore("node", () => {
   );
 
   const visiblePeerCount = computed(() => discoveredPeers.value.length);
-  const savedPeerCount = computed(() => savedVisiblePeers.value.length);
+  const savedPeerCount = computed(() => savedPeers.value.length);
   const connectedPeerCount = computed(() => connectedPeers.value.length);
   const propagationCandidateDestinations = computed(() =>
     activePropagationNodeHex(syncStatus.value)
@@ -2417,9 +2423,7 @@ export const useNodeStore = defineStore("node", () => {
   });
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
-  const readinessErrorMessage = computed(() => (
-    asTrimmedString(readinessError.value) || asTrimmedString(status.value.lastError)
-  ));
+  const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
   const ready = computed(() => status.value.running && !readinessErrorMessage.value);
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(
@@ -2638,9 +2642,6 @@ export const useNodeStore = defineStore("node", () => {
       });
     } catch (error: unknown) {
       const captured = captureActionError(`LXMF send failed (${destinationHex})`, error);
-      setReadinessError(
-        `LXMF send failed after all available direct/propagation attempts (${destinationHex}): ${captured.message}`,
-      );
       throw captured;
     }
   }

@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import ts from "typescript";
 
-import {
+const source = await readFile(new URL("./readinessErrors.ts", import.meta.url), "utf8");
+const transpiled = ts.transpileModule(source, {
+  compilerOptions: {
+    module: ts.ModuleKind.ES2022,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
+const {
   logIndicatesReadinessError,
   nodeErrorIndicatesReadinessError,
-} from "../../../../tmp/readiness-errors/readinessErrors.js";
+} = await import(moduleUrl);
 
 test("intermediate direct LXMF send attempt errors do not mark the node not ready", () => {
   assert.equal(
@@ -43,21 +53,31 @@ test("direct link activation network errors do not mark the node not ready", () 
   );
 });
 
-test("final network errors still mark the node not ready", () => {
+test("final direct and propagation send failures do not mark the node not ready", () => {
   assert.equal(
     nodeErrorIndicatesReadinessError({
       code: "NetworkError",
       message: "LXMF send failed after direct and propagation attempts",
     }),
-    true,
+    false,
   );
 });
 
-test("delivery acknowledgement timeout marks the node not ready", () => {
+test("delivery acknowledgement timeout does not mark the node not ready", () => {
   assert.equal(
     nodeErrorIndicatesReadinessError({
       code: "NetworkError",
       message: "lxmf delivery acknowledgement timeout destination=abc command=sos.status",
+    }),
+    false,
+  );
+});
+
+test("unrecoverable node runtime failures still mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "InternalError",
+      message: "node runtime failed unrecoverable bridge error",
     }),
     true,
   );
