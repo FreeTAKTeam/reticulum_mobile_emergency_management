@@ -71,6 +71,34 @@ test("renders dashboard readiness metrics from stored action messages", async ({
         at: 1_710_000_000_700,
         route: "/checklists/checklist-1",
       },
+      {
+        id: 703,
+        title: "Position update",
+        body: "Alpha-1 position refreshed",
+        at: 1_710_000_000_600,
+        route: "/telemetry",
+      },
+      {
+        id: 704,
+        title: "Event replicated",
+        body: "Checkpoint event received",
+        at: 1_710_000_000_500,
+        route: "/events",
+      },
+      {
+        id: 705,
+        title: "EAM updated",
+        body: "Bravo-2 status changed",
+        at: 1_710_000_000_400,
+        route: "/messages",
+      },
+      {
+        id: 706,
+        title: "Old notification",
+        body: "Older log entry",
+        at: 1_710_000_000_300,
+        route: "/settings",
+      },
     ],
   });
 
@@ -84,13 +112,21 @@ test("renders dashboard readiness metrics from stored action messages", async ({
   const panelHeadings = await page.locator(".panel h2").evaluateAll((headings) =>
     headings.map((heading) => heading.textContent?.trim() ?? ""),
   );
-  expect(panelHeadings.indexOf("Activity")).toBeLessThan(panelHeadings.indexOf("Checklists"));
+  expect(panelHeadings).toEqual(["Team Status", "Activity"]);
   await expect(page.getByRole("link", { name: "Open Threads" })).toHaveCount(0);
 
   await expect(page.locator(".activity-grid")).toContainText("2");
   await expect(page.locator(".activity-grid")).toContainText("EAM");
   await expect(page.locator(".activity-grid")).toContainText("1");
   await expect(page.locator(".activity-grid")).toContainText("Threads");
+  await expect(page.locator(".checklist-grid")).toContainText("Total");
+  await expect(page.locator(".checklist-grid")).toContainText("Active");
+  await expect(page.locator(".checklist-grid")).toContainText("Late");
+  await expect(page.getByRole("heading", { name: "Logs" })).toBeVisible();
+  await expect(page.locator(".activity-list")).toHaveAttribute("aria-label", "Logs");
+  await expect(page.locator(".activity-item")).toHaveCount(5);
+  await expect(page.getByText("Old notification")).toHaveCount(0);
+  await expect(page.locator(".activity-list")).toHaveCSS("overflow-y", "auto");
   await expect(page.getByRole("link", { name: /Inbound chat from Alpha-1/ })).toHaveAttribute(
     "href",
     "/inbox?conversation=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&message=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

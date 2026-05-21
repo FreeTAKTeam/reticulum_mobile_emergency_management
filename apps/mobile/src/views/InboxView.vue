@@ -456,14 +456,6 @@ onUnmounted(() => {
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
-        <header class="inbox-panel-header">
-          <div>
-            <p class="panel-kicker">Conversations</p>
-          </div>
-        </header>
-        <p class="panel-copy">
-          {{ conversationCount }} conversation{{ conversationCount === 1 ? "" : "s" }} available.
-        </p>
         <ConversationList
           :items="messagingStore.conversations"
           :selected-conversation-id="activeConversationId"
@@ -600,38 +592,8 @@ onUnmounted(() => {
 
 .inbox-panel {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.65rem;
   min-height: 0;
-}
-
-.inbox-panel-header {
-  align-items: start;
-  display: flex;
-  gap: 0.85rem;
-  justify-content: space-between;
-}
-
-.inbox-panel-header > div {
-  min-width: 0;
-}
-
-.panel-kicker,
-.panel-copy {
-  margin: 0;
-}
-
-.panel-kicker {
-  color: #60d8ff;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.panel-copy {
-  color: #8ea8d1;
-  font-family: var(--font-body);
-  font-size: 0.92rem;
 }
 
 .inbox-layout {

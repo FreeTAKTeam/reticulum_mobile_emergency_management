@@ -14,14 +14,25 @@ import {
 import {
   DEFAULT_R3AKT_TEAM_COLOR,
   R3AKT_TEAM_COLORS,
+  type R3aktTeamColor,
   formatR3aktTeamColorLabel,
   normalizeR3aktTeamColor,
 } from "../utils/r3akt";
+
+const TEAM_COLOR_FILTER_ALL = "ALL";
+type TeamColorFilter = typeof TEAM_COLOR_FILTER_ALL | R3aktTeamColor;
 
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
 const route = useRoute();
 
+const teamColorFilterOptions: Array<{ value: TeamColorFilter; label: string }> = [
+  { value: TEAM_COLOR_FILTER_ALL, label: "All teams" },
+  ...R3AKT_TEAM_COLORS.map((value) => ({
+    value,
+    label: formatR3aktTeamColorLabel(value),
+  })),
+];
 const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
   label: formatR3aktTeamColorLabel(value),
@@ -57,8 +68,27 @@ const createForm = reactive({
 });
 const isCreateFormVisible = shallowRef(false);
 const editingCallsign = shallowRef<string | null>(null);
+const selectedTeamColorFilter = shallowRef<TeamColorFilter>(TEAM_COLOR_FILTER_ALL);
 
 const messages = computed(() => messagesStore.messages);
+const filteredMessages = computed(() => {
+  if (selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL) {
+    return messages.value;
+  }
+  return messages.value.filter((message) =>
+    normalizeR3aktTeamColor(message.groupName) === selectedTeamColorFilter.value,
+  );
+});
+const messageCountLabel = computed(() =>
+  selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL
+    ? `${messagesStore.activeCount} MSG`
+    : `${filteredMessages.value.length}/${messagesStore.activeCount} MSG`,
+);
+const filterStatusLabel = computed(() =>
+  selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL
+    ? "All"
+    : formatR3aktTeamColorLabel(selectedTeamColorFilter.value),
+);
 const selectedCallsign = computed(() => {
   const value = route.query.callsign;
   return Array.isArray(value) ? (value[0]?.trim() ?? "") : (value?.trim() ?? "");
@@ -193,17 +223,30 @@ function deleteMessage(callsign: string): void {
             <path d="M4 12l8 4 8-4" />
             <path d="M4 16l8 4 8-4" />
           </svg>
-          <span>{{ messagesStore.activeCount }} MSG</span>
+          <span>{{ messageCountLabel }}</span>
         </span>
-        <span
+        <label
           class="utility-chip filter-chip"
-          aria-label="Action message filter status"
+          for="team-color-filter"
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
           </svg>
-          <span>Filter: All</span>
-        </span>
+          <span>Team: {{ filterStatusLabel }}</span>
+          <select
+            id="team-color-filter"
+            v-model="selectedTeamColorFilter"
+            aria-label="Team color filter"
+          >
+            <option
+              v-for="option in teamColorFilterOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
         <RouterLink
           class="utility-chip help-trigger"
           to="/messages/help"
@@ -289,7 +332,7 @@ function deleteMessage(callsign: string): void {
 
     <div class="desktop-only">
       <ActionMessageTable
-        :messages="messages"
+        :messages="filteredMessages"
         :editable-callsigns="editableCallsigns"
         :selected-callsign="selectedCallsign"
         @edit="editMessage"
@@ -299,7 +342,7 @@ function deleteMessage(callsign: string): void {
     </div>
     <div class="mobile-only">
       <ActionMessageList
-        :messages="messages"
+        :messages="filteredMessages"
         :editable-callsigns="editableCallsigns"
         :selected-callsign="selectedCallsign"
         @edit="editMessage"
@@ -404,11 +447,42 @@ p {
 }
 
 .filter-chip {
-  cursor: pointer;
+  gap: 0.42rem;
+  padding-right: 0.5rem;
 }
 
-.filter-chip .chevron {
-  margin-left: auto;
+.filter-chip select {
+  appearance: none;
+  background:
+    linear-gradient(135deg, rgb(10 45 83 / 92%), rgb(4 21 46 / 92%)),
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    0 0,
+    calc(100% - 0.76rem) 50%,
+    calc(100% - 0.5rem) 50%;
+  background-repeat: no-repeat;
+  background-size:
+    100% 100%,
+    0.28rem 0.28rem,
+    0.28rem 0.28rem;
+  border: 1px solid rgb(93 171 255 / 40%);
+  border-radius: 8px;
+  color: #d9f4ff;
+  cursor: pointer;
+  flex: 0 1 9.2rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  min-width: 0;
+  padding: 0.36rem 1.05rem 0.36rem 0.48rem;
+  text-transform: uppercase;
+}
+
+.filter-chip select:focus-visible {
+  border-color: rgb(102 219 255 / 78%);
+  outline: 2px solid rgb(111 219 255 / 55%);
+  outline-offset: 2px;
 }
 
 .sync-banner {
@@ -587,6 +661,19 @@ p {
   .utility-chip svg {
     height: 1rem;
     width: 1rem;
+  }
+
+  .filter-chip {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-block: 0.34rem;
+  }
+
+  .filter-chip select {
+    flex-basis: auto;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .help-trigger span {

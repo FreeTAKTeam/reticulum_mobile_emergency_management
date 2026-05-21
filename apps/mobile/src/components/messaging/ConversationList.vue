@@ -176,7 +176,7 @@ function conversationStateLabel(state: string): string {
   color: inherit;
   display: grid;
   gap: 0.3rem;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 2.2rem;
   padding: 0.82rem 0.88rem;
   text-align: left;
 }
@@ -194,25 +194,26 @@ function conversationStateLabel(state: string): string {
 }
 
 .conversation-delete {
-  --btn-bg: rgb(12 31 64 / 78%);
-  --btn-bg-pressed: rgb(29 61 105 / 88%);
-  --btn-border: rgb(118 154 202 / 36%);
-  --btn-border-pressed: rgb(250 113 113 / 82%);
-  --btn-shadow: none;
-  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 10%);
-  --btn-color: #9fb7d9;
-  --btn-color-pressed: #fecaca;
+  --btn-bg: rgb(53 15 25 / 70%);
+  --btn-bg-pressed: linear-gradient(180deg, rgb(199 241 255 / 96%), rgb(132 219 255 / 94%));
+  --btn-border: rgb(255 100 117 / 48%);
+  --btn-border-pressed: rgb(234 251 255 / 88%);
+  --btn-shadow: 0 0 16px rgb(255 72 104 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%);
+  --btn-color: #ff8190;
+  --btn-color-pressed: #063050;
   align-items: center;
   background: var(--btn-bg);
   border: 1px solid var(--btn-border);
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: var(--btn-shadow);
   color: var(--btn-color);
   cursor: pointer;
   display: inline-flex;
-  height: 2.1rem;
+  height: 2.2rem;
   justify-content: center;
   padding: 0;
-  width: 2.1rem;
+  width: 2.2rem;
 }
 
 .conversation-delete svg {
@@ -240,9 +241,10 @@ function conversationStateLabel(state: string): string {
 
 .conversation-topline {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: 0.6rem;
-  justify-content: space-between;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
 }
 
 .conversation-name {
@@ -250,6 +252,10 @@ function conversationStateLabel(state: string): string {
   font-family: var(--font-headline);
   font-size: 1rem;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-time,
@@ -266,6 +272,11 @@ function conversationStateLabel(state: string): string {
   font-family: var(--font-ui);
   font-size: 0.74rem;
   letter-spacing: 0.05em;
+}
+
+.conversation-time {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .conversation-preview {

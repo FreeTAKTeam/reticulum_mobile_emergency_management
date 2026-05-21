@@ -10,6 +10,11 @@ test("operators can delete a chat thread from the conversation list", async ({ p
   await gotoApp(page, "/inbox?mockChat=1");
   await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
   await expect(page.getByText("3 Threads")).toBeVisible();
+  await expect(page.getByText("Conversations", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/conversations available/i)).toHaveCount(0);
+  await expect(page.locator(".conversation-name").first()).toHaveCSS("text-overflow", "ellipsis");
+  await expect(page.locator(".conversation-time").first()).toHaveCSS("white-space", "nowrap");
+  await expect(page.locator(".conversation-delete").first()).toHaveCSS("border-radius", "10px");
 
   page.on("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete conversation with ALPHA-1" }).click();

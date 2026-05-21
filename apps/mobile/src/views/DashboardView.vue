@@ -266,7 +266,21 @@ onUnmounted(() => {
           <p class="summary-label">{{ metric.label }}</p>
         </RouterLink>
       </div>
-      <div class="activity-list" aria-label="Android notification activity">
+      <h3 class="activity-subheading">Checklists</h3>
+      <div class="summary-grid checklist-grid">
+        <RouterLink
+          v-for="metric in checklistSummaryMetrics"
+          :key="metric.key"
+          class="summary-metric"
+          :class="{ 'summary-metric-alert': metric.alert }"
+          :to="metric.href"
+        >
+          <p class="summary-value">{{ metric.value }}</p>
+          <p class="summary-label">{{ metric.label }}</p>
+        </RouterLink>
+      </div>
+      <h3 class="activity-subheading">Logs</h3>
+      <div class="activity-list" aria-label="Logs">
         <component
           :is="activityHref(activity) ? 'RouterLink' : 'article'"
           v-for="activity in notificationActivities.slice(0, 5)"
@@ -283,24 +297,8 @@ onUnmounted(() => {
           <time :datetime="new Date(activity.at).toISOString()">{{ formatActivityTime(activity.at) }}</time>
         </component>
         <p v-if="notificationActivities.length === 0" class="activity-empty">
-          No Android notification activity yet.
+          No logs yet.
         </p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Checklists</h2>
-      <div class="summary-grid">
-        <RouterLink
-          v-for="metric in checklistSummaryMetrics"
-          :key="metric.key"
-          class="summary-metric"
-          :class="{ 'summary-metric-alert': metric.alert }"
-          :to="metric.href"
-        >
-          <p class="summary-value">{{ metric.value }}</p>
-          <p class="summary-label">{{ metric.label }}</p>
-        </RouterLink>
       </div>
     </section>
   </section>
@@ -538,6 +536,20 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.checklist-grid {
+  margin-top: 0.55rem;
+}
+
+.activity-subheading {
+  color: #a8d7ff;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  margin: 0.9rem 0 0;
+  text-transform: uppercase;
+}
+
 .summary-metric {
   align-items: center;
   background:
@@ -579,7 +591,14 @@ h2 {
 .activity-list {
   display: grid;
   gap: 0.52rem;
-  margin-top: 0.78rem;
+  margin-top: 0.55rem;
+  max-height: 18.25rem;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.18rem;
+  scrollbar-color: rgb(88 187 255 / 55%) rgb(7 20 45 / 72%);
+  scrollbar-width: thin;
 }
 
 .activity-item {
