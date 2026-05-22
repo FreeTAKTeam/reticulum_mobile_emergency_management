@@ -327,20 +327,25 @@ function resolutionLabel(destination: string): string {
 }
 
 async function onAddPeer(destination: string): Promise<void> {
+  const peerName = peerNotificationName(destination);
   await runNodeAction(
     () => nodeStore.savePeer(destination),
-    `added ${peerNotificationName(destination)}`,
+    `added ${peerName}`,
     "Peer",
+    `add ${peerName}`,
   );
 }
 
 async function onSavedPeerConnectToggle(destination: string): Promise<void> {
   const disconnecting = savedPeerConnectionLabel(destination) === "Disconnect";
+  const peerName = peerNotificationName(destination);
   await runNodeAction(
     () => (disconnecting ? nodeStore.disconnectPeer(destination) : nodeStore.connectPeer(destination)),
     disconnecting
-      ? `Disconnect requested for ${destination}.`
-      : `Connect requested for ${destination}.`,
+      ? `disconnect requested ${peerName}`
+      : `connect requested ${peerName}`,
+    "Peer",
+    `${disconnecting ? "disconnect" : "connect"} ${peerName}`,
   );
 }
 
@@ -348,14 +353,15 @@ async function runNodeAction(
   action: () => Promise<void>,
   successMessage: string,
   title = "Peers",
+  failureAction = "action",
 ): Promise<void> {
   try {
     await action();
     await notifyOperationalUpdate(title, successMessage, { route: "/peers" });
   } catch (error: unknown) {
     await notifyOperationalUpdate(
-      "Peer action failed",
-      error instanceof Error ? error.message : String(error),
+      "Peer",
+      `${failureAction} failed - ${error instanceof Error ? error.message : String(error)}`,
       { route: "/peers" },
     );
   }
