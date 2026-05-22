@@ -240,11 +240,12 @@ export async function notifyOperationalUpdate(
   body: string,
   extra: NotificationExtra = {},
 ): Promise<void> {
+  const id = getNextNotificationId();
+  appendNotificationActivity(id, title, body, extra);
+
   if (!(await ensureNotificationsReady().catch(() => false))) {
     return;
   }
-  const id = getNextNotificationId();
-  appendNotificationActivity(id, title, body, extra);
 
   await LocalNotifications.schedule({
     notifications: [

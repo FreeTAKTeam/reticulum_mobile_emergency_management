@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import { notifyOperationalUpdate } from "../services/notifications";
 import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer, HubDirectoryPeerRecord, SavedPeer } from "../types/domain";
 
@@ -11,7 +12,6 @@ const nodeStore = useNodeStore();
 const route = useRoute();
 
 const searchText = ref("");
-const feedback = ref("");
 const activeTab = ref<PeerTab>("discovered");
 let visualMockRefreshInterval: number | undefined;
 
@@ -173,7 +173,6 @@ function applyVisualMockData(): void {
     receivedAtMs: mockNow,
   };
   nodeStore.lastHubRefreshAt = mockNow;
-  feedback.value = "Visual mock peer data loaded.";
 }
 
 function isVisualMockMode(): boolean {
@@ -262,6 +261,12 @@ function savedPeerName(peer: SavedPeer): string {
   return announcedNameFor(peer.destination) || peer.label || "No label";
 }
 
+function peerNotificationName(destination: string): string {
+  const discovered = nodeStore.discoveredByDestination[destination];
+  const saved = nodeStore.savedByDestination[destination];
+  return discovered?.announcedName || discovered?.label || saved?.label || `${destination.slice(0, 5)}...`;
+}
+
 function seenLabel(lastSeenAt?: number): string {
   if (!lastSeenAt) {
     return "never seen";
@@ -324,7 +329,8 @@ function resolutionLabel(destination: string): string {
 async function onAddPeer(destination: string): Promise<void> {
   await runNodeAction(
     () => nodeStore.savePeer(destination),
-    `Peer ${destination} added.`,
+    `added ${peerNotificationName(destination)}`,
+    "Peer",
   );
 }
 
@@ -338,12 +344,20 @@ async function onSavedPeerConnectToggle(destination: string): Promise<void> {
   );
 }
 
-async function runNodeAction(action: () => Promise<void>, successMessage: string): Promise<void> {
+async function runNodeAction(
+  action: () => Promise<void>,
+  successMessage: string,
+  title = "Peers",
+): Promise<void> {
   try {
     await action();
-    feedback.value = successMessage;
+    await notifyOperationalUpdate(title, successMessage, { route: "/peers" });
   } catch (error: unknown) {
-    feedback.value = error instanceof Error ? error.message : String(error);
+    await notifyOperationalUpdate(
+      "Peer action failed",
+      error instanceof Error ? error.message : String(error),
+      { route: "/peers" },
+    );
   }
 }
 </script>
@@ -554,8 +568,6 @@ async function runNodeAction(action: () => Promise<void>, successMessage: string
       </div>
       <p v-else class="empty-copy">No hub peers cached.</p>
     </section>
-
-    <p v-if="feedback" class="feedback">{{ feedback }}</p>
   </section>
 </template>
 
@@ -856,15 +868,10 @@ button:not(.tab-button) {
   text-transform: uppercase;
 }
 
-.empty-copy,
-.feedback {
+.empty-copy {
   color: #96afd5;
   font-family: var(--font-body);
   margin: 0;
-}
-
-.feedback {
-  margin-top: -0.25rem;
 }
 
 @media (max-width: 760px) {
