@@ -547,7 +547,7 @@ fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
 }
 
 fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
-    peer.active_link || matches!(peer.state, PeerState::Connected {})
+    peer.active_link && matches!(peer.state, PeerState::Connected {})
 }
 
 fn peer_is_current_replication_target(peer: &PeerRecord) -> bool {
@@ -560,8 +560,8 @@ fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> b
         && peer.announce_last_seen_at_ms.is_some()
         && peer.lxmf_last_seen_at_ms.is_some();
 
-    if !has_active_relay {
-        return peer_is_directly_reachable(peer) || has_fresh_lxmf_route;
+    if has_active_relay {
+        return peer_is_directly_reachable(peer);
     }
 
     peer_is_directly_reachable(peer) || has_fresh_lxmf_route
@@ -6611,7 +6611,8 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_use_direct_for_connected_peer_without_active_link_when_relay_exists() {
+    fn telemetry_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists()
+    {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -6636,7 +6637,10 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -8976,7 +8980,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_use_direct_for_connected_peer_without_active_link_when_relay_exists(
+    fn event_replication_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists(
     ) {
         let status = NodeStatus {
             running: true,
@@ -9010,7 +9014,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]

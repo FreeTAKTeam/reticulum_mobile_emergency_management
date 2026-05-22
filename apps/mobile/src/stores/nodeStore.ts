@@ -65,12 +65,12 @@ import {
   formatAnnounceAppData,
   hasCapability,
   isValidDestinationHex,
-  matchesEmergencyCapabilities,
   normalizeDisplayName,
   normalizeDestinationHex,
   parseCapabilityTokens,
   parsePeerListV1,
 } from "../utils/peers";
+import { peerHasRemAnnounceEvidence } from "../utils/announceEvidence";
 import { runtimeProfile } from "../utils/runtimeProfile";
 import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
@@ -688,6 +688,8 @@ export const useNodeStore = defineStore("node", () => {
       announcedName: patch.announcedName ?? base.announcedName,
       label: patch.label ?? base.label,
       appData: patch.appData ?? base.appData,
+      latestAnnounceKind: patch.latestAnnounceKind ?? base.latestAnnounceKind,
+      latestAnnounceClass: patch.latestAnnounceClass ?? base.latestAnnounceClass,
       hops: patch.hops ?? base.hops,
       interfaceHex: patch.interfaceHex ?? base.interfaceHex,
       saved: patch.saved ?? base.saved,
@@ -830,6 +832,8 @@ export const useNodeStore = defineStore("node", () => {
         announcedName: peer.displayName?.trim() || undefined,
         label: saved?.label ?? undefined,
         appData: peer.appData,
+        latestAnnounceKind: peer.lxmfLastSeenAtMs ? "lxmf_delivery" : undefined,
+        latestAnnounceClass: peer.lxmfLastSeenAtMs ? "LxmfDelivery" : undefined,
         announceLastSeenAt: peer.announceLastSeenAtMs,
         lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
         lastSeenAt: peer.lastSeenAtMs,
@@ -864,6 +868,12 @@ export const useNodeStore = defineStore("node", () => {
         announcedName: change.displayName?.trim() || undefined,
         label: saved?.label ?? discoveredByDestination[destination]?.label,
         appData: change.appData ?? discoveredByDestination[destination]?.appData,
+        latestAnnounceKind: change.lxmfLastSeenAtMs
+          ? "lxmf_delivery"
+          : discoveredByDestination[destination]?.latestAnnounceKind,
+        latestAnnounceClass: change.lxmfLastSeenAtMs
+          ? "LxmfDelivery"
+          : discoveredByDestination[destination]?.latestAnnounceClass,
         state: change.state ? toUiPeerState(change.state) : undefined,
         saved: change.saved,
         stale: change.stale,
@@ -904,6 +914,8 @@ export const useNodeStore = defineStore("node", () => {
         lxmfDestinationHex: undefined,
         announceLastSeenAt: undefined,
         lxmfLastSeenAt: undefined,
+        latestAnnounceKind: undefined,
+        latestAnnounceClass: undefined,
         state: peer.saved ? "connecting" : "disconnected",
         stale: false,
         activeLink: false,
@@ -1299,16 +1311,33 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     if (event.destinationKind === "lxmf_delivery") {
+      const destination = normalizeDestinationHex(event.destinationHex);
+      const announcedName = ("displayName" in event && typeof event.displayName === "string"
+        ? event.displayName.trim()
+        : undefined) ?? extractAnnouncedName(event.appData);
       if (isValidDestinationHex(identityHex)) {
-        lxmfDestinationByIdentity[identityHex] = event.destinationHex;
-        const appDestinationHex = appDestinationByIdentity[identityHex];
+        lxmfDestinationByIdentity[identityHex] = destination;
+        const appDestinationHex = appDestinationByIdentity[identityHex]
+          ?? Object.values(discoveredByDestination).find((peer) =>
+            normalizeDestinationHex(peer.identityHex ?? "") === identityHex
+            && peerHasRemAnnounceEvidence(peer)
+          )?.destination;
         if (isValidDestinationHex(appDestinationHex)) {
           upsertDiscovered(appDestinationHex, {
             identityHex,
-            lxmfDestinationHex: event.destinationHex,
+            lxmfDestinationHex: destination,
             lxmfLastSeenAt: event.receivedAtMs,
+            announcedName,
+            hops: event.hops,
+            interfaceHex: event.interfaceHex,
+            latestAnnounceKind: event.destinationKind,
+            latestAnnounceClass: event.announceClass,
             lastSeenAt: event.receivedAtMs,
-          });
+          }, "announce");
+          if (appDestinationHex !== destination && discoveredByDestination[destination]) {
+            delete discoveredByDestination[destination];
+          }
+          return;
         }
       }
       return;
@@ -1340,12 +1369,21 @@ export const useNodeStore = defineStore("node", () => {
         appData: capabilityText || undefined,
         hops: event.hops,
         interfaceHex: event.interfaceHex,
+        latestAnnounceKind: event.destinationKind,
+        latestAnnounceClass: event.announceClass,
         label: saved?.label,
         announceLastSeenAt: event.receivedAtMs,
         lastSeenAt: event.receivedAtMs,
       },
       "announce",
     );
+    if (
+      isValidDestinationHex(knownLxmfDestination ?? "")
+      && knownLxmfDestination !== event.destinationHex
+      && discoveredByDestination[knownLxmfDestination!]
+    ) {
+      delete discoveredByDestination[knownLxmfDestination!];
+    }
   }
 
   async function refreshAnnounceState(): Promise<void> {
@@ -2318,7 +2356,7 @@ export const useNodeStore = defineStore("node", () => {
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
       .filter((peer) => peer.sources.includes("announce"))
-      .filter((peer) => matchesEmergencyCapabilities(peer.appData ?? ""))
+      .filter((peer) => peerHasRemAnnounceEvidence(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
 

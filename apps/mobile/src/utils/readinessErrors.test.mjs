@@ -63,6 +63,26 @@ test("final direct and propagation send failures do not mark the node not ready"
   );
 });
 
+test("send bytes delivery failures reported as invalid config do not mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "InvalidConfig",
+      message: "send_bytes failed destination=5c231773f221c687682b031709c210fc reason=invalid config",
+    }),
+    false,
+  );
+});
+
+test("plain invalid config action errors do not mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "InvalidConfig",
+      message: "invalid send payload: missing bytes",
+    }),
+    false,
+  );
+});
+
 test("delivery acknowledgement timeout does not mark the node not ready", () => {
   assert.equal(
     nodeErrorIndicatesReadinessError({

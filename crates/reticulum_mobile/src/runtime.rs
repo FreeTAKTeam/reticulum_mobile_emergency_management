@@ -65,7 +65,10 @@ const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
+const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 7] = [0, 2, 5, 12, 30, 60, 120];
+const MAX_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 300;
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
+const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
     "topic_broker",
     "group_chat",
@@ -2481,6 +2484,12 @@ fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
 }
 
+fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
+    configured_seconds
+        .max(1)
+        .min(MAX_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
+}
+
 async fn announce_destinations(
     transport: &Arc<Transport>,
     app_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
@@ -2713,11 +2722,24 @@ fn operator_label(display_name: Option<&str>, fallback_hex: &str) -> String {
         .unwrap_or_else(|| fallback_hex.to_ascii_lowercase())
 }
 
+fn short_destination_hex(value: &str) -> String {
+    let prefix = value
+        .chars()
+        .take(5)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if prefix.len() < value.len() {
+        format!("{prefix}...")
+    } else {
+        prefix
+    }
+}
+
 fn operator_announce_message(
     announce_class: AnnounceClass,
     display_name: Option<&str>,
     destination_hex: &str,
-    identity_hex: &str,
+    _identity_hex: &str,
     hops: u8,
 ) -> Option<String> {
     if !announce_class_is_operator_relevant(announce_class) {
@@ -2727,13 +2749,17 @@ fn operator_announce_message(
     let subject = operator_label(display_name, destination_hex);
     let prefix = match announce_class {
         AnnounceClass::RchHubServer {} => "RCH hub",
-        AnnounceClass::PeerApp {} => "REM peer",
+        AnnounceClass::PeerApp {} => "",
         _ => return None,
     };
+    let label = if prefix.is_empty() {
+        subject
+    } else {
+        format!("{prefix} {subject}")
+    };
     Some(format!(
-        "[announce] {prefix} {subject} destination={} identity={} hops={hops}.",
-        destination_hex.to_ascii_lowercase(),
-        identity_hex.to_ascii_lowercase(),
+        "[announce] {label} dest={} hops={hops}.",
+        short_destination_hex(destination_hex),
     ))
 }
 
@@ -3176,7 +3202,7 @@ impl SendTaskClass {
 }
 
 fn should_emit_global_send_bytes_error(send_task_class: SendTaskClass) -> bool {
-    !matches!(send_task_class, SendTaskClass::MissionPropagation)
+    matches!(send_task_class, SendTaskClass::General)
 }
 
 #[derive(Clone)]
@@ -3553,10 +3579,14 @@ async fn seed_runtime_projection_snapshot(
 }
 
 fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
-    peer.active_link || matches!(peer.state, sdkmsg::PeerState::Connected)
+    peer.active_link && matches!(peer.state, sdkmsg::PeerState::Connected)
 }
 
 fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay: bool) -> bool {
+    if has_active_relay {
+        return sdk_peer_is_directly_reachable(peer);
+    }
+
     let has_fresh_lxmf_route = !peer.stale
         && peer.announce_last_seen_at_ms.is_some()
         && peer.lxmf_last_seen_at_ms.is_some()
@@ -3564,10 +3594,6 @@ fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay
             .lxmf_destination_hex
             .as_deref()
             .is_some_and(|destination| normalize_hex_32(destination).is_some());
-
-    if !has_active_relay {
-        return sdk_peer_is_directly_reachable(peer) || has_fresh_lxmf_route;
-    }
 
     sdk_peer_is_directly_reachable(peer) || has_fresh_lxmf_route
 }
@@ -3584,17 +3610,13 @@ async fn saved_peer_prefers_propagation(
     let normalized_destination = requested_destination_hex.to_ascii_lowercase();
     let canonical_destination =
         canonical_app_destination_hex(state, normalized_destination.as_str()).await;
-    let saved_peers = match state.app_state.get_saved_peers() {
-        Ok(saved_peers) => saved_peers,
-        Err(_) => return false,
-    };
-    let is_saved = saved_peers
-        .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
-        .any(|destination_hex| {
-            destination_hex == canonical_destination || destination_hex == normalized_destination
-        });
-    if !is_saved {
+    if !saved_peer_matches_destination(
+        state,
+        normalized_destination.as_str(),
+        canonical_destination.as_str(),
+    )
+    .await
+    {
         return false;
     }
 
@@ -3603,6 +3625,70 @@ async fn saved_peer_prefers_propagation(
         return true;
     };
     !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
+}
+
+async fn saved_peer_matches_destination(
+    state: &NodeRuntimeState,
+    normalized_destination: &str,
+    canonical_destination: &str,
+) -> bool {
+    let saved_peers = match state.app_state.get_saved_peers() {
+        Ok(saved_peers) => saved_peers,
+        Err(_) => return false,
+    };
+    saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .any(|destination_hex| {
+            destination_hex == canonical_destination || destination_hex == normalized_destination
+        })
+}
+
+fn should_try_propagation_after_direct_failure(
+    send_mode: SendMode,
+    is_accepted_result: bool,
+    has_active_relay: bool,
+    saved_peer: bool,
+) -> bool {
+    matches!(send_mode, SendMode::Auto {}) && !is_accepted_result && has_active_relay && saved_peer
+}
+
+async fn clear_peer_direct_delivery_state(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    resolved_destination_hex: Option<&str>,
+) {
+    let mut destinations = Vec::<String>::new();
+    for destination in [Some(requested_destination_hex), resolved_destination_hex]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(normalized) = normalize_hex_32(destination) {
+            destinations.push(normalized);
+        }
+    }
+
+    if let Some(peer) = peer_for_any_destination_hex(state, requested_destination_hex).await {
+        destinations.extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
+    }
+    if let Some(resolved_destination_hex) = resolved_destination_hex {
+        if let Some(peer) = peer_for_any_destination_hex(state, resolved_destination_hex).await {
+            destinations.extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
+        }
+    }
+
+    destinations.sort();
+    destinations.dedup();
+
+    if destinations.is_empty() {
+        return;
+    }
+
+    let now = now_ms();
+    let mut messaging = state.messaging.lock().await;
+    for destination in destinations {
+        messaging.set_peer_active_link(destination.as_str(), false, now);
+    }
 }
 
 async fn emit_peer_resolved_for_destination(
@@ -3665,6 +3751,10 @@ fn peer_is_current_send_target(peer: &sdkmsg::PeerRecord) -> bool {
     !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
 }
 
+fn delivery_route_unavailable_error() -> NodeError {
+    NodeError::NetworkError {}
+}
+
 fn resolve_current_lxmf_destination_from_peers(
     peers: &[sdkmsg::PeerRecord],
     destination_hex: &str,
@@ -3693,7 +3783,7 @@ fn resolve_current_lxmf_destination_from_peers(
         .iter()
         .find(|peer| peer_matches_hex(peer, normalized_destination.as_str()));
     let Some(stale_equivalent) = stale_equivalent else {
-        return Err(NodeError::InvalidConfig {});
+        return Err(delivery_route_unavailable_error());
     };
     let identity_hex = stale_equivalent.identity_hex.as_deref();
     let lxmf_destination_hex = stale_equivalent
@@ -3722,7 +3812,7 @@ fn resolve_current_lxmf_destination_from_peers(
                 .clone()
                 .unwrap_or_else(|| peer.destination_hex.clone())
         })
-        .ok_or(NodeError::InvalidConfig {})
+        .ok_or_else(delivery_route_unavailable_error)
 }
 
 async fn peer_for_any_destination_hex(
@@ -4239,6 +4329,16 @@ async fn resolve_peer_route(
 
 fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
     tokio::spawn(async move {
+        let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) else {
+            return;
+        };
+        {
+            let mut inflight = state.peer_resolution_inflight.lock().await;
+            if !inflight.insert(destination_hex.clone()) {
+                return;
+            }
+        }
+
         let retry_delays_secs = [0_u64, 3, 8, 15, 30];
         for delay_secs in retry_delays_secs {
             if delay_secs > 0 {
@@ -4257,6 +4357,11 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
             };
 
             if !should_retry {
+                state
+                    .peer_resolution_inflight
+                    .lock()
+                    .await
+                    .remove(destination_hex.as_str());
                 return;
             }
 
@@ -4268,10 +4373,34 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
                     .record_resolution_error(destination_hex.as_str(), Some(err.to_string()));
                 emit_peer_changed(&state, &bus, destination_hex.as_str()).await;
             } else {
+                state
+                    .peer_resolution_inflight
+                    .lock()
+                    .await
+                    .remove(destination_hex.as_str());
                 return;
             }
         }
+        state
+            .peer_resolution_inflight
+            .lock()
+            .await
+            .remove(destination_hex.as_str());
     });
+}
+
+fn saved_peer_destinations_needing_route_refresh(
+    messaging: &sdkmsg::MessagingStore,
+) -> Vec<String> {
+    let mut destinations = messaging
+        .list_peers()
+        .into_iter()
+        .filter(|peer| peer.saved && !sdk_peer_is_directly_reachable(peer))
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<Vec<_>>();
+    destinations.sort();
+    destinations.dedup();
+    destinations
 }
 
 fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
@@ -4288,15 +4417,29 @@ fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destina
         }
 
         let result = async {
-            let should_connect = {
+            let (is_saved, has_current_route) = {
                 let messaging = state.messaging.lock().await;
-                messaging
-                    .saved_peer_has_direct_current_app_announce(normalized_destination.as_str())
+                (
+                    messaging.is_peer_saved(normalized_destination.as_str()),
+                    messaging
+                        .saved_peer_has_current_route_announce(normalized_destination.as_str()),
+                )
             };
-            if !should_connect {
+            if !is_saved {
+                return Ok(());
+            }
+            info!(
+                "[announce] saved peer auto-connect check destination={} current_route={}",
+                normalized_destination, has_current_route,
+            );
+            if !has_current_route {
                 return Ok(());
             }
 
+            info!(
+                "[announce] saved peer auto-connect starting destination={}",
+                normalized_destination,
+            );
             state.sdk.record_peer_changed(
                 normalized_destination.as_str(),
                 PeerState::Connecting {},
@@ -4307,11 +4450,19 @@ fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destina
             let desc = ensure_destination_desc(&state, destination, None).await?;
             let _link = ensure_output_link(&state, desc).await?;
             sync_auto_propagation_node(&state, &bus).await;
+            info!(
+                "[announce] saved peer auto-connect established destination={}",
+                normalized_destination,
+            );
             Ok::<(), NodeError>(())
         }
         .await;
 
         if let Err(err) = &result {
+            info!(
+                "[announce] saved peer auto-connect failed destination={} reason={}",
+                normalized_destination, err,
+            );
             state
                 .messaging
                 .lock()
@@ -5048,8 +5199,20 @@ async fn send_lxmf_with_delivery_policy(
     let has_active_relay = has_active_propagation_relay(state).await;
     let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
     let require_current_peer = !is_accepted_result;
+    let normalized_requested_destination = normalize_hex_32(requested_destination_hex)
+        .unwrap_or_else(|| requested_destination_hex.trim().to_ascii_lowercase());
+    let canonical_requested_destination =
+        canonical_app_destination_hex(state, normalized_requested_destination.as_str()).await;
+    let is_saved_peer = saved_peer_matches_destination(
+        state,
+        normalized_requested_destination.as_str(),
+        canonical_requested_destination.as_str(),
+    )
+    .await;
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
+        && has_active_relay
+        && is_saved_peer
         && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
 
     if matches!(send_mode, SendMode::PropagationOnly {}) || prefer_propagation {
@@ -5152,6 +5315,24 @@ async fn send_lxmf_with_delivery_policy(
                     report.outcome,
                 );
                 last_error = Some(NodeError::NetworkError {});
+                if should_try_propagation_after_direct_failure(
+                    send_mode,
+                    is_accepted_result,
+                    has_active_relay,
+                    is_saved_peer,
+                ) {
+                    clear_peer_direct_delivery_state(
+                        state,
+                        requested_destination_hex,
+                        Some(report.resolved_destination_hex.as_str()),
+                    )
+                    .await;
+                    info!(
+                        "[lxmf][mission] direct delivery failed for saved peer {}; retrying via propagation relay",
+                        requested_destination_hex,
+                    );
+                    break;
+                }
             }
             Err(err) => {
                 let retriable = is_retriable_lxmf_error(&err);
@@ -5162,6 +5343,19 @@ async fn send_lxmf_with_delivery_policy(
                     err,
                 );
                 last_error = Some(err);
+                if should_try_propagation_after_direct_failure(
+                    send_mode,
+                    is_accepted_result,
+                    has_active_relay,
+                    is_saved_peer,
+                ) {
+                    clear_peer_direct_delivery_state(state, requested_destination_hex, None).await;
+                    info!(
+                        "[lxmf][mission] direct delivery errored for saved peer {}; retrying via propagation relay",
+                        requested_destination_hex,
+                    );
+                    break;
+                }
                 if !retriable {
                     break;
                 }
@@ -5247,7 +5441,7 @@ async fn send_lxmf_via_propagation_candidates(
         state.preferred_propagation_node_hex.as_deref(),
     );
     if relay_candidates.is_empty() {
-        return Err(NodeError::InvalidConfig {});
+        return Err(delivery_route_unavailable_error());
     }
 
     let mut last_error = None;
@@ -6272,6 +6466,12 @@ pub async fn run_node(
 
     refresh_peer_snapshot(&state).await;
     sync_auto_propagation_node(&state, &bus).await;
+    if !restored_saved_destinations.is_empty() {
+        info!(
+            "[announce] restored saved peers route requests destinations={}",
+            restored_saved_destinations.join(","),
+        );
+    }
     for destination_hex in restored_saved_destinations {
         if let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) {
             if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
@@ -6300,6 +6500,37 @@ pub async fn run_node(
                 interval.tick().await;
                 refresh_peer_snapshot(&state).await;
                 sync_auto_propagation_node(&state, &bus).await;
+            }
+        });
+    }
+
+    // Saved peer route maintenance. Passive announces are opportunistic; keep
+    // asking the transport for managed peers so late or asymmetric mesh routes
+    // can still be resolved without changing global node readiness.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SAVED_PEER_ROUTE_REFRESH_INTERVAL);
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let destinations = {
+                    let messaging = state.messaging.lock().await;
+                    saved_peer_destinations_needing_route_refresh(&messaging)
+                };
+                if !destinations.is_empty() {
+                    info!(
+                        "[announce] saved peer route refresh destinations={}",
+                        destinations.join(","),
+                    );
+                }
+                for destination_hex in destinations {
+                    if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
+                        state.transport.request_path(&destination, None, None).await;
+                    }
+                    spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
+                }
             }
         });
     }
@@ -6350,7 +6581,7 @@ pub async fn run_node(
         let lxmf_destination = lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
         tokio::spawn(async move {
-            for delay_secs in [0_u64, 2, 5, 12] {
+            for delay_secs in STARTUP_ANNOUNCE_DELAYS_SECS {
                 if delay_secs > 0 {
                     tokio::time::sleep(Duration::from_secs(delay_secs)).await;
                 }
@@ -6371,7 +6602,7 @@ pub async fn run_node(
         let app_destination = app_destination.clone();
         let lxmf_destination = lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
-        let interval_secs = config.announce_interval_seconds.max(1);
+        let interval_secs = effective_announce_interval_seconds(config.announce_interval_seconds);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
             interval.tick().await;
@@ -6505,20 +6736,38 @@ pub async fn run_node(
                                 destination_hex.clone(),
                             );
                         } else if destination_kind == "lxmf_delivery" {
-                            let app_destination_hex = state
-                                .messaging
-                                .lock()
-                                .await
-                                .app_destination_for_identity(identity_hex.as_str());
-                            if let Some(app_destination_hex) = app_destination_hex {
-                                emit_peer_changed(&state, &bus, &app_destination_hex).await;
-                                emit_peer_resolved_for_destination(
-                                    &state,
-                                    &bus,
-                                    &app_destination_hex,
-                                )
+                            let app_destination_hex = SingleOutputDestination::new(
+                                desc.identity,
+                                DestinationName::new(
+                                    APP_DESTINATION_NAME.0,
+                                    APP_DESTINATION_NAME.1,
+                                ),
+                            )
+                            .desc
+                            .address_hash
+                            .to_hex_string();
+                            info!(
+                                "[announce] derived app route from lxmf_delivery app={} lxmf={} identity={} display={} hops={}",
+                                app_destination_hex,
+                                destination_hex,
+                                identity_hex,
+                                display_name.as_deref().unwrap_or(""),
+                                event.hops,
+                            );
+                            state.messaging.lock().await.record_resolution_result(
+                                app_destination_hex.as_str(),
+                                identity_hex.as_str(),
+                                destination_hex.as_str(),
+                                received_at_ms,
+                            );
+                            emit_peer_changed(&state, &bus, &app_destination_hex).await;
+                            emit_peer_resolved_for_destination(&state, &bus, &app_destination_hex)
                                 .await;
-                            }
+                            spawn_saved_peer_auto_connect(
+                                state.clone(),
+                                bus.clone(),
+                                app_destination_hex,
+                            );
                         }
                         sync_auto_propagation_node(&state, &bus).await;
                     }
@@ -6840,10 +7089,14 @@ pub async fn run_node(
                 resp,
             } => {
                 *announce_capabilities.lock().await = capability_string;
-                let caps = announce_capabilities.lock().await.clone();
-                transport
-                    .send_announce(&app_destination, Some(caps.as_bytes()))
-                    .await;
+                announce_destinations(
+                    &transport,
+                    &app_destination,
+                    &lxmf_destination,
+                    &announce_capabilities,
+                    "capabilities-updated",
+                )
+                .await;
                 let _ = resp.send(Ok(()));
             }
             Command::ConnectPeer {
@@ -9152,11 +9405,11 @@ mod tests {
     }
 
     #[test]
-    fn propagation_mission_failures_do_not_emit_global_send_bytes_error() {
+    fn mission_delivery_failures_do_not_emit_global_send_bytes_error() {
+        assert!(!should_emit_global_send_bytes_error(SendTaskClass::Mission));
         assert!(!should_emit_global_send_bytes_error(
             SendTaskClass::MissionPropagation
         ));
-        assert!(should_emit_global_send_bytes_error(SendTaskClass::Mission));
         assert!(should_emit_global_send_bytes_error(SendTaskClass::General));
     }
 
@@ -9192,6 +9445,85 @@ mod tests {
     }
 
     #[test]
+    fn direct_delivery_readiness_prefers_relay_for_announced_saved_peer_without_active_link() {
+        let announced_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            false,
+            Some(1),
+        );
+        let active_peer = send_peer(
+            "dddddddddddddddddddddddddddddddd",
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            Some("ffffffffffffffffffffffffffffffff"),
+            false,
+            true,
+            Some(1),
+        );
+
+        assert!(sdk_peer_is_direct_delivery_ready(&announced_peer, false));
+        assert!(!sdk_peer_is_direct_delivery_ready(&announced_peer, true));
+        assert!(sdk_peer_is_direct_delivery_ready(&active_peer, true));
+    }
+
+    #[test]
+    fn direct_delivery_requires_connected_peer_with_active_link() {
+        let mut inconsistent_connected_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            false,
+            Some(1),
+        );
+        inconsistent_connected_peer.state = sdkmsg::PeerState::Connected;
+
+        assert!(!sdk_peer_is_directly_reachable(
+            &inconsistent_connected_peer
+        ));
+        assert!(!sdk_peer_is_direct_delivery_ready(
+            &inconsistent_connected_peer,
+            true
+        ));
+    }
+
+    #[test]
+    fn auto_saved_peer_direct_failure_uses_propagation_when_relay_exists() {
+        assert!(should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            false,
+            true,
+            true,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::DirectOnly {},
+            false,
+            true,
+            true,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            false,
+            false,
+            true,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            false,
+            true,
+            false,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            true,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
     fn send_destination_resolution_requires_current_peer() {
         let peers = vec![send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -9223,6 +9555,10 @@ mod tests {
                 peers.as_slice(),
                 "dddddddddddddddddddddddddddddddd"
             ),
+            Err(NodeError::NetworkError {})
+        ));
+        assert!(matches!(
+            resolve_current_lxmf_destination_from_peers(peers.as_slice(), "not-a-destination"),
             Err(NodeError::InvalidConfig {})
         ));
     }
@@ -9253,14 +9589,14 @@ mod tests {
                 peers.as_slice(),
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             ),
-            Err(NodeError::InvalidConfig {})
+            Err(NodeError::NetworkError {})
         ));
         assert!(matches!(
             resolve_current_lxmf_destination_from_peers(
                 peers.as_slice(),
                 "dddddddddddddddddddddddddddddddd"
             ),
-            Err(NodeError::InvalidConfig {})
+            Err(NodeError::NetworkError {})
         ));
     }
 
@@ -9321,8 +9657,22 @@ mod tests {
                 peers.as_slice(),
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ),
-            Err(NodeError::InvalidConfig {})
+            Err(NodeError::NetworkError {})
         ));
+    }
+
+    #[test]
+    fn saved_peer_route_refresh_targets_saved_peers_without_direct_reachability() {
+        let mut messaging = sdkmsg::MessagingStore::new(30);
+        messaging.mark_peer_saved("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true);
+        messaging.mark_peer_saved("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true);
+        messaging.mark_peer_saved("cccccccccccccccccccccccccccccccc", false);
+        messaging.set_peer_active_link("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true, now_ms());
+
+        assert_eq!(
+            saved_peer_destinations_needing_route_refresh(&messaging),
+            vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+        );
     }
 
     #[test]
@@ -9388,8 +9738,10 @@ mod tests {
         .expect("hub announce should be relevant");
 
         assert!(message.contains("RCH hub North Hub"));
-        assert!(message.contains("destination=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-        assert!(message.contains("identity=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+        assert!(message.contains("dest=aaaaa..."));
+        assert!(!message.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(!message.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
+        assert!(!message.contains("id="));
     }
 
     #[test]
@@ -9403,8 +9755,18 @@ mod tests {
         )
         .expect("peer announce should be relevant");
 
-        assert!(message.contains("REM peer Pixel"));
+        assert!(message.contains("[announce] Pixel"));
+        assert!(!message.contains("REM peer"));
+        assert!(message.contains("dest=aaaaa..."));
+        assert!(!message.contains("id="));
         assert!(message.contains("hops=1"));
+    }
+
+    #[test]
+    fn effective_announce_interval_is_capped_for_presence_reliability() {
+        assert_eq!(effective_announce_interval_seconds(0), 1);
+        assert_eq!(effective_announce_interval_seconds(60), 60);
+        assert_eq!(effective_announce_interval_seconds(1800), 300);
     }
 
     #[test]

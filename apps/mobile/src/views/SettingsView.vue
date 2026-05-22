@@ -74,6 +74,17 @@ const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 
+function formatLogTimestamp(at: number): string {
+  if (!Number.isFinite(at) || at <= 0) {
+    return "--:--:--";
+  }
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
   TCP_COMMUNITY_SERVERS.map((server) => ({
     name: server.name,
@@ -859,7 +870,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
         <div class="log-list">
           <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
-            {{ entry.level }} | {{ entry.message }}
+            <time :datetime="new Date(entry.at).toISOString()">{{ formatLogTimestamp(entry.at) }}</time>
+            <span>{{ entry.level }}</span>
+            <span>{{ entry.message }}</span>
           </p>
         </div>
       </div>
@@ -1330,10 +1343,21 @@ button:disabled {
 }
 
 .log {
+  align-items: baseline;
   color: #88a4d0;
+  display: grid;
   font-family: var(--font-body);
+  gap: 0.4rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
   margin: 0.28rem 0 0;
   overflow-wrap: anywhere;
+}
+
+.log time,
+.log span:first-of-type {
+  color: #5de7ff;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
 }
 
 .about-list {

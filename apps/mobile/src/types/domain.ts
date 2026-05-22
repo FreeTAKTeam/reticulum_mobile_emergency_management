@@ -228,6 +228,8 @@ export interface DiscoveredPeer {
   hops?: number;
   interfaceHex?: string;
   appData?: string;
+  latestAnnounceKind?: string;
+  latestAnnounceClass?: string;
   sources: PeerSource[];
   state: PeerConnectionState;
   saved: boolean;

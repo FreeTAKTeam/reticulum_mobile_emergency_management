@@ -22,6 +22,7 @@ const DELIVERY_ERROR_LOG_PATTERNS = [
   /\bretry_lxmf failed\b/i,
   /\bsend_lxmf failed\b/i,
   /\bsend_bytes failed\b/i,
+  /\bsend_bytes failed\b.*\breason=invalid config\b/i,
   /\bbroadcast_bytes failed\b/i,
 ];
 
@@ -51,6 +52,5 @@ export function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean
   }
   return event.code === "InternalError"
     || event.code === "IoError"
-    || event.code === "InvalidConfig"
     || event.code === "NotRunning";
 }
