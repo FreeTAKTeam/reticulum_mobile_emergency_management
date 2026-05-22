@@ -102,3 +102,13 @@ test("unrecoverable node runtime failures still mark the node not ready", () => 
     true,
   );
 });
+
+test("node runtime restore timeout marks the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "InternalError",
+      message: "node runtime restore timed out after 15000ms",
+    }),
+    true,
+  );
+});

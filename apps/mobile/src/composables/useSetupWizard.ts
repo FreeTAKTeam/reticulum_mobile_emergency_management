@@ -39,6 +39,13 @@ const SETUP_STEPS: SetupWizardStep[] = [
   { id: "review", label: "Review", title: "Review setup" },
 ];
 
+const DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS = 360;
+
+export function normalizeWizardTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
+  const parsed = Math.trunc(Number(value));
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS;
+}
+
 export function normalizeWizardTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
   if (!candidate) {
@@ -84,6 +91,7 @@ export function useSetupWizard() {
     displayName: nodeStore.settings.displayName,
     tcpClients: [...nodeStore.settings.tcpClients],
     telemetryEnabled: nodeStore.settings.telemetry.enabled,
+    telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
     sosEnabled: sosStore.settings.enabled,
   });
 
@@ -91,6 +99,9 @@ export function useSetupWizard() {
   const activeStep = computed(() => steps[activeIndex.value]);
   const normalizedDisplayName = computed(() => normalizeDisplayName(draft.displayName) ?? "");
   const normalizedTcpClients = computed(() => normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS));
+  const normalizedTelemetryPublishIntervalSeconds = computed(() =>
+    normalizeWizardTelemetryPublishIntervalSeconds(draft.telemetryPublishIntervalSeconds),
+  );
   const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value));
   const sosFloatingButtonEnabled = computed(() => draft.sosEnabled || sosStore.settings.floatingButton);
 
@@ -189,6 +200,7 @@ export function useSetupWizard() {
         telemetry: {
           ...nodeStore.settings.telemetry,
           enabled: draft.telemetryEnabled,
+          publishIntervalSeconds: normalizedTelemetryPublishIntervalSeconds.value,
         },
       });
       await sosStore.saveSettings({
@@ -217,6 +229,7 @@ export function useSetupWizard() {
     draft,
     feedback,
     normalizedDisplayName,
+    normalizedTelemetryPublishIntervalSeconds,
     normalizedTcpClients,
     open,
     permissions,

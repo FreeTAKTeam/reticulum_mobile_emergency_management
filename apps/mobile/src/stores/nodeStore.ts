@@ -86,6 +86,7 @@ const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
+const NODE_START_TIMEOUT_MS = 15_000;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
 
@@ -141,7 +142,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   telemetry: {
     enabled: false,
-    publishIntervalSeconds: 60,
+    publishIntervalSeconds: 360,
     accuracyThresholdMeters: undefined,
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,
@@ -197,6 +198,21 @@ function nowMs(): number {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
+  });
+}
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timerId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timerId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+    }
   });
 }
 
@@ -648,6 +664,13 @@ export const useNodeStore = defineStore("node", () => {
     console.error(`[ui][Error] ${message}`);
     appendLog("Error", message);
     return error instanceof Error ? error : new Error(message);
+  }
+
+  function captureRuntimeActionError(action: string, error: unknown): Error {
+    const message = `${action}: ${errorMessage(error)}`;
+    const captured = captureActionError(action, error);
+    setReadinessError(message);
+    return captured;
   }
 
   function upsertDiscovered(
@@ -1880,7 +1903,11 @@ export const useNodeStore = defineStore("node", () => {
 
       clearLastError();
       clearReadinessError();
-      await client.value.start(toNodeConfig(settings));
+      await withTimeout(
+        client.value.start(toNodeConfig(settings)),
+        NODE_START_TIMEOUT_MS,
+        `node runtime start timed out after ${NODE_START_TIMEOUT_MS}ms`,
+      );
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -1896,7 +1923,7 @@ export const useNodeStore = defineStore("node", () => {
         });
       }
     } catch (error: unknown) {
-      throw captureActionError("Start node failed", error);
+      throw captureRuntimeActionError("Start node failed", error);
     }
   }
 
@@ -1930,7 +1957,11 @@ export const useNodeStore = defineStore("node", () => {
       }
       clearLastError();
       clearReadinessError();
-      await client.value.restart(toNodeConfig(settings));
+      await withTimeout(
+        client.value.restart(toNodeConfig(settings)),
+        NODE_START_TIMEOUT_MS,
+        `node runtime restart timed out after ${NODE_START_TIMEOUT_MS}ms`,
+      );
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -1946,7 +1977,7 @@ export const useNodeStore = defineStore("node", () => {
         });
       }
     } catch (error: unknown) {
-      throw captureActionError("Restart node failed", error);
+      throw captureRuntimeActionError("Restart node failed", error);
     }
   }
 

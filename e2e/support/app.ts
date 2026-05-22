@@ -143,7 +143,7 @@ export const defaultSettings: SettingsSeed = {
   announceIntervalSeconds: 1800,
   telemetry: {
     enabled: false,
-    publishIntervalSeconds: 10,
+    publishIntervalSeconds: 360,
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,
   },

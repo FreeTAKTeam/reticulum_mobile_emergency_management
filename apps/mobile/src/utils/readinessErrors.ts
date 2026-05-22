@@ -4,6 +4,8 @@ const GLOBAL_READINESS_ERROR_LOG_PATTERNS = [
   /\bnode runtime failed\b/i,
   /\bunrecoverable\b/i,
   /\bsdk_start_failed\b/i,
+  /\bnode runtime\b.*\b(?:timed out|timeout|failed|crash|anr)\b/i,
+  /\bruntime restore\b.*\b(?:timed out|timeout|failed)\b/i,
   /\b(?:native )?bridge\b.*\b(?:failed|error|unavailable)\b/i,
   /\b(?:storage|database|app state)\b.*\b(?:failed|error|corrupt|unavailable)\b/i,
   /\b(?:transport|node)\b.*\b(?:startup|start)\b.*\bfailed\b/i,

@@ -11,6 +11,7 @@ import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 import type { DiscoveredPeer } from "../types/domain";
 import { getMessageOverallScore, getOverallStatusBand } from "../utils/actionMessageStatus";
+import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 
 const messagingStore = useMessagingStore();
@@ -24,6 +25,7 @@ const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 const isPeerPickerVisible = shallowRef(false);
 let visualMockRefreshInterval: number | undefined;
+let unregisterBackNavigationHandler: (() => void) | undefined;
 
 interface ConnectedPeerOption {
   value: string;
@@ -300,6 +302,18 @@ function showConversationList(): void {
   mobilePane.value = "list";
 }
 
+function handleAndroidBackNavigation(): boolean {
+  if (isPeerPickerVisible.value) {
+    isPeerPickerVisible.value = false;
+    return true;
+  }
+  if (mobilePane.value === "detail") {
+    showConversationList();
+    return true;
+  }
+  return false;
+}
+
 function togglePeerPicker(): void {
   isPeerPickerVisible.value = !isPeerPickerVisible.value;
 }
@@ -369,6 +383,7 @@ watch(
 );
 
 onMounted(() => {
+  unregisterBackNavigationHandler = registerBackNavigationHandler(handleAndroidBackNavigation);
   if (isVisualMockMode()) {
     messagingStore.applyVisualMockChatData();
     visualMockRefreshInterval = window.setInterval(() => {
@@ -378,6 +393,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  unregisterBackNavigationHandler?.();
+  unregisterBackNavigationHandler = undefined;
   if (visualMockRefreshInterval !== undefined) {
     window.clearInterval(visualMockRefreshInterval);
   }

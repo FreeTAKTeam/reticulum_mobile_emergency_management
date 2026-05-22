@@ -24,6 +24,12 @@ test("first start redirects to setup wizard", async ({ page }) => {
 
   await page.getByRole("button", { name: "Start Setup" }).click();
   await expect(page.getByTestId("setup-callsign")).toHaveValue(GREEK_CALLSIGN_PATTERN);
+
+  const defaultSettings = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().settings;
+  });
+  expect(defaultSettings.telemetry.publishIntervalSeconds).toBe(360);
 });
 
 test("operators complete first-run setup and persist core choices", async ({ page }) => {
@@ -47,6 +53,8 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   await page.getByRole("button", { name: "Next" }).click();
 
   await page.getByLabel("Activate telemetry").check();
+  await expect(page.getByLabel("Telemetry publish interval (seconds)")).toHaveValue("360");
+  await page.getByLabel("Telemetry publish interval (seconds)").fill("420");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByLabel("Enable SOS").check();
@@ -77,6 +85,7 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   expect(storedSettings.displayName).toBe("Atlas-9");
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
   expect(storedSettings.telemetry.enabled).toBe(true);
+  expect(storedSettings.telemetry.publishIntervalSeconds).toBe(420);
   expect(status.running).toBe(true);
   expect(status.name).toBe("Atlas-9");
   expect(sosSettings).toEqual({

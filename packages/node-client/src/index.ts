@@ -1783,7 +1783,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
     announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
     telemetry: {
       enabled: Boolean(telemetry.enabled),
-      publishIntervalSeconds: Number(telemetry.publishIntervalSeconds ?? 10),
+      publishIntervalSeconds: Number(telemetry.publishIntervalSeconds ?? 360),
       accuracyThresholdMeters: toOptionalNumber(telemetry.accuracyThresholdMeters),
       staleAfterMinutes: Number(telemetry.staleAfterMinutes ?? 30),
       expireAfterMinutes: Number(telemetry.expireAfterMinutes ?? 180),

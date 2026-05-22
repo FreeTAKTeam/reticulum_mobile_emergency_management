@@ -191,10 +191,20 @@ onMounted(() => {
               <small>Location permission is requested during setup.</small>
             </span>
           </label>
+          <label class="field-block">
+            <span>Telemetry publish interval (seconds)</span>
+            <input
+              v-model.number="wizard.draft.telemetryPublishIntervalSeconds"
+              type="number"
+              min="1"
+              step="1"
+              inputmode="numeric"
+            />
+          </label>
           <dl class="config-grid">
             <div>
               <dt>Publish interval</dt>
-              <dd>60s</dd>
+              <dd>{{ wizard.normalizedTelemetryPublishIntervalSeconds.value }}s</dd>
             </div>
             <div>
               <dt>Stale after</dt>
@@ -316,6 +326,10 @@ onMounted(() => {
             <div>
               <dt>Telemetry</dt>
               <dd>{{ wizard.draft.telemetryEnabled ? "Enabled" : "Disabled" }}</dd>
+            </div>
+            <div>
+              <dt>Telemetry Interval</dt>
+              <dd>{{ wizard.normalizedTelemetryPublishIntervalSeconds.value }}s</dd>
             </div>
             <div>
               <dt>Location</dt>

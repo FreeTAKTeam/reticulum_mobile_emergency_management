@@ -63,11 +63,14 @@ public final class ReticulumNodeService extends Service {
     private static final int FOREGROUND_NOTIFICATION_ID = 41001;
     private static final int SOS_NOTIFICATION_ID = 41002;
     private static final int BACKGROUND_NOTIFICATION_BASE_ID = 47000;
+    private static final long RUNTIME_RESTORE_TIMEOUT_MS = 15_000L;
 
     private final IBinder binder = new LocalBinder();
     private final CopyOnWriteArraySet<ServiceEventListener> listeners = new CopyOnWriteArraySet<>();
     private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
     private final ExecutorService pollerExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService restoreExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private SharedPreferences preferences;
@@ -77,6 +80,7 @@ public final class ReticulumNodeService extends Service {
     private String latestStatusJson = "";
     private String latestSyncStatusJson = "";
     private String latestSosStatusJson = "";
+    private String latestRuntimeErrorJson = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
@@ -96,7 +100,6 @@ public final class ReticulumNodeService extends Service {
         latestSyncStatusJson = safeSyncStatusJson();
         latestSosStatusJson = safeSosStatusJson();
         applyCurrentSosPlatformSettings();
-        maybeRestoreAfterProcessRecreation();
     }
 
     @Override
@@ -106,13 +109,12 @@ public final class ReticulumNodeService extends Service {
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
-            return maybeRestoreAfterBoot() ? START_STICKY : START_NOT_STICKY;
+            scheduleRuntimeRestore("boot");
+            return START_STICKY;
         }
 
-        if (shouldBeRunning() && !isNodeRunning()) {
-            if (!maybeRestoreAfterProcessRecreation()) {
-                return START_NOT_STICKY;
-            }
+        if (shouldBeRunning()) {
+            scheduleRuntimeRestore("process recreation");
         }
         return START_STICKY;
     }
@@ -133,6 +135,7 @@ public final class ReticulumNodeService extends Service {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
         }
+        restoreExecutor.shutdownNow();
         pollerExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -200,6 +203,7 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
+            clearRuntimeReadinessFailure();
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
@@ -209,6 +213,10 @@ public final class ReticulumNodeService extends Service {
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to start node", ex);
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime failed during start: " + ex.getMessage()
+            );
             cleanupFailedRuntimeStart();
             return -1;
         }
@@ -218,6 +226,7 @@ public final class ReticulumNodeService extends Service {
         stopPoller();
         final int result = ReticulumBridge.stop();
         clearDesiredRunning();
+        clearRuntimeReadinessFailure();
         refreshLatestRuntimeState();
         emitCachedStateToAll();
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -237,6 +246,7 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
+            clearRuntimeReadinessFailure();
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
@@ -246,6 +256,10 @@ public final class ReticulumNodeService extends Service {
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to restart node", ex);
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime failed during restart: " + ex.getMessage()
+            );
             return -1;
         }
     }
@@ -529,29 +543,61 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.takeLastErrorJson();
     }
 
-    private boolean maybeRestoreAfterProcessRecreation() {
+    private void scheduleRuntimeRestore(String reason) {
         if (!shouldBeRunning()) {
-            return true;
+            return;
         }
 
         final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
         if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return true;
+            return;
         }
 
-        if (isNodeRunning()) {
-            ensurePoller();
-            refreshLatestRuntimeState();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            return true;
+        if (!restoreRunning.compareAndSet(false, true)) {
+            return;
         }
 
-        final int result = startNode(persistedConfig);
-        if (result != 0) {
-            Log.e(TAG, "Failed to restore node after process recreation");
-            return false;
-        }
-        return true;
+        promoteServiceForRuntime();
+        final AtomicBoolean restoreCompleted = new AtomicBoolean(false);
+        mainHandler.postDelayed(() -> {
+            if (restoreCompleted.get() || !restoreRunning.get()) {
+                return;
+            }
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime restore timed out after " + RUNTIME_RESTORE_TIMEOUT_MS + "ms"
+            );
+        }, RUNTIME_RESTORE_TIMEOUT_MS);
+        restoreExecutor.execute(() -> {
+            try {
+                if (isNodeRunning()) {
+                    ensurePoller();
+                    clearRuntimeReadinessFailure();
+                    refreshLatestRuntimeState();
+                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+                    emitCachedStateToAll();
+                    emitProjectionRefreshSweepToAll();
+                    return;
+                }
+
+                final int result = startNode(persistedConfig);
+                if (result != 0) {
+                    reportRuntimeReadinessFailure(
+                        "InternalError",
+                        "node runtime failed to restore after " + reason
+                    );
+                }
+            } catch (Exception ex) {
+                Logger.error(TAG, "Failed to restore node after " + reason, ex);
+                reportRuntimeReadinessFailure(
+                    "InternalError",
+                    "node runtime failed to restore after " + reason + ": " + ex.getMessage()
+                );
+            } finally {
+                restoreCompleted.set(true);
+                restoreRunning.set(false);
+            }
+        });
     }
 
     private boolean shouldBeRunning() {
@@ -602,7 +648,11 @@ public final class ReticulumNodeService extends Service {
     }
 
     private synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
-        Log.w(TAG, "Foreground service timeout; stopping Reticulum node service. type=" + foregroundServiceType);
+        reportRuntimeReadinessFailure(
+            "InternalError",
+            "node runtime foreground service timed out; stopping Reticulum node service. type="
+                + foregroundServiceType
+        );
         stopPoller();
         try {
             ReticulumBridge.stop();
@@ -613,6 +663,49 @@ public final class ReticulumNodeService extends Service {
         refreshLatestRuntimeState();
         emitCachedStateToAll();
         stopForegroundAndSelf(startId);
+    }
+
+    private void clearRuntimeReadinessFailure() {
+        latestRuntimeErrorJson = "";
+    }
+
+    private void reportRuntimeReadinessFailure(String code, String message) {
+        final String safeCode = code == null || code.trim().isEmpty() ? "InternalError" : code;
+        final String safeMessage =
+            message == null || message.trim().isEmpty() ? "node runtime failed" : message;
+        Log.e(TAG, safeMessage);
+        final JSObject errorPayload = new JSObject();
+        errorPayload.put("code", safeCode);
+        errorPayload.put("message", safeMessage);
+        latestRuntimeErrorJson = errorPayload.toString();
+        latestStatusJson = statusJsonWithLastError(safeMessage);
+        dispatchEventToListeners("error", errorPayload);
+        final JSObject statusPayload = new JSObject();
+        try {
+            statusPayload.put("status", new JSObject(nonEmptyJson(latestStatusJson, "{}")));
+        } catch (JSONException ignored) {
+            statusPayload.put("status", new JSObject());
+        }
+        dispatchEventToListeners("statusChanged", statusPayload);
+        updateForegroundNotification();
+    }
+
+    private String statusJsonWithLastError(String message) {
+        try {
+            final JSONObject status = new JSONObject(nonEmptyJson(ReticulumBridge.getStatusJson(), "{}"));
+            status.put("running", false);
+            status.put("lastError", message);
+            return status.toString();
+        } catch (JSONException ex) {
+            final JSONObject status = new JSONObject();
+            try {
+                status.put("running", false);
+                status.put("lastError", message);
+            } catch (JSONException ignored) {
+                return "{\"running\":false}";
+            }
+            return status.toString();
+        }
     }
 
     private void stopForegroundAndSelf(int startId) {
@@ -731,22 +824,6 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    private boolean maybeRestoreAfterBoot() {
-        if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
-            return true;
-        }
-        final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
-        if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return true;
-        }
-        final int result = startNode(persistedConfig);
-        if (result != 0) {
-            Log.e(TAG, "Failed to restore node after boot");
-            return false;
-        }
-        return true;
-    }
-
     private void dispatchEventToListeners(String eventName, JSObject payload) {
         for (ServiceEventListener listener : listeners) {
             mainHandler.post(() -> listener.onNodeEvent(eventName, payload));
@@ -777,6 +854,17 @@ public final class ReticulumNodeService extends Service {
             listener.onNodeEvent("sosStatusChanged", statusPayload);
         } catch (JSONException ignored) {
             listener.onNodeEvent("sosStatusChanged", new JSObject());
+        }
+
+        if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {
+            try {
+                listener.onNodeEvent("error", new JSObject(latestRuntimeErrorJson));
+            } catch (JSONException ignored) {
+                final JSObject fallback = new JSObject();
+                fallback.put("code", "InternalError");
+                fallback.put("message", "node runtime failed");
+                listener.onNodeEvent("error", fallback);
+            }
         }
     }
 

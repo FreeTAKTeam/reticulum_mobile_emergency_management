@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef, watch } from "vue";
+import { App, type BackButtonListenerEvent } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import logoUrl from "./assets/rem-logo.png";
+import SplashScreen from "./components/SplashScreen.vue";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
 import { useChecklistsStore } from "./stores/checklistsStore";
@@ -12,6 +15,10 @@ import { useMessagesStore } from "./stores/messagesStore";
 import { useSosStore } from "./stores/sosStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
+import {
+  resolveAndroidRouteBackAction,
+  runBackNavigationHandlers,
+} from "./utils/androidBackNavigation";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 
 const nodeStore = useNodeStore();
@@ -23,6 +30,7 @@ const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
+const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {
@@ -42,6 +50,9 @@ registerNotificationNavigationHandler(async (target) => {
 });
 
 onMounted(async () => {
+  splashTimer = window.setTimeout(() => {
+    splashMinimumElapsed.value = true;
+  }, 1200);
   try {
     const setupCompleted = hasCompletedSetupWizard();
     if (setupCompleted) {
@@ -72,6 +83,8 @@ onMounted(async () => {
     }
   } catch (error: unknown) {
     nodeStore.lastError = error instanceof Error ? error.message : String(error);
+  } finally {
+    startupComplete.value = true;
   }
 });
 
@@ -93,6 +106,11 @@ interface NavigationItem {
 }
 
 const menuOpen = shallowRef(false);
+const splashMinimumElapsed = shallowRef(false);
+const startupComplete = shallowRef(false);
+const showSplash = computed(() => !splashMinimumElapsed.value || !startupComplete.value);
+let splashTimer: number | undefined;
+let androidBackButtonListener: { remove: () => Promise<void> } | undefined;
 
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -246,12 +264,53 @@ function closeMenu(): void {
   menuOpen.value = false;
 }
 
+async function handleAndroidBackButton(event: BackButtonListenerEvent): Promise<void> {
+  if (menuOpen.value) {
+    closeMenu();
+    return;
+  }
+  if (await runBackNavigationHandlers()) {
+    return;
+  }
+
+  const action = resolveAndroidRouteBackAction({
+    canGoBack: event.canGoBack,
+    currentPath: route.path,
+  });
+  if (action === "back") {
+    router.back();
+    return;
+  }
+  if (action === "dashboard") {
+    await router.replace("/dashboard");
+  }
+}
+
+async function registerAndroidBackButtonHandler(): Promise<void> {
+  if (Capacitor.getPlatform() !== "android") {
+    return;
+  }
+  androidBackButtonListener = await App.addListener("backButton", (event) => {
+    void handleAndroidBackButton(event);
+  });
+}
+
 watch(
   () => route.fullPath,
   () => {
     closeMenu();
   },
 );
+
+void registerAndroidBackButtonHandler();
+
+onUnmounted(() => {
+  if (splashTimer !== undefined) {
+    window.clearTimeout(splashTimer);
+  }
+  void androidBackButtonListener?.remove();
+  androidBackButtonListener = undefined;
+});
 </script>
 
 <template>
@@ -378,6 +437,7 @@ watch(
         </button>
       </nav>
       <SosOverlay v-if="!setupActive" />
+      <SplashScreen v-if="showSplash" :version="appVersion" />
     </div>
   </div>
 </template>
