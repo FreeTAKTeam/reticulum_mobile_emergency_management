@@ -70,8 +70,8 @@ const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TCP_CLIENT_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
-const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 7] = [0, 2, 5, 12, 30, 60, 120];
-const MAX_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 300;
+const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 3] = [0, 10, 30];
+const MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 3600;
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const AUTO_PROPAGATION_SYNC_INTERVAL: Duration = Duration::from_secs(30);
@@ -2529,9 +2529,7 @@ fn address_hash_to_hex(hash: &AddressHash) -> String {
 }
 
 fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
-    configured_seconds
-        .max(1)
-        .min(MAX_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
+    configured_seconds.max(MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
 }
 
 async fn announce_destinations(
@@ -11064,10 +11062,17 @@ mod tests {
     }
 
     #[test]
-    fn effective_announce_interval_is_capped_for_presence_reliability() {
-        assert_eq!(effective_announce_interval_seconds(0), 1);
-        assert_eq!(effective_announce_interval_seconds(60), 60);
-        assert_eq!(effective_announce_interval_seconds(1800), 300);
+    fn effective_announce_interval_respects_reticulum_rate_limit() {
+        assert_eq!(effective_announce_interval_seconds(0), 3600);
+        assert_eq!(effective_announce_interval_seconds(60), 3600);
+        assert_eq!(effective_announce_interval_seconds(1800), 3600);
+        assert_eq!(effective_announce_interval_seconds(7200), 7200);
+    }
+
+    #[test]
+    fn startup_announce_burst_leaves_reticulum_rate_limit_headroom() {
+        assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS.len(), 3);
+        assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS[0], 0);
     }
 
     #[test]

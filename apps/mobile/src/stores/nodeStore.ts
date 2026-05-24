@@ -2123,7 +2123,10 @@ export const useNodeStore = defineStore("node", () => {
     }
     try {
       clearLastError();
-      await client.value.setAnnounceCapabilities(settings.announceCapabilities);
+      await client.value.setAnnounceCapabilities(formatAnnounceAppData(
+        ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
+        settings.displayName,
+      ));
     } catch (error: unknown) {
       throw captureActionError("Set announce capabilities failed", error);
     }
