@@ -14,13 +14,10 @@ use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_fro
 use crossbeam_channel as cb;
 use fs_err as fs;
 use log::{debug, info, warn};
-use lxmf::announce::encode_delivery_display_name_app_data;
+use lxmf::announce::{display_name_from_delivery_app_data, encode_delivery_display_name_app_data};
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
-use lxmf_sdk::messaging::{
-    AnnounceRecord as LxmfSdkAnnounceRecord, DESTINATION_KIND_APP, DESTINATION_KIND_LXMF_DELIVERY,
-    DESTINATION_KIND_LXMF_PROPAGATION, DESTINATION_KIND_OTHER,
-};
+use lxmf_sdk::messaging::AnnounceRecord as LxmfSdkAnnounceRecord;
 use rand_core::OsRng;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
@@ -65,6 +62,10 @@ use self::runtime_projection::RuntimeProjectionJournal;
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const DESTINATION_KIND_APP: &str = "app";
+const DESTINATION_KIND_LXMF_DELIVERY: &str = "lxmf_delivery";
+const DESTINATION_KIND_LXMF_PROPAGATION: &str = "lxmf_propagation";
+const DESTINATION_KIND_OTHER: &str = "other";
 const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TCP_CLIENT_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
@@ -2960,6 +2961,37 @@ fn from_sdk_announce_record(record: sdkmsg::AnnounceRecord) -> AnnounceRecord {
         hops: record.hops,
         interface_hex: record.interface_hex,
         received_at_ms: record.received_at_ms,
+    }
+}
+
+fn normalize_announce_app_data(app_data: &[u8]) -> String {
+    String::from_utf8(app_data.to_vec()).unwrap_or_else(|_| hex::encode(app_data))
+}
+
+fn lxmf_sdk_announce_record_from_raw(
+    destination_hex: impl Into<String>,
+    identity_hex: impl Into<String>,
+    destination_kind: impl Into<String>,
+    app_data: &[u8],
+    hops: u8,
+    interface_hex: impl Into<String>,
+    received_at_ms: u64,
+) -> LxmfSdkAnnounceRecord {
+    let destination_kind = destination_kind.into();
+    let display_name = if destination_kind == DESTINATION_KIND_LXMF_DELIVERY {
+        display_name_from_delivery_app_data(app_data)
+    } else {
+        None
+    };
+    LxmfSdkAnnounceRecord {
+        destination_hex: destination_hex.into(),
+        identity_hex: identity_hex.into(),
+        destination_kind,
+        app_data: normalize_announce_app_data(app_data),
+        display_name,
+        hops,
+        interface_hex: interface_hex.into(),
+        received_at_ms,
     }
 }
 
@@ -7298,7 +7330,7 @@ pub async fn run_node(
                                 .to_string();
                         let interface_hex = hex::encode(event.interface);
                         let received_at_ms = now_ms();
-                        let sdk_announce_record = LxmfSdkAnnounceRecord::from_raw(
+                        let sdk_announce_record = lxmf_sdk_announce_record_from_raw(
                             destination_hex.clone(),
                             identity_hex.clone(),
                             destination_kind.clone(),
@@ -8491,7 +8523,7 @@ mod tests {
     fn lxmf_delivery_announce_mapping_uses_lxmf_sdk_normalization() {
         let raw_app_data =
             encode_delivery_display_name_app_data("Alice Router").expect("encoded app data");
-        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+        let sdk_record = lxmf_sdk_announce_record_from_raw(
             "cccccccccccccccccccccccccccccccc",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             DESTINATION_KIND_LXMF_DELIVERY,
@@ -8518,7 +8550,7 @@ mod tests {
 
     #[test]
     fn app_announce_mapping_keeps_rem_capability_policy() {
-        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+        let sdk_record = lxmf_sdk_announce_record_from_raw(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             DESTINATION_KIND_APP,
@@ -8537,7 +8569,7 @@ mod tests {
 
     #[test]
     fn propagation_and_malformed_announces_keep_generic_sdk_normalization() {
-        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+        let sdk_record = lxmf_sdk_announce_record_from_raw(
             "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             DESTINATION_KIND_LXMF_PROPAGATION,
