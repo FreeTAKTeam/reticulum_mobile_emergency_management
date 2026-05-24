@@ -5,15 +5,19 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -27,6 +31,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -67,11 +72,54 @@ public final class ReticulumNodeService extends Service {
 
     private final IBinder binder = new LocalBinder();
     private final CopyOnWriteArraySet<ServiceEventListener> listeners = new CopyOnWriteArraySet<>();
+    private final AtomicBoolean appUiForeground = new AtomicBoolean(false);
     private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
     private final ExecutorService pollerExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService restoreExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Application.ActivityLifecycleCallbacks activityLifecycleCallbacks =
+        new Application.ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
+            }
+
+            @Override
+            public void onActivityStarted(Activity activity) {
+            }
+
+            @Override
+            public void onActivityResumed(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(true);
+                }
+            }
+
+            @Override
+            public void onActivityPaused(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+
+            @Override
+            public void onActivityStopped(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+
+            @Override
+            public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+        };
 
     private SharedPreferences preferences;
     private String storageDir = "";
@@ -86,6 +134,7 @@ public final class ReticulumNodeService extends Service {
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenChecklistKeys = new HashSet<>();
     private final Set<String> seenMessageIds = new HashSet<>();
+    private final Set<String> seenMissionPacketNotificationKeys = new HashSet<>();
     private int nextBackgroundNotificationId = BACKGROUND_NOTIFICATION_BASE_ID;
 
     @Override
@@ -96,6 +145,7 @@ public final class ReticulumNodeService extends Service {
         initializeBridgeStorage(storageDir);
         createNotificationChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
+        getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
         latestSosStatusJson = safeSosStatusJson();
@@ -135,6 +185,7 @@ public final class ReticulumNodeService extends Service {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
         }
+        getApplication().unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks);
         restoreExecutor.shutdownNow();
         pollerExecutor.shutdownNow();
         super.onDestroy();
@@ -171,6 +222,16 @@ public final class ReticulumNodeService extends Service {
             return;
         }
         listeners.remove(listener);
+    }
+
+    public void setAppUiForeground(boolean foreground) {
+        if (appUiForeground.getAndSet(foreground) != foreground) {
+            Log.i(TAG, "appUiForeground=" + foreground);
+        }
+    }
+
+    public boolean isAppUiForeground() {
+        return appUiForeground.get();
     }
 
     public synchronized int startNode(String configJson) {
@@ -771,7 +832,10 @@ public final class ReticulumNodeService extends Service {
         mirrorEventToLogcat(eventName, payload);
         updateCachedState(eventName, payload);
         dispatchEventToListeners(eventName, payload);
-        if (listeners.isEmpty()) {
+        final boolean uiForeground = isAppUiForeground();
+        if ("sosAlertChanged".equals(eventName)) {
+            maybeNotifySosAlert(payload, !uiForeground);
+        } else if (!uiForeground) {
             maybeNotifyInboundUpdate(eventName, payload);
         }
         if ("sosTelemetryRequested".equals(eventName) && sosPlatformCoordinator != null) {
@@ -1043,8 +1107,12 @@ public final class ReticulumNodeService extends Service {
     }
 
     private void maybeNotifyInboundUpdate(String eventName, JSObject payload) {
-        if ("sosAlertChanged".equals(eventName)) {
-            maybeNotifySosAlert(payload);
+        if ("log".equals(eventName)) {
+            maybeNotifyInboundMissionLog(payload);
+            return;
+        }
+        if ("packetReceived".equals(eventName)) {
+            maybeNotifyInboundMissionPacket(payload);
             return;
         }
         if ("messageReceived".equals(eventName) || "messageUpdated".equals(eventName)) {
@@ -1063,13 +1131,70 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    private void maybeNotifySosAlert(JSObject payload) {
+    private void maybeNotifyInboundMissionPacket(JSObject payload) {
+        final String fieldsBase64 = payload.getString("fieldsBase64", "");
+        if (fieldsBase64.isEmpty()) {
+            return;
+        }
+        final String fieldsText = decodeBase64Text(fieldsBase64);
+        final String sourceHex = payload.getString("sourceHex", "").trim().toLowerCase(Locale.US);
+        final String destinationHex = payload.getString("destinationHex", "").trim().toLowerCase(Locale.US);
+        final String key = sourceHex + ":" + destinationHex + ":" + Integer.toHexString(fieldsBase64.hashCode());
+        if (!seenMissionPacketNotificationKeys.add(key)) {
+            return;
+        }
+
+        final String body = truncate(decodeBase64Text(payload.getString("bytesBase64", "")).trim());
+        if (fieldsText.contains("mission.registry.eam.upsert")) {
+            postBackgroundNotification("EAM from mesh", body.isEmpty() ? "Action Emergency Message updated" : body);
+        } else if (fieldsText.contains("mission.registry.log_entry.upsert")) {
+            postBackgroundNotification("Event from mesh", body.isEmpty() ? "Event updated" : body);
+        } else if (fieldsText.contains("checklist.task.status.set")) {
+            postBackgroundNotification("Checklist updated", body.isEmpty() ? "Checklist task status changed" : body);
+        }
+    }
+
+    private void maybeNotifyInboundMissionLog(JSObject payload) {
+        final String message = payload.getString("message", "");
+        if (!message.contains("[lxmf][mission] received kind=command")) {
+            return;
+        }
+        if (message.contains("name=mission.registry.eam.upsert")) {
+            scheduleBackgroundNotificationRefresh("Eams");
+        } else if (message.contains("name=mission.registry.log_entry.upsert")) {
+            scheduleBackgroundNotificationRefresh("Events");
+        } else if (message.contains("name=checklist.task.status.set")) {
+            scheduleBackgroundNotificationRefresh("Checklists");
+        }
+    }
+
+    private void scheduleBackgroundNotificationRefresh(String scope) {
+        mainHandler.postDelayed(() -> restoreExecutor.execute(() -> {
+            if (isAppUiForeground()) {
+                return;
+            }
+            if ("Eams".equals(scope)) {
+                maybeNotifyInboundEams();
+            } else if ("Events".equals(scope)) {
+                maybeNotifyInboundEvents();
+            } else if ("Checklists".equals(scope)) {
+                maybeNotifyInboundChecklists();
+            }
+        }), 1_500L);
+    }
+
+    private void maybeNotifySosAlert(JSObject payload, boolean postUserVisibleNotification) {
         final JSONObject nestedAlert = payload.optJSONObject("alert");
         final JSONObject alert = nestedAlert == null ? payload : nestedAlert;
         final boolean active = alert.optBoolean("active", true);
         if (!active) {
             NotificationManagerCompat.from(this).cancel(SOS_NOTIFICATION_ID);
-            postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
+            if (postUserVisibleNotification) {
+                postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
+            }
+            return;
+        }
+        if (!postUserVisibleNotification) {
             return;
         }
         final String source = alert.optString("sourceHex", "Unknown");
@@ -1085,7 +1210,15 @@ public final class ReticulumNodeService extends Service {
         }
         final String peer = payload.getString("sourceHex", payload.getString("destinationHex", "Unknown"));
         final String body = truncate(payload.getString("bodyUtf8", "(empty message)"));
+        if (isSosMessageBody(body)) {
+            return;
+        }
         postBackgroundNotification("Message from " + peer, body);
+    }
+
+    private boolean isSosMessageBody(String body) {
+        final String normalized = body == null ? "" : body.trim().toLowerCase(Locale.US);
+        return normalized.startsWith("sos!") || normalized.startsWith("sos cancelled");
     }
 
     private void maybeNotifyInboundEams() {
@@ -1304,6 +1437,7 @@ public final class ReticulumNodeService extends Service {
 
     private void primeOperationalNotificationState() {
         seenMessageIds.clear();
+        seenMissionPacketNotificationKeys.clear();
         maybePrimeEamKeys();
         maybePrimeEventKeys();
         maybePrimeChecklistKeys();
@@ -1408,6 +1542,17 @@ public final class ReticulumNodeService extends Service {
             return "";
         }
         return item.optString(camelKey, item.optString(snakeKey, ""));
+    }
+
+    private String decodeBase64Text(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        try {
+            return new String(Base64.decode(raw, Base64.DEFAULT), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            return "";
+        }
     }
 
     private int optIntAny(JSONObject item, String camelKey, String snakeKey, int fallback) {

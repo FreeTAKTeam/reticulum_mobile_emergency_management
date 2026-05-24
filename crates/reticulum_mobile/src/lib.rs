@@ -1,4 +1,3 @@
-mod announce_compat;
 mod app_state;
 mod event_bus;
 mod jni_bridge;

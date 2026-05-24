@@ -6,9 +6,6 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::announce_compat::{
-    display_name_from_delivery_app_data, encode_delivery_display_name_app_data,
-};
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
@@ -17,8 +14,13 @@ use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_fro
 use crossbeam_channel as cb;
 use fs_err as fs;
 use log::{debug, info, warn};
+use lxmf::announce::encode_delivery_display_name_app_data;
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
+use lxmf_sdk::messaging::{
+    AnnounceRecord as LxmfSdkAnnounceRecord, DESTINATION_KIND_APP, DESTINATION_KIND_LXMF_DELIVERY,
+    DESTINATION_KIND_LXMF_PROPAGATION, DESTINATION_KIND_OTHER,
+};
 use rand_core::OsRng;
 use reticulum::destination::link::{LinkEvent, LinkStatus};
 use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
@@ -35,7 +37,7 @@ use rmpv::Value as MsgPackValue;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 #[path = "runtime_projection.rs"]
 mod runtime_projection;
@@ -64,11 +66,15 @@ use self::runtime_projection::RuntimeProjectionJournal;
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const TCP_CLIENT_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 7] = [0, 2, 5, 12, 30, 60, 120];
 const MAX_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 300;
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const AUTO_PROPAGATION_SYNC_INTERVAL: Duration = Duration::from_secs(30);
+const AUTO_PROPAGATION_SYNC_LIMIT: u32 = 100;
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
     "topic_broker",
     "group_chat",
@@ -79,7 +85,7 @@ const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
 
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
-const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(90);
+const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
@@ -94,10 +100,19 @@ const PROPAGATION_SYNC_RELAY_SELECTION_POLL: Duration = Duration::from_millis(50
 const PROPAGATION_SYNC_RELAY_SELECTION_POLL: Duration = Duration::from_millis(10);
 const SEND_TASK_CONCURRENCY_LIMIT: usize = 8;
 const MISSION_SEND_TASK_RESERVED_LIMIT: usize = 2;
+const MISSION_ACK_SEND_TASK_RESERVED_LIMIT: usize = 1;
 const MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT: usize = 1;
+const MISSION_RECOVERY_SEND_TASK_RESERVED_LIMIT: usize = 3;
 const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize = SEND_TASK_CONCURRENCY_LIMIT
     - MISSION_SEND_TASK_RESERVED_LIMIT
-    - MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT;
+    - MISSION_ACK_SEND_TASK_RESERVED_LIMIT
+    - MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT
+    - MISSION_RECOVERY_SEND_TASK_RESERVED_LIMIT;
+const LXMF_DIRECT_ATTEMPTS: usize = 5;
+const LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS: usize = 1;
+const MISSION_DIRECT_PRIORITY_FREE_HOPS: u8 = 2;
+const MISSION_DIRECT_PRIORITY_DELAY_PER_HOP: Duration = Duration::from_millis(80);
+const MISSION_DIRECT_PRIORITY_MAX_DELAY: Duration = Duration::from_millis(800);
 const CHAT_DELIVERY_ACK_TITLE: &str = "REM delivery ack";
 const CHAT_DELIVERY_ACK_PREFIX: &str = "REM_DELIVERY_ACK:";
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
@@ -164,6 +179,7 @@ fn operational_ack_from_metadata(
     })
 }
 
+#[cfg(test)]
 fn build_operational_ack_fields(
     ack: &OperationalAck,
     by_identity: &str,
@@ -192,6 +208,20 @@ fn build_operational_ack_fields(
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_RESULTS),
         MsgPackValue::Map(result_entries),
+    )]);
+    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+}
+
+fn build_compact_operational_ack_fields(ack: &OperationalAck) -> Result<Vec<u8>, NodeError> {
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_RESULTS),
+        MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("command_id"),
+                MsgPackValue::from(ack.command_id.as_str()),
+            ),
+            (MsgPackValue::from("status"), MsgPackValue::from("accepted")),
+        ]),
     )]);
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
 }
@@ -889,12 +919,12 @@ fn emit_checklist_invalidations(
 }
 
 fn upsert_inbound_checklist(
-    state: &NodeRuntimeState,
+    app_state: &AppStateStore,
     bus: &EventBus,
     checklist: &ChecklistRecord,
     reason: &str,
 ) -> bool {
-    match state.app_state.upsert_checklist(checklist, reason) {
+    match app_state.upsert_checklist(checklist, reason) {
         Ok(invalidations) => {
             emit_checklist_invalidations(bus, invalidations);
             true
@@ -1527,7 +1557,7 @@ fn checklist_task_from_row_add_args(
 }
 
 fn persist_received_checklist_if_present(
-    state: &NodeRuntimeState,
+    app_state: &AppStateStore,
     bus: &EventBus,
     _metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
@@ -1551,6 +1581,7 @@ fn persist_received_checklist_if_present(
     };
 
     let mut persisted_any = false;
+    let mut handled_any = false;
     for command in command_entries {
         let Some(command_map) = msgpack_map_entries(command) else {
             continue;
@@ -1601,8 +1632,7 @@ fn persist_received_checklist_if_present(
                     .and_then(msgpack_string)
                     .unwrap_or_default();
                 let start_time = msgpack_get_named(args, &["start_time"]).and_then(msgpack_string);
-                let existing = state
-                    .app_state
+                let existing = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .unwrap_or_default();
                 if !should_apply_inbound_checklist_create(existing.as_ref(), timestamp.as_str()) {
@@ -1736,11 +1766,15 @@ fn persist_received_checklist_if_present(
                         checklist = snapshot;
                     }
                 }
-                hydrate_checklist_from_local_template(&state.app_state, &mut checklist);
+                hydrate_checklist_from_local_template(app_state, &mut checklist);
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                persisted_any |=
-                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-create");
+                persisted_any |= upsert_inbound_checklist(
+                    app_state,
+                    bus,
+                    &checklist,
+                    "checklist-received-create",
+                );
             }
             "checklist.upload" => {
                 let Some(checklist_uid) =
@@ -1760,8 +1794,7 @@ fn persist_received_checklist_if_present(
                     continue;
                 };
                 checklist.uid = checklist_uid.clone();
-                let existing = state
-                    .app_state
+                let existing = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .unwrap_or_default();
                 let Some(checklist) = merge_uploaded_checklist_snapshot(
@@ -1772,8 +1805,12 @@ fn persist_received_checklist_if_present(
                 ) else {
                     continue;
                 };
-                persisted_any |=
-                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-upload");
+                persisted_any |= upsert_inbound_checklist(
+                    app_state,
+                    bus,
+                    &checklist,
+                    "checklist-received-upload",
+                );
             }
             "checklist.update" => {
                 let Some(checklist_uid) =
@@ -1781,8 +1818,7 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -1828,8 +1864,12 @@ fn persist_received_checklist_if_present(
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
-                persisted_any |=
-                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-update");
+                persisted_any |= upsert_inbound_checklist(
+                    app_state,
+                    bus,
+                    &checklist,
+                    "checklist-received-update",
+                );
             }
             "checklist.delete" => {
                 let Some(checklist_uid) =
@@ -1838,8 +1878,7 @@ fn persist_received_checklist_if_present(
                     continue;
                 };
                 let Some(checklist) = checklist_delete_record_from_command(
-                    state
-                        .app_state
+                    app_state
                         .get_checklist_any(checklist_uid.as_str())
                         .ok()
                         .flatten(),
@@ -1849,8 +1888,12 @@ fn persist_received_checklist_if_present(
                 ) else {
                     continue;
                 };
-                persisted_any |=
-                    upsert_inbound_checklist(state, bus, &checklist, "checklist-received-delete");
+                persisted_any |= upsert_inbound_checklist(
+                    app_state,
+                    bus,
+                    &checklist,
+                    "checklist-received-delete",
+                );
             }
             "checklist.task.row.add" => {
                 let Some(checklist_uid) =
@@ -1873,8 +1916,7 @@ fn persist_received_checklist_if_present(
                     number as u32,
                     timestamp.as_str(),
                 );
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -1967,7 +2009,7 @@ fn persist_received_checklist_if_present(
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 persisted_any |= upsert_inbound_checklist(
-                    state,
+                    app_state,
                     bus,
                     &checklist,
                     "checklist-received-task-row-add",
@@ -1984,8 +2026,7 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let existing = state
-                    .app_state
+                let existing = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten();
@@ -2038,7 +2079,7 @@ fn persist_received_checklist_if_present(
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 persisted_any |= upsert_inbound_checklist(
-                    state,
+                    app_state,
                     bus,
                     &checklist,
                     "checklist-received-task-row-delete",
@@ -2055,8 +2096,7 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -2071,6 +2111,7 @@ fn persist_received_checklist_if_present(
                 }) || (checklist.deleted_at.is_some()
                     && !is_hidden_placeholder_checklist(&checklist))
                 {
+                    handled_any = true;
                     continue;
                 }
                 let inserted_placeholder = ensure_task_for_incoming_update(
@@ -2084,6 +2125,7 @@ fn persist_received_checklist_if_present(
                 if !inserted_placeholder
                     && !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str())
                 {
+                    handled_any = true;
                     continue;
                 }
                 let user_status = match msgpack_get_named(args, &["user_status"])
@@ -2110,7 +2152,7 @@ fn persist_received_checklist_if_present(
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 persisted_any |= upsert_inbound_checklist(
-                    state,
+                    app_state,
                     bus,
                     &checklist,
                     "checklist-received-task-status",
@@ -2127,8 +2169,7 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -2173,7 +2214,7 @@ fn persist_received_checklist_if_present(
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 persisted_any |= upsert_inbound_checklist(
-                    state,
+                    app_state,
                     bus,
                     &checklist,
                     "checklist-received-task-row-style",
@@ -2199,8 +2240,7 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -2281,7 +2321,7 @@ fn persist_received_checklist_if_present(
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
                 normalize_checklist_record(&mut checklist);
                 persisted_any |= upsert_inbound_checklist(
-                    state,
+                    app_state,
                     bus,
                     &checklist,
                     "checklist-received-task-cell",
@@ -2296,8 +2336,7 @@ fn persist_received_checklist_if_present(
                 let Some(source_identity) = source_identity.clone() else {
                     continue;
                 };
-                let mut checklist = state
-                    .app_state
+                let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
                     .flatten()
@@ -2324,14 +2363,18 @@ fn persist_received_checklist_if_present(
                     checklist.updated_at = Some(timestamp.clone());
                     set_checklist_last_changed_by(&mut checklist, Some(changed_by.as_str()));
                     normalize_checklist_record(&mut checklist);
-                    persisted_any |=
-                        upsert_inbound_checklist(state, bus, &checklist, "checklist-received-join");
+                    persisted_any |= upsert_inbound_checklist(
+                        app_state,
+                        bus,
+                        &checklist,
+                        "checklist-received-join",
+                    );
                 }
             }
             _ => {}
         }
     }
-    persisted_any
+    persisted_any || handled_any
 }
 
 #[derive(Debug, Deserialize)]
@@ -2535,20 +2578,20 @@ fn delivery_display_name_app_data(capability_string: &str) -> Option<Vec<u8>> {
 fn announce_destination_kind_from_name_hash(name_hash: &[u8]) -> &'static str {
     let app_name = DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1);
     if name_hash == app_name.as_name_hash_slice() {
-        return "app";
+        return DESTINATION_KIND_APP;
     }
 
     let lxmf_name = DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1);
     if name_hash == lxmf_name.as_name_hash_slice() {
-        return "lxmf_delivery";
+        return DESTINATION_KIND_LXMF_DELIVERY;
     }
 
     let propagation_name = DestinationName::new(LXMF_PROPAGATION_NAME.0, LXMF_PROPAGATION_NAME.1);
     if name_hash == propagation_name.as_name_hash_slice() {
-        return "lxmf_propagation";
+        return DESTINATION_KIND_LXMF_PROPAGATION;
     }
 
-    "other"
+    DESTINATION_KIND_OTHER
 }
 
 fn parse_capability_tokens(app_data: &str) -> Vec<String> {
@@ -2586,7 +2629,7 @@ fn decode_percent_component(value: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
-fn normalize_display_name(value: &str) -> Option<String> {
+fn normalize_rem_display_name(value: &str) -> Option<String> {
     let sanitized = value
         .chars()
         .map(|ch| if ch.is_control() { ' ' } else { ch })
@@ -2602,11 +2645,11 @@ fn normalize_display_name(value: &str) -> Option<String> {
 
 fn announce_display_name_from_msgpack_value(value: &MsgPackValue) -> Option<String> {
     match value {
-        MsgPackValue::String(value) => value.as_str().and_then(normalize_display_name),
+        MsgPackValue::String(value) => value.as_str().and_then(normalize_rem_display_name),
         MsgPackValue::Binary(value) => String::from_utf8(value.clone())
             .ok()
             .as_deref()
-            .and_then(normalize_display_name),
+            .and_then(normalize_rem_display_name),
         _ => None,
     }
 }
@@ -2660,6 +2703,17 @@ fn extract_msgpack_capability_tokens(value: &MsgPackValue) -> Vec<String> {
     }
 }
 
+fn decode_hex_announce_app_data(app_data: &str) -> Option<Vec<u8>> {
+    let trimmed = app_data.trim();
+    if trimmed.len() < 2 || trimmed.len() % 2 != 0 {
+        return None;
+    }
+    if !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    hex::decode(trimmed).ok()
+}
+
 fn announce_metadata_from_app_data(app_data: &str) -> (Option<String>, Vec<String>) {
     let display_name = app_data
         .split([',', ';'])
@@ -2667,22 +2721,24 @@ fn announce_metadata_from_app_data(app_data: &str) -> (Option<String>, Vec<Strin
         .find_map(|token| token.strip_prefix("name="))
         .and_then(decode_percent_component)
         .as_deref()
-        .and_then(normalize_display_name);
+        .and_then(normalize_rem_display_name);
     let text_tokens = parse_capability_tokens(app_data);
+    if let Some(bytes) = decode_hex_announce_app_data(app_data) {
+        if let Some(payload) = parse_announce_payload_msgpack(bytes.as_slice()) {
+            let msgpack_display_name = extract_msgpack_announce_display_name(&payload);
+            let msgpack_tokens = extract_msgpack_capability_tokens(&payload);
+            if msgpack_display_name.is_some() || !msgpack_tokens.is_empty() {
+                return (msgpack_display_name, msgpack_tokens);
+            }
+        }
+        if display_name.is_none() {
+            return (None, Vec::new());
+        }
+    }
     if display_name.is_some() || !text_tokens.is_empty() {
         return (display_name, text_tokens);
     }
-
-    let Some(bytes) = hex::decode(app_data).ok() else {
-        return (None, Vec::new());
-    };
-    let Some(payload) = parse_announce_payload_msgpack(bytes.as_slice()) else {
-        return (None, Vec::new());
-    };
-    (
-        extract_msgpack_announce_display_name(&payload),
-        extract_msgpack_capability_tokens(&payload),
-    )
+    (None, Vec::new())
 }
 
 fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
@@ -2696,8 +2752,8 @@ fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
     }
 
     match destination_kind {
-        "lxmf_propagation" => AnnounceClass::PropagationNode {},
-        "lxmf_delivery" => AnnounceClass::LxmfDelivery {},
+        DESTINATION_KIND_LXMF_PROPAGATION => AnnounceClass::PropagationNode {},
+        DESTINATION_KIND_LXMF_DELIVERY => AnnounceClass::LxmfDelivery {},
         _ => {
             if tokens.iter().any(|token| token == "r3akt")
                 && tokens.iter().any(|token| token == "emergencymessages")
@@ -2718,7 +2774,7 @@ fn announce_class_is_operator_relevant(class: AnnounceClass) -> bool {
 
 fn operator_label(display_name: Option<&str>, fallback_hex: &str) -> String {
     display_name
-        .and_then(normalize_display_name)
+        .and_then(normalize_rem_display_name)
         .unwrap_or_else(|| fallback_hex.to_ascii_lowercase())
 }
 
@@ -2892,6 +2948,35 @@ fn to_sdk_announce_record(record: AnnounceRecord) -> sdkmsg::AnnounceRecord {
 }
 
 fn from_sdk_announce_record(record: sdkmsg::AnnounceRecord) -> AnnounceRecord {
+    let (parsed_display_name, _) = announce_metadata_from_app_data(&record.app_data);
+    let announce_class = classify_announce(&record.destination_kind, &record.app_data);
+    AnnounceRecord {
+        destination_hex: record.destination_hex,
+        identity_hex: record.identity_hex,
+        destination_kind: record.destination_kind,
+        announce_class,
+        app_data: record.app_data,
+        display_name: record.display_name.or(parsed_display_name),
+        hops: record.hops,
+        interface_hex: record.interface_hex,
+        received_at_ms: record.received_at_ms,
+    }
+}
+
+fn to_compat_announce_record(record: &LxmfSdkAnnounceRecord) -> sdkmsg::AnnounceRecord {
+    sdkmsg::AnnounceRecord {
+        destination_hex: record.destination_hex.clone(),
+        identity_hex: record.identity_hex.clone(),
+        destination_kind: record.destination_kind.clone(),
+        app_data: record.app_data.clone(),
+        display_name: record.display_name.clone(),
+        hops: record.hops,
+        interface_hex: record.interface_hex.clone(),
+        received_at_ms: record.received_at_ms,
+    }
+}
+
+fn from_lxmf_sdk_announce_record(record: LxmfSdkAnnounceRecord) -> AnnounceRecord {
     let (parsed_display_name, _) = announce_metadata_from_app_data(&record.app_data);
     let announce_class = classify_announce(&record.destination_kind, &record.app_data);
     AnnounceRecord {
@@ -3100,6 +3185,7 @@ struct PendingLxmfResend {
     metadata: MissionSyncMetadata,
     send_task_class: SendTaskClass,
     original_send_mode: SendMode,
+    direct_ack_retry_attempted: bool,
     propagation_fallback_attempted: bool,
 }
 
@@ -3162,7 +3248,9 @@ struct ReceiptMessageTracking {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendTaskClass {
     Mission,
+    MissionAck,
     MissionPropagation,
+    MissionRecovery,
     General,
 }
 
@@ -3178,6 +3266,12 @@ impl SendTaskClass {
         if !metadata.is_some_and(MissionSyncMetadata::is_mission_related) {
             return Self::General;
         }
+        if is_accepted_result_metadata(metadata) {
+            return Self::MissionAck;
+        }
+        if is_sos_status_metadata(metadata) {
+            return Self::MissionRecovery;
+        }
         if matches!(send_mode, SendMode::PropagationOnly {}) {
             Self::MissionPropagation
         } else {
@@ -3187,7 +3281,17 @@ impl SendTaskClass {
 
     fn propagation_equivalent(self) -> Self {
         match self {
-            Self::Mission | Self::MissionPropagation => Self::MissionPropagation,
+            Self::Mission | Self::MissionAck | Self::MissionPropagation => Self::MissionPropagation,
+            Self::MissionRecovery => Self::MissionRecovery,
+            Self::General => Self::General,
+        }
+    }
+
+    fn direct_recovery_equivalent(self) -> Self {
+        match self {
+            Self::Mission | Self::MissionAck | Self::MissionPropagation | Self::MissionRecovery => {
+                Self::MissionRecovery
+            }
             Self::General => Self::General,
         }
     }
@@ -3195,7 +3299,9 @@ impl SendTaskClass {
     fn label(self) -> &'static str {
         match self {
             Self::Mission => "mission-direct",
+            Self::MissionAck => "mission-ack",
             Self::MissionPropagation => "mission-propagation",
+            Self::MissionRecovery => "mission-recovery",
             Self::General => "general",
         }
     }
@@ -3209,7 +3315,9 @@ fn should_emit_global_send_bytes_error(send_task_class: SendTaskClass) -> bool {
 struct SendTaskPermits {
     general: Arc<Semaphore>,
     mission: Arc<Semaphore>,
+    mission_ack: Arc<Semaphore>,
     mission_propagation: Arc<Semaphore>,
+    mission_recovery: Arc<Semaphore>,
 }
 
 impl SendTaskPermits {
@@ -3217,9 +3325,11 @@ impl SendTaskPermits {
         Self {
             general: Arc::new(Semaphore::new(GENERAL_SEND_TASK_CONCURRENCY_LIMIT)),
             mission: Arc::new(Semaphore::new(MISSION_SEND_TASK_RESERVED_LIMIT)),
+            mission_ack: Arc::new(Semaphore::new(MISSION_ACK_SEND_TASK_RESERVED_LIMIT)),
             mission_propagation: Arc::new(Semaphore::new(
                 MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT,
             )),
+            mission_recovery: Arc::new(Semaphore::new(MISSION_RECOVERY_SEND_TASK_RESERVED_LIMIT)),
         }
     }
 
@@ -3228,7 +3338,9 @@ impl SendTaskPermits {
         Self {
             general: Arc::new(Semaphore::new(general)),
             mission: Arc::new(Semaphore::new(mission)),
+            mission_ack: Arc::new(Semaphore::new(1)),
             mission_propagation: Arc::new(Semaphore::new(mission)),
+            mission_recovery: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -3240,8 +3352,20 @@ impl SendTaskPermits {
                 .acquire_owned()
                 .await
                 .map_err(|_| NodeError::InternalError {}),
+            SendTaskClass::MissionAck => self
+                .mission_ack
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
             SendTaskClass::MissionPropagation => self
                 .mission_propagation
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| NodeError::InternalError {}),
+            SendTaskClass::MissionRecovery => self
+                .mission_recovery
                 .clone()
                 .acquire_owned()
                 .await
@@ -3256,9 +3380,43 @@ impl SendTaskPermits {
     }
 }
 
+#[derive(Clone)]
+struct MissionDestinationLocks {
+    locks: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
+}
+
+impl MissionDestinationLocks {
+    fn new() -> Self {
+        Self {
+            locks: Arc::new(TokioMutex::new(HashMap::new())),
+        }
+    }
+
+    async fn acquire(&self, destination_hex: &str) -> Result<OwnedMutexGuard<()>, NodeError> {
+        let key = normalize_hex_32(destination_hex)
+            .unwrap_or_else(|| destination_hex.trim().to_ascii_lowercase());
+        if key.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let lock = {
+            let mut guard = self.locks.lock().await;
+            guard
+                .entry(key)
+                .or_insert_with(|| Arc::new(TokioMutex::new(())))
+                .clone()
+        };
+        Ok(lock.lock_owned().await)
+    }
+}
+
 fn log_send_task(class: SendTaskClass, message: String) {
     match class {
-        SendTaskClass::Mission | SendTaskClass::MissionPropagation => info!("{message}"),
+        SendTaskClass::Mission
+        | SendTaskClass::MissionAck
+        | SendTaskClass::MissionPropagation
+        | SendTaskClass::MissionRecovery => {
+            info!("{message}")
+        }
         SendTaskClass::General => debug!("{message}"),
     }
 }
@@ -3582,26 +3740,125 @@ fn sdk_peer_is_directly_reachable(peer: &sdkmsg::PeerRecord) -> bool {
     peer.active_link && matches!(peer.state, sdkmsg::PeerState::Connected)
 }
 
+fn sdk_peer_has_known_delivery_route(peer: &sdkmsg::PeerRecord) -> bool {
+    peer.identity_hex
+        .as_deref()
+        .and_then(normalize_hex_32)
+        .is_some()
+        && sdk_peer_has_known_lxmf_route(peer)
+}
+
+fn mark_peer_link_state(
+    messaging: &mut sdkmsg::MessagingStore,
+    link_destination_hex: &str,
+    canonical_destination_hex: &str,
+    active: bool,
+    changed_at_ms: u64,
+) {
+    messaging.set_peer_active_link(link_destination_hex, active, changed_at_ms);
+    if link_destination_hex != canonical_destination_hex {
+        messaging.set_peer_active_link(canonical_destination_hex, active, changed_at_ms);
+    }
+}
+
+fn mark_peer_active_after_successful_link(
+    messaging: &mut sdkmsg::MessagingStore,
+    link_destination_hex: &str,
+    canonical_destination_hex: &str,
+    changed_at_ms: u64,
+) {
+    mark_peer_link_state(
+        messaging,
+        link_destination_hex,
+        canonical_destination_hex,
+        true,
+        changed_at_ms,
+    );
+}
+
+async fn record_peer_link_state(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    link_destination_hex: &str,
+    active: bool,
+) {
+    let canonical_destination_hex =
+        canonical_app_destination_hex(state, link_destination_hex).await;
+    let change = {
+        let mut messaging = state.messaging.lock().await;
+        if active {
+            mark_peer_active_after_successful_link(
+                &mut messaging,
+                link_destination_hex,
+                canonical_destination_hex.as_str(),
+                now_ms(),
+            );
+        } else {
+            mark_peer_link_state(
+                &mut messaging,
+                link_destination_hex,
+                canonical_destination_hex.as_str(),
+                false,
+                now_ms(),
+            );
+        }
+        messaging
+            .peer_change_for_destination(canonical_destination_hex.as_str())
+            .map(from_sdk_peer_change)
+    };
+    if let Some(change) = change {
+        state.sdk.record_peer_changed(
+            &change.destination_hex,
+            change.state,
+            change.last_error.as_deref(),
+        );
+    }
+    emit_peer_changed(state, bus, canonical_destination_hex.as_str()).await;
+    sync_auto_propagation_node(state, bus).await;
+}
+
 fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay: bool) -> bool {
+    let has_observed_lxmf_route = sdk_peer_has_observed_lxmf_delivery_route(peer);
+    let has_current_known_lxmf_route =
+        peer_is_current_send_target(peer) && sdk_peer_has_known_lxmf_route(peer);
+
     if has_active_relay {
-        return sdk_peer_is_directly_reachable(peer);
+        return sdk_peer_is_directly_reachable(peer)
+            || has_current_known_lxmf_route
+            || has_observed_lxmf_route;
     }
 
-    let has_fresh_lxmf_route = !peer.stale
-        && peer.announce_last_seen_at_ms.is_some()
-        && peer.lxmf_last_seen_at_ms.is_some()
-        && peer
-            .lxmf_destination_hex
-            .as_deref()
-            .is_some_and(|destination| normalize_hex_32(destination).is_some());
+    sdk_peer_is_directly_reachable(peer) || has_current_known_lxmf_route || has_observed_lxmf_route
+}
 
-    sdk_peer_is_directly_reachable(peer) || has_fresh_lxmf_route
+fn sdk_peer_has_known_lxmf_route(peer: &sdkmsg::PeerRecord) -> bool {
+    let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+        return false;
+    };
+    let Some(lxmf_destination_hex) = peer
+        .lxmf_destination_hex
+        .as_deref()
+        .and_then(normalize_hex_32)
+    else {
+        return false;
+    };
+    app_destination_hex != lxmf_destination_hex
+}
+
+fn sdk_peer_has_observed_lxmf_delivery_route(peer: &sdkmsg::PeerRecord) -> bool {
+    if !sdk_peer_has_known_lxmf_route(peer) {
+        return false;
+    }
+    peer.lxmf_last_seen_at_ms.is_some_and(|seen_at_ms| {
+        now_ms().saturating_sub(seen_at_ms) <= sdkmsg::DEFAULT_PEER_STALE_AFTER_MS
+    })
 }
 
 async fn saved_peer_prefers_propagation(
     state: &NodeRuntimeState,
     requested_destination_hex: &str,
     has_active_relay: bool,
+    direct_priority_hops: Option<u8>,
 ) -> bool {
     if !has_active_relay {
         return false;
@@ -3624,7 +3881,45 @@ async fn saved_peer_prefers_propagation(
     else {
         return true;
     };
+    if saved_peer_stored_route_prefers_propagation(&peer, has_active_relay, direct_priority_hops) {
+        return true;
+    }
     !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
+        && !sdk_peer_has_known_lxmf_route(&peer)
+}
+
+fn saved_peer_stored_route_prefers_propagation(
+    peer: &sdkmsg::PeerRecord,
+    has_active_relay: bool,
+    direct_priority_hops: Option<u8>,
+) -> bool {
+    has_active_relay
+        && direct_priority_hops.is_some_and(|hops| hops > MISSION_DIRECT_PRIORITY_FREE_HOPS)
+        && sdk_peer_has_known_lxmf_route(peer)
+        && !sdk_peer_is_directly_reachable(peer)
+}
+
+async fn saved_peer_can_try_stored_lxmf_route(
+    state: &NodeRuntimeState,
+    normalized_destination: &str,
+    canonical_destination: &str,
+) -> bool {
+    if !saved_peer_matches_destination(state, normalized_destination, canonical_destination).await {
+        return false;
+    }
+    peer_for_any_destination_hex(state, canonical_destination)
+        .await
+        .is_some_and(|peer| sdk_peer_has_known_lxmf_route(&peer))
+}
+
+async fn saved_peer_has_direct_ready_route(
+    state: &NodeRuntimeState,
+    canonical_destination: &str,
+    has_active_relay: bool,
+) -> bool {
+    peer_for_any_destination_hex(state, canonical_destination)
+        .await
+        .is_some_and(|peer| sdk_peer_is_direct_delivery_ready(&peer, has_active_relay))
 }
 
 async fn saved_peer_matches_destination(
@@ -3644,13 +3939,88 @@ async fn saved_peer_matches_destination(
         })
 }
 
+fn mission_direct_priority_delay_for_hops(hops: Option<u8>) -> Duration {
+    let Some(hops) = hops else {
+        return Duration::ZERO;
+    };
+    if hops <= MISSION_DIRECT_PRIORITY_FREE_HOPS {
+        return Duration::ZERO;
+    }
+
+    let delay_units = u32::from(hops - MISSION_DIRECT_PRIORITY_FREE_HOPS);
+    (MISSION_DIRECT_PRIORITY_DELAY_PER_HOP * delay_units).min(MISSION_DIRECT_PRIORITY_MAX_DELAY)
+}
+
+#[cfg(not(test))]
+fn add_normalized_destination_candidate(candidates: &mut HashSet<String>, destination_hex: &str) {
+    if let Some(normalized) = normalize_hex_32(destination_hex) {
+        candidates.insert(normalized);
+    }
+}
+
+#[cfg(not(test))]
+async fn mission_direct_priority_hops(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    canonical_destination_hex: &str,
+) -> Option<u8> {
+    let mut candidates = HashSet::<String>::new();
+    add_normalized_destination_candidate(&mut candidates, requested_destination_hex);
+    add_normalized_destination_candidate(&mut candidates, canonical_destination_hex);
+
+    if let Some(peer) = peer_for_any_destination_hex(state, canonical_destination_hex).await {
+        add_normalized_destination_candidate(&mut candidates, peer.destination_hex.as_str());
+        if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.as_deref() {
+            add_normalized_destination_candidate(&mut candidates, lxmf_destination_hex);
+        }
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let announces = state.app_state.list_announces().ok()?;
+    announces
+        .iter()
+        .filter_map(|announce| {
+            let destination_hex = normalize_hex_32(announce.destination_hex.as_str())?;
+            candidates
+                .contains(destination_hex.as_str())
+                .then_some(announce.hops)
+        })
+        .min()
+}
+
+fn direct_attempt_budget_for_send(
+    send_mode: SendMode,
+    has_active_relay: bool,
+    can_try_stored_lxmf_route: bool,
+    direct_delivery_ready: bool,
+    direct_priority_hops: Option<u8>,
+) -> usize {
+    if matches!(send_mode, SendMode::Auto {}) && has_active_relay && can_try_stored_lxmf_route {
+        if direct_priority_hops.is_some_and(|hops| hops > MISSION_DIRECT_PRIORITY_FREE_HOPS)
+            || !direct_delivery_ready
+        {
+            return LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS;
+        }
+    }
+
+    LXMF_DIRECT_ATTEMPTS
+}
+
 fn should_try_propagation_after_direct_failure(
     send_mode: SendMode,
     is_accepted_result: bool,
     has_active_relay: bool,
     saved_peer: bool,
+    retriable: bool,
 ) -> bool {
-    matches!(send_mode, SendMode::Auto {}) && !is_accepted_result && has_active_relay && saved_peer
+    matches!(send_mode, SendMode::Auto {})
+        && !is_accepted_result
+        && has_active_relay
+        && saved_peer
+        && !retriable
 }
 
 async fn clear_peer_direct_delivery_state(
@@ -4004,21 +4374,6 @@ fn propagation_sync_candidate_relays(
     candidates
 }
 
-fn relay_candidate_interface_hex(
-    announces: &[sdkmsg::AnnounceRecord],
-    relay_hex: &str,
-) -> Option<String> {
-    let relay_hex = relay_hex.trim();
-    announces
-        .iter()
-        .find(|record| {
-            record.destination_kind == "lxmf_propagation"
-                && (record.destination_hex == relay_hex || record.identity_hex == relay_hex)
-                && normalize_hex_32(record.interface_hex.as_str()).is_some()
-        })
-        .and_then(|record| normalize_hex_32(record.interface_hex.as_str()))
-}
-
 async fn run_propagation_sync_job(
     state: NodeRuntimeState,
     bus: EventBus,
@@ -4113,12 +4468,7 @@ async fn run_propagation_sync_job(
 
         let result = match state
             .sdk
-            .fetch_propagated_lxmf_from_relay(
-                relay_candidate.as_str(),
-                limit,
-                relay_candidate_interface_hex(announces.as_slice(), relay_candidate.as_str())
-                    .as_deref(),
-            )
+            .fetch_propagated_lxmf_from_relay(relay_candidate.as_str(), limit, None)
             .await
         {
             Ok(result) => result,
@@ -4352,7 +4702,7 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
                 } else {
                     messaging
                         .peer_by_destination(destination_hex.as_str())
-                        .is_none_or(|peer| !sdk_peer_is_directly_reachable(&peer))
+                        .is_none_or(|peer| !sdk_peer_has_known_delivery_route(&peer))
                 }
             };
 
@@ -4395,93 +4745,12 @@ fn saved_peer_destinations_needing_route_refresh(
     let mut destinations = messaging
         .list_peers()
         .into_iter()
-        .filter(|peer| peer.saved && !sdk_peer_is_directly_reachable(peer))
+        .filter(|peer| peer.saved && !sdk_peer_has_known_delivery_route(peer))
         .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
         .collect::<Vec<_>>();
     destinations.sort();
     destinations.dedup();
     destinations
-}
-
-fn spawn_saved_peer_auto_connect(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
-    tokio::spawn(async move {
-        let normalized_destination = match normalize_hex_32(destination_hex.as_str()) {
-            Some(value) => value,
-            None => return,
-        };
-        {
-            let mut inflight = state.peer_connect_inflight.lock().await;
-            if !inflight.insert(normalized_destination.clone()) {
-                return;
-            }
-        }
-
-        let result = async {
-            let (is_saved, has_current_route) = {
-                let messaging = state.messaging.lock().await;
-                (
-                    messaging.is_peer_saved(normalized_destination.as_str()),
-                    messaging
-                        .saved_peer_has_current_route_announce(normalized_destination.as_str()),
-                )
-            };
-            if !is_saved {
-                return Ok(());
-            }
-            info!(
-                "[announce] saved peer auto-connect check destination={} current_route={}",
-                normalized_destination, has_current_route,
-            );
-            if !has_current_route {
-                return Ok(());
-            }
-
-            info!(
-                "[announce] saved peer auto-connect starting destination={}",
-                normalized_destination,
-            );
-            state.sdk.record_peer_changed(
-                normalized_destination.as_str(),
-                PeerState::Connecting {},
-                None,
-            );
-            resolve_peer_route(&state, &bus, normalized_destination.as_str()).await?;
-            let destination = parse_address_hash(normalized_destination.as_str())?;
-            let desc = ensure_destination_desc(&state, destination, None).await?;
-            let _link = ensure_output_link(&state, desc).await?;
-            sync_auto_propagation_node(&state, &bus).await;
-            info!(
-                "[announce] saved peer auto-connect established destination={}",
-                normalized_destination,
-            );
-            Ok::<(), NodeError>(())
-        }
-        .await;
-
-        if let Err(err) = &result {
-            info!(
-                "[announce] saved peer auto-connect failed destination={} reason={}",
-                normalized_destination, err,
-            );
-            state
-                .messaging
-                .lock()
-                .await
-                .record_resolution_error(normalized_destination.as_str(), Some(err.to_string()));
-            emit_peer_changed(&state, &bus, normalized_destination.as_str()).await;
-            state.sdk.record_peer_changed(
-                normalized_destination.as_str(),
-                PeerState::Disconnected {},
-                Some(err.to_string().as_str()),
-            );
-        }
-
-        state
-            .peer_connect_inflight
-            .lock()
-            .await
-            .remove(normalized_destination.as_str());
-    });
 }
 
 fn spawn_passive_peer_resolution(state: NodeRuntimeState, bus: EventBus, destination_hex: String) {
@@ -4693,7 +4962,6 @@ struct NodeRuntimeState {
     transport: Arc<Transport>,
     lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
-    peer_connect_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links:
         Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
@@ -4709,6 +4977,7 @@ struct NodeRuntimeState {
     preferred_propagation_node_hex: Option<String>,
     propagation_sync_inflight: Arc<AtomicBool>,
     send_task_permits: SendTaskPermits,
+    mission_destination_locks: MissionDestinationLocks,
 }
 
 fn prune_expired_buffered_acknowledgements(
@@ -4898,6 +5167,10 @@ fn build_pending_lxmf_resend(
         metadata,
         send_task_class,
         original_send_mode: send_mode,
+        direct_ack_retry_attempted: matches!(
+            report.fallback_stage,
+            Some(LxmfFallbackStage::AfterDirectRetryBudget {})
+        ),
         propagation_fallback_attempted: matches!(
             report.fallback_stage,
             Some(LxmfFallbackStage::AfterDirectRetryBudget {})
@@ -4924,6 +5197,16 @@ fn parse_chat_delivery_ack_body(body: &str) -> Option<String> {
     valid_message_id.then(|| message_id_hex.to_ascii_lowercase())
 }
 
+fn should_retry_pending_ack_timeout_via_direct(pending: &PendingLxmfDelivery) -> bool {
+    pending.resend.as_ref().is_some_and(|resend| {
+        matches!(resend.original_send_mode, SendMode::Auto {})
+            && !resend.direct_ack_retry_attempted
+            && !resend.propagation_fallback_attempted
+            && !matches!(pending.method, LxmfDeliveryMethod::Propagated {})
+            && pending.relay_destination_hex.is_none()
+    })
+}
+
 fn should_retry_pending_ack_timeout_via_propagation(
     pending: &PendingLxmfDelivery,
     has_active_relay: bool,
@@ -4936,13 +5219,8 @@ fn should_retry_pending_ack_timeout_via_propagation(
 }
 
 fn pending_ack_timeout_elapsed(pending: &PendingLxmfDelivery, now: u64) -> bool {
-    let is_propagation_fallback = pending
-        .resend
-        .as_ref()
-        .is_some_and(|resend| resend.propagation_fallback_attempted);
-    let timeout = if !is_propagation_fallback
-        && (matches!(pending.method, LxmfDeliveryMethod::Propagated {})
-            || pending.relay_destination_hex.is_some())
+    let timeout = if matches!(pending.method, LxmfDeliveryMethod::Propagated {})
+        || pending.relay_destination_hex.is_some()
     {
         PROPAGATED_LXMF_ACK_TIMEOUT
     } else {
@@ -5064,12 +5342,95 @@ async fn retry_pending_ack_timeout_via_propagation(
     pending: &PendingLxmfDelivery,
 ) -> Result<bool, String> {
     let has_active_relay = has_active_propagation_relay(state).await;
-    if !should_retry_pending_ack_timeout_via_propagation(pending, has_active_relay) {
-        return Ok(false);
-    }
     let Some(mut resend) = pending.resend.clone() else {
         return Ok(false);
     };
+    if should_retry_pending_ack_timeout_via_direct(pending) {
+        resend.direct_ack_retry_attempted = true;
+        info!(
+            "[lxmf][mission] ack timeout message_id={} destination={} command={} correlation={}; retrying direct delivery",
+            pending.message_id_hex,
+            pending.destination_hex,
+            pending.command_type.as_deref().unwrap_or("-"),
+            pending.correlation_id.as_deref().unwrap_or("-"),
+        );
+        match send_lxmf_with_delivery_policy(
+            state,
+            bus,
+            resend.requested_destination_hex.as_str(),
+            resend.body.as_slice(),
+            resend.title.clone(),
+            resend.fields_bytes.clone(),
+            Some(resend.metadata.clone()),
+            SendMode::DirectOnly {},
+            resend.send_task_class.direct_recovery_equivalent(),
+        )
+        .await
+        {
+            Ok(report) if lxmf_send_succeeded(report.outcome) => {
+                let Some(registered) = register_pending_lxmf_delivery(
+                    state,
+                    &report,
+                    Some(resend),
+                    Some(pending.message_id_hex.clone()),
+                )
+                .await
+                else {
+                    return Err("direct retry did not register pending delivery".to_string());
+                };
+                let retry_pending = &registered.pending;
+                state.sdk.record_delivery_sent(
+                    &retry_pending.message_id_hex,
+                    &retry_pending.destination_hex,
+                    retry_pending.correlation_id.as_deref(),
+                    retry_pending.command_id.as_deref(),
+                    retry_pending.command_type.as_deref(),
+                    retry_pending.event_uid.as_deref(),
+                    retry_pending.mission_uid.as_deref(),
+                );
+                emit_lxmf_delivery(
+                    bus,
+                    retry_pending,
+                    LxmfDeliveryStatus::Sent {},
+                    Some("ack timeout; retrying direct delivery".to_string()),
+                );
+                info!(
+                    "[lxmf][mission] resent direct after ack timeout original_message_id={} retry_message_id={} destination={} command={} correlation={}",
+                    retry_pending.message_id_hex,
+                    report.message_id_hex,
+                    retry_pending.destination_hex,
+                    retry_pending.command_type.as_deref().unwrap_or("-"),
+                    retry_pending.correlation_id.as_deref().unwrap_or("-"),
+                );
+                if let Some(buffered_ack) = registered.buffered_ack {
+                    acknowledge_pending_with_buffered_ack(state, bus, retry_pending, buffered_ack)
+                        .await;
+                }
+                return Ok(true);
+            }
+            Ok(report) => {
+                info!(
+                    "[lxmf][mission] direct retry after ack timeout failed destination={} command={} correlation={} outcome={:?}",
+                    pending.destination_hex,
+                    pending.command_type.as_deref().unwrap_or("-"),
+                    pending.correlation_id.as_deref().unwrap_or("-"),
+                    send_outcome_to_udl(report.outcome),
+                );
+            }
+            Err(err) => {
+                info!(
+                    "[lxmf][mission] direct retry after ack timeout errored destination={} command={} correlation={} err={}",
+                    pending.destination_hex,
+                    pending.command_type.as_deref().unwrap_or("-"),
+                    pending.correlation_id.as_deref().unwrap_or("-"),
+                    err,
+                );
+            }
+        }
+    }
+    if !should_retry_pending_ack_timeout_via_propagation(pending, has_active_relay) {
+        return Ok(false);
+    }
     resend.propagation_fallback_attempted = true;
     info!(
         "[lxmf][mission] ack timeout message_id={} destination={} command={} correlation={}; retrying via propagation relay",
@@ -5080,13 +5441,14 @@ async fn retry_pending_ack_timeout_via_propagation(
     );
     let report = send_lxmf_with_delivery_policy(
         state,
+        bus,
         resend.requested_destination_hex.as_str(),
         resend.body.as_slice(),
         resend.title.clone(),
         resend.fields_bytes.clone(),
         Some(resend.metadata.clone()),
         SendMode::PropagationOnly {},
-        resend.send_task_class.propagation_equivalent(),
+        resend.send_task_class.direct_recovery_equivalent(),
     )
     .await
     .map_err(|err| err.to_string())?;
@@ -5184,8 +5546,15 @@ fn is_accepted_result_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+fn is_sos_status_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata.command_present && metadata.command_type.as_deref() == Some("sos.status")
+    })
+}
+
 async fn send_lxmf_with_delivery_policy(
     state: &NodeRuntimeState,
+    bus: &EventBus,
     requested_destination_hex: &str,
     body: &[u8],
     title: Option<String>,
@@ -5194,11 +5563,16 @@ async fn send_lxmf_with_delivery_policy(
     send_mode: SendMode,
     send_task_class: SendTaskClass,
 ) -> Result<LxmfSendReport, NodeError> {
-    const DIRECT_ATTEMPTS: usize = 5;
     const RETRY_DELAY: Duration = Duration::from_secs(10);
+    const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
     let has_active_relay = has_active_propagation_relay(state).await;
     let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
-    let require_current_peer = !is_accepted_result;
+    let is_sos_status = is_sos_status_metadata(metadata.as_ref());
+    let retry_delay = if is_accepted_result {
+        ACCEPTED_RESULT_RETRY_DELAY
+    } else {
+        RETRY_DELAY
+    };
     let normalized_requested_destination = normalize_hex_32(requested_destination_hex)
         .unwrap_or_else(|| requested_destination_hex.trim().to_ascii_lowercase());
     let canonical_requested_destination =
@@ -5209,26 +5583,89 @@ async fn send_lxmf_with_delivery_policy(
         canonical_requested_destination.as_str(),
     )
     .await;
+    let can_try_stored_lxmf_route = matches!(send_mode, SendMode::Auto {})
+        && is_saved_peer
+        && saved_peer_can_try_stored_lxmf_route(
+            state,
+            normalized_requested_destination.as_str(),
+            canonical_requested_destination.as_str(),
+        )
+        .await;
+    let require_current_peer = !is_accepted_result && !can_try_stored_lxmf_route;
+    let direct_delivery_ready = if can_try_stored_lxmf_route {
+        saved_peer_has_direct_ready_route(
+            state,
+            canonical_requested_destination.as_str(),
+            has_active_relay,
+        )
+        .await
+    } else {
+        false
+    };
+    #[cfg(not(test))]
+    let direct_priority_hops = if matches!(send_task_class, SendTaskClass::Mission)
+        && matches!(send_mode, SendMode::Auto {})
+        && !is_accepted_result
+        && is_saved_peer
+    {
+        mission_direct_priority_hops(
+            state,
+            requested_destination_hex,
+            canonical_requested_destination.as_str(),
+        )
+        .await
+    } else {
+        None
+    };
+    #[cfg(test)]
+    let direct_priority_hops = None;
+    let direct_attempts = direct_attempt_budget_for_send(
+        send_mode,
+        has_active_relay,
+        can_try_stored_lxmf_route,
+        direct_delivery_ready,
+        direct_priority_hops,
+    );
+    let _destination_send_lock = if !is_accepted_result
+        && !is_sos_status
+        && metadata
+            .as_ref()
+            .is_some_and(MissionSyncMetadata::is_mission_related)
+    {
+        Some(
+            state
+                .mission_destination_locks
+                .acquire(canonical_requested_destination.as_str())
+                .await?,
+        )
+    } else {
+        None
+    };
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay
         && is_saved_peer
-        && saved_peer_prefers_propagation(state, requested_destination_hex, has_active_relay).await;
+        && saved_peer_prefers_propagation(
+            state,
+            requested_destination_hex,
+            has_active_relay,
+            direct_priority_hops,
+        )
+        .await;
 
     if matches!(send_mode, SendMode::PropagationOnly {}) || prefer_propagation {
         let propagation_task_class = send_task_class.propagation_equivalent();
         if prefer_propagation {
             info!(
-                "[lxmf][mission] saved peer {} is not directly reachable; using propagation relay",
+                "[lxmf][mission] saved peer {} is better suited for relay delivery; using propagation relay priority_hops={}",
                 requested_destination_hex,
+                direct_priority_hops
+                    .map(|hops| hops.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
             );
         }
-        let resolved_destination_hex = resolve_lxmf_destination_for_send(
-            state,
-            requested_destination_hex,
-            require_current_peer,
-        )
-        .await?;
+        let resolved_destination_hex =
+            resolve_lxmf_destination_for_send(state, requested_destination_hex, false).await?;
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
         log_send_task(
             propagation_task_class,
@@ -5260,20 +5697,48 @@ async fn send_lxmf_with_delivery_policy(
         .await;
     }
 
+    #[cfg(not(test))]
+    let mission_direct_admission_delay =
+        mission_direct_priority_delay_for_hops(direct_priority_hops);
+
     let mut last_error: Option<NodeError> = None;
 
-    for attempt in 1..=DIRECT_ATTEMPTS {
+    for attempt in 1..=direct_attempts {
         let resolved_destination_hex = resolve_lxmf_destination_for_send(
             state,
             requested_destination_hex,
             require_current_peer,
         )
         .await?;
+        info!(
+            "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
+            requested_destination_hex,
+            canonical_requested_destination,
+            resolved_destination_hex,
+            send_mode,
+            require_current_peer,
+            is_saved_peer,
+            can_try_stored_lxmf_route,
+            has_active_relay,
+            direct_delivery_ready,
+        );
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        #[cfg(not(test))]
+        if !mission_direct_admission_delay.is_zero() {
+            info!(
+                "[lxmf][queue] deferring {} send slot destination={} mode={:?} attempt={attempt}/{direct_attempts} priority_hops={} delay_ms={}",
+                send_task_class.label(),
+                requested_destination_hex,
+                send_mode,
+                direct_priority_hops.unwrap_or(u8::MAX),
+                mission_direct_admission_delay.as_millis(),
+            );
+            tokio::time::sleep(mission_direct_admission_delay).await;
+        }
         log_send_task(
             send_task_class,
             format!(
-                "[lxmf][queue] waiting for {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                "[lxmf][queue] waiting for {} send slot destination={} mode={:?} attempt={attempt}/{direct_attempts}",
                 send_task_class.label(),
                 requested_destination_hex,
                 send_mode,
@@ -5285,7 +5750,7 @@ async fn send_lxmf_with_delivery_policy(
             log_send_task(
                 send_task_class,
                 format!(
-                    "[lxmf][queue] acquired {} send slot destination={} mode={:?} attempt={attempt}/{DIRECT_ATTEMPTS}",
+                    "[lxmf][queue] acquired {} send slot destination={} mode={:?} attempt={attempt}/{direct_attempts}",
                     send_task_class.label(),
                     requested_destination_hex,
                     send_mode,
@@ -5305,11 +5770,20 @@ async fn send_lxmf_with_delivery_policy(
         };
         match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
+                if !report.used_propagation_node {
+                    record_peer_link_state(
+                        state,
+                        bus,
+                        report.resolved_destination_hex.as_str(),
+                        true,
+                    )
+                    .await;
+                }
                 return Ok(report);
             }
             Ok(report) => {
                 info!(
-                    "[lxmf][mission] send attempt {attempt}/{DIRECT_ATTEMPTS} failed destination={} mode={:?} outcome={:?}",
+                    "[lxmf][mission] send attempt {attempt}/{direct_attempts} failed destination={} mode={:?} outcome={:?}",
                     requested_destination_hex,
                     send_mode,
                     report.outcome,
@@ -5320,6 +5794,7 @@ async fn send_lxmf_with_delivery_policy(
                     is_accepted_result,
                     has_active_relay,
                     is_saved_peer,
+                    false,
                 ) {
                     clear_peer_direct_delivery_state(
                         state,
@@ -5337,7 +5812,7 @@ async fn send_lxmf_with_delivery_policy(
             Err(err) => {
                 let retriable = is_retriable_lxmf_error(&err);
                 info!(
-                    "[lxmf][mission] send attempt {attempt}/{DIRECT_ATTEMPTS} errored destination={} mode={:?} err={}",
+                    "[lxmf][mission] send attempt {attempt}/{direct_attempts} errored destination={} mode={:?} err={}",
                     requested_destination_hex,
                     send_mode,
                     err,
@@ -5348,6 +5823,7 @@ async fn send_lxmf_with_delivery_policy(
                     is_accepted_result,
                     has_active_relay,
                     is_saved_peer,
+                    retriable,
                 ) {
                     clear_peer_direct_delivery_state(state, requested_destination_hex, None).await;
                     info!(
@@ -5362,7 +5838,7 @@ async fn send_lxmf_with_delivery_policy(
             }
         }
 
-        if attempt < DIRECT_ATTEMPTS {
+        if attempt < direct_attempts {
             log_send_task(
                 send_task_class,
                 format!(
@@ -5370,11 +5846,11 @@ async fn send_lxmf_with_delivery_policy(
                     requested_destination_hex,
                     send_mode,
                     attempt + 1,
-                    DIRECT_ATTEMPTS,
-                    RETRY_DELAY.as_millis(),
+                    direct_attempts,
+                    retry_delay.as_millis(),
                 ),
             );
-            tokio::time::sleep(RETRY_DELAY).await;
+            tokio::time::sleep(retry_delay).await;
         }
     }
 
@@ -5387,10 +5863,9 @@ async fn send_lxmf_with_delivery_policy(
         requested_destination_hex,
     );
     let resolved_destination_hex =
-        resolve_lxmf_destination_for_send(state, requested_destination_hex, require_current_peer)
-            .await?;
+        resolve_lxmf_destination_for_send(state, requested_destination_hex, false).await?;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
-    let propagation_task_class = send_task_class.propagation_equivalent();
+    let propagation_task_class = send_task_class.direct_recovery_equivalent();
     log_send_task(
         propagation_task_class,
         format!(
@@ -5577,7 +6052,7 @@ async fn emit_received_payload(
             )
             .await;
             let persisted_checklist = persist_received_checklist_if_present(
-                state,
+                &state.app_state,
                 bus,
                 Some(metadata),
                 fields_bytes.as_deref(),
@@ -5705,6 +6180,7 @@ async fn emit_received_payload(
                 upsert_message_record(state, bus, record, true).await;
                 send_chat_delivery_ack_if_needed(
                     state,
+                    bus,
                     source_hex.as_deref(),
                     message_id_hex.as_str(),
                     body_utf8.as_str(),
@@ -5810,6 +6286,7 @@ async fn ack_pending_lxmf_delivery(
         return;
     }
 
+    record_peer_link_state(state, bus, source_hex, true).await;
     state.sdk.record_delivery_acknowledged(
         &pending.message_id_hex,
         &pending.destination_hex,
@@ -5855,11 +6332,12 @@ async fn send_operational_ack_if_needed(
         let destination = state.lxmf_destination.lock().await;
         address_hash_to_hex(&destination.desc.address_hash)
     };
-    let local_identity_hex = state.identity.address_hash().to_hex_string();
     if ack.destination_hex == local_lxmf_hex {
         return;
     }
-    let fields = match build_operational_ack_fields(&ack, local_identity_hex.as_str()) {
+    const OPERATIONAL_ACK_SEND_ATTEMPTS: usize = 3;
+    const OPERATIONAL_ACK_REDUNDANT_DELAY: Duration = Duration::from_millis(250);
+    let fields = match build_compact_operational_ack_fields(&ack) {
         Ok(fields) => fields,
         Err(err) => {
             bus.emit(NodeEvent::Error {
@@ -5873,30 +6351,45 @@ async fn send_operational_ack_if_needed(
         }
     };
     let ack_metadata = parse_mission_sync_metadata(fields.as_slice());
-    let body = format!("Accepted {}", ack.command_id).into_bytes();
-    match send_lxmf_with_delivery_policy(
-        state,
-        ack.destination_hex.as_str(),
-        body.as_slice(),
-        None,
-        Some(fields),
-        ack_metadata,
-        SendMode::Auto {},
-        SendTaskClass::Mission,
-    )
-    .await
-    {
-        Ok(report) => {
-            info!(
-                "[lxmf][mission] sent received acknowledgement destination={} message_id={} command={} correlation={} type={}",
-                report.resolved_destination_hex,
-                report.message_id_hex,
-                ack.command_id,
-                ack.correlation_id.as_deref().unwrap_or("-"),
-                ack.command_type.as_deref().unwrap_or("-"),
-            );
+    let mut sent = false;
+    let mut last_error: Option<NodeError> = None;
+    for attempt in 1..=OPERATIONAL_ACK_SEND_ATTEMPTS {
+        if attempt > 1 {
+            tokio::time::sleep(OPERATIONAL_ACK_REDUNDANT_DELAY).await;
         }
-        Err(err) => {
+        match send_lxmf_with_delivery_policy(
+            state,
+            bus,
+            ack.destination_hex.as_str(),
+            &[],
+            None,
+            Some(fields.clone()),
+            ack_metadata.clone(),
+            SendMode::Auto {},
+            SendTaskClass::MissionAck,
+        )
+        .await
+        {
+            Ok(report) => {
+                sent = true;
+                info!(
+                    "[lxmf][mission] sent received acknowledgement destination={} message_id={} command={} correlation={} type={} attempt={}/{}",
+                    report.resolved_destination_hex,
+                    report.message_id_hex,
+                    ack.command_id,
+                    ack.correlation_id.as_deref().unwrap_or("-"),
+                    ack.command_type.as_deref().unwrap_or("-"),
+                    attempt,
+                    OPERATIONAL_ACK_SEND_ATTEMPTS,
+                );
+            }
+            Err(err) => {
+                last_error = Some(err);
+            }
+        }
+    }
+    if !sent {
+        if let Some(err) = last_error {
             bus.emit(NodeEvent::Error {
                 code: node_error_code(&err).to_string(),
                 message: format!(
@@ -5930,6 +6423,9 @@ async fn acknowledge_chat_delivery(
         .map(from_sdk_message_record);
 
     if let Some(record) = maybe_record {
+        if let Some(source_hex) = source_hex {
+            record_peer_link_state(state, bus, source_hex, true).await;
+        }
         state.sdk.record_delivery_acknowledged(
             &record.message_id_hex,
             &record.destination_hex,
@@ -5955,6 +6451,7 @@ async fn acknowledge_chat_delivery(
 
 async fn send_chat_delivery_ack_if_needed(
     state: &NodeRuntimeState,
+    bus: &EventBus,
     source_hex: Option<&str>,
     message_id_hex: &str,
     body_utf8: &str,
@@ -5968,6 +6465,7 @@ async fn send_chat_delivery_ack_if_needed(
     let body = chat_delivery_ack_body(message_id_hex);
     match send_lxmf_with_delivery_policy(
         state,
+        bus,
         source_hex,
         body.as_bytes(),
         Some(CHAT_DELIVERY_ACK_TITLE.to_string()),
@@ -6256,39 +6754,153 @@ fn tcp_endpoint_connect_addr(endpoint: &str) -> &str {
         .unwrap_or_else(|| endpoint.trim())
 }
 
-fn spawn_reachable_tcp_client(transport: Arc<Transport>, endpoint: String) {
-    tokio::spawn(async move {
-        let connect_addr = tcp_endpoint_connect_addr(&endpoint).to_string();
-        if connect_addr.is_empty() {
-            return;
+fn configured_tcp_client_endpoints(endpoints: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for endpoint in endpoints {
+        let connect_addr = tcp_endpoint_connect_addr(endpoint).trim();
+        if connect_addr.is_empty() || normalized.iter().any(|value| value == connect_addr) {
+            continue;
         }
+        normalized.push(connect_addr.to_string());
+    }
+    normalized
+}
 
-        match tokio::time::timeout(
-            TCP_CLIENT_CONNECT_TIMEOUT,
-            TcpStream::connect(connect_addr.clone()),
-        )
+fn tcp_endpoint_host(connect_addr: &str) -> &str {
+    connect_addr
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(connect_addr)
+        .trim_matches(['[', ']'])
+        .trim()
+}
+
+fn tcp_endpoint_is_loopback(connect_addr: &str) -> bool {
+    let host = tcp_endpoint_host(connect_addr).to_ascii_lowercase();
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
+fn tcp_readiness_monitor_endpoints(endpoints: &[String]) -> Vec<String> {
+    endpoints
+        .iter()
+        .filter(|endpoint| !tcp_endpoint_is_loopback(endpoint))
+        .cloned()
+        .collect()
+}
+
+fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
+    format!(
+        "transport startup failed: no reachable Reticulum TCP interface endpoints={}",
+        endpoints.join(",")
+    )
+}
+
+async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
+    tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, TcpStream::connect(connect_addr))
         .await
-        {
-            Ok(Ok(stream)) => {
-                info!("tcp_client: preflight connected to <{}>", connect_addr);
+        .ok()
+        .and_then(Result::ok)
+}
+
+async fn tcp_endpoint_reachable(connect_addr: &str) -> bool {
+    connect_tcp_endpoint(connect_addr).await.is_some()
+}
+
+async fn any_tcp_endpoint_reachable(endpoints: &[String]) -> bool {
+    for endpoint in endpoints {
+        if tcp_endpoint_reachable(endpoint).await {
+            return true;
+        }
+    }
+    false
+}
+
+fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
+    if let Ok(guard) = status.lock() {
+        bus.emit(NodeEvent::StatusChanged {
+            status: guard.clone(),
+        });
+    }
+}
+
+fn spawn_tcp_client_interface_manager(transport: Arc<Transport>, connect_addr: String) {
+    tokio::spawn(async move {
+        let active = Arc::new(AtomicBool::new(false));
+        loop {
+            if active.load(Ordering::Acquire) {
+                tokio::time::sleep(TCP_CLIENT_INTERFACE_RETRY_INTERVAL).await;
+                continue;
+            }
+
+            if let Some(stream) = connect_tcp_endpoint(connect_addr.as_str()).await {
+                info!(
+                    "tcp_client: starting connected interface for <{}>",
+                    connect_addr
+                );
+                active.store(true, Ordering::Release);
+                let active_for_task = active.clone();
+                let task_addr = connect_addr.clone();
                 transport.iface_manager().lock().await.spawn(
-                    TcpClient::new_from_stream(connect_addr.as_str(), stream),
-                    TcpClient::spawn,
+                    TcpClient::new_from_stream(connect_addr.clone(), stream),
+                    move |context| async move {
+                        TcpClient::spawn(context).await;
+                        active_for_task.store(false, Ordering::Release);
+                        info!("tcp_client: stopped interface for <{}>", task_addr);
+                    },
                 );
             }
-            Ok(Err(err)) => {
-                warn!(
-                    "tcp_client: skipping unavailable endpoint <{}>: {}",
-                    connect_addr, err
+
+            tokio::time::sleep(TCP_CLIENT_INTERFACE_RETRY_INTERVAL).await;
+        }
+    });
+}
+
+fn spawn_tcp_client_readiness_monitor(
+    endpoints: Vec<String>,
+    status: Arc<Mutex<NodeStatus>>,
+    bus: EventBus,
+) {
+    if endpoints.is_empty() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut data_path_down = false;
+        loop {
+            let reachable = any_tcp_endpoint_reachable(endpoints.as_slice()).await;
+            if reachable {
+                if data_path_down {
+                    info!(
+                        "tcp_client: Reticulum TCP data path restored endpoints={}",
+                        endpoints.join(",")
+                    );
+                    emit_operational_notice(
+                        &bus,
+                        LogLevel::Info {},
+                        format!("Reticulum TCP data path restored: {}", endpoints.join(",")),
+                    );
+                    emit_status_changed(&status, &bus);
+                }
+                data_path_down = false;
+            } else if !data_path_down {
+                let message = tcp_data_path_unavailable_message(endpoints.as_slice());
+                warn!("{}", message);
+                bus.emit(NodeEvent::Error {
+                    code: "NetworkError".to_string(),
+                    message: message.clone(),
+                });
+                emit_operational_notice(
+                    &bus,
+                    LogLevel::Warn {},
+                    format!(
+                        "Reticulum TCP data path unavailable: {}",
+                        endpoints.join(",")
+                    ),
                 );
+                data_path_down = true;
             }
-            Err(_) => {
-                warn!(
-                    "tcp_client: skipping unavailable endpoint <{}>: connect timed out after {}ms",
-                    connect_addr,
-                    TCP_CLIENT_CONNECT_TIMEOUT.as_millis()
-                );
-            }
+
+            tokio::time::sleep(TCP_CLIENT_READINESS_CHECK_INTERVAL).await;
         }
     });
 }
@@ -6303,6 +6915,7 @@ pub async fn run_node(
     hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     bus: EventBus,
     mut cmd_rx: mpsc::Receiver<Command>,
+    mut priority_cmd_rx: mpsc::Receiver<Command>,
 ) {
     let mut transport_cfg = TransportConfig::new(config.name.clone(), &identity, config.broadcast);
     transport_cfg.set_retransmit(false);
@@ -6353,8 +6966,9 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
-    for endpoint in config.tcp_clients.iter().cloned() {
-        spawn_reachable_tcp_client(transport.clone(), endpoint);
+    let tcp_client_endpoints = configured_tcp_client_endpoints(config.tcp_clients.as_slice());
+    for endpoint in tcp_client_endpoints.iter().cloned() {
+        spawn_tcp_client_interface_manager(transport.clone(), endpoint);
     }
 
     let app_destination_hex = app_destination
@@ -6374,8 +6988,6 @@ pub async fn run_node(
         Arc::new(TokioMutex::new(HashSet::new()));
     let peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>> =
         Arc::new(TokioMutex::new(HashSet::new()));
-    let peer_connect_inflight: Arc<TokioMutex<HashSet<String>>> =
-        Arc::new(TokioMutex::new(HashSet::new()));
     let pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
     let pending_lxmf_acknowledgements: Arc<
@@ -6388,6 +7000,7 @@ pub async fn run_node(
         Arc::new(TokioMutex::new(None));
     let propagation_sync_inflight = Arc::new(AtomicBool::new(false));
     let send_task_permits = SendTaskPermits::new();
+    let mission_destination_locks = MissionDestinationLocks::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
         projection_journal_path(config.storage_dir.as_deref()),
         bus.clone(),
@@ -6412,7 +7025,6 @@ pub async fn run_node(
         transport: transport.clone(),
         lxmf_destination: lxmf_destination.clone(),
         peer_resolution_inflight: peer_resolution_inflight.clone(),
-        peer_connect_inflight: peer_connect_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
@@ -6430,6 +7042,7 @@ pub async fn run_node(
             .and_then(|value| normalize_hex_32(value)),
         propagation_sync_inflight: propagation_sync_inflight.clone(),
         send_task_permits: send_task_permits.clone(),
+        mission_destination_locks: mission_destination_locks.clone(),
     };
 
     if let Some(snapshot) = projection_journal.load_snapshot() {
@@ -6489,6 +7102,11 @@ pub async fn run_node(
             status: guard.clone(),
         });
     }
+    spawn_tcp_client_readiness_monitor(
+        tcp_readiness_monitor_endpoints(tcp_client_endpoints.as_slice()),
+        status.clone(),
+        bus.clone(),
+    );
 
     // Peer freshness/relay maintenance.
     {
@@ -6531,6 +7149,42 @@ pub async fn run_node(
                     }
                     spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
                 }
+            }
+        });
+    }
+
+    // Propagation receive maintenance. Relay sends are store-and-forward, so
+    // receivers must poll the selected relay even when nobody taps Sync.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(AUTO_PROPAGATION_SYNC_INTERVAL);
+            loop {
+                interval.tick().await;
+                sync_auto_propagation_node(&state, &bus).await;
+                let Some(relay_hex) = state.active_propagation_node_hex.lock().await.clone() else {
+                    continue;
+                };
+                if state
+                    .propagation_sync_inflight
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    continue;
+                }
+                let requested_at_ms = now_ms();
+                info!(
+                    "[sync] automatic propagation sync scheduled relay={} limit={}",
+                    relay_hex, AUTO_PROPAGATION_SYNC_LIMIT
+                );
+                tokio::spawn(run_propagation_sync_job(
+                    state.clone(),
+                    bus.clone(),
+                    Some(AUTO_PROPAGATION_SYNC_LIMIT),
+                    requested_at_ms,
+                    relay_hex,
+                ));
             }
         });
     }
@@ -6642,35 +7296,27 @@ pub async fn run_node(
                         let destination_kind =
                             announce_destination_kind_from_name_hash(event.name_hash.as_slice())
                                 .to_string();
-                        let app_data_bytes = event.app_data.as_slice().to_vec();
-                        let app_data = String::from_utf8(app_data_bytes.clone())
-                            .unwrap_or_else(|_| hex::encode(app_data_bytes.as_slice()));
-                        let (parsed_display_name, _) = announce_metadata_from_app_data(&app_data);
-                        let display_name = if destination_kind == "lxmf_delivery" {
-                            display_name_from_delivery_app_data(app_data_bytes.as_slice())
-                                .or(parsed_display_name)
-                        } else {
-                            parsed_display_name
-                        };
-                        let announce_class = classify_announce(&destination_kind, &app_data);
                         let interface_hex = hex::encode(event.interface);
                         let received_at_ms = now_ms();
-                        let announce_record = AnnounceRecord {
-                            destination_hex: destination_hex.clone(),
-                            identity_hex: identity_hex.clone(),
-                            destination_kind: destination_kind.clone(),
-                            announce_class,
-                            app_data: app_data.clone(),
-                            display_name: display_name.clone(),
-                            hops: event.hops,
-                            interface_hex: interface_hex.clone(),
+                        let sdk_announce_record = LxmfSdkAnnounceRecord::from_raw(
+                            destination_hex.clone(),
+                            identity_hex.clone(),
+                            destination_kind.clone(),
+                            event.app_data.as_slice(),
+                            event.hops,
+                            interface_hex.clone(),
                             received_at_ms,
-                        };
+                        );
+                        let announce_record =
+                            from_lxmf_sdk_announce_record(sdk_announce_record.clone());
+                        let announce_class = announce_record.announce_class;
+                        let app_data = announce_record.app_data.clone();
+                        let display_name = announce_record.display_name.clone();
                         state
                             .messaging
                             .lock()
                             .await
-                            .record_announce(to_sdk_announce_record(announce_record.clone()));
+                            .record_announce(to_compat_announce_record(&sdk_announce_record));
                         if let Err(err) = state.app_state.upsert_announce(&announce_record) {
                             bus.emit(NodeEvent::Error {
                                 code: "IoError".to_string(),
@@ -6684,7 +7330,7 @@ pub async fn run_node(
                             &destination_hex,
                             &identity_hex,
                             &destination_kind,
-                            &app_data,
+                            &announce_record.app_data,
                             event.hops,
                             &interface_hex,
                         );
@@ -6708,7 +7354,7 @@ pub async fn run_node(
                         ) {
                             emit_operational_notice(&bus, LogLevel::Info {}, message);
                         }
-                        if destination_kind == "app" {
+                        if destination_kind == DESTINATION_KIND_APP {
                             let lxmf_destination_hex = SingleOutputDestination::new(
                                 desc.identity,
                                 DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
@@ -6730,12 +7376,7 @@ pub async fn run_node(
                                 bus.clone(),
                                 destination_hex.clone(),
                             );
-                            spawn_saved_peer_auto_connect(
-                                state.clone(),
-                                bus.clone(),
-                                destination_hex.clone(),
-                            );
-                        } else if destination_kind == "lxmf_delivery" {
+                        } else if destination_kind == DESTINATION_KIND_LXMF_DELIVERY {
                             let app_destination_hex = SingleOutputDestination::new(
                                 desc.identity,
                                 DestinationName::new(
@@ -6763,11 +7404,6 @@ pub async fn run_node(
                             emit_peer_changed(&state, &bus, &app_destination_hex).await;
                             emit_peer_resolved_for_destination(&state, &bus, &app_destination_hex)
                                 .await;
-                            spawn_saved_peer_auto_connect(
-                                state.clone(),
-                                bus.clone(),
-                                app_destination_hex,
-                            );
                         }
                         sync_auto_propagation_node(&state, &bus).await;
                     }
@@ -6952,7 +7588,6 @@ pub async fn run_node(
     {
         let transport = transport.clone();
         let bus = bus.clone();
-        let sdk = sdk.clone();
         let connected_peers = connected_peers.clone();
         let state = state.clone();
         tokio::spawn(async move {
@@ -6961,54 +7596,14 @@ pub async fn run_node(
                 match rx.recv().await {
                     Ok(event) => {
                         let destination_hex = address_hash_to_hex(&event.address_hash);
-                        let canonical_destination_hex =
-                            canonical_app_destination_hex(&state, &destination_hex).await;
                         match event.event {
                             LinkEvent::Activated => {
                                 connected_peers.lock().await.insert(event.address_hash);
-                                state.messaging.lock().await.set_peer_active_link(
-                                    &destination_hex,
-                                    true,
-                                    now_ms(),
-                                );
-                                let state_name = state
-                                    .messaging
-                                    .lock()
-                                    .await
-                                    .peer_change_for_destination(&canonical_destination_hex)
-                                    .map(from_sdk_peer_change);
-                                if let Some(change) = state_name {
-                                    sdk.record_peer_changed(
-                                        &change.destination_hex,
-                                        change.state,
-                                        change.last_error.as_deref(),
-                                    );
-                                }
-                                emit_peer_changed(&state, &bus, &canonical_destination_hex).await;
-                                sync_auto_propagation_node(&state, &bus).await;
+                                record_peer_link_state(&state, &bus, &destination_hex, true).await;
                             }
                             LinkEvent::Closed => {
                                 connected_peers.lock().await.remove(&event.address_hash);
-                                state.messaging.lock().await.set_peer_active_link(
-                                    &destination_hex,
-                                    false,
-                                    now_ms(),
-                                );
-                                let state_name = state
-                                    .messaging
-                                    .lock()
-                                    .await
-                                    .peer_change_for_destination(&canonical_destination_hex)
-                                    .map(from_sdk_peer_change);
-                                if let Some(change) = state_name {
-                                    sdk.record_peer_changed(
-                                        &change.destination_hex,
-                                        change.state,
-                                        change.last_error.as_deref(),
-                                    );
-                                }
-                                emit_peer_changed(&state, &bus, &canonical_destination_hex).await;
-                                sync_auto_propagation_node(&state, &bus).await;
+                                record_peer_link_state(&state, &bus, &destination_hex, false).await;
                             }
                             LinkEvent::Data(_) => {}
                         }
@@ -7041,7 +7636,13 @@ pub async fn run_node(
         });
     }
 
-    while let Some(cmd) = cmd_rx.recv().await {
+    loop {
+        let cmd = tokio::select! {
+            biased;
+            Some(cmd) = priority_cmd_rx.recv() => cmd,
+            Some(cmd) = cmd_rx.recv() => cmd,
+            else => break,
+        };
         match cmd {
             Command::Stop { resp } => {
                 if let Ok(mut guard) = status.lock() {
@@ -7118,7 +7719,7 @@ pub async fn run_node(
                     resolve_peer_route(&state, &bus, &destination_hex).await?;
                     let desc = ensure_destination_desc(&state, dest, None).await?;
                     let _link = ensure_output_link(&state, desc).await?;
-                    sync_auto_propagation_node(&state, &bus).await;
+                    record_peer_link_state(&state, &bus, destination_hex.as_str(), true).await;
                     Ok::<(), NodeError>(())
                 }
                 .await;
@@ -7198,6 +7799,7 @@ pub async fn run_node(
                             Some(
                                 send_lxmf_with_delivery_policy(
                                     &state,
+                                    &bus,
                                     &destination_hex,
                                     &bytes,
                                     None,
@@ -7391,6 +7993,7 @@ pub async fn run_node(
                         let body_bytes = request.body_utf8.as_bytes().to_vec();
                         let report = send_lxmf_with_delivery_policy(
                             &state,
+                            &bus,
                             request.destination_hex.as_str(),
                             body_bytes.as_slice(),
                             request.title.clone(),
@@ -7504,6 +8107,7 @@ pub async fn run_node(
                             .ok_or(NodeError::InvalidConfig {})?;
                         let report = send_lxmf_with_delivery_policy(
                             &state,
+                            &bus,
                             outbound.request.destination_hex.as_str(),
                             outbound.request.body_utf8.as_bytes(),
                             outbound.request.title.clone(),
@@ -7846,6 +8450,194 @@ mod tests {
     }
 
     #[test]
+    fn configured_tcp_client_endpoints_trim_strip_and_deduplicate() {
+        let endpoints = configured_tcp_client_endpoints(&[
+            " tcp://rns.beleth.net:4242 ".to_string(),
+            "rns.beleth.net:4242".to_string(),
+            " ".to_string(),
+            "dfw.us.g00n.cloud:6969".to_string(),
+        ]);
+
+        assert_eq!(
+            endpoints,
+            vec![
+                "rns.beleth.net:4242".to_string(),
+                "dfw.us.g00n.cloud:6969".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn tcp_readiness_monitor_skips_loopback_test_relays() {
+        let endpoints = tcp_readiness_monitor_endpoints(&[
+            "127.0.0.1:4242".to_string(),
+            "localhost:4242".to_string(),
+            "[::1]:4242".to_string(),
+            "rns.beleth.net:4242".to_string(),
+        ]);
+
+        assert_eq!(endpoints, vec!["rns.beleth.net:4242".to_string()]);
+    }
+
+    #[test]
+    fn tcp_data_path_unavailable_message_is_readiness_classified() {
+        let message = tcp_data_path_unavailable_message(&["rns.beleth.net:4242".to_string()]);
+
+        assert!(message.contains("transport startup failed"));
+        assert!(message.contains("no reachable Reticulum TCP interface"));
+    }
+
+    #[test]
+    fn lxmf_delivery_announce_mapping_uses_lxmf_sdk_normalization() {
+        let raw_app_data =
+            encode_delivery_display_name_app_data("Alice Router").expect("encoded app data");
+        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+            "cccccccccccccccccccccccccccccccc",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            DESTINATION_KIND_LXMF_DELIVERY,
+            raw_app_data.as_slice(),
+            2,
+            "dddddddddddddddddddddddddddddddd",
+            42,
+        );
+
+        assert_eq!(sdk_record.app_data, hex::encode(raw_app_data.as_slice()));
+        assert_eq!(sdk_record.display_name.as_deref(), Some("Alice Router"));
+
+        let announce = from_lxmf_sdk_announce_record(sdk_record.clone());
+        assert!(matches!(
+            announce.announce_class,
+            AnnounceClass::LxmfDelivery {}
+        ));
+        assert_eq!(announce.display_name.as_deref(), Some("Alice Router"));
+
+        let compat = to_compat_announce_record(&sdk_record);
+        assert_eq!(compat.display_name.as_deref(), Some("Alice Router"));
+        assert_eq!(compat.app_data, sdk_record.app_data);
+    }
+
+    #[test]
+    fn app_announce_mapping_keeps_rem_capability_policy() {
+        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            DESTINATION_KIND_APP,
+            b"R3AKT;EMergencyMessages;Telemetry;name=Bravo+Team",
+            1,
+            "dddddddddddddddddddddddddddddddd",
+            100,
+        );
+
+        assert!(sdk_record.display_name.is_none());
+
+        let announce = from_lxmf_sdk_announce_record(sdk_record);
+        assert!(matches!(announce.announce_class, AnnounceClass::PeerApp {}));
+        assert_eq!(announce.display_name.as_deref(), Some("Bravo Team"));
+    }
+
+    #[test]
+    fn propagation_and_malformed_announces_keep_generic_sdk_normalization() {
+        let sdk_record = LxmfSdkAnnounceRecord::from_raw(
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            DESTINATION_KIND_LXMF_PROPAGATION,
+            &[0xff, 0xfe, 0x00],
+            3,
+            "dddddddddddddddddddddddddddddddd",
+            200,
+        );
+
+        assert_eq!(sdk_record.app_data, "fffe00");
+        assert!(sdk_record.display_name.is_none());
+
+        let announce = from_lxmf_sdk_announce_record(sdk_record);
+        assert!(matches!(
+            announce.announce_class,
+            AnnounceClass::PropagationNode {}
+        ));
+        assert_eq!(announce.app_data, "fffe00");
+        assert!(announce.display_name.is_none());
+
+        let (_, malformed_tokens) = announce_metadata_from_app_data("fffe00");
+        assert!(malformed_tokens.is_empty());
+    }
+
+    #[test]
+    fn announce_metadata_accepts_text_and_msgpack_layouts() {
+        let (text_name, text_tokens) =
+            announce_metadata_from_app_data("R3AKT;EMergencyMessages;name=Legacy+Team");
+        assert_eq!(text_name.as_deref(), Some("Legacy Team"));
+        assert!(text_tokens.iter().any(|token| token == "r3akt"));
+        assert!(text_tokens.iter().any(|token| token == "emergencymessages"));
+
+        let payload = MsgPackValue::Array(vec![
+            MsgPackValue::from("Msgpack Team"),
+            MsgPackValue::Map(vec![(
+                MsgPackValue::from("caps"),
+                MsgPackValue::Array(vec![
+                    MsgPackValue::from("R3AKT"),
+                    MsgPackValue::from("EMergencyMessages"),
+                ]),
+            )]),
+        ]);
+        let encoded = rmp_serde::to_vec(&payload).expect("msgpack");
+        let msgpack_hex = hex::encode(encoded);
+        let (msgpack_name, msgpack_tokens) = announce_metadata_from_app_data(msgpack_hex.as_str());
+
+        assert_eq!(msgpack_name.as_deref(), Some("Msgpack Team"));
+        assert!(msgpack_tokens.iter().any(|token| token == "r3akt"));
+        assert!(msgpack_tokens
+            .iter()
+            .any(|token| token == "emergencymessages"));
+        assert!(matches!(
+            classify_announce(DESTINATION_KIND_APP, msgpack_hex.as_str()),
+            AnnounceClass::PeerApp {}
+        ));
+    }
+
+    #[test]
+    fn successful_link_marks_canonical_saved_peer_active() {
+        let mut messaging = sdkmsg::MessagingStore::default();
+        let now = now_ms();
+        let app_destination_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let identity_hex = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let lxmf_destination_hex = "cccccccccccccccccccccccccccccccc";
+
+        messaging.record_announce(sdkmsg::AnnounceRecord {
+            destination_hex: app_destination_hex.to_string(),
+            identity_hex: identity_hex.to_string(),
+            destination_kind: "app".to_string(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Peer".to_string(),
+            display_name: Some("Peer".to_string()),
+            hops: 1,
+            interface_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+            received_at_ms: now,
+        });
+        messaging.record_resolution_result(
+            app_destination_hex,
+            identity_hex,
+            lxmf_destination_hex,
+            now,
+        );
+        messaging.mark_peer_saved(app_destination_hex, true);
+
+        mark_peer_active_after_successful_link(
+            &mut messaging,
+            lxmf_destination_hex,
+            app_destination_hex,
+            now,
+        );
+
+        let peer = messaging
+            .list_peers()
+            .into_iter()
+            .find(|peer| peer.destination_hex == app_destination_hex)
+            .expect("saved app peer should be listed");
+        assert!(peer.active_link);
+        assert_eq!(peer.state, sdkmsg::PeerState::Connected);
+    }
+
+    #[test]
     fn sos_field_telemetry_promotes_to_regular_telemetry_position() {
         let telemetry = SosDeviceTelemetryRecord {
             lat: Some(43.967_349),
@@ -8012,6 +8804,31 @@ mod tests {
     }
 
     #[test]
+    fn compact_operational_ack_fields_keep_result_tracking_metadata() {
+        let ack = OperationalAck {
+            destination_hex: "abcdef0123456789abcdef0123456789".to_string(),
+            command_id: "cmd-checklist-task-status-set-chk-operational-ack-task-operational-ack-abcdef01-1779627082723".to_string(),
+            correlation_id: Some(
+                "checklist-task-status-set-chk-operational-ack-task-operational-ack-abcdef01-1779627082723"
+                    .to_string(),
+            ),
+            command_type: Some("checklist.task.status.set".to_string()),
+        };
+
+        let fields = build_compact_operational_ack_fields(&ack).expect("ack fields");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+
+        assert!(metadata.result_present);
+        assert!(!metadata.command_present);
+        assert_eq!(metadata.result_status.as_deref(), Some("accepted"));
+        assert_eq!(
+            metadata.command_id.as_deref(),
+            Some(ack.command_id.as_str())
+        );
+        assert!(metadata.correlation_id.is_none());
+    }
+
+    #[test]
     fn accepted_result_metadata_is_identified_for_direct_ack_return() {
         let accepted = MissionSyncMetadata {
             result_present: true,
@@ -8096,6 +8913,7 @@ mod tests {
         assert!(!should_retry_pending_ack_timeout_via_propagation(
             &pending, false
         ));
+        assert!(should_retry_pending_ack_timeout_via_direct(&pending));
     }
 
     #[test]
@@ -8168,6 +8986,7 @@ mod tests {
             },
             send_task_class: SendTaskClass::Mission,
             original_send_mode: SendMode::Auto {},
+            direct_ack_retry_attempted: true,
             propagation_fallback_attempted: true,
         };
         assert!(!should_retry_pending_ack_timeout_via_propagation(
@@ -8193,7 +9012,7 @@ mod tests {
     }
 
     #[test]
-    fn propagation_fallback_pending_deliveries_use_direct_ack_timeout() {
+    fn propagation_fallback_pending_deliveries_keep_waiting_for_late_acknowledgements() {
         let now = now_ms();
         let mut propagated = test_pending_delivery(Some(PendingLxmfResend {
             requested_destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
@@ -8209,12 +9028,15 @@ mod tests {
             },
             send_task_class: SendTaskClass::Mission,
             original_send_mode: SendMode::Auto {},
+            direct_ack_retry_attempted: true,
             propagation_fallback_attempted: true,
         }));
         propagated.method = LxmfDeliveryMethod::Propagated {};
         propagated.relay_destination_hex = Some("dddddddddddddddddddddddddddddddd".to_string());
         propagated.sent_at_ms = now.saturating_sub(DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64);
 
+        assert!(!pending_ack_timeout_elapsed(&propagated, now));
+        propagated.sent_at_ms = now.saturating_sub(PROPAGATED_LXMF_ACK_TIMEOUT.as_millis() as u64);
         assert!(pending_ack_timeout_elapsed(&propagated, now));
     }
 
@@ -8934,6 +9756,130 @@ mod tests {
         );
     }
 
+    fn checklist_status_fields(
+        checklist_uid: &str,
+        task_uid: Option<&str>,
+        timestamp: &str,
+        user_status: &str,
+    ) -> Vec<u8> {
+        let mut args = vec![
+            (
+                MsgPackValue::from("checklist_uid"),
+                MsgPackValue::from(checklist_uid),
+            ),
+            (
+                MsgPackValue::from("user_status"),
+                MsgPackValue::from(user_status),
+            ),
+        ];
+        if let Some(task_uid) = task_uid {
+            args.push((MsgPackValue::from("task_uid"), MsgPackValue::from(task_uid)));
+        }
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("command_type"),
+                    MsgPackValue::from("checklist.task.status.set"),
+                ),
+                (
+                    MsgPackValue::from("command_id"),
+                    MsgPackValue::from("cmd-status-test"),
+                ),
+                (
+                    MsgPackValue::from("timestamp"),
+                    MsgPackValue::from(timestamp),
+                ),
+                (MsgPackValue::from("args"), MsgPackValue::Map(args)),
+            ])]),
+        )]);
+        rmp_serde::to_vec(&fields).expect("status fields")
+    }
+
+    #[test]
+    fn idempotent_checklist_status_update_is_handled_for_ack() {
+        let storage_dir = std::env::temp_dir().join(format!(
+            "rem-runtime-checklist-status-idempotent-{}",
+            now_ms()
+        ));
+        let store = AppStateStore::new(Some(
+            storage_dir
+                .to_str()
+                .expect("temporary storage dir should be utf-8"),
+        ))
+        .expect("app state store");
+        let mut task =
+            checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:05:00.000000000Z");
+        task.user_status = ChecklistUserTaskStatus::Complete {};
+        task.task_status = ChecklistTaskStatus::Complete {};
+        task.completed_at = Some("2026-04-22T12:05:00.000000000Z".to_string());
+        let checklist = checklist_test_record("2026-04-22T12:05:00.000000000Z", task.clone());
+        store
+            .upsert_checklist(&checklist, "seed-checklist")
+            .expect("seed checklist");
+        let bus = EventBus::new();
+        let fields = checklist_status_fields(
+            "chk-merge",
+            Some("task-1"),
+            "2026-04-22T12:04:00.000000000Z",
+            "COMPLETE",
+        );
+
+        assert!(persist_received_checklist_if_present(
+            &store,
+            &bus,
+            None,
+            Some(fields.as_slice()),
+            None,
+        ));
+
+        let stored = store
+            .get_checklist_any("chk-merge")
+            .expect("stored checklist query")
+            .expect("stored checklist");
+        assert_eq!(
+            stored.updated_at.as_deref(),
+            Some("2026-04-22T12:05:00.000000000Z")
+        );
+        assert_eq!(
+            stored.tasks[0].updated_at.as_deref(),
+            Some("2026-04-22T12:05:00.000000000Z")
+        );
+        assert!(matches!(
+            stored.tasks[0].user_status,
+            ChecklistUserTaskStatus::Complete {}
+        ));
+    }
+
+    #[test]
+    fn malformed_checklist_status_update_is_not_handled_for_ack() {
+        let storage_dir = std::env::temp_dir().join(format!(
+            "rem-runtime-checklist-status-malformed-{}",
+            now_ms()
+        ));
+        let store = AppStateStore::new(Some(
+            storage_dir
+                .to_str()
+                .expect("temporary storage dir should be utf-8"),
+        ))
+        .expect("app state store");
+        let bus = EventBus::new();
+        let fields = checklist_status_fields(
+            "chk-merge",
+            None,
+            "2026-04-22T12:04:00.000000000Z",
+            "COMPLETE",
+        );
+
+        assert!(!persist_received_checklist_if_present(
+            &store,
+            &bus,
+            None,
+            Some(fields.as_slice()),
+            None,
+        ));
+    }
+
     #[test]
     fn upload_snapshot_hydrates_hidden_placeholder_even_when_snapshot_is_older() {
         let existing = hidden_placeholder_checklist_record("chk-merge", "2026-04-22T12:00:01Z");
@@ -9351,6 +10297,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mission_destination_locks_serialize_same_destination() {
+        let locks = MissionDestinationLocks::new();
+        let first = locks
+            .acquire("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .expect("first destination lock");
+
+        let blocked = tokio::time::timeout(
+            Duration::from_millis(50),
+            locks.acquire("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "same destination should wait for the first mission send to finish"
+        );
+
+        drop(first);
+        let second = tokio::time::timeout(
+            Duration::from_millis(50),
+            locks.acquire("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .await
+        .expect("same destination should unblock after first send finishes")
+        .expect("second destination lock");
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn mission_destination_locks_allow_different_destinations() {
+        let locks = MissionDestinationLocks::new();
+        let _first = locks
+            .acquire("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .await
+            .expect("first destination lock");
+
+        let second = tokio::time::timeout(
+            Duration::from_millis(50),
+            locks.acquire("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        )
+        .await
+        .expect("different destinations should not block each other")
+        .expect("second destination lock");
+        drop(second);
+    }
+
+    #[tokio::test]
     async fn mission_sends_keep_reserved_capacity_when_general_pool_is_full() {
         let permits = SendTaskPermits::with_limits(1, 1);
         let _general = acquire_send_task_permit(&permits, SendTaskClass::General)
@@ -9405,10 +10398,122 @@ mod tests {
     }
 
     #[test]
+    fn direct_recovery_fallback_uses_dedicated_recovery_lane() {
+        assert_eq!(
+            SendTaskClass::Mission.direct_recovery_equivalent(),
+            SendTaskClass::MissionRecovery
+        );
+        assert_eq!(
+            SendTaskClass::MissionAck.direct_recovery_equivalent(),
+            SendTaskClass::MissionRecovery
+        );
+        assert_eq!(
+            SendTaskClass::MissionPropagation.direct_recovery_equivalent(),
+            SendTaskClass::MissionRecovery
+        );
+        assert_eq!(
+            SendTaskClass::MissionRecovery.direct_recovery_equivalent(),
+            SendTaskClass::MissionRecovery
+        );
+        assert_eq!(
+            SendTaskClass::General.direct_recovery_equivalent(),
+            SendTaskClass::General
+        );
+    }
+
+    #[test]
+    fn sos_status_sends_use_dedicated_recovery_lane() {
+        let metadata = MissionSyncMetadata {
+            command_present: true,
+            command_id: Some("sos:incident-1:active:123".to_string()),
+            correlation_id: Some("incident-1".to_string()),
+            command_type: Some("sos.status".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+
+        assert_eq!(
+            SendTaskClass::from_lxmf_request(true, Some(&metadata), &SendMode::Auto {}),
+            SendTaskClass::MissionRecovery
+        );
+        assert_eq!(
+            SendTaskClass::from_lxmf_request(true, Some(&metadata), &SendMode::PropagationOnly {}),
+            SendTaskClass::MissionRecovery
+        );
+    }
+
+    #[test]
+    fn accepted_result_sends_use_dedicated_ack_lane() {
+        let metadata = MissionSyncMetadata {
+            result_present: true,
+            result_status: Some("accepted".to_string()),
+            command_id: Some("cmd-accepted".to_string()),
+            ..MissionSyncMetadata::default()
+        };
+
+        assert_eq!(
+            SendTaskClass::from_lxmf_request(true, Some(&metadata), &SendMode::Auto {}),
+            SendTaskClass::MissionAck
+        );
+    }
+
+    #[tokio::test]
+    async fn mission_recovery_sends_do_not_wait_on_saturated_mission_lanes() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let _direct = acquire_send_task_permit(&permits, SendTaskClass::Mission)
+            .await
+            .expect("saturate direct mission pool");
+        let _propagation = acquire_send_task_permit(&permits, SendTaskClass::MissionPropagation)
+            .await
+            .expect("saturate propagation mission pool");
+
+        let recovery = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::MissionRecovery),
+        )
+        .await
+        .expect("recovery permit should not wait on direct or propagation saturation")
+        .expect("recovery permit acquisition should succeed");
+
+        let blocked_recovery = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::MissionRecovery),
+        )
+        .await;
+        assert!(
+            blocked_recovery.is_err(),
+            "recovery pool should remain saturated while the original permit is held"
+        );
+        drop(recovery);
+    }
+
+    #[tokio::test]
+    async fn accepted_ack_sends_do_not_wait_on_saturated_direct_mission_capacity() {
+        let permits = SendTaskPermits::with_limits(1, 1);
+        let _mission = acquire_send_task_permit(&permits, SendTaskClass::Mission)
+            .await
+            .expect("saturate direct mission pool");
+
+        let ack = tokio::time::timeout(
+            Duration::from_millis(50),
+            acquire_send_task_permit(&permits, SendTaskClass::MissionAck),
+        )
+        .await
+        .expect("accepted acknowledgement should not wait on mission pool saturation")
+        .expect("accepted acknowledgement permit acquisition should succeed");
+        drop(ack);
+    }
+
+    #[test]
     fn mission_delivery_failures_do_not_emit_global_send_bytes_error() {
         assert!(!should_emit_global_send_bytes_error(SendTaskClass::Mission));
         assert!(!should_emit_global_send_bytes_error(
+            SendTaskClass::MissionAck
+        ));
+        assert!(!should_emit_global_send_bytes_error(
             SendTaskClass::MissionPropagation
+        ));
+        assert!(!should_emit_global_send_bytes_error(
+            SendTaskClass::MissionRecovery
         ));
         assert!(should_emit_global_send_bytes_error(SendTaskClass::General));
     }
@@ -9439,13 +10544,12 @@ mod tests {
             last_resolution_attempt_at_ms: None,
             last_seen_at_ms: announce_last_seen_at_ms.unwrap_or_default(),
             announce_last_seen_at_ms,
-            lxmf_last_seen_at_ms: lxmf_destination_hex
-                .map(|_| announce_last_seen_at_ms.unwrap_or(1)),
+            lxmf_last_seen_at_ms: lxmf_destination_hex.map(|_| now_ms()),
         }
     }
 
     #[test]
-    fn direct_delivery_readiness_prefers_relay_for_announced_saved_peer_without_active_link() {
+    fn direct_delivery_readiness_uses_fresh_route_before_relay_fallback() {
         let announced_peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -9464,12 +10568,12 @@ mod tests {
         );
 
         assert!(sdk_peer_is_direct_delivery_ready(&announced_peer, false));
-        assert!(!sdk_peer_is_direct_delivery_ready(&announced_peer, true));
+        assert!(sdk_peer_is_direct_delivery_ready(&announced_peer, true));
         assert!(sdk_peer_is_direct_delivery_ready(&active_peer, true));
     }
 
     #[test]
-    fn direct_delivery_requires_connected_peer_with_active_link() {
+    fn direct_delivery_can_use_fresh_route_without_active_link() {
         let mut inconsistent_connected_peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -9483,17 +10587,172 @@ mod tests {
         assert!(!sdk_peer_is_directly_reachable(
             &inconsistent_connected_peer
         ));
-        assert!(!sdk_peer_is_direct_delivery_ready(
+        assert!(sdk_peer_is_direct_delivery_ready(
             &inconsistent_connected_peer,
             true
         ));
     }
 
     #[test]
-    fn auto_saved_peer_direct_failure_uses_propagation_when_relay_exists() {
+    fn direct_delivery_can_use_observed_lxmf_route_for_stale_peer() {
+        let stale_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            true,
+            false,
+            None,
+        );
+
+        assert!(sdk_peer_has_observed_lxmf_delivery_route(&stale_peer));
+        assert!(sdk_peer_is_direct_delivery_ready(&stale_peer, true));
+    }
+
+    #[test]
+    fn direct_delivery_can_use_current_app_peer_with_old_lxmf_timestamp() {
+        let mut peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            false,
+            Some(now_ms()),
+        );
+        peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!sdk_peer_has_observed_lxmf_delivery_route(&peer));
+        assert!(sdk_peer_is_direct_delivery_ready(&peer, true));
+    }
+
+    #[test]
+    fn direct_delivery_rejects_old_observed_lxmf_route_for_stale_peer() {
+        let mut stale_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            true,
+            false,
+            None,
+        );
+        stale_peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!sdk_peer_has_observed_lxmf_delivery_route(&stale_peer));
+        assert!(!sdk_peer_is_direct_delivery_ready(&stale_peer, true));
+    }
+
+    #[test]
+    fn stored_route_only_auto_send_uses_single_direct_probe_when_relay_exists() {
+        assert_eq!(
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, None),
+            LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(11)),
+            LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(1)),
+            LXMF_DIRECT_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(SendMode::Auto {}, false, true, false, Some(11)),
+            LXMF_DIRECT_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(SendMode::DirectOnly {}, true, true, false, Some(11)),
+            LXMF_DIRECT_ATTEMPTS
+        );
+    }
+
+    #[test]
+    fn high_hop_stale_saved_route_prefers_propagation_lane() {
+        let stale_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            true,
+            false,
+            None,
+        );
+        let current_peer = send_peer(
+            "dddddddddddddddddddddddddddddddd",
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            Some("ffffffffffffffffffffffffffffffff"),
+            false,
+            false,
+            Some(now_ms()),
+        );
+        let active_peer = send_peer(
+            "11111111111111111111111111111111",
+            Some("22222222222222222222222222222222"),
+            Some("33333333333333333333333333333333"),
+            false,
+            true,
+            Some(now_ms()),
+        );
+
+        assert!(saved_peer_stored_route_prefers_propagation(
+            &stale_peer,
+            true,
+            Some(11),
+        ));
+        assert!(!saved_peer_stored_route_prefers_propagation(
+            &stale_peer,
+            true,
+            Some(1),
+        ));
+        assert!(saved_peer_stored_route_prefers_propagation(
+            &current_peer,
+            true,
+            Some(11),
+        ));
+        assert!(!saved_peer_stored_route_prefers_propagation(
+            &active_peer,
+            true,
+            Some(11),
+        ));
+        assert!(!saved_peer_stored_route_prefers_propagation(
+            &stale_peer,
+            false,
+            Some(11),
+        ));
+    }
+
+    #[test]
+    fn mission_direct_admission_delay_keeps_one_hop_targets_first() {
+        assert_eq!(
+            mission_direct_priority_delay_for_hops(Some(1)),
+            Duration::ZERO
+        );
+        assert_eq!(
+            mission_direct_priority_delay_for_hops(Some(2)),
+            Duration::ZERO
+        );
+        assert!(
+            mission_direct_priority_delay_for_hops(Some(5))
+                < mission_direct_priority_delay_for_hops(Some(11))
+        );
+        assert_eq!(
+            mission_direct_priority_delay_for_hops(Some(20)),
+            MISSION_DIRECT_PRIORITY_MAX_DELAY
+        );
+    }
+
+    #[test]
+    fn auto_saved_peer_nonretriable_direct_failure_uses_propagation_when_relay_exists() {
         assert!(should_try_propagation_after_direct_failure(
             SendMode::Auto {},
             false,
+            true,
+            true,
+            false,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            false,
+            true,
             true,
             true,
         ));
@@ -9502,24 +10761,28 @@ mod tests {
             false,
             true,
             true,
-        ));
-        assert!(!should_try_propagation_after_direct_failure(
-            SendMode::Auto {},
-            false,
-            false,
-            true,
-        ));
-        assert!(!should_try_propagation_after_direct_failure(
-            SendMode::Auto {},
-            false,
-            true,
             false,
         ));
         assert!(!should_try_propagation_after_direct_failure(
             SendMode::Auto {},
+            false,
+            false,
+            true,
+            false,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
+            false,
+            true,
+            false,
+            false,
+        ));
+        assert!(!should_try_propagation_after_direct_failure(
+            SendMode::Auto {},
             true,
             true,
             true,
+            false,
         ));
     }
 
@@ -9662,12 +10925,18 @@ mod tests {
     }
 
     #[test]
-    fn saved_peer_route_refresh_targets_saved_peers_without_direct_reachability() {
+    fn saved_peer_route_refresh_targets_saved_peers_without_known_delivery_route() {
         let mut messaging = sdkmsg::MessagingStore::new(30);
+        let now = now_ms();
         messaging.mark_peer_saved("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true);
         messaging.mark_peer_saved("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true);
         messaging.mark_peer_saved("cccccccccccccccccccccccccccccccc", false);
-        messaging.set_peer_active_link("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true, now_ms());
+        messaging.record_resolution_result(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "dddddddddddddddddddddddddddddddd",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            now,
+        );
 
         assert_eq!(
             saved_peer_destinations_needing_route_refresh(&messaging),

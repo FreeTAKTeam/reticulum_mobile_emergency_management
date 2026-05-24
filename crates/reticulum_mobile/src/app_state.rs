@@ -24,6 +24,7 @@ use crate::types::{
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
+const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct AppStateStore {
@@ -122,19 +123,19 @@ impl AppStateStore {
     fn connect(&self) -> Result<Connection, NodeError> {
         let connection = Connection::open(&self.db_path).map_err(|_| NodeError::IoError {})?;
         connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(|_| NodeError::IoError {})?;
-        connection
-            .pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|_| NodeError::IoError {})?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .map_err(|_| NodeError::IoError {})?;
         Ok(connection)
     }
 
     fn initialize(&self) -> Result<(), NodeError> {
         let connection = self.connect()?;
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .map_err(|_| NodeError::IoError {})?;
+        connection
+            .pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|_| NodeError::IoError {})?;
         connection
             .execute_batch(
                 "

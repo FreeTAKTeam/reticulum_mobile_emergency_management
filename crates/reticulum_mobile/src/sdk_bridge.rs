@@ -42,6 +42,7 @@ use crate::types::{
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
 const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+const ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(8);
 const PROPAGATION_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
 const PROPAGATION_FETCH_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
 const PROPAGATION_FETCH_BATCH_SIZE: usize = 1;
@@ -111,6 +112,12 @@ fn transport_method_for_send_mode(
             }
         }
     }
+}
+
+fn metadata_is_accepted_result(metadata: Option<&MissionSyncMetadata>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata.result_present && metadata.result_status.as_deref() == Some("accepted")
+    })
 }
 
 fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String {
@@ -262,12 +269,16 @@ const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_LINK_CONNECT_ATTEMPTS: usize = 3;
+const ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS: usize = 1;
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
 const EXT_FIELDS_BASE64: &str = "reticulum.fields_base64";
 const EXT_RAW_BYTES_BASE64: &str = "reticulum.raw_bytes_base64";
 const EXT_SEND_MODE: &str = "reticulum.send_mode";
 const EXT_USE_PROPAGATION_NODE: &str = "reticulum.use_propagation_node";
+const EXT_ACCEPTED_RESULT_ACK: &str = "reticulum.accepted_result_ack";
 const EVENT_PACKET_RECEIVED: &str = "reticulum.packet_received";
 const EVENT_ANNOUNCE_RECEIVED: &str = "reticulum.announce_received";
 const EVENT_PEER_CHANGED: &str = "reticulum.peer_changed";
@@ -792,6 +803,9 @@ impl RuntimeLxmfSdk {
         if matches!(send_mode, SendMode::PropagationOnly {}) {
             request = request.with_extension(EXT_USE_PROPAGATION_NODE, json!(true));
         }
+        if metadata_is_accepted_result(metadata.as_ref()) {
+            request = request.with_extension(EXT_ACCEPTED_RESULT_ACK, json!(true));
+        }
         if let Some(correlation_id) = metadata
             .as_ref()
             .and_then(|value| value.correlation_id.clone())
@@ -1072,6 +1086,26 @@ async fn compat_send_lxmf(
             _ => SendMode::Auto {},
         }
     };
+    let is_accepted_result_ack = req
+        .extensions
+        .get(EXT_ACCEPTED_RESULT_ACK)
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let link_connect_timeout = if is_accepted_result_ack {
+        ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT
+    } else {
+        DEFAULT_LINK_CONNECT_TIMEOUT
+    };
+    let link_connect_attempts = if is_accepted_result_ack {
+        ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS
+    } else {
+        DEFAULT_LINK_CONNECT_ATTEMPTS
+    };
+    let resource_transfer_timeout = if is_accepted_result_ack {
+        ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT
+    } else {
+        RESOURCE_TRANSFER_TIMEOUT
+    };
 
     let remote_desc = resolve_lxmf_destination_desc(&state, destination)
         .await
@@ -1132,11 +1166,15 @@ async fn compat_send_lxmf(
     } else {
         false
     };
-    let desired_method = transport_method_for_send_mode(
-        send_mode,
-        has_cached_direct_link,
-        has_delivery_ratchet(&state, &remote_desc.address_hash),
-    );
+    let desired_method = if is_accepted_result_ack {
+        TransportMethod::Opportunistic
+    } else {
+        transport_method_for_send_mode(
+            send_mode,
+            has_cached_direct_link,
+            has_delivery_ratchet(&state, &remote_desc.address_hash),
+        )
+    };
     let DeliveryDecision {
         method,
         representation,
@@ -1203,22 +1241,31 @@ async fn compat_send_lxmf(
         });
     }
 
+    let remote_destination_hash = remote_desc.address_hash;
     let link = ensure_lxmf_output_link(
         &state,
         remote_desc,
         Some(requested_destination_hex.as_str()),
         Some(resolved_destination_hex.as_str()),
+        link_connect_timeout,
+        link_connect_attempts,
     )
     .await
     .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
     let link_id = *link.lock().await.id();
     if matches!(representation, LxmfRepresentation::Resource) {
         let mut resource_events = state.transport.resource_events();
-        let resource_hash = state
+        let resource_hash = match state
             .transport
             .send_resource(&link_id, wire.clone(), None)
             .await
-            .map_err(|_| sdk_transport("failed to start lxmf resource transfer"))?;
+        {
+            Ok(hash) => hash,
+            Err(_) => {
+                clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                return Err(sdk_transport("failed to start lxmf resource transfer"));
+            }
+        };
         let resource_hash_hex = hex::encode(resource_hash.as_slice());
         info!(
             "[lxmf][events][sdk] path=direct representation=resource requested_destination={} resolved_destination={} message_id={} resource_hash={} wire_bytes={} max_wire_bytes={}",
@@ -1229,9 +1276,10 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let deadline = tokio::time::Instant::now() + RESOURCE_TRANSFER_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + resource_transfer_timeout;
         loop {
             if tokio::time::Instant::now() >= deadline {
+                clear_lxmf_output_link(&state, &remote_destination_hash).await;
                 return Err(sdk_transport("lxmf resource transfer timed out"));
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1262,6 +1310,9 @@ async fn compat_send_lxmf(
                                 message_id_hex,
                                 resource_hash_hex,
                             );
+                            if is_accepted_result_ack {
+                                clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            }
                             return Ok(CompatSendReport {
                                 outcome: RnsSendOutcome::SentDirect,
                                 message_id_hex,
@@ -1278,10 +1329,14 @@ async fn compat_send_lxmf(
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    clear_lxmf_output_link(&state, &remote_destination_hash).await;
                     return Err(sdk_transport("resource event stream closed"));
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                Err(_) => return Err(sdk_transport("lxmf resource transfer timed out")),
+                Err(_) => {
+                    clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                    return Err(sdk_transport("lxmf resource transfer timed out"));
+                }
             }
         }
     }
@@ -1300,6 +1355,12 @@ async fn compat_send_lxmf(
         .map_err(|_| sdk_internal("failed to create transport packet"))?;
     let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
     let outcome = state.transport.send_packet_with_outcome(packet).await;
+    if !matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    ) {
+        clear_lxmf_output_link(&state, &remote_destination_hash).await;
+    }
 
     Ok(CompatSendReport {
         outcome,
@@ -1365,6 +1426,8 @@ async fn compat_send_lxmf_via_propagation(
             relay_desc,
             Some(requested_destination_hex),
             Some(resolved_destination_hex),
+            DEFAULT_LINK_CONNECT_TIMEOUT,
+            DEFAULT_LINK_CONNECT_ATTEMPTS,
         )
         .await
         .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
@@ -1680,6 +1743,8 @@ async fn propagation_remote_control_request(
             relay_desc.clone(),
             Some(path),
             Some(relay_destination_hex.as_str()),
+            DEFAULT_LINK_CONNECT_TIMEOUT,
+            DEFAULT_LINK_CONNECT_ATTEMPTS,
         )
         .await?;
         let link_id = *link.lock().await.id();
@@ -2173,11 +2238,12 @@ async fn ensure_lxmf_output_link(
     desc: DestinationDesc,
     requested_destination_hex: Option<&str>,
     resolved_destination_hex: Option<&str>,
+    connect_timeout: Duration,
+    max_attempts: usize,
 ) -> Result<Arc<TokioMutex<Link>>, NodeError> {
-    const MAX_ATTEMPTS: usize = 3;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
 
-    for attempt in 0..MAX_ATTEMPTS {
+    for attempt in 0..max_attempts.max(1) {
         state
             .transport
             .request_path(&desc.address_hash, None, None)
@@ -2194,14 +2260,14 @@ async fn ensure_lxmf_output_link(
             }
         };
 
-        match wait_for_link_active(&state.transport, &link).await {
+        match wait_for_link_active(&state.transport, &link, connect_timeout).await {
             Ok(()) => return Ok(link),
             Err(err) => {
                 let stale = state.out_links.lock().await.remove(&desc.address_hash);
                 if let Some(stale) = stale {
                     stale.lock().await.close();
                 }
-                if attempt + 1 == MAX_ATTEMPTS {
+                if attempt + 1 == max_attempts.max(1) {
                     log_lxmf_link_activation_failure(
                         "failed",
                         &desc,
@@ -2268,6 +2334,7 @@ async fn clear_lxmf_output_link(state: &SdkTransportState, destination: &Address
 async fn wait_for_link_active(
     transport: &Arc<Transport>,
     link: &Arc<TokioMutex<Link>>,
+    timeout: Duration,
 ) -> Result<(), NodeError> {
     if link.lock().await.status() == LinkStatus::Active {
         return Ok(());
@@ -2275,7 +2342,7 @@ async fn wait_for_link_active(
 
     let link_id = *link.lock().await.id();
     let mut events = transport.out_link_events();
-    let deadline = tokio::time::Instant::now() + DEFAULT_LINK_CONNECT_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
         if link.lock().await.status() == LinkStatus::Active {

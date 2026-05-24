@@ -946,6 +946,7 @@ version = "0.2.1"
 dependencies = [
  "hex",
  "hmac",
+ "lxmf-wire",
  "serde",
  "serde_json",
  "sha2",

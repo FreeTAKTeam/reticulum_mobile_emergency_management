@@ -197,6 +197,8 @@ pub struct MessagingStore {
 }
 
 const DEFAULT_PEER_STALE_AFTER_MINUTES: u32 = 30;
+pub(crate) const DEFAULT_PEER_STALE_AFTER_MS: u64 =
+    DEFAULT_PEER_STALE_AFTER_MINUTES as u64 * 60_000;
 const REQUIRED_MISSION_CAPABILITIES: [&str; 2] = ["r3akt", "emergencymessages"];
 
 impl Default for SyncStatus {
@@ -360,68 +362,6 @@ impl MessagingStore {
     pub fn is_peer_saved(&self, destination_hex: &str) -> bool {
         let normalized = normalize_hex(destination_hex);
         !normalized.is_empty() && self.saved_destinations.contains(normalized.as_str())
-    }
-
-    pub fn saved_peer_has_current_app_announce(&self, destination_hex: &str) -> bool {
-        let normalized = normalize_hex(destination_hex);
-        if normalized.is_empty() || !self.saved_destinations.contains(normalized.as_str()) {
-            return false;
-        }
-
-        let Some(record) = self.announce_records.get(normalized.as_str()) else {
-            return false;
-        };
-        if record.destination_kind != "app" || !supports_mission_traffic(Some(&record.app_data)) {
-            return false;
-        }
-
-        let identity_hex = normalize_hex(record.identity_hex.as_str());
-        let lxmf_destination_hex = self.resolved_lxmf_by_identity.get(identity_hex.as_str());
-        let active_link = self.active_link_destinations.contains(normalized.as_str())
-            || lxmf_destination_hex
-                .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
-        if active_link {
-            return false;
-        }
-
-        current_time_ms().saturating_sub(record.received_at_ms) <= self.peer_stale_after_ms
-    }
-
-    pub fn saved_peer_has_current_route_announce(&self, destination_hex: &str) -> bool {
-        let normalized = normalize_hex(destination_hex);
-        if normalized.is_empty() || !self.saved_destinations.contains(normalized.as_str()) {
-            return false;
-        }
-        if self.saved_peer_has_current_app_announce(normalized.as_str()) {
-            return true;
-        }
-        if self.active_link_destinations.contains(normalized.as_str()) {
-            return false;
-        }
-
-        let now_ms = current_time_ms();
-        if self
-            .announce_records
-            .get(normalized.as_str())
-            .is_some_and(|record| {
-                record.destination_kind == "lxmf_delivery"
-                    && now_ms.saturating_sub(record.received_at_ms) <= self.peer_stale_after_ms
-            })
-        {
-            return true;
-        }
-
-        self.peer_by_destination(normalized.as_str())
-            .is_some_and(|peer| {
-                !peer.active_link
-                    && peer.lxmf_last_seen_at_ms.is_some_and(|seen_at_ms| {
-                        now_ms.saturating_sub(seen_at_ms) <= self.peer_stale_after_ms
-                    })
-                    && peer
-                        .lxmf_destination_hex
-                        .as_deref()
-                        .is_some_and(|value| !normalize_hex(value).is_empty())
-            })
     }
 
     pub fn current_lxmf_announce_destination(&self, destination_hex: &str) -> Option<String> {
@@ -1066,7 +1006,6 @@ mod tests {
             Some(now.saturating_sub(10_000))
         );
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
-        assert!(store.saved_peer_has_current_app_announce("appdest"));
 
         store.record_announce(AnnounceRecord {
             destination_hex: "appdest".into(),
@@ -1088,7 +1027,6 @@ mod tests {
             Some(now.saturating_add(1))
         );
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
-        assert!(store.saved_peer_has_current_app_announce("appdest"));
 
         store.record_resolution_result("appdest", "identity", "lxmfdest", now.saturating_add(2));
 
@@ -1135,26 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_peer_current_route_announce_accepts_multihop_app_announce() {
-        let mut store = MessagingStore::default();
-        let now = current_time_ms();
-        store.record_announce(AnnounceRecord {
-            destination_hex: "appdest".into(),
-            identity_hex: "identity".into(),
-            destination_kind: "app".into(),
-            app_data: "R3AKT,EMergencyMessages".into(),
-            display_name: Some("Alice".into()),
-            hops: 5,
-            interface_hex: "iface".into(),
-            received_at_ms: now,
-        });
-        store.mark_peer_saved("appdest", true);
-
-        assert!(store.saved_peer_has_current_route_announce("appdest"));
-    }
-
-    #[test]
-    fn saved_peer_current_route_announce_accepts_lxmf_only_resolution() {
+    fn lxmf_only_resolution_projects_saved_peer() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1170,7 +1089,6 @@ mod tests {
         store.record_resolution_result("appdest", "identity", "lxmfdest", now);
         store.mark_peer_saved("appdest", true);
 
-        assert!(store.saved_peer_has_current_route_announce("appdest"));
         let peer = store
             .peer_by_destination("appdest")
             .expect("saved peer should be projected from lxmf announce");
