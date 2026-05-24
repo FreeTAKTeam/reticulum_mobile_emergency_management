@@ -29,8 +29,18 @@ public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
 
+    private volatile ReticulumNodeService boundService;
+    private volatile boolean serviceBound = false;
+    private volatile boolean serviceListenerRegistered = false;
+    private volatile boolean bridgeForeground = true;
+    private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
+
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
+        final ReticulumNodeService service = boundService;
+        if (service != null && !service.isAppUiForeground()) {
+            return;
+        }
         final JSObject safePayload = payload == null ? new JSObject() : payload;
         mirrorEventToLogcat(eventName, safePayload);
         notifyListeners(eventName, safePayload);
@@ -47,6 +57,7 @@ public class ReticulumNodePlugin extends Plugin {
             final ReticulumNodeService.LocalBinder localBinder = (ReticulumNodeService.LocalBinder) service;
             boundService = localBinder.getService();
             serviceBound = true;
+            boundService.setAppUiForeground(bridgeForeground);
             tryRegisterServiceListener();
             serviceFuture.complete(boundService);
             Logger.info(TAG, "Bound to ReticulumNodeService.");
@@ -80,19 +91,49 @@ public class ReticulumNodePlugin extends Plugin {
         }
     };
 
-    private volatile ReticulumNodeService boundService;
-    private volatile boolean serviceBound = false;
-    private volatile boolean serviceListenerRegistered = false;
-    private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
-
     @Override
     public void load() {
         super.load();
+        bridgeForeground = true;
         Logger.info(TAG, "ReticulumNode plugin loaded.");
     }
 
     @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        bridgeForeground = true;
+        if (boundService != null) {
+            boundService.setAppUiForeground(true);
+        }
+        tryRegisterServiceListener();
+    }
+
+    @Override
+    protected void handleOnPause() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
+        unregisterServiceListener();
+        super.handleOnPause();
+    }
+
+    @Override
+    protected void handleOnStop() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
+        unregisterServiceListener();
+        super.handleOnStop();
+    }
+
+    @Override
     protected void handleOnDestroy() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
         unregisterServiceListener();
         unbindFromService();
         bridgeExecutor.shutdownNow();
@@ -1058,7 +1099,7 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     private void tryRegisterServiceListener() {
-        if (boundService == null || serviceListenerRegistered) {
+        if (boundService == null || serviceListenerRegistered || !bridgeForeground) {
             return;
         }
         boundService.addListener(serviceEventListener);

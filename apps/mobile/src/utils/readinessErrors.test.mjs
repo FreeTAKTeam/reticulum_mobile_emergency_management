@@ -112,3 +112,13 @@ test("node runtime restore timeout marks the node not ready", () => {
     true,
   );
 });
+
+test("unreachable Reticulum TCP startup data path marks the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "NetworkError",
+      message: "transport startup failed: no reachable Reticulum TCP interface endpoints=rns.beleth.net:4242",
+    }),
+    true,
+  );
+});

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -43,6 +43,7 @@ const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const LXMF_SYNC_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const COMMAND_QUEUE_CAPACITY: usize = 256;
+const PRIORITY_COMMAND_QUEUE_CAPACITY: usize = 32;
 fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return tx.try_send(command).map_err(|error| match error {
@@ -86,6 +87,7 @@ struct NodeInner {
     active_config: Option<NodeConfigFingerprint>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
+    priority_cmd_tx: Option<mpsc::Sender<Command>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +211,13 @@ struct MissionReplicationTarget {
     send_mode: SendMode,
 }
 
+#[derive(Debug, Clone)]
+struct PrioritizedMissionReplicationTarget {
+    priority: u8,
+    sequence: usize,
+    target: MissionReplicationTarget,
+}
+
 type ScheduledMissionSend = (String, Vec<u8>, Vec<u8>, SendMode);
 const CHECKLIST_INITIAL_TASK_SEND_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -329,9 +338,7 @@ fn telemetry_targets_from_peers_with_relay(
             }
         }
     }
-    if direct_targets.is_empty() {
-        direct_targets.extend(relay_targets);
-    }
+    direct_targets.extend(relay_targets);
     direct_targets
 }
 
@@ -550,25 +557,50 @@ fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
     peer.active_link && matches!(peer.state, PeerState::Connected {})
 }
 
+fn peer_has_observed_lxmf_delivery_route(peer: &PeerRecord) -> bool {
+    has_known_lxmf_route(peer)
+        && peer.lxmf_last_seen_at_ms.is_some_and(|seen_at_ms| {
+            now_ms().saturating_sub(seen_at_ms) <= sdkmsg::DEFAULT_PEER_STALE_AFTER_MS
+        })
+}
+
 fn peer_is_current_replication_target(peer: &PeerRecord) -> bool {
     !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
 }
 
+fn peer_supports_mission_traffic(peer: &PeerRecord) -> bool {
+    has_capability_token(peer.app_data.as_deref(), "r3akt")
+        && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
+}
+
 fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
-    let has_fresh_lxmf_route = !peer.stale
-        && has_known_lxmf_route(peer)
-        && peer.announce_last_seen_at_ms.is_some()
-        && peer.lxmf_last_seen_at_ms.is_some();
+    let has_observed_lxmf_route = peer_has_observed_lxmf_delivery_route(peer);
 
     if has_active_relay {
-        return peer_is_directly_reachable(peer);
+        return peer_is_directly_reachable(peer) || has_observed_lxmf_route;
     }
 
-    peer_is_directly_reachable(peer) || has_fresh_lxmf_route
+    peer_is_directly_reachable(peer) || has_observed_lxmf_route
+}
+
+fn peer_has_current_known_lxmf_route(peer: &PeerRecord) -> bool {
+    peer_is_current_replication_target(peer) && has_known_lxmf_route(peer)
+}
+
+fn peer_is_mission_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
+    peer_is_direct_delivery_ready(peer, has_active_relay) || peer_has_current_known_lxmf_route(peer)
 }
 
 fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
     peer_is_current_replication_target(peer) && has_known_lxmf_route(peer)
+}
+
+fn peer_has_stored_propagation_route(peer: &PeerRecord) -> bool {
+    has_known_lxmf_route(peer)
+}
+
+fn saved_peer_can_try_stored_lxmf_route(peer: &PeerRecord) -> bool {
+    peer.saved && peer_supports_mission_traffic(peer) && has_known_lxmf_route(peer)
 }
 
 fn peer_has_usable_propagation_route(peer: &PeerRecord, has_active_relay: bool) -> bool {
@@ -580,6 +612,213 @@ fn peer_can_use_direct_when_relay_route_is_missing(
     has_active_relay: bool,
 ) -> bool {
     !peer_has_usable_propagation_route(peer, has_active_relay) && peer_is_directly_reachable(peer)
+}
+
+fn direct_replication_target_priority(peer: &PeerRecord) -> u8 {
+    if peer_is_current_replication_target(peer) || peer_has_observed_lxmf_delivery_route(peer) {
+        0
+    } else {
+        1
+    }
+}
+
+fn build_prioritized_direct_target(
+    peer: &PeerRecord,
+    app_destination_hex: String,
+    sequence: usize,
+) -> PrioritizedMissionReplicationTarget {
+    PrioritizedMissionReplicationTarget {
+        priority: direct_replication_target_priority(peer),
+        sequence,
+        target: MissionReplicationTarget {
+            app_destination_hex,
+            send_mode: SendMode::Auto {},
+        },
+    }
+}
+
+fn finish_replication_targets(
+    mut direct_targets: Vec<PrioritizedMissionReplicationTarget>,
+    mut relay_targets: Vec<MissionReplicationTarget>,
+) -> Vec<MissionReplicationTarget> {
+    direct_targets.sort_by_key(|target| (target.priority, target.sequence));
+    let mut targets = direct_targets
+        .into_iter()
+        .map(|target| target.target)
+        .collect::<Vec<_>>();
+    targets.append(&mut relay_targets);
+    targets
+}
+
+fn announce_route_hops(announces: &[AnnounceRecord]) -> HashMap<String, u8> {
+    let mut route_hops = HashMap::<String, u8>::new();
+    for announce in announces {
+        let Some(destination_hex) = normalize_hex_32(announce.destination_hex.as_str()) else {
+            continue;
+        };
+        route_hops
+            .entry(destination_hex)
+            .and_modify(|hops| *hops = (*hops).min(announce.hops))
+            .or_insert(announce.hops);
+    }
+    route_hops
+}
+
+fn node_error_code(err: NodeError) -> &'static str {
+    match err {
+        NodeError::InvalidConfig {} => "InvalidConfig",
+        NodeError::IoError {} => "IoError",
+        NodeError::NetworkError {} => "NetworkError",
+        NodeError::ReticulumError {} => "ReticulumError",
+        NodeError::AlreadyRunning {} => "AlreadyRunning",
+        NodeError::NotRunning {} => "NotRunning",
+        NodeError::Timeout {} => "Timeout",
+        NodeError::LxmfWireEncodeError {} => "LxmfWireEncodeError",
+        NodeError::LxmfMessageIdParseError {} => "LxmfMessageIdParseError",
+        NodeError::LxmfPacketTooLarge {} => "LxmfPacketTooLarge",
+        NodeError::LxmfPacketBuildError {} => "LxmfPacketBuildError",
+        NodeError::EventStreamClosed {} => "EventStreamClosed",
+        NodeError::InternalError {} => "InternalError",
+    }
+}
+
+fn emit_replication_planning_error(bus: &EventBus, operation: &str, detail: &str, err: NodeError) {
+    bus.emit(NodeEvent::Error {
+        code: node_error_code(err).to_string(),
+        message: format!("{operation} replication planning skipped {detail} reason={err}"),
+    });
+}
+
+fn saved_peers_for_replication(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    operation: &str,
+) -> Vec<SavedPeerRecord> {
+    match app_state.get_saved_peers() {
+        Ok(peers) => peers,
+        Err(err) => {
+            emit_replication_planning_error(bus, operation, "saved-peers", err);
+            Vec::new()
+        }
+    }
+}
+
+fn route_hops_for_replication(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    operation: &str,
+) -> HashMap<String, u8> {
+    match app_state.list_announces() {
+        Ok(announces) => announce_route_hops(announces.as_slice()),
+        Err(err) => {
+            emit_replication_planning_error(bus, operation, "announce-route-hops", err);
+            HashMap::new()
+        }
+    }
+}
+
+fn peer_for_target<'a>(
+    peers: &'a [PeerRecord],
+    target: &MissionReplicationTarget,
+) -> Option<&'a PeerRecord> {
+    peers.iter().find(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+            == Some(target.app_destination_hex.as_str())
+    })
+}
+
+fn target_route_hops(
+    target: &MissionReplicationTarget,
+    peers: &[PeerRecord],
+    route_hops: &HashMap<String, u8>,
+) -> u8 {
+    route_hops
+        .get(target.app_destination_hex.as_str())
+        .copied()
+        .or_else(|| {
+            peer_for_target(peers, target)
+                .and_then(|peer| peer.lxmf_destination_hex.as_deref())
+                .and_then(normalize_hex_32)
+                .and_then(|destination_hex| route_hops.get(destination_hex.as_str()).copied())
+        })
+        .unwrap_or(u8::MAX)
+}
+
+fn target_liveness_priority(target: &MissionReplicationTarget, peers: &[PeerRecord]) -> u8 {
+    match peer_for_target(peers, target) {
+        Some(peer) if peer_is_directly_reachable(peer) => 0,
+        Some(peer) if peer_is_current_replication_target(peer) => 1,
+        Some(peer) if peer_has_observed_lxmf_delivery_route(peer) => 2,
+        Some(_) => 3,
+        None => 4,
+    }
+}
+
+fn prioritize_replication_targets_by_route_hops(
+    targets: &mut [MissionReplicationTarget],
+    peers: &[PeerRecord],
+    route_hops: &HashMap<String, u8>,
+) {
+    if route_hops.is_empty() {
+        return;
+    }
+
+    let sequence_by_destination = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.app_destination_hex.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    targets.sort_by_key(|target| {
+        (
+            matches!(target.send_mode, SendMode::PropagationOnly {}) as u8,
+            target_liveness_priority(target, peers),
+            target_route_hops(target, peers, route_hops),
+            sequence_by_destination
+                .get(target.app_destination_hex.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    });
+}
+
+fn target_is_saved(
+    target: &MissionReplicationTarget,
+    peers: &[PeerRecord],
+    saved_destination_set: &HashSet<String>,
+) -> bool {
+    saved_destination_set.contains(target.app_destination_hex.as_str())
+        || peer_for_target(peers, target).is_some_and(|peer| peer.saved)
+}
+
+fn prioritize_sos_replication_targets(
+    targets: &mut [MissionReplicationTarget],
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    route_hops: &HashMap<String, u8>,
+) {
+    let saved_destination_set = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<HashSet<_>>();
+    let sequence_by_destination = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.app_destination_hex.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    targets.sort_by_key(|target| {
+        (
+            matches!(target.send_mode, SendMode::PropagationOnly {}) as u8,
+            !target_is_saved(target, peers, &saved_destination_set),
+            target_route_hops(target, peers, route_hops),
+            target_liveness_priority(target, peers),
+            sequence_by_destination
+                .get(target.app_destination_hex.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    });
 }
 
 fn build_mission_replication_targets(
@@ -615,17 +854,27 @@ fn build_mission_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        if !peer_is_current_replication_target(peer) {
+        if !peer_supports_mission_traffic(peer) {
             continue;
         }
-        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer);
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
+        {
+            continue;
+        }
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || saved_stored_route
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
-            direct_targets.push(MissionReplicationTarget {
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
                 app_destination_hex,
-                send_mode: SendMode::Auto {},
-            });
+                sequence,
+            ));
         }
     }
 
@@ -640,8 +889,8 @@ fn build_mission_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
-                    && peer_is_current_replication_target(peer)
-                    && peer_can_use_propagation_fallback(peer)
+                    && peer_supports_mission_traffic(peer)
+                    && peer_has_stored_propagation_route(peer)
             });
             if !relay_ready {
                 continue;
@@ -659,10 +908,96 @@ fn build_mission_replication_targets(
         });
     }
 
-    if direct_targets.is_empty() {
-        direct_targets.extend(relay_targets);
+    finish_replication_targets(direct_targets, relay_targets)
+}
+
+fn build_sos_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+) -> Vec<MissionReplicationTarget> {
+    let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
+    let saved_destinations = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<Vec<_>>();
+    let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
+    let mut seen_app_destinations = HashSet::<String>::new();
+    let mut direct_destination_set = HashSet::<String>::new();
+
+    for peer in peers {
+        let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+            continue;
+        };
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
+            continue;
+        }
+        if !seen_app_destinations.insert(app_destination_hex.clone()) {
+            continue;
+        }
+        if !peer_supports_mission_traffic(peer) {
+            continue;
+        }
+        let saved_peer = peer.saved || saved_destination_set.contains(app_destination_hex.as_str());
+        if !saved_peer && !peer.active_link {
+            continue;
+        }
+        if !peer_is_current_replication_target(peer) && !peer_has_observed_lxmf_delivery_route(peer)
+        {
+            continue;
+        }
+
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
+        if direct_ready {
+            direct_destination_set.insert(app_destination_hex.clone());
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
+                app_destination_hex,
+                sequence,
+            ));
+        } else if has_active_relay && peer_can_use_propagation_fallback(peer) {
+            relay_targets.push(MissionReplicationTarget {
+                app_destination_hex,
+                send_mode: SendMode::PropagationOnly {},
+            });
+        }
     }
-    direct_targets
+
+    for app_destination_hex in saved_destinations {
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
+            continue;
+        }
+        if direct_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
+        }
+        if !has_active_relay {
+            continue;
+        }
+        let relay_ready = peers.iter().any(|peer| {
+            normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+                == Some(app_destination_hex.as_str())
+                && peer_supports_mission_traffic(peer)
+                && peer_is_current_replication_target(peer)
+                && has_known_lxmf_route(peer)
+        });
+        if !relay_ready {
+            continue;
+        }
+        relay_targets.push(MissionReplicationTarget {
+            app_destination_hex,
+            send_mode: SendMode::PropagationOnly {},
+        });
+    }
+
+    finish_replication_targets(direct_targets, relay_targets)
 }
 
 fn build_event_replication_targets(
@@ -701,17 +1036,27 @@ fn build_event_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        if !peer_is_current_replication_target(peer) {
+        if !peer_supports_mission_traffic(peer) {
             continue;
         }
-        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer);
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
+        {
+            continue;
+        }
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || saved_stored_route
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
-            direct_targets.push(MissionReplicationTarget {
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
                 app_destination_hex,
-                send_mode: SendMode::Auto {},
-            });
+                sequence,
+            ));
         }
     }
 
@@ -726,8 +1071,8 @@ fn build_event_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
-                    && peer_is_current_replication_target(peer)
-                    && peer_can_use_propagation_fallback(peer)
+                    && peer_supports_mission_traffic(peer)
+                    && peer_has_stored_propagation_route(peer)
             });
             if !relay_ready {
                 continue;
@@ -745,10 +1090,7 @@ fn build_event_replication_targets(
         });
     }
 
-    if direct_targets.is_empty() {
-        direct_targets.extend(relay_targets);
-    }
-    direct_targets
+    finish_replication_targets(direct_targets, relay_targets)
 }
 
 fn build_transient_replication_targets(
@@ -783,12 +1125,14 @@ fn build_transient_replication_targets(
         let Some(matched_peer) = matched_peer else {
             continue;
         };
-        if !peer_is_current_replication_target(matched_peer) {
+        if !peer_is_current_replication_target(matched_peer)
+            || !peer_supports_mission_traffic(matched_peer)
+        {
             continue;
         }
         let send_mode = if !has_active_relay
             || ((matched_peer.saved
-                && peer_is_direct_delivery_ready(matched_peer, has_active_relay))
+                && peer_is_mission_direct_delivery_ready(matched_peer, has_active_relay))
                 || peer_can_use_direct_when_relay_route_is_missing(matched_peer, has_active_relay))
         {
             SendMode::Auto {}
@@ -808,9 +1152,7 @@ fn build_transient_replication_targets(
         }
     }
 
-    if direct_targets.is_empty() {
-        direct_targets.extend(relay_targets);
-    }
+    direct_targets.extend(relay_targets);
     direct_targets
 }
 
@@ -832,9 +1174,10 @@ fn current_replication_send_mode(
     let peer = peers.iter().find(|peer| {
         normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
             && peer_is_current_replication_target(peer)
+            && peer_supports_mission_traffic(peer)
     })?;
 
-    if peer_is_direct_delivery_ready(peer, has_active_relay)
+    if peer_is_mission_direct_delivery_ready(peer, has_active_relay)
         || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
     {
         Some(SendMode::Auto {})
@@ -2204,8 +2547,8 @@ fn run_sos_fanout(
     saved_peers: Vec<SavedPeerRecord>,
     peers: Vec<PeerRecord>,
     active_propagation_node_hex: Option<String>,
-    active_config: Option<NodeConfigFingerprint>,
-    hub_directory_snapshot: Option<HubDirectorySnapshot>,
+    _active_config: Option<NodeConfigFingerprint>,
+    _hub_directory_snapshot: Option<HubDirectorySnapshot>,
     telemetry: Option<SosDeviceTelemetryRecord>,
     incident_id: String,
     trigger_source: SosTriggerSource,
@@ -2238,23 +2581,26 @@ fn run_sos_fanout(
     }
 
     let body = compose_sos_body(&settings, kind, telemetry.as_ref());
-    let targets = match build_runtime_mission_replication_targets(
+    let mut targets = build_sos_replication_targets(
         &status,
         peers.as_slice(),
         saved_peers.as_slice(),
         active_propagation_node_hex.as_deref(),
-        active_config.as_ref(),
-        hub_directory_snapshot.as_ref(),
-    ) {
-        Ok(targets) => targets,
-        Err(err) => {
-            bus.emit(NodeEvent::Error {
-                code: "InvalidConfig".to_string(),
-                message: format!("sos target resolution failed reason={err}"),
-            });
-            Vec::new()
-        }
-    };
+    );
+    let route_hops = route_hops_for_replication(&app_state, &bus, "sos");
+    prioritize_sos_replication_targets(
+        targets.as_mut_slice(),
+        peers.as_slice(),
+        saved_peers.as_slice(),
+        &route_hops,
+    );
+    if targets.is_empty() {
+        bus.emit(NodeEvent::Log {
+            level: LogLevel::Warn {},
+            message: "sos fanout has no eligible saved or active mission-capable peer targets"
+                .to_string(),
+        });
+    }
     for target in targets {
         let destination_hex = target.app_destination_hex.clone();
         let command = SosCommand {
@@ -2385,6 +2731,7 @@ impl Node {
                 active_config: None,
                 runtime: None,
                 cmd_tx: None,
+                priority_cmd_tx: None,
             }),
         }
     }
@@ -2479,6 +2826,7 @@ impl Node {
 
         let runtime = build_node_runtime()?;
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let (priority_cmd_tx, priority_cmd_rx) = mpsc::channel(PRIORITY_COMMAND_QUEUE_CAPACITY);
 
         runtime.spawn(run_node(
             config,
@@ -2490,10 +2838,12 @@ impl Node {
             inner.hub_directory_snapshot.clone(),
             inner.bus.clone(),
             cmd_rx,
+            priority_cmd_rx,
         ));
 
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
+        inner.priority_cmd_tx = Some(priority_cmd_tx);
         inner.active_config = Some(config_fingerprint);
 
         Ok(())
@@ -2523,6 +2873,7 @@ impl Node {
         let (
             runtime,
             cmd_tx,
+            priority_cmd_tx,
             bus,
             status,
             peers_snapshot,
@@ -2534,6 +2885,7 @@ impl Node {
             (
                 inner.runtime.take(),
                 inner.cmd_tx.take(),
+                inner.priority_cmd_tx.take(),
                 inner.bus.clone(),
                 inner.status.clone(),
                 inner.peers_snapshot.clone(),
@@ -2546,7 +2898,7 @@ impl Node {
             return Ok(());
         };
 
-        if let Some(cmd_tx) = cmd_tx {
+        if let Some(cmd_tx) = priority_cmd_tx.or(cmd_tx) {
             let (tx, rx) = cb::bounded(1);
             let _ = dispatch_command(&cmd_tx, Command::Stop { resp: tx });
             let _ = rx.recv_timeout(Duration::from_secs(5));
@@ -4561,20 +4913,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-upsert");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "eam-upsert");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "eam-upsert",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_eam_replication_payload(&status, &normalized_record, &target) {
                         Ok((body, fields)) => {
@@ -4647,20 +5018,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-delete");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "eam-delete");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "eam-delete",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_eam_delete_replication_payload(&callsign, deleted_at_ms, &target) {
                         Ok((body, fields)) => {
@@ -4746,20 +5136,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "event-upsert");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "event-upsert");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_event_replication_targets(
+                let mut replication_targets = match build_runtime_event_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "event-upsert",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
@@ -4838,20 +5247,39 @@ impl Node {
                         .lock()
                         .map_err(|_| NodeError::InternalError {})?
                         .clone();
-                    let saved_peers = inner.app_state.get_saved_peers()?;
+                    let saved_peers =
+                        saved_peers_for_replication(&inner.app_state, &inner.bus, "event-delete");
+                    let route_hops =
+                        route_hops_for_replication(&inner.app_state, &inner.bus, "event-delete");
                     let sync_status = inner
                         .sync_status_snapshot
                         .lock()
                         .map_err(|_| NodeError::InternalError {})?
                         .clone();
-                    let replication_targets = build_runtime_event_replication_targets(
+                    let mut replication_targets = match build_runtime_event_replication_targets(
                         &status,
                         peers.as_slice(),
                         saved_peers.as_slice(),
                         sync_status.active_propagation_node_hex.as_deref(),
                         inner.active_config.as_ref(),
                         hub_directory_snapshot.as_ref(),
-                    )?;
+                    ) {
+                        Ok(targets) => targets,
+                        Err(err) => {
+                            emit_replication_planning_error(
+                                &inner.bus,
+                                "event-delete",
+                                "target-selection",
+                                err,
+                            );
+                            Vec::new()
+                        }
+                    };
+                    prioritize_replication_targets_by_route_hops(
+                        replication_targets.as_mut_slice(),
+                        peers.as_slice(),
+                        &route_hops,
+                    );
                     for target in replication_targets {
                         match build_event_delete_replication_payload(
                             &status,
@@ -5129,6 +5557,7 @@ impl Node {
             active_config,
             hub_directory_snapshot,
             telemetry_store,
+            current,
         ) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
@@ -5143,7 +5572,7 @@ impl Node {
                 .app_state
                 .get_sos_status()?
                 .unwrap_or_else(idle_status);
-            if !matches!(current.state, SosState::Idle {}) {
+            if !matches!(current.state, SosState::Idle {} | SosState::Active {}) {
                 return Ok(current);
             }
             let status = inner
@@ -5170,7 +5599,11 @@ impl Node {
             (
                 inner.app_state.clone(),
                 inner.bus.clone(),
-                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner
+                    .priority_cmd_tx
+                    .clone()
+                    .or_else(|| inner.cmd_tx.clone())
+                    .ok_or(NodeError::NotRunning {})?,
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
@@ -5179,11 +5612,24 @@ impl Node {
                 inner.active_config.clone(),
                 hub_directory_snapshot,
                 inner.sos_device_telemetry.clone(),
+                current,
             )
         };
 
-        let incident_id = new_incident_id(status.identity_hex.as_str());
-        let countdown = settings.countdown_seconds;
+        let rebroadcast_active = matches!(current.state, SosState::Active {});
+        let incident_id = if rebroadcast_active {
+            current
+                .incident_id
+                .clone()
+                .unwrap_or_else(|| new_incident_id(status.identity_hex.as_str()))
+        } else {
+            new_incident_id(status.identity_hex.as_str())
+        };
+        let countdown = if rebroadcast_active {
+            0
+        } else {
+            settings.countdown_seconds
+        };
         if countdown > 0 {
             let deadline = now_ms().saturating_add(u64::from(countdown) * 1000);
             let countdown_record = countdown_status(incident_id.clone(), source, deadline);
@@ -5215,6 +5661,11 @@ impl Node {
         }
 
         let telemetry = latest_sos_telemetry(&telemetry_store);
+        let kind = if rebroadcast_active {
+            SosMessageKind::Update {}
+        } else {
+            SosMessageKind::Active {}
+        };
         let active = run_sos_fanout(
             app_state,
             bus,
@@ -5229,7 +5680,7 @@ impl Node {
             telemetry,
             incident_id,
             source,
-            SosMessageKind::Active {},
+            kind,
         )
         .unwrap_or_else(idle_status);
         Ok(active)
@@ -5428,6 +5879,7 @@ impl EventSubscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AnnounceClass;
 
     use crate::mission_sync::parse_mission_sync_metadata;
     use crate::types::{
@@ -5657,6 +6109,498 @@ mod tests {
             &idle_status(),
             "incident-a"
         ));
+    }
+
+    #[test]
+    fn trigger_sos_rebroadcasts_existing_active_incident() {
+        let storage_dir = prepare_storage_dir("sos-active-rebroadcast");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+        let existing = active_status(
+            "incident-existing".to_string(),
+            SosTriggerSource::Manual {},
+            1_700_000_000_000,
+        );
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_sos_status(&existing, "test-active")
+                .expect("persist active status");
+            inner
+                .app_state
+                .set_saved_peers(&[build_saved_peer()])
+                .expect("persist saved peer");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            )];
+            inner.cmd_tx = Some(tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("rebroadcast active sos");
+        assert!(matches!(status.state, SosState::Active {}));
+        assert_eq!(status.incident_id.as_deref(), Some("incident-existing"));
+
+        let command = rx.try_recv().expect("expected sos send command");
+        if let Command::SendBytes {
+            destination_hex,
+            bytes,
+            fields_bytes,
+            send_mode,
+            ..
+        } = command
+        {
+            assert_eq!(destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            assert!(matches!(send_mode, SendMode::Auto {}));
+            let body = String::from_utf8(bytes).expect("sos body utf8");
+            assert!(body.starts_with("SOS! I need help."));
+            let parsed =
+                crate::sos_fields::parse_sos_fields(fields_bytes.as_deref().expect("sos fields"))
+                    .expect("parsed sos fields");
+            let command = parsed.command.expect("sos command field");
+            assert_eq!(command.incident_id, "incident-existing");
+            assert!(matches!(command.state, SosMessageKind::Update {}));
+            assert!(matches!(
+                command.trigger_source,
+                SosTriggerSource::Manual {}
+            ));
+        } else {
+            panic!("expected SendBytes command");
+        }
+    }
+
+    #[test]
+    fn trigger_sos_uses_priority_command_lane_when_available() {
+        let storage_dir = prepare_storage_dir("sos-priority-command-lane");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (normal_tx, mut normal_rx) = mpsc::channel(4);
+        let (priority_tx, mut priority_rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_saved_peers(&[build_saved_peer()])
+                .expect("persist saved peer");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            )];
+            inner.cmd_tx = Some(normal_tx);
+            inner.priority_cmd_tx = Some(priority_tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("trigger sos");
+        assert!(matches!(status.state, SosState::Active {}));
+
+        let command = priority_rx
+            .try_recv()
+            .expect("expected sos send command on priority lane");
+        assert!(matches!(command, Command::SendBytes { .. }));
+        assert!(normal_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sos_targets_all_current_saved_peers_without_hub_narrowing() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::Connected {},
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                true,
+                true,
+                true,
+            ),
+        ];
+
+        let regular_targets = build_runtime_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[
+                build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+            ],
+            None,
+            Some(&config),
+            None,
+        )
+        .expect("regular mission targets");
+        assert_eq!(regular_targets.len(), 1);
+
+        let saved_peers = [
+            build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+        ];
+        let sos_targets =
+            build_sos_replication_targets(&status, peers.as_slice(), &saved_peers, None);
+
+        let destinations = sos_targets
+            .iter()
+            .map(|target| target.app_destination_hex.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(destinations.len(), 2);
+        assert!(destinations.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(destinations.contains("cccccccccccccccccccccccccccccccc"));
+        assert!(sos_targets
+            .iter()
+            .all(|target| matches!(target.send_mode, SendMode::Auto {})));
+    }
+
+    #[test]
+    fn trigger_sos_fans_out_to_all_current_saved_peers() {
+        let storage_dir = prepare_storage_dir("sos-multi-peer-fanout");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_saved_peers(&[
+                    build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+                ])
+                .expect("persist saved peers");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![
+                build_peer_record(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    true,
+                    true,
+                    true,
+                ),
+                build_peer_record(
+                    "cccccccccccccccccccccccccccccccc",
+                    "dddddddddddddddddddddddddddddddd",
+                    true,
+                    true,
+                    true,
+                ),
+            ];
+            inner.active_config = Some(build_config_fingerprint_for_tests(
+                HubMode::Connected {},
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ));
+            inner.cmd_tx = Some(tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("trigger sos");
+        assert!(matches!(status.state, SosState::Active {}));
+
+        let mut destinations = HashSet::new();
+        for _ in 0..2 {
+            let command = rx.try_recv().expect("expected sos send command");
+            if let Command::SendBytes {
+                destination_hex,
+                fields_bytes,
+                send_mode,
+                ..
+            } = command
+            {
+                destinations.insert(destination_hex);
+                assert!(fields_bytes.is_some());
+                assert!(matches!(send_mode, SendMode::Auto {}));
+            } else {
+                panic!("expected SendBytes command");
+            }
+        }
+        assert_eq!(destinations.len(), 2);
+        assert!(destinations.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(destinations.contains("cccccccccccccccccccccccccccccccc"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sos_targets_use_persisted_saved_peers_when_snapshot_saved_flag_is_stale() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                true,
+                true,
+                false,
+            ),
+        ];
+        let saved_peers = [
+            build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+        ];
+
+        let targets = build_sos_replication_targets(&status, peers.as_slice(), &saved_peers, None);
+
+        let destinations = targets
+            .iter()
+            .map(|target| target.app_destination_hex.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            destinations,
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "cccccccccccccccccccccccccccccccc"
+            ]
+        );
+        assert!(targets
+            .iter()
+            .all(|target| matches!(target.send_mode, SendMode::Auto {})));
+    }
+
+    #[test]
+    fn sos_route_priority_puts_current_peers_before_stale_saved_routes() {
+        let status = build_status_for_tests();
+        let mut stale_saved_peer = build_peer_record(
+            "11111111111111111111111111111111",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        stale_saved_peer.stale = true;
+        stale_saved_peer.announce_last_seen_at_ms = None;
+
+        let peers = vec![
+            stale_saved_peer,
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .map(|peer| build_saved_peer_for(peer.destination_hex.as_str()))
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "11111111111111111111111111111111",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                3,
+                100,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                2,
+                90,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets =
+            build_sos_replication_targets(&status, peers.as_slice(), saved_peers.as_slice(), None);
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "11111111111111111111111111111111",
+            ]
+        );
+    }
+
+    #[test]
+    fn sos_priority_keeps_saved_low_hop_routes_before_unsaved_active_peers() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "1a9a24c8bb16e1951cb954aef32158b1",
+                "fe2a758c2bb875886a83a3bf6859d213",
+                false,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "1080d475b77274d7fdabaed81878d916",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .filter(|peer| peer.saved)
+            .map(|peer| build_saved_peer_for(peer.destination_hex.as_str()))
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                100,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                4,
+                110,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                5,
+                120,
+            ),
+            build_announce_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "app",
+                AnnounceClass::PeerApp {},
+                8,
+                130,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets =
+            build_sos_replication_targets(&status, peers.as_slice(), saved_peers.as_slice(), None);
+
+        prioritize_sos_replication_targets(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            saved_peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "a3e80acf291d9f57ee455493946b3763",
+                "a133b8b1fe137f92210a048efded46db",
+                "1a9a24c8bb16e1951cb954aef32158b1",
+            ]
+        );
     }
 
     fn msgpack_map(entries: Vec<(&str, MsgPackValue)>) -> MsgPackValue {
@@ -5954,6 +6898,11 @@ mod tests {
         node_a
             .request_peer_identity(node_b_lxmf_destination_hex.clone())
             .expect("resolve node b");
+        let node_a_lxmf_destination_hex = node_a.get_status().lxmf_destination_hex;
+        node_b
+            .request_peer_identity(node_a_lxmf_destination_hex.clone())
+            .expect("resolve node a");
+        tokio::time::sleep(Duration::from_millis(250)).await;
 
         (relay, node_a, node_b)
     }
@@ -6070,8 +7019,12 @@ mod tests {
     }
 
     fn build_saved_peer() -> SavedPeerRecord {
+        build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    }
+
+    fn build_saved_peer_for(destination_hex: &str) -> SavedPeerRecord {
         SavedPeerRecord {
-            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            destination_hex: destination_hex.to_string(),
             label: Some("POCO".to_string()),
             saved_at_ms: 1_700_000_000_000,
         }
@@ -6134,6 +7087,26 @@ mod tests {
             last_seen_at_ms: now_ms(),
             announce_last_seen_at_ms: Some(now_ms()),
             lxmf_last_seen_at_ms: Some(now_ms()),
+        }
+    }
+
+    fn build_announce_record(
+        destination_hex: &str,
+        destination_kind: &str,
+        announce_class: AnnounceClass,
+        hops: u8,
+        received_at_ms: u64,
+    ) -> AnnounceRecord {
+        AnnounceRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: format!("identity-{destination_hex}"),
+            destination_kind: destination_kind.to_string(),
+            announce_class,
+            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            display_name: Some(format!("peer-{destination_hex}")),
+            hops,
+            interface_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+            received_at_ms,
         }
     }
 
@@ -6498,7 +7471,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_do_not_mix_direct_and_propagation_fanout() {
+    fn telemetry_targets_include_direct_and_propagation_fanout() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let direct_peer = build_peer_record(
@@ -6526,12 +7499,20 @@ mod tests {
         )
         .expect("telemetry fallback targets");
 
-        assert_eq!(destinations.len(), 1);
+        assert_eq!(destinations.len(), 2);
         assert_eq!(
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert_eq!(
+            destinations[1].app_destination_hex,
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        );
+        assert!(matches!(
+            destinations[1].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     #[test]
@@ -6611,8 +7592,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists()
-    {
+    fn telemetry_targets_try_fresh_route_before_relay_when_active_relay_exists() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -6637,10 +7617,7 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(
-            destinations[0].send_mode,
-            SendMode::PropagationOnly {}
-        ));
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -8980,8 +9957,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_use_propagation_for_connected_peer_without_active_link_when_relay_exists(
-    ) {
+    fn event_replication_targets_try_fresh_route_before_relay_when_active_relay_exists() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9014,11 +9990,94 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
-    fn event_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+    fn event_replication_targets_try_current_app_peer_with_old_lxmf_timestamp_before_relay() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!peer_has_observed_lxmf_delivery_route(&peer));
+        assert!(peer_is_mission_direct_delivery_ready(&peer, true));
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_include_direct_fanout_for_saved_stored_routes() {
+        let status = build_status_for_tests();
+        let direct_saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("Pixel".to_string()),
+            saved_at_ms: 1,
+        };
+        let relay_saved_peer = SavedPeerRecord {
+            destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            label: Some("RelayOnly".to_string()),
+            saved_at_ms: 2,
+        };
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "11111111111111111111111111111111",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        relay_peer.stale = true;
+        relay_peer.announce_last_seen_at_ms = None;
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[relay_peer, direct_peer],
+            &[direct_saved_peer, relay_saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_try_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9038,6 +10097,8 @@ mod tests {
             false,
             false,
         );
+        saved_relay_peer.stale = true;
+        saved_relay_peer.announce_last_seen_at_ms = None;
         saved_relay_peer.lxmf_last_seen_at_ms = None;
         let mut unsaved_relay_peer = build_peer_record(
             "cccccccccccccccccccccccccccccccc",
@@ -9046,6 +10107,8 @@ mod tests {
             false,
             false,
         );
+        unsaved_relay_peer.stale = true;
+        unsaved_relay_peer.announce_last_seen_at_ms = None;
         unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
@@ -9078,7 +10141,7 @@ mod tests {
             targets[0].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -9138,7 +10201,7 @@ mod tests {
     }
 
     #[test]
-    fn mission_replication_targets_skip_stale_saved_peers_before_connected_peers() {
+    fn mission_replication_targets_prioritize_current_saved_peers_before_stale_stored_routes() {
         let status = NodeStatus {
             running: true,
             name: "poco".to_string(),
@@ -9166,6 +10229,7 @@ mod tests {
         stale_peer.stale = true;
         stale_peer.last_seen_at_ms = 0;
         stale_peer.announce_last_seen_at_ms = None;
+        stale_peer.lxmf_last_seen_at_ms = None;
         let connected_peer = build_peer_record(
             connected_saved_peer.destination_hex.as_str(),
             "dddddddddddddddddddddddddddddddd",
@@ -9181,16 +10245,270 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 2);
         assert_eq!(
             targets[0].app_destination_hex,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
     }
 
     #[test]
-    fn mission_replication_targets_do_not_mix_direct_and_propagation_fanout() {
+    fn eam_route_priority_puts_low_hop_live_peers_before_high_hop_saved_routes() {
+        let peers = vec![
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "1080d475b77274d7fdabaed81878d916",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let announces = vec![
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                11,
+                100,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                10,
+                110,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+            build_announce_record(
+                "1080d475b77274d7fdabaed81878d916",
+                "lxmf_delivery",
+                AnnounceClass::LxmfDelivery {},
+                7,
+                120,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets = vec![
+            MissionReplicationTarget {
+                app_destination_hex: "3457d5ba744e89bbae543c5ff9c679fb".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "a3e80acf291d9f57ee455493946b3763".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "0e252632c57fa999a15c4a05c0d1bae2".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "5ea3149a58998316f6c8200a006e14c2".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "a133b8b1fe137f92210a048efded46db".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+        ];
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "a133b8b1fe137f92210a048efded46db",
+                "a3e80acf291d9f57ee455493946b3763",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+            ]
+        );
+    }
+
+    #[test]
+    fn event_route_priority_puts_low_hop_live_peers_before_high_hop_saved_routes() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .map(|peer| SavedPeerRecord {
+                destination_hex: peer.destination_hex.clone(),
+                label: peer.display_name.clone(),
+                saved_at_ms: 1_700_000_000_000,
+            })
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                11,
+                100,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                10,
+                110,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets = build_event_replication_targets(
+            &status,
+            peers.as_slice(),
+            saved_peers.as_slice(),
+            Some("99999999999999999999999999999999"),
+        );
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "a3e80acf291d9f57ee455493946b3763",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+            ]
+        );
+    }
+
+    #[test]
+    fn mission_replication_targets_try_observed_lxmf_route_for_stale_saved_peer() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn mission_replication_targets_include_direct_fanout_for_saved_stored_routes() {
         let status = build_status_for_tests();
         let direct_saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -9216,6 +10534,8 @@ mod tests {
             false,
             false,
         );
+        relay_peer.stale = true;
+        relay_peer.announce_last_seen_at_ms = None;
         relay_peer.lxmf_last_seen_at_ms = None;
 
         let targets = build_mission_replication_targets(
@@ -9225,16 +10545,21 @@ mod tests {
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 2);
         assert_eq!(
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
     }
 
     #[test]
-    fn eam_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+    fn eam_replication_targets_try_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9254,6 +10579,8 @@ mod tests {
             false,
             false,
         );
+        saved_relay_peer.stale = true;
+        saved_relay_peer.announce_last_seen_at_ms = None;
         saved_relay_peer.lxmf_last_seen_at_ms = None;
         let mut unsaved_relay_peer = build_peer_record(
             "cccccccccccccccccccccccccccccccc",
@@ -9262,6 +10589,8 @@ mod tests {
             false,
             false,
         );
+        unsaved_relay_peer.stale = true;
+        unsaved_relay_peer.announce_last_seen_at_ms = None;
         unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
@@ -9294,7 +10623,7 @@ mod tests {
             targets[0].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -9446,7 +10775,7 @@ mod tests {
     }
 
     #[test]
-    fn eam_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+    fn eam_replication_targets_try_saved_stored_route_without_direct_reachability() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9462,6 +10791,8 @@ mod tests {
             false,
             false,
         );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
         peer.lxmf_last_seen_at_ms = None;
         let peers = vec![peer];
 
@@ -9477,11 +10808,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
-    fn event_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+    fn event_replication_targets_try_saved_stored_route_without_direct_reachability() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9497,6 +10828,8 @@ mod tests {
             false,
             false,
         );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
         peer.lxmf_last_seen_at_ms = None;
         let peers = vec![peer];
 
@@ -9512,7 +10845,102 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_try_stale_saved_peer_with_stored_lxmf_route() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_try_observed_lxmf_route_for_stale_saved_peer() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn event_replication_targets_try_stored_route_when_observed_route_is_old_for_stale_saved_peer()
+    {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!peer_has_observed_lxmf_delivery_route(&peer));
+        assert!(!peer_is_direct_delivery_ready(&peer, true));
+        assert!(saved_peer_can_try_stored_lxmf_route(&peer));
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -9529,6 +10957,42 @@ mod tests {
         let targets = build_mission_replication_targets(&status, &[], &[saved_peer], None);
 
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn replication_targets_skip_saved_peer_without_mission_capabilities() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.app_data = Some("Telemetry".to_string());
+
+        let mission_targets = build_mission_replication_targets(
+            &status,
+            &[peer.clone()],
+            &[saved_peer.clone()],
+            Some("99999999999999999999999999999999"),
+        );
+        let event_targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert!(mission_targets.is_empty());
+        assert!(event_targets.is_empty());
     }
 
     #[test]
@@ -9589,7 +11053,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
@@ -9652,7 +11116,7 @@ mod tests {
     }
 
     #[test]
-    fn checklist_participant_targets_skip_propagation_participants_when_direct_target_exists() {
+    fn checklist_participant_targets_include_current_participants_when_direct_target_exists() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9682,11 +11146,17 @@ mod tests {
             &mut targets,
         );
 
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 2);
         assert_eq!(
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::Auto {});
     }
 
     #[test]
