@@ -294,19 +294,14 @@ function savedPeerConnectionLabel(destination: string): string {
   return peer?.activeLink ? "Disconnect" : "Connect";
 }
 
-function savedPeerConnectionMessage(destination: string): string {
+function savedPeerStatusLabel(destination: string): "Connected" | "Reachable" | "Disconnected" {
   const peer = nodeStore.discoveredByDestination[destination];
   if (peer?.activeLink) {
     return "Connected";
   }
-  if (peer?.state === "connecting") {
-    return "Connecting";
-  }
-  return "Disconnected";
-}
-
-function savedPeerStatusLabel(destination: string): "Connected" | "Disconnected" {
-  return nodeStore.discoveredByDestination[destination]?.activeLink ? "Connected" : "Disconnected";
+  return nodeStore.reachablePeers.some((reachablePeer) => reachablePeer.destination === destination)
+    ? "Reachable"
+    : "Disconnected";
 }
 
 function savedPeerMeta(destination: string): string {
@@ -387,6 +382,15 @@ async function runNodeAction(
             <path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07" />
           </svg>
           <span>{{ nodeStore.connectedPeerCount }} Connected</span>
+        </span>
+        <span class="utility-chip stat-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 20h.01" />
+            <path d="M8.5 16.5a5 5 0 0 1 7 0" />
+            <path d="M5 13a10 10 0 0 1 14 0" />
+            <path d="M2 9.5a15 15 0 0 1 20 0" />
+          </svg>
+          <span>{{ nodeStore.reachablePeerCount }} Reachable</span>
         </span>
         <label class="utility-chip search-chip">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -483,13 +487,13 @@ async function runNodeAction(
       <div class="section-header split-header">
         <div>
           <h2>Peers</h2>
-          <p>{{ filteredPeers.length }} managed peers | {{ nodeStore.connectedPeerCount }} online</p>
+          <p>{{ filteredPeers.length }} saved peers by last seen | {{ nodeStore.connectedPeerCount }} Connected | {{ nodeStore.reachablePeerCount }} Reachable</p>
         </div>
         <div class="actions header-inline-actions">
           <button
             type="button"
             @click="
-              runNodeAction(() => nodeStore.connectAllSaved(), 'Connected all saved peers.')
+              runNodeAction(() => nodeStore.connectAllSaved(), 'Connect requested for saved peers.')
             "
           >
             Connect all
@@ -799,6 +803,12 @@ h2 {
   background: rgb(14 67 42 / 82%);
   border-color: rgb(71 214 145 / 40%);
   color: #8df3c1;
+}
+
+.peer-connection-pill.reachable {
+  background: rgb(18 49 86 / 82%);
+  border-color: rgb(86 186 255 / 42%);
+  color: #a7ddff;
 }
 
 .peer-connection-pill.disconnected {

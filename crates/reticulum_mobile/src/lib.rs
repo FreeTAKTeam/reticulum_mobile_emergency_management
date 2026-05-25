@@ -1,4 +1,5 @@
 mod app_state;
+mod delivery_policy;
 mod event_bus;
 mod jni_bridge;
 mod logger;

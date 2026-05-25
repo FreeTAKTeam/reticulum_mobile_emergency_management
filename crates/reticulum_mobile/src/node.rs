@@ -11,6 +11,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::mpsc;
 
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
+use crate::delivery_policy;
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
@@ -31,7 +32,7 @@ use crate::types::{
     ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
@@ -258,7 +259,6 @@ fn telemetry_targets_from_peers(
     peers: &[PeerRecord],
     self_destination_hex: Option<&str>,
 ) -> Vec<MissionReplicationTarget> {
-    let has_active_relay = false;
     let mut destinations = Vec::new();
     let mut seen = HashSet::<String>::new();
     for peer in peers {
@@ -277,7 +277,7 @@ fn telemetry_targets_from_peers(
         if seen.insert(destination_hex.clone()) {
             destinations.push(MissionReplicationTarget {
                 app_destination_hex: destination_hex,
-                send_mode: if peer_is_direct_delivery_ready(peer, has_active_relay) {
+                send_mode: if peer_is_direct_delivery_ready(peer) {
                     SendMode::Auto {}
                 } else {
                     SendMode::PropagationOnly {}
@@ -317,7 +317,7 @@ fn telemetry_targets_from_peers_with_relay(
         }
 
         let relay_ready = has_active_relay && peer_can_use_propagation_fallback(peer);
-        let direct_ready = peer_is_direct_delivery_ready(peer, has_active_relay)
+        let direct_ready = peer_is_direct_delivery_ready(peer)
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if !direct_ready && !relay_ready {
             continue;
@@ -540,32 +540,23 @@ fn populate_eam_defaults(status: &NodeStatus, record: &EamProjectionRecord) -> E
 }
 
 fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
-    let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
-        return false;
-    };
-    let Some(lxmf_destination_hex) = peer
-        .lxmf_destination_hex
-        .as_deref()
-        .and_then(normalize_hex_32)
-    else {
-        return false;
-    };
-    app_destination_hex != lxmf_destination_hex
+    delivery_policy::peer_has_known_lxmf_route(peer)
 }
 
 fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
-    peer.active_link && matches!(peer.state, PeerState::Connected {})
+    delivery_policy::peer_is_directly_reachable(peer)
 }
 
 fn peer_has_observed_lxmf_delivery_route(peer: &PeerRecord) -> bool {
-    has_known_lxmf_route(peer)
-        && peer.lxmf_last_seen_at_ms.is_some_and(|seen_at_ms| {
-            now_ms().saturating_sub(seen_at_ms) <= sdkmsg::DEFAULT_PEER_STALE_AFTER_MS
-        })
+    delivery_policy::peer_has_observed_lxmf_delivery_route(
+        peer,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    )
 }
 
 fn peer_is_current_replication_target(peer: &PeerRecord) -> bool {
-    !peer.stale && (peer.active_link || peer.announce_last_seen_at_ms.is_some())
+    delivery_policy::peer_is_current_replication_target(peer)
 }
 
 fn peer_supports_mission_traffic(peer: &PeerRecord) -> bool {
@@ -573,38 +564,54 @@ fn peer_supports_mission_traffic(peer: &PeerRecord) -> bool {
         && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
 }
 
-fn peer_is_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
-    let has_observed_lxmf_route = peer_has_observed_lxmf_delivery_route(peer);
-
-    if has_active_relay {
-        return peer_is_directly_reachable(peer) || has_observed_lxmf_route;
-    }
-
-    peer_is_directly_reachable(peer) || has_observed_lxmf_route
+fn peer_is_direct_delivery_ready(peer: &PeerRecord) -> bool {
+    peer_connectivity_model(peer, false, peer.saved).direct_delivery_available()
 }
 
 fn peer_has_current_known_lxmf_route(peer: &PeerRecord) -> bool {
-    peer_is_current_replication_target(peer) && has_known_lxmf_route(peer)
+    delivery_policy::peer_has_current_known_lxmf_route(peer)
+}
+
+fn peer_connectivity_model(
+    peer: &PeerRecord,
+    has_active_relay: bool,
+    saved: bool,
+) -> delivery_policy::PeerConnectivityModel {
+    delivery_policy::PeerConnectivityModel::from_peer_with_saved(
+        peer,
+        saved,
+        has_active_relay,
+        true,
+        false,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    )
 }
 
 fn peer_is_mission_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
-    peer_is_direct_delivery_ready(peer, has_active_relay) || peer_has_current_known_lxmf_route(peer)
+    let connectivity = peer_connectivity_model(peer, has_active_relay, peer.saved);
+    if has_active_relay {
+        return connectivity.direct_delivery_available();
+    }
+    connectivity.direct_delivery_available() || peer_has_current_known_lxmf_route(peer)
 }
 
 fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
-    peer_is_current_replication_target(peer) && has_known_lxmf_route(peer)
+    delivery_policy::peer_can_use_propagation_fallback(peer)
 }
 
 fn peer_has_stored_propagation_route(peer: &PeerRecord) -> bool {
-    has_known_lxmf_route(peer)
+    peer_connectivity_model(peer, true, true).stored_propagation_available()
 }
 
-fn saved_peer_can_try_stored_lxmf_route(peer: &PeerRecord) -> bool {
-    peer.saved && peer_supports_mission_traffic(peer) && has_known_lxmf_route(peer)
+fn saved_peer_can_try_stored_lxmf_route(peer: &PeerRecord, saved: bool) -> bool {
+    peer_supports_mission_traffic(peer)
+        && peer_connectivity_model(peer, true, saved).stored_propagation_available()
 }
 
 fn peer_has_usable_propagation_route(peer: &PeerRecord, has_active_relay: bool) -> bool {
-    has_active_relay && peer_can_use_propagation_fallback(peer)
+    peer_connectivity_model(peer, has_active_relay, true).propagation_eligible
+        && peer_can_use_propagation_fallback(peer)
 }
 
 fn peer_can_use_direct_when_relay_route_is_missing(
@@ -857,7 +864,8 @@ fn build_mission_replication_targets(
         if !peer_supports_mission_traffic(peer) {
             continue;
         }
-        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer);
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, true);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, true);
         if !peer_is_current_replication_target(peer)
             && !peer_has_observed_lxmf_delivery_route(peer)
             && !saved_stored_route
@@ -865,7 +873,6 @@ fn build_mission_replication_targets(
             continue;
         }
         let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
-            || saved_stored_route
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
@@ -875,6 +882,8 @@ fn build_mission_replication_targets(
                 app_destination_hex,
                 sequence,
             ));
+        } else if !connectivity.current_or_stored_route_available() {
+            continue;
         }
     }
 
@@ -930,6 +939,7 @@ fn build_sos_replication_targets(
     let mut relay_targets = Vec::new();
     let mut seen_app_destinations = HashSet::<String>::new();
     let mut direct_destination_set = HashSet::<String>::new();
+    let mut relay_destination_set = HashSet::<String>::new();
 
     for peer in peers {
         let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
@@ -945,10 +955,14 @@ fn build_sos_replication_targets(
             continue;
         }
         let saved_peer = peer.saved || saved_destination_set.contains(app_destination_hex.as_str());
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, saved_peer);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, saved_peer);
         if !saved_peer && !peer.active_link {
             continue;
         }
-        if !peer_is_current_replication_target(peer) && !peer_has_observed_lxmf_delivery_route(peer)
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
         {
             continue;
         }
@@ -963,7 +977,10 @@ fn build_sos_replication_targets(
                 app_destination_hex,
                 sequence,
             ));
-        } else if has_active_relay && peer_can_use_propagation_fallback(peer) {
+        } else if connectivity.stored_propagation_available()
+            || (has_active_relay && peer_can_use_propagation_fallback(peer))
+        {
+            relay_destination_set.insert(app_destination_hex.clone());
             relay_targets.push(MissionReplicationTarget {
                 app_destination_hex,
                 send_mode: SendMode::PropagationOnly {},
@@ -978,6 +995,9 @@ fn build_sos_replication_targets(
         if direct_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
+        if relay_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
+        }
         if !has_active_relay {
             continue;
         }
@@ -985,8 +1005,7 @@ fn build_sos_replication_targets(
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
                 && peer_supports_mission_traffic(peer)
-                && peer_is_current_replication_target(peer)
-                && has_known_lxmf_route(peer)
+                && peer_has_stored_propagation_route(peer)
         });
         if !relay_ready {
             continue;
@@ -1039,7 +1058,8 @@ fn build_event_replication_targets(
         if !peer_supports_mission_traffic(peer) {
             continue;
         }
-        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer);
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, true);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, true);
         if !peer_is_current_replication_target(peer)
             && !peer_has_observed_lxmf_delivery_route(peer)
             && !saved_stored_route
@@ -1047,7 +1067,6 @@ fn build_event_replication_targets(
             continue;
         }
         let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
-            || saved_stored_route
             || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
@@ -1057,6 +1076,8 @@ fn build_event_replication_targets(
                 app_destination_hex,
                 sequence,
             ));
+        } else if !connectivity.current_or_stored_route_available() {
+            continue;
         }
     }
 
@@ -1285,9 +1306,6 @@ fn append_checklist_participant_replication_targets(
         .iter()
         .map(|target| target.app_destination_hex.clone())
         .collect::<HashSet<_>>();
-    let mut has_direct_target = targets
-        .iter()
-        .any(|target| matches!(target.send_mode, SendMode::Auto {}));
     for participant in participant_rns_identities {
         let Some(app_destination_hex) = normalize_hex_32(participant.as_str()) else {
             continue;
@@ -1304,16 +1322,10 @@ fn append_checklist_participant_replication_targets(
         ) else {
             continue;
         };
-        if has_direct_target && matches!(send_mode, SendMode::PropagationOnly {}) {
-            continue;
-        }
         targets.push(MissionReplicationTarget {
             send_mode,
             app_destination_hex,
         });
-        if matches!(send_mode, SendMode::Auto {}) {
-            has_direct_target = true;
-        }
     }
 }
 
@@ -1696,6 +1708,10 @@ fn build_checklist_replication_payload(
     build_checklist_replication_payload_with_command_id(status, target, command_type, args, None)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "delete replication planning keeps explicit runtime snapshots at the call boundary"
+)]
 fn build_checklist_delete_replication_sends(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -2757,7 +2773,7 @@ impl Node {
 
         let identity = load_or_create_identity(config.storage_dir.as_deref(), &config.name)?;
 
-        let app_hash = reticulum::destination::SingleInputDestination::new(
+        let _legacy_app_hash = reticulum::destination::SingleInputDestination::new(
             identity.clone(),
             DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
         )
@@ -2775,7 +2791,7 @@ impl Node {
                 running: false,
                 name: config.name.clone(),
                 identity_hex: identity.address_hash().to_hex_string(),
-                app_destination_hex: app_hash.to_hex_string(),
+                app_destination_hex: lxmf_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
             };
         }
@@ -6408,7 +6424,7 @@ mod tests {
     }
 
     #[test]
-    fn sos_route_priority_puts_current_peers_before_stale_saved_routes() {
+    fn sos_route_priority_omits_stale_saved_route_without_relay() {
         let status = build_status_for_tests();
         let mut stale_saved_peer = build_peer_record(
             "11111111111111111111111111111111",
@@ -6482,9 +6498,109 @@ mod tests {
             vec![
                 "0e252632c57fa999a15c4a05c0d1bae2",
                 "3457d5ba744e89bbae543c5ff9c679fb",
-                "11111111111111111111111111111111",
             ]
         );
+    }
+
+    #[test]
+    fn sos_targets_use_propagation_for_saved_stale_stored_route_when_relay_exists() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn sos_targets_skip_saved_stale_stored_route_without_relay() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(&status, &[peer], &[saved_peer], None);
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn sos_targets_keep_active_direct_link_on_auto() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn sos_targets_skip_unsaved_stale_stored_route() {
+        let status = build_status_for_tests();
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert!(targets.is_empty());
     }
 
     #[test]
@@ -7592,7 +7708,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_targets_try_fresh_route_before_relay_when_active_relay_exists() {
+    fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_exists() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
         let peer = build_peer_record(
@@ -7617,7 +7733,10 @@ mod tests {
             destinations[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -7750,7 +7869,7 @@ mod tests {
         ] {
             assert!(
                 fields
-                    .windows(required_key.as_bytes().len())
+                    .windows(required_key.len())
                     .any(|window| window == required_key.as_bytes()),
                 "main-compatible event fields should include {required_key}"
             );
@@ -9924,7 +10043,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_include_connected_peer_without_active_link() {
+    fn event_replication_targets_try_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9957,7 +10076,7 @@ mod tests {
     }
 
     #[test]
-    fn event_replication_targets_try_fresh_route_before_relay_when_active_relay_exists() {
+    fn event_replication_targets_use_relay_for_fresh_route_without_active_link_when_relay_exists() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9990,7 +10109,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -10008,7 +10127,7 @@ mod tests {
             Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
 
         assert!(!peer_has_observed_lxmf_delivery_route(&peer));
-        assert!(peer_is_mission_direct_delivery_ready(&peer, true));
+        assert!(!peer_is_mission_direct_delivery_ready(&peer, true));
 
         let targets = build_event_replication_targets(
             &status,
@@ -10022,11 +10141,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_include_direct_fanout_for_saved_stored_routes() {
+    fn event_replication_targets_use_direct_link_then_relay_for_saved_stored_routes() {
         let status = build_status_for_tests();
         let direct_saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -10073,11 +10192,11 @@ mod tests {
             targets[1].app_destination_hex,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_try_saved_stored_route_without_discovered_peer() {
+    fn event_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -10141,7 +10260,7 @@ mod tests {
             targets[0].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -10255,7 +10374,7 @@ mod tests {
             targets[1].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -10479,7 +10598,7 @@ mod tests {
     }
 
     #[test]
-    fn mission_replication_targets_try_observed_lxmf_route_for_stale_saved_peer() {
+    fn mission_replication_targets_use_propagation_for_observed_lxmf_route_without_active_link() {
         let status = build_status_for_tests();
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -10504,11 +10623,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn mission_replication_targets_include_direct_fanout_for_saved_stored_routes() {
+    fn mission_replication_targets_use_direct_link_then_relay_for_saved_stored_routes() {
         let status = build_status_for_tests();
         let direct_saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -10555,11 +10674,11 @@ mod tests {
             targets[1].app_destination_hex,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn eam_replication_targets_try_saved_stored_route_without_discovered_peer() {
+    fn eam_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -10623,11 +10742,11 @@ mod tests {
             targets[0].app_destination_hex,
             "cccccccccccccccccccccccccccccccc"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn eam_replication_targets_include_saved_connected_peer_without_active_link() {
+    fn eam_replication_targets_include_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -10775,7 +10894,7 @@ mod tests {
     }
 
     #[test]
-    fn eam_replication_targets_try_saved_stored_route_without_direct_reachability() {
+    fn eam_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -10808,11 +10927,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_try_saved_stored_route_without_direct_reachability() {
+    fn event_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -10845,11 +10964,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_try_stale_saved_peer_with_stored_lxmf_route() {
+    fn event_replication_targets_use_propagation_for_stale_saved_peer_with_stored_lxmf_route() {
         let status = build_status_for_tests();
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -10875,11 +10994,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_try_observed_lxmf_route_for_stale_saved_peer() {
+    fn event_replication_targets_use_propagation_for_observed_lxmf_route_without_active_link() {
         let status = build_status_for_tests();
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -10904,12 +11023,11 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn event_replication_targets_try_stored_route_when_observed_route_is_old_for_stale_saved_peer()
-    {
+    fn event_replication_targets_use_propagation_for_stored_route_when_observed_route_is_old() {
         let status = build_status_for_tests();
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -10925,8 +11043,8 @@ mod tests {
             Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
 
         assert!(!peer_has_observed_lxmf_delivery_route(&peer));
-        assert!(!peer_is_direct_delivery_ready(&peer, true));
-        assert!(saved_peer_can_try_stored_lxmf_route(&peer));
+        assert!(!peer_is_direct_delivery_ready(&peer));
+        assert!(saved_peer_can_try_stored_lxmf_route(&peer, true));
 
         let targets = build_event_replication_targets(
             &status,
@@ -10940,7 +11058,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -10981,7 +11099,7 @@ mod tests {
         let mission_targets = build_mission_replication_targets(
             &status,
             &[peer.clone()],
-            &[saved_peer.clone()],
+            std::slice::from_ref(&saved_peer),
             Some("99999999999999999999999999999999"),
         );
         let event_targets = build_event_replication_targets(
@@ -11012,7 +11130,8 @@ mod tests {
     }
 
     #[test]
-    fn checklist_participant_targets_include_current_unsaved_source_for_autonomous_return_path() {
+    fn checklist_participant_targets_use_propagation_for_current_unsaved_source_when_relay_exists()
+    {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -11053,7 +11172,7 @@ mod tests {
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -11156,7 +11275,7 @@ mod tests {
             targets[1].app_destination_hex,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-        assert_eq!(targets[1].send_mode, SendMode::Auto {});
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]

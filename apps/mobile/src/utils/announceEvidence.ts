@@ -17,5 +17,6 @@ export function announceHasEmergencyCapabilities(appData: string): boolean {
 }
 
 export function peerHasRemAnnounceEvidence(peer: AnnounceEvidencePeer): boolean {
-  return announceHasEmergencyCapabilities(peer.appData ?? "");
+  return peer.latestAnnounceKind === "lxmf_delivery"
+    && announceHasEmergencyCapabilities(peer.appData ?? "");
 }

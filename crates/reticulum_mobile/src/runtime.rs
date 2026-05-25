@@ -6,6 +6,7 @@ use std::sync::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::delivery_policy;
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
@@ -14,7 +15,9 @@ use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_fro
 use crossbeam_channel as cb;
 use fs_err as fs;
 use log::{debug, info, warn};
-use lxmf::announce::{display_name_from_delivery_app_data, encode_delivery_display_name_app_data};
+use lxmf::announce::display_name_from_delivery_app_data;
+#[cfg(test)]
+use lxmf::announce::encode_delivery_display_name_app_data;
 use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
 use lxmf_sdk::messaging::AnnounceRecord as LxmfSdkAnnounceRecord;
@@ -72,8 +75,14 @@ const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 3] = [0, 10, 30];
 const MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 3600;
+const INTERFACE_TRAFFIC_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const SAVED_PEER_LINK_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(10);
+const SAVED_PEER_LINK_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const SAVED_PEER_LINK_BACKOFF_BASE_MS: u64 = 2_000;
+const SAVED_PEER_LINK_BACKOFF_MAX_MS: u64 = 60_000;
+const SAVED_PEER_LINK_BACKOFF_MAX_ATTEMPTS: u32 = 6;
 const AUTO_PROPAGATION_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 const AUTO_PROPAGATION_SYNC_LIMIT: u32 = 100;
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
@@ -110,7 +119,7 @@ const GENERAL_SEND_TASK_CONCURRENCY_LIMIT: usize = SEND_TASK_CONCURRENCY_LIMIT
     - MISSION_PROPAGATION_SEND_TASK_RESERVED_LIMIT
     - MISSION_RECOVERY_SEND_TASK_RESERVED_LIMIT;
 const LXMF_DIRECT_ATTEMPTS: usize = 5;
-const LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS: usize = 1;
+const DIRECT_DELIVERY_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 const MISSION_DIRECT_PRIORITY_FREE_HOPS: u8 = 2;
 const MISSION_DIRECT_PRIORITY_DELAY_PER_HOP: Duration = Duration::from_millis(80);
 const MISSION_DIRECT_PRIORITY_MAX_DELAY: Duration = Duration::from_millis(800);
@@ -2528,50 +2537,160 @@ fn address_hash_to_hex(hash: &AddressHash) -> String {
     hash.to_hex_string()
 }
 
+#[derive(Default)]
+struct InterfaceTrafficSample {
+    packets: u64,
+    bytes: u64,
+    announces: u64,
+    data: u64,
+    proofs: u64,
+    link_requests: u64,
+}
+
+impl InterfaceTrafficSample {
+    fn record(&mut self, packet: &Packet) {
+        self.packets = self.packets.saturating_add(1);
+        self.bytes = self
+            .bytes
+            .saturating_add(packet.data.as_slice().len() as u64);
+        match packet.header.packet_type {
+            reticulum::packet::PacketType::Announce => {
+                self.announces = self.announces.saturating_add(1);
+            }
+            reticulum::packet::PacketType::Data => {
+                self.data = self.data.saturating_add(1);
+            }
+            reticulum::packet::PacketType::Proof => {
+                self.proofs = self.proofs.saturating_add(1);
+            }
+            reticulum::packet::PacketType::LinkRequest => {
+                self.link_requests = self.link_requests.saturating_add(1);
+            }
+        }
+    }
+}
+
+type TcpEndpointRegistry = Arc<TokioMutex<HashMap<AddressHash, String>>>;
+
 fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
     configured_seconds.max(MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
 }
 
+fn spawn_interface_traffic_monitor(
+    transport: Arc<Transport>,
+    tcp_endpoint_registry: TcpEndpointRegistry,
+) {
+    tokio::spawn(async move {
+        let mut rx = transport.iface_rx();
+        let mut interval = tokio::time::interval(INTERFACE_TRAFFIC_LOG_INTERVAL);
+        let mut samples = HashMap::<AddressHash, InterfaceTrafficSample>::new();
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if samples.is_empty() {
+                        continue;
+                    }
+                    let endpoints = tcp_endpoint_registry.lock().await.clone();
+                    let mut rows = samples.drain().collect::<Vec<_>>();
+                    rows.sort_by_key(|(_, sample)| std::cmp::Reverse(sample.bytes));
+                    for (interface, sample) in rows {
+                        let endpoint = endpoints
+                            .get(&interface)
+                            .map(String::as_str)
+                            .unwrap_or("unknown");
+                        info!(
+                            "[iface][rx] endpoint=<{}> iface={} packets={} bytes={} announces={} data={} proofs={} link_requests={}",
+                            endpoint,
+                            interface,
+                            sample.packets,
+                            sample.bytes,
+                            sample.announces,
+                            sample.data,
+                            sample.proofs,
+                            sample.link_requests,
+                        );
+                    }
+                }
+                message = rx.recv() => {
+                    match message {
+                        Ok(message) => {
+                            samples
+                                .entry(message.address)
+                                .or_default()
+                                .record(&message.packet);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!("[iface][rx] monitor lagged skipped={}", skipped);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 async fn announce_destinations(
     transport: &Arc<Transport>,
-    app_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    _app_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     lxmf_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
     announce_capabilities: &Arc<TokioMutex<String>>,
     reason: &str,
 ) {
     let caps = announce_capabilities.lock().await.clone();
-    let app_hex = app_destination
-        .lock()
-        .await
-        .desc
-        .address_hash
-        .to_hex_string();
     let lxmf_hex = lxmf_destination
         .lock()
         .await
         .desc
         .address_hash
         .to_hex_string();
-    let delivery_app_data = delivery_display_name_app_data(caps.as_str());
     info!(
-        "[announce] sending reason={} app={} lxmf={}",
-        reason, app_hex, lxmf_hex,
+        "[announce] sending reason={} kind={} destination={}",
+        reason, DESTINATION_KIND_LXMF_DELIVERY, lxmf_hex,
     );
-    transport
-        .send_announce(app_destination, Some(caps.as_bytes()))
-        .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    transport
-        .send_announce(lxmf_destination, delivery_app_data.as_deref())
-        .await;
+    send_announce_with_trace(
+        transport,
+        lxmf_destination,
+        Some(caps.as_bytes()),
+        reason,
+        DESTINATION_KIND_LXMF_DELIVERY,
+    )
+    .await;
 }
 
-fn delivery_display_name_app_data(capability_string: &str) -> Option<Vec<u8>> {
-    capability_string
-        .split(';')
-        .map(str::trim)
-        .find_map(|token| token.strip_prefix("name="))
-        .and_then(encode_delivery_display_name_app_data)
+async fn send_announce_with_trace(
+    transport: &Arc<Transport>,
+    destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    app_data: Option<&[u8]>,
+    reason: &str,
+    destination_kind: &str,
+) {
+    let (destination_hex, app_data_len, packet) = {
+        let mut destination = destination.lock().await;
+        let destination_hex = destination.desc.address_hash.to_hex_string();
+        let app_data_len = app_data.map(|value| value.len()).unwrap_or(0);
+        let packet = destination
+            .announce(OsRng, app_data)
+            .expect("valid announce packet");
+        (destination_hex, app_data_len, packet)
+    };
+    let trace = transport.send_packet_with_trace(packet).await;
+    info!(
+        "[announce][tx] reason={} kind={} destination={} app_data_len={} outcome={:?} broadcast={} direct_iface={} matched={} sent={} failed={}",
+        reason,
+        destination_kind,
+        destination_hex,
+        app_data_len,
+        trace.outcome,
+        trace.broadcast,
+        trace
+            .direct_iface
+            .map(|iface| iface.to_hex_string())
+            .unwrap_or_else(|| "none".to_string()),
+        trace.dispatch.matched_ifaces,
+        trace.dispatch.sent_ifaces,
+        trace.dispatch.failed_ifaces,
+    );
 }
 
 fn announce_destination_kind_from_name_hash(name_hash: &[u8]) -> &'static str {
@@ -2704,7 +2823,7 @@ fn extract_msgpack_capability_tokens(value: &MsgPackValue) -> Vec<String> {
 
 fn decode_hex_announce_app_data(app_data: &str) -> Option<Vec<u8>> {
     let trimmed = app_data.trim();
-    if trimmed.len() < 2 || trimmed.len() % 2 != 0 {
+    if trimmed.len() < 2 || !trimmed.len().is_multiple_of(2) {
         return None;
     }
     if !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -2740,6 +2859,12 @@ fn announce_metadata_from_app_data(app_data: &str) -> (Option<String>, Vec<Strin
     (None, Vec::new())
 }
 
+fn app_data_has_rem_peer_capabilities(app_data: &str) -> bool {
+    let (_, tokens) = announce_metadata_from_app_data(app_data);
+    tokens.iter().any(|token| token == "r3akt")
+        && tokens.iter().any(|token| token == "emergencymessages")
+}
+
 fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
     let (_, tokens) = announce_metadata_from_app_data(app_data);
     if tokens.iter().any(|token| token == "r3akt")
@@ -2767,8 +2892,16 @@ fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
 fn announce_class_is_operator_relevant(class: AnnounceClass) -> bool {
     matches!(
         class,
-        AnnounceClass::PeerApp {} | AnnounceClass::RchHubServer {}
+        AnnounceClass::RchHubServer {}
     )
+}
+
+fn announce_is_operator_relevant(
+    class: AnnounceClass,
+    is_rem_capable_lxmf_delivery: bool,
+) -> bool {
+    announce_class_is_operator_relevant(class)
+        || (matches!(class, AnnounceClass::LxmfDelivery {}) && is_rem_capable_lxmf_delivery)
 }
 
 fn operator_label(display_name: Option<&str>, fallback_hex: &str) -> String {
@@ -2792,19 +2925,20 @@ fn short_destination_hex(value: &str) -> String {
 
 fn operator_announce_message(
     announce_class: AnnounceClass,
+    is_rem_capable_lxmf_delivery: bool,
     display_name: Option<&str>,
     destination_hex: &str,
     _identity_hex: &str,
     hops: u8,
 ) -> Option<String> {
-    if !announce_class_is_operator_relevant(announce_class) {
+    if !announce_is_operator_relevant(announce_class, is_rem_capable_lxmf_delivery) {
         return None;
     }
 
     let subject = operator_label(display_name, destination_hex);
     let prefix = match announce_class {
         AnnounceClass::RchHubServer {} => "RCH hub",
-        AnnounceClass::PeerApp {} => "",
+        AnnounceClass::LxmfDelivery {} if is_rem_capable_lxmf_delivery => "",
         _ => return None,
     };
     let label = if prefix.is_empty() {
@@ -3410,6 +3544,211 @@ impl SendTaskPermits {
     }
 }
 
+#[derive(Clone, Default)]
+struct DirectDeliveryHealth {
+    cooldown_until_ms: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+impl DirectDeliveryHealth {
+    fn mark_unhealthy<'a, I>(&self, destinations: I, until_ms: u64)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let Ok(mut guard) = self.cooldown_until_ms.lock() else {
+            return;
+        };
+        for destination in destinations {
+            if let Some(normalized) = normalize_hex_32(destination) {
+                guard.insert(normalized, until_ms);
+            }
+        }
+    }
+
+    fn clear<'a, I>(&self, destinations: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let Ok(mut guard) = self.cooldown_until_ms.lock() else {
+            return;
+        };
+        for destination in destinations {
+            if let Some(normalized) = normalize_hex_32(destination) {
+                guard.remove(normalized.as_str());
+            }
+        }
+    }
+
+    fn is_available(&self, destination: &str, now_ms: u64) -> bool {
+        let Some(normalized) = normalize_hex_32(destination) else {
+            return true;
+        };
+        let Ok(mut guard) = self.cooldown_until_ms.lock() else {
+            return true;
+        };
+        match guard.get(normalized.as_str()).copied() {
+            Some(until_ms) if until_ms > now_ms => false,
+            Some(_) => {
+                guard.remove(normalized.as_str());
+                true
+            }
+            None => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ManagedPeerLinkKind {
+    App,
+    LxmfDelivery,
+}
+
+impl ManagedPeerLinkKind {
+    fn destination_name(self) -> DestinationName {
+        match self {
+            Self::App => DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+            Self::LxmfDelivery => DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManagedPeerLinkTarget {
+    destination_hex: String,
+    kind: ManagedPeerLinkKind,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ManagedPeerLinkBackoff {
+    attempts: u32,
+    next_retry_at_ms: u64,
+    last_failure_reason: Option<String>,
+}
+
+impl ManagedPeerLinkBackoff {
+    fn next_delay_ms(&self) -> u64 {
+        let exponent = self
+            .attempts
+            .saturating_sub(1)
+            .min(SAVED_PEER_LINK_BACKOFF_MAX_ATTEMPTS);
+        let multiplier = 1_u64.checked_shl(exponent).unwrap_or(u64::MAX);
+        SAVED_PEER_LINK_BACKOFF_BASE_MS
+            .saturating_mul(multiplier)
+            .min(SAVED_PEER_LINK_BACKOFF_MAX_MS)
+    }
+}
+
+#[derive(Clone, Default)]
+struct ManagedPeerLinks {
+    desired: Arc<TokioMutex<HashMap<String, ManagedPeerLinkTarget>>>,
+    reconnecting: Arc<TokioMutex<HashSet<String>>>,
+    failures: Arc<TokioMutex<HashMap<String, ManagedPeerLinkBackoff>>>,
+}
+
+impl ManagedPeerLinks {
+    async fn add_desired(&self, target: ManagedPeerLinkTarget) {
+        self.failures
+            .lock()
+            .await
+            .remove(target.destination_hex.as_str());
+        self.desired
+            .lock()
+            .await
+            .insert(target.destination_hex.clone(), target);
+    }
+
+    async fn remove_desired<'a, I>(&self, destinations: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let normalized = destinations
+            .into_iter()
+            .filter_map(normalize_hex_32)
+            .collect::<Vec<_>>();
+        if normalized.is_empty() {
+            return;
+        }
+        {
+            let mut desired = self.desired.lock().await;
+            for destination in &normalized {
+                desired.remove(destination.as_str());
+            }
+        }
+        let mut reconnecting = self.reconnecting.lock().await;
+        for destination in normalized {
+            reconnecting.remove(destination.as_str());
+            self.failures.lock().await.remove(destination.as_str());
+        }
+    }
+
+    async fn desired_targets(&self) -> Vec<ManagedPeerLinkTarget> {
+        let now = now_ms();
+        let desired = self.desired.lock().await;
+        let failures = self.failures.lock().await;
+        desired
+            .values()
+            .filter(|target| {
+                failures
+                    .get(target.destination_hex.as_str())
+                    .is_none_or(|failure| failure.next_retry_at_ms <= now)
+            })
+            .cloned()
+            .collect()
+    }
+
+    async fn is_desired(&self, destination_hex: &str) -> bool {
+        let Some(normalized) = normalize_hex_32(destination_hex) else {
+            return false;
+        };
+        self.desired.lock().await.contains_key(normalized.as_str())
+    }
+
+    async fn begin_reconnect(&self, destination_hex: &str) -> Option<ManagedPeerLinkTarget> {
+        let normalized = normalize_hex_32(destination_hex)?;
+        let now = now_ms();
+        let target = self
+            .desired
+            .lock()
+            .await
+            .get(normalized.as_str())
+            .cloned()?;
+        if self
+            .failures
+            .lock()
+            .await
+            .get(normalized.as_str())
+            .is_some_and(|failure| failure.next_retry_at_ms > now)
+        {
+            return None;
+        }
+        let mut reconnecting = self.reconnecting.lock().await;
+        if !reconnecting.insert(normalized.clone()) {
+            return None;
+        }
+        Some(target)
+    }
+
+    async fn finish_reconnect(&self, destination_hex: &str, result: Result<(), String>) {
+        if let Some(normalized) = normalize_hex_32(destination_hex) {
+            self.reconnecting.lock().await.remove(normalized.as_str());
+            match result {
+                Ok(()) => {
+                    self.failures.lock().await.remove(normalized.as_str());
+                }
+                Err(reason) => {
+                    let mut failures = self.failures.lock().await;
+                    let failure = failures.entry(normalized).or_default();
+                    failure.attempts = failure
+                        .attempts
+                        .saturating_add(1)
+                        .min(SAVED_PEER_LINK_BACKOFF_MAX_ATTEMPTS);
+                    failure.last_failure_reason = Some(reason);
+                    failure.next_retry_at_ms = now_ms().saturating_add(failure.next_delay_ms());
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct MissionDestinationLocks {
     locks: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
@@ -3836,6 +4175,35 @@ async fn record_peer_link_state(
             .peer_change_for_destination(canonical_destination_hex.as_str())
             .map(from_sdk_peer_change)
     };
+    if let Some(change) = change.as_ref() {
+        debug!(
+            "[peers][link-state] link_destination={} canonical_destination={} active={} projected_destination={} state={:?} saved={} stale={} active_link={} identity={} lxmf={} announce_seen={} lxmf_seen={} last_error={}",
+            link_destination_hex,
+            canonical_destination_hex,
+            active,
+            change.destination_hex,
+            change.state,
+            change.saved,
+            change.stale,
+            change.active_link,
+            change.identity_hex.as_deref().unwrap_or("-"),
+            change.lxmf_destination_hex.as_deref().unwrap_or("-"),
+            change
+                .announce_last_seen_at_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            change
+                .lxmf_last_seen_at_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            change.last_error.as_deref().unwrap_or("-"),
+        );
+    } else {
+        debug!(
+            "[peers][link-state] link_destination={} canonical_destination={} active={} projected_destination=- state=missing",
+            link_destination_hex, canonical_destination_hex, active,
+        );
+    }
     if let Some(change) = change {
         state.sdk.record_peer_changed(
             &change.destination_hex,
@@ -3848,40 +4216,21 @@ async fn record_peer_link_state(
 }
 
 fn sdk_peer_is_direct_delivery_ready(peer: &sdkmsg::PeerRecord, has_active_relay: bool) -> bool {
-    let has_observed_lxmf_route = sdk_peer_has_observed_lxmf_delivery_route(peer);
-    let has_current_known_lxmf_route =
-        peer_is_current_send_target(peer) && sdk_peer_has_known_lxmf_route(peer);
-
-    if has_active_relay {
-        return sdk_peer_is_directly_reachable(peer)
-            || has_current_known_lxmf_route
-            || has_observed_lxmf_route;
-    }
-
-    sdk_peer_is_directly_reachable(peer) || has_current_known_lxmf_route || has_observed_lxmf_route
+    let _ = has_active_relay;
+    delivery_policy::peer_is_direct_delivery_ready(peer)
 }
 
 fn sdk_peer_has_known_lxmf_route(peer: &sdkmsg::PeerRecord) -> bool {
-    let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
-        return false;
-    };
-    let Some(lxmf_destination_hex) = peer
-        .lxmf_destination_hex
-        .as_deref()
-        .and_then(normalize_hex_32)
-    else {
-        return false;
-    };
-    app_destination_hex != lxmf_destination_hex
+    delivery_policy::peer_has_known_lxmf_route(peer)
 }
 
+#[cfg(test)]
 fn sdk_peer_has_observed_lxmf_delivery_route(peer: &sdkmsg::PeerRecord) -> bool {
-    if !sdk_peer_has_known_lxmf_route(peer) {
-        return false;
-    }
-    peer.lxmf_last_seen_at_ms.is_some_and(|seen_at_ms| {
-        now_ms().saturating_sub(seen_at_ms) <= sdkmsg::DEFAULT_PEER_STALE_AFTER_MS
-    })
+    delivery_policy::peer_has_observed_lxmf_delivery_route(
+        peer,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    )
 }
 
 async fn saved_peer_prefers_propagation(
@@ -3906,11 +4255,35 @@ async fn saved_peer_prefers_propagation(
     {
         return false;
     }
+    let direct_available =
+        peer_direct_delivery_available(state, canonical_destination.as_str()).await;
+    if !direct_available {
+        return true;
+    }
 
     let Some(peer) = peer_for_any_destination_hex(state, canonical_destination.as_str()).await
     else {
         return true;
     };
+    let connectivity = delivery_policy::PeerConnectivityModel::from_peer(
+        &peer,
+        has_active_relay,
+        true,
+        !direct_available,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    );
+    if connectivity.saved
+        && connectivity.propagation_eligible
+        && !connectivity.direct_delivery_available()
+    {
+        return true;
+    }
+    if sdk_peer_has_known_lxmf_route(&peer)
+        && !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
+    {
+        return true;
+    }
     if saved_peer_stored_route_prefers_propagation(&peer, has_active_relay, direct_priority_hops) {
         return true;
     }
@@ -3923,10 +4296,13 @@ fn saved_peer_stored_route_prefers_propagation(
     has_active_relay: bool,
     direct_priority_hops: Option<u8>,
 ) -> bool {
-    has_active_relay
-        && direct_priority_hops.is_some_and(|hops| hops > MISSION_DIRECT_PRIORITY_FREE_HOPS)
-        && sdk_peer_has_known_lxmf_route(peer)
-        && !sdk_peer_is_directly_reachable(peer)
+    delivery_policy::saved_route_prefers_propagation(
+        peer,
+        has_active_relay,
+        sdk_peer_is_directly_reachable(peer),
+        direct_priority_hops,
+        MISSION_DIRECT_PRIORITY_FREE_HOPS,
+    )
 }
 
 async fn saved_peer_can_try_stored_lxmf_route(
@@ -3947,6 +4323,9 @@ async fn saved_peer_has_direct_ready_route(
     canonical_destination: &str,
     has_active_relay: bool,
 ) -> bool {
+    if !peer_direct_delivery_available(state, canonical_destination).await {
+        return false;
+    }
     peer_for_any_destination_hex(state, canonical_destination)
         .await
         .is_some_and(|peer| sdk_peer_is_direct_delivery_ready(&peer, has_active_relay))
@@ -4028,15 +4407,15 @@ fn direct_attempt_budget_for_send(
     direct_delivery_ready: bool,
     direct_priority_hops: Option<u8>,
 ) -> usize {
-    if matches!(send_mode, SendMode::Auto {}) && has_active_relay && can_try_stored_lxmf_route {
-        if direct_priority_hops.is_some_and(|hops| hops > MISSION_DIRECT_PRIORITY_FREE_HOPS)
-            || !direct_delivery_ready
-        {
-            return LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS;
-        }
-    }
-
-    LXMF_DIRECT_ATTEMPTS
+    delivery_policy::direct_attempt_budget_for_send(
+        send_mode,
+        has_active_relay,
+        can_try_stored_lxmf_route,
+        direct_delivery_ready,
+        direct_priority_hops,
+        MISSION_DIRECT_PRIORITY_FREE_HOPS,
+        LXMF_DIRECT_ATTEMPTS,
+    )
 }
 
 fn should_try_propagation_after_direct_failure(
@@ -4044,20 +4423,16 @@ fn should_try_propagation_after_direct_failure(
     is_accepted_result: bool,
     has_active_relay: bool,
     saved_peer: bool,
-    retriable: bool,
+    _retriable: bool,
 ) -> bool {
-    matches!(send_mode, SendMode::Auto {})
-        && !is_accepted_result
-        && has_active_relay
-        && saved_peer
-        && !retriable
+    matches!(send_mode, SendMode::Auto {}) && !is_accepted_result && has_active_relay && saved_peer
 }
 
-async fn clear_peer_direct_delivery_state(
+async fn equivalent_direct_delivery_destinations(
     state: &NodeRuntimeState,
     requested_destination_hex: &str,
     resolved_destination_hex: Option<&str>,
-) {
+) -> Vec<String> {
     let mut destinations = Vec::<String>::new();
     for destination in [Some(requested_destination_hex), resolved_destination_hex]
         .into_iter()
@@ -4081,14 +4456,62 @@ async fn clear_peer_direct_delivery_state(
     destinations.dedup();
 
     if destinations.is_empty() {
-        return;
+        return destinations;
     }
 
-    let now = now_ms();
-    let mut messaging = state.messaging.lock().await;
-    for destination in destinations {
-        messaging.set_peer_active_link(destination.as_str(), false, now);
+    destinations
+}
+
+async fn mark_peer_direct_delivery_unhealthy(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    resolved_destination_hex: Option<&str>,
+) {
+    let destinations = equivalent_direct_delivery_destinations(
+        state,
+        requested_destination_hex,
+        resolved_destination_hex,
+    )
+    .await;
+    if destinations.is_empty() {
+        return;
     }
+    let until_ms = now_ms().saturating_add(DIRECT_DELIVERY_FAILURE_COOLDOWN.as_millis() as u64);
+    state
+        .direct_delivery_health
+        .mark_unhealthy(destinations.iter().map(String::as_str), until_ms);
+    debug!(
+        "[lxmf][mission] marked direct delivery cooldown destinations={} until_ms={}",
+        destinations.join(","),
+        until_ms,
+    );
+}
+
+async fn clear_peer_direct_delivery_unhealthy(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    resolved_destination_hex: Option<&str>,
+) {
+    let destinations = equivalent_direct_delivery_destinations(
+        state,
+        requested_destination_hex,
+        resolved_destination_hex,
+    )
+    .await;
+    if destinations.is_empty() {
+        return;
+    }
+    state
+        .direct_delivery_health
+        .clear(destinations.iter().map(String::as_str));
+}
+
+async fn peer_direct_delivery_available(state: &NodeRuntimeState, destination_hex: &str) -> bool {
+    let destinations = equivalent_direct_delivery_destinations(state, destination_hex, None).await;
+    let now = now_ms();
+    destinations
+        .iter()
+        .all(|destination| state.direct_delivery_health.is_available(destination, now))
 }
 
 async fn emit_peer_resolved_for_destination(
@@ -4534,7 +4957,11 @@ async fn run_propagation_sync_job(
         let destination_hex = result.destination_hex.clone();
         let available_count = result.available_count;
         let fetched_count = result.fetched_count;
+        let fetched_entry_count = result.fetched_entry_count;
+        let extracted_payload_count = result.extracted_payload_count;
         let failed_count = result.failed_count;
+        let malformed_count = result.malformed_count;
+        let decrypt_failed_count = result.decrypt_failed_count;
         let imported_count = result.imported_wires.len() as u32;
         emit_sync_status_update(
             &state,
@@ -4543,7 +4970,7 @@ async fn run_propagation_sync_job(
             requested_at_ms,
             0,
             Some(format!(
-                "available={available_count} fetched={fetched_count} decrypt_failed={failed_count}"
+                "available={available_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} decrypt_failed={decrypt_failed_count}"
             )),
             false,
         )
@@ -4560,7 +4987,7 @@ async fn run_propagation_sync_job(
             .await;
         }
         let detail = format!(
-            "available={available_count} fetched={fetched_count} imported={imported_count} failed={failed_count}"
+            "available={available_count} fetched={fetched_count} fetched_entries={fetched_entry_count} extracted_payloads={extracted_payload_count} imported={imported_count} malformed={malformed_count} decrypt_failed={decrypt_failed_count} failed={failed_count}"
         );
         emit_sync_status_update(
             &state,
@@ -5006,6 +5433,8 @@ struct NodeRuntimeState {
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
     preferred_propagation_node_hex: Option<String>,
     propagation_sync_inflight: Arc<AtomicBool>,
+    direct_delivery_health: DirectDeliveryHealth,
+    managed_peer_links: ManagedPeerLinks,
     send_task_permits: SendTaskPermits,
     mission_destination_locks: MissionDestinationLocks,
 }
@@ -5122,6 +5551,161 @@ async fn ensure_output_link(
     Err(NodeError::Timeout {})
 }
 
+fn managed_peer_link_target(peer: &sdkmsg::PeerRecord) -> Option<ManagedPeerLinkTarget> {
+    if !peer.saved || peer.stale {
+        return None;
+    }
+    if let Some(destination_hex) = peer
+        .lxmf_destination_hex
+        .as_deref()
+        .and_then(normalize_hex_32)
+    {
+        return Some(ManagedPeerLinkTarget {
+            destination_hex,
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        });
+    }
+    normalize_hex_32(peer.destination_hex.as_str()).map(|destination_hex| ManagedPeerLinkTarget {
+        destination_hex,
+        kind: ManagedPeerLinkKind::App,
+    })
+}
+
+#[cfg(test)]
+fn saved_peer_link_targets(peers: &[sdkmsg::PeerRecord]) -> Vec<ManagedPeerLinkTarget> {
+    let mut seen = HashSet::<String>::new();
+    let mut targets = Vec::<ManagedPeerLinkTarget>::new();
+    for peer in peers {
+        let Some(target) = managed_peer_link_target(peer) else {
+            continue;
+        };
+        if seen.insert(target.destination_hex.clone()) {
+            targets.push(target);
+        }
+    }
+    targets
+}
+
+async fn desired_managed_peer_link_target_for_destination(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> Option<ManagedPeerLinkTarget> {
+    peer_for_any_destination_hex(state, destination_hex)
+        .await
+        .and_then(|peer| managed_peer_link_target(&peer))
+}
+
+async fn register_desired_managed_peer_link(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> Option<ManagedPeerLinkTarget> {
+    let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
+    state.managed_peer_links.add_desired(target.clone()).await;
+    Some(target)
+}
+
+async fn output_link_is_active(state: &NodeRuntimeState, destination: &AddressHash) -> bool {
+    let link = state.out_links.lock().await.get(destination).cloned();
+    let Some(link) = link else {
+        return false;
+    };
+    let active = link.lock().await.status() == LinkStatus::Active;
+    active
+}
+
+async fn ensure_managed_peer_link(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    target: ManagedPeerLinkTarget,
+) -> Result<(), NodeError> {
+    let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) else {
+        return Err(NodeError::InvalidConfig {});
+    };
+    if output_link_is_active(state, &destination).await {
+        clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None).await;
+        return Ok(());
+    }
+    let desc =
+        match ensure_destination_desc(state, destination, Some(target.kind.destination_name()))
+            .await
+        {
+            Ok(desc) => desc,
+            Err(err) => {
+                debug!(
+                    "[link][maintain] destination={} status=resolve-failed reason={}",
+                    target.destination_hex, err,
+                );
+                return Err(err);
+            }
+        };
+    match ensure_output_link(state, desc).await {
+        Ok(_) => {
+            clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
+                .await;
+            record_peer_link_state(state, bus, target.destination_hex.as_str(), true).await;
+            debug!(
+                "[link][maintain] destination={} status=active",
+                target.destination_hex,
+            );
+            Ok(())
+        }
+        Err(err) => {
+            debug!(
+                "[link][maintain] destination={} status=failed reason={}",
+                target.destination_hex, err,
+            );
+            Err(err)
+        }
+    }
+}
+
+async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
+    let targets = state.managed_peer_links.desired_targets().await;
+    for target in targets {
+        let still_saved_and_current =
+            peer_for_any_destination_hex(state, target.destination_hex.as_str())
+                .await
+                .is_some_and(|peer| managed_peer_link_target(&peer).is_some());
+        if still_saved_and_current {
+            if let Err(err) = ensure_managed_peer_link(state, bus, target.clone()).await {
+                state
+                    .managed_peer_links
+                    .finish_reconnect(target.destination_hex.as_str(), Err(err.to_string()))
+                    .await;
+            }
+        } else {
+            state
+                .managed_peer_links
+                .remove_desired([target.destination_hex.as_str()])
+                .await;
+        }
+    }
+}
+
+fn spawn_managed_peer_link_reconnect(
+    state: NodeRuntimeState,
+    bus: EventBus,
+    target: ManagedPeerLinkTarget,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(SAVED_PEER_LINK_RECONNECT_DELAY).await;
+        let result = ensure_managed_peer_link(&state, &bus, target.clone()).await;
+        state
+            .managed_peer_links
+            .finish_reconnect(
+                target.destination_hex.as_str(),
+                result.as_ref().map(|_| ()).map_err(ToString::to_string),
+            )
+            .await;
+        if let Err(err) = result {
+            debug!(
+                "[link][maintain] destination={} status=reconnect-backoff reason={}",
+                target.destination_hex, err,
+            );
+        }
+    });
+}
+
 async fn register_pending_lxmf_delivery(
     state: &NodeRuntimeState,
     report: &LxmfSendReport,
@@ -5165,6 +5749,10 @@ async fn register_pending_lxmf_delivery(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resend construction mirrors the persisted pending delivery fields"
+)]
 fn build_pending_lxmf_resend(
     report: &LxmfSendReport,
     requested_destination_hex: &str,
@@ -5582,6 +6170,10 @@ fn is_sos_status_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "send policy boundary intentionally keeps transport, payload, metadata, and lane selection explicit"
+)]
 async fn send_lxmf_with_delivery_policy(
     state: &NodeRuntimeState,
     bus: &EventBus,
@@ -5801,6 +6393,19 @@ async fn send_lxmf_with_delivery_policy(
         match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
                 if !report.used_propagation_node {
+                    if is_saved_peer {
+                        register_desired_managed_peer_link(
+                            state,
+                            report.resolved_destination_hex.as_str(),
+                        )
+                        .await;
+                    }
+                    clear_peer_direct_delivery_unhealthy(
+                        state,
+                        requested_destination_hex,
+                        Some(report.resolved_destination_hex.as_str()),
+                    )
+                    .await;
                     record_peer_link_state(
                         state,
                         bus,
@@ -5826,7 +6431,7 @@ async fn send_lxmf_with_delivery_policy(
                     is_saved_peer,
                     false,
                 ) {
-                    clear_peer_direct_delivery_state(
+                    mark_peer_direct_delivery_unhealthy(
                         state,
                         requested_destination_hex,
                         Some(report.resolved_destination_hex.as_str()),
@@ -5855,7 +6460,8 @@ async fn send_lxmf_with_delivery_policy(
                     is_saved_peer,
                     retriable,
                 ) {
-                    clear_peer_direct_delivery_state(state, requested_destination_hex, None).await;
+                    mark_peer_direct_delivery_unhealthy(state, requested_destination_hex, None)
+                        .await;
                     info!(
                         "[lxmf][mission] direct delivery errored for saved peer {}; retrying via propagation relay",
                         requested_destination_hex,
@@ -5888,10 +6494,21 @@ async fn send_lxmf_with_delivery_policy(
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }
 
-    info!(
-        "[lxmf][mission] auto delivery exhausted destination={}; retrying via propagation relay",
-        requested_destination_hex,
-    );
+    if direct_attempts == 0 {
+        info!(
+            "[lxmf][mission] auto delivery using propagation without direct probe destination={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
+            requested_destination_hex,
+            is_saved_peer,
+            can_try_stored_lxmf_route,
+            has_active_relay,
+            direct_delivery_ready,
+        );
+    } else {
+        info!(
+            "[lxmf][mission] auto delivery exhausted destination={}; retrying via propagation relay",
+            requested_destination_hex,
+        );
+    }
     let resolved_destination_hex =
         resolve_lxmf_destination_for_send(state, requested_destination_hex, false).await?;
     let destination = parse_address_hash(resolved_destination_hex.as_str())?;
@@ -6853,7 +7470,11 @@ fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
     }
 }
 
-fn spawn_tcp_client_interface_manager(transport: Arc<Transport>, connect_addr: String) {
+fn spawn_tcp_client_interface_manager(
+    transport: Arc<Transport>,
+    connect_addr: String,
+    tcp_endpoint_registry: TcpEndpointRegistry,
+) {
     tokio::spawn(async move {
         let active = Arc::new(AtomicBool::new(false));
         loop {
@@ -6870,13 +7491,21 @@ fn spawn_tcp_client_interface_manager(transport: Arc<Transport>, connect_addr: S
                 active.store(true, Ordering::Release);
                 let active_for_task = active.clone();
                 let task_addr = connect_addr.clone();
-                transport.iface_manager().lock().await.spawn(
+                let iface = transport.iface_manager().lock().await.spawn(
                     TcpClient::new_from_stream(connect_addr.clone(), stream),
                     move |context| async move {
                         TcpClient::spawn(context).await;
                         active_for_task.store(false, Ordering::Release);
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
+                );
+                tcp_endpoint_registry
+                    .lock()
+                    .await
+                    .insert(iface, connect_addr.clone());
+                info!(
+                    "tcp_client: connected interface endpoint=<{}> iface={}",
+                    connect_addr, iface
                 );
             }
 
@@ -6935,6 +7564,10 @@ fn spawn_tcp_client_readiness_monitor(
     });
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "runtime entrypoint receives independently owned state handles and command lanes"
+)]
 pub async fn run_node(
     config: NodeConfig,
     identity: PrivateIdentity,
@@ -6996,17 +7629,30 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
+    let tcp_endpoint_registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::new()));
+    spawn_interface_traffic_monitor(transport.clone(), tcp_endpoint_registry.clone());
     let tcp_client_endpoints = configured_tcp_client_endpoints(config.tcp_clients.as_slice());
     for endpoint in tcp_client_endpoints.iter().cloned() {
-        spawn_tcp_client_interface_manager(transport.clone(), endpoint);
+        spawn_tcp_client_interface_manager(
+            transport.clone(),
+            endpoint,
+            tcp_endpoint_registry.clone(),
+        );
     }
 
-    let app_destination_hex = app_destination
+    let _legacy_app_destination_hex = app_destination
         .lock()
         .await
         .desc
         .address_hash
         .to_hex_string();
+    let lxmf_destination_hex = lxmf_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
+    let app_destination_hex = lxmf_destination_hex.clone();
 
     let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
@@ -7029,6 +7675,8 @@ pub async fn run_node(
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
     let propagation_sync_inflight = Arc::new(AtomicBool::new(false));
+    let direct_delivery_health = DirectDeliveryHealth::default();
+    let managed_peer_links = ManagedPeerLinks::default();
     let send_task_permits = SendTaskPermits::new();
     let mission_destination_locks = MissionDestinationLocks::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
@@ -7071,6 +7719,8 @@ pub async fn run_node(
             .as_ref()
             .and_then(|value| normalize_hex_32(value)),
         propagation_sync_inflight: propagation_sync_inflight.clone(),
+        direct_delivery_health: direct_delivery_health.clone(),
+        managed_peer_links: managed_peer_links.clone(),
         send_task_permits: send_task_permits.clone(),
         mission_destination_locks: mission_destination_locks.clone(),
     };
@@ -7179,6 +7829,20 @@ pub async fn run_node(
                     }
                     spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
                 }
+            }
+        });
+    }
+
+    // Keep explicitly desired peer links warm. Fresh announces update
+    // reachability, but they do not create maintained links by themselves.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(SAVED_PEER_LINK_MAINTENANCE_INTERVAL);
+            loop {
+                interval.tick().await;
+                maintain_managed_peer_links_once(&state, &bus).await;
             }
         });
     }
@@ -7341,6 +8005,9 @@ pub async fn run_node(
                             from_lxmf_sdk_announce_record(sdk_announce_record.clone());
                         let announce_class = announce_record.announce_class;
                         let app_data = announce_record.app_data.clone();
+                        let is_rem_capable_lxmf_delivery =
+                            destination_kind == DESTINATION_KIND_LXMF_DELIVERY
+                                && app_data_has_rem_peer_capabilities(&app_data);
                         let display_name = announce_record.display_name.clone();
                         state
                             .messaging
@@ -7377,6 +8044,7 @@ pub async fn run_node(
                         });
                         if let Some(message) = operator_announce_message(
                             announce_class,
+                            is_rem_capable_lxmf_delivery,
                             display_name.as_deref(),
                             destination_hex.as_str(),
                             identity_hex.as_str(),
@@ -7417,7 +8085,7 @@ pub async fn run_node(
                             .desc
                             .address_hash
                             .to_hex_string();
-                            info!(
+                            debug!(
                                 "[announce] derived app route from lxmf_delivery app={} lxmf={} identity={} display={} hops={}",
                                 app_destination_hex,
                                 destination_hex,
@@ -7431,8 +8099,8 @@ pub async fn run_node(
                                 destination_hex.as_str(),
                                 received_at_ms,
                             );
-                            emit_peer_changed(&state, &bus, &app_destination_hex).await;
-                            emit_peer_resolved_for_destination(&state, &bus, &app_destination_hex)
+                            emit_peer_changed(&state, &bus, &destination_hex).await;
+                            emit_peer_resolved_for_destination(&state, &bus, &destination_hex)
                                 .await;
                         }
                         sync_auto_propagation_node(&state, &bus).await;
@@ -7628,12 +8296,51 @@ pub async fn run_node(
                         let destination_hex = address_hash_to_hex(&event.address_hash);
                         match event.event {
                             LinkEvent::Activated => {
+                                debug!(
+                                    "[link][event] kind=activated destination={} link_id={}",
+                                    destination_hex,
+                                    address_hash_to_hex(&event.id),
+                                );
                                 connected_peers.lock().await.insert(event.address_hash);
                                 record_peer_link_state(&state, &bus, &destination_hex, true).await;
                             }
                             LinkEvent::Closed => {
+                                debug!(
+                                    "[link][event] kind=closed destination={} link_id={}",
+                                    destination_hex,
+                                    address_hash_to_hex(&event.id),
+                                );
+                                state.out_links.lock().await.remove(&event.address_hash);
                                 connected_peers.lock().await.remove(&event.address_hash);
-                                record_peer_link_state(&state, &bus, &destination_hex, false).await;
+                                mark_peer_direct_delivery_unhealthy(
+                                    &state,
+                                    destination_hex.as_str(),
+                                    None,
+                                )
+                                .await;
+                                if let Some(target) = state
+                                    .managed_peer_links
+                                    .begin_reconnect(destination_hex.as_str())
+                                    .await
+                                {
+                                    spawn_managed_peer_link_reconnect(
+                                        state.clone(),
+                                        bus.clone(),
+                                        target,
+                                    );
+                                } else if state
+                                    .managed_peer_links
+                                    .is_desired(destination_hex.as_str())
+                                    .await
+                                {
+                                    debug!(
+                                        "[link][event] kind=closed destination={} desired=true status=reconnect-deferred",
+                                        destination_hex,
+                                    );
+                                } else {
+                                    record_peer_link_state(&state, &bus, &destination_hex, false)
+                                        .await;
+                                }
                             }
                             LinkEvent::Data(_) => {}
                         }
@@ -7747,9 +8454,28 @@ pub async fn run_node(
                         .sdk
                         .record_peer_changed(&destination_hex, PeerState::Connecting {}, None);
                     resolve_peer_route(&state, &bus, &destination_hex).await?;
-                    let desc = ensure_destination_desc(&state, dest, None).await?;
+                    let target =
+                        match register_desired_managed_peer_link(&state, &destination_hex).await {
+                            Some(target) => target,
+                            None => {
+                                let target = ManagedPeerLinkTarget {
+                                    destination_hex: address_hash_to_hex(&dest),
+                                    kind: ManagedPeerLinkKind::App,
+                                };
+                                state.managed_peer_links.add_desired(target.clone()).await;
+                                target
+                            }
+                        };
+                    let target_destination = parse_address_hash(target.destination_hex.as_str())?;
+                    let desc = ensure_destination_desc(
+                        &state,
+                        target_destination,
+                        Some(target.kind.destination_name()),
+                    )
+                    .await?;
                     let _link = ensure_output_link(&state, desc).await?;
-                    record_peer_link_state(&state, &bus, destination_hex.as_str(), true).await;
+                    record_peer_link_state(&state, &bus, target.destination_hex.as_str(), true)
+                        .await;
                     Ok::<(), NodeError>(())
                 }
                 .await;
@@ -7773,15 +8499,36 @@ pub async fn run_node(
             } => {
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
+                    let mut destinations = vec![destination_hex.clone()];
+                    if let Some(peer) = peer_for_any_destination_hex(&state, &destination_hex).await
+                    {
+                        destinations
+                            .extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
+                    }
+                    destinations.sort();
+                    destinations.dedup();
+                    {
+                        let now = now_ms();
+                        let mut messaging = state.messaging.lock().await;
+                        for destination in &destinations {
+                            messaging.set_peer_active_link(destination.as_str(), false, now);
+                        }
+                    }
                     state
-                        .messaging
-                        .lock()
-                        .await
-                        .mark_peer_saved(&destination_hex, false);
+                        .direct_delivery_health
+                        .clear(destinations.iter().map(String::as_str));
+                    state
+                        .managed_peer_links
+                        .remove_desired(destinations.iter().map(String::as_str))
+                        .await;
                     connected_peers.lock().await.remove(&dest);
-                    // Clean up any stale link from older builds if present.
-                    if let Some(link) = out_links.lock().await.remove(&dest) {
-                        link.lock().await.close();
+                    for destination in &destinations {
+                        if let Ok(destination) = parse_address_hash(destination.as_str()) {
+                            connected_peers.lock().await.remove(&destination);
+                            if let Some(link) = out_links.lock().await.remove(&destination) {
+                                link.lock().await.close();
+                            }
+                        }
                     }
                     emit_peer_changed(&state, &bus, &destination_hex).await;
                     state.sdk.record_peer_changed(
@@ -10533,6 +11280,51 @@ mod tests {
         drop(ack);
     }
 
+    #[tokio::test]
+    async fn managed_peer_links_dedupe_reconnect_and_clear_on_disconnect() {
+        let links = ManagedPeerLinks::default();
+        let target = ManagedPeerLinkTarget {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        };
+
+        links.add_desired(target.clone()).await;
+
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            Some(target.clone())
+        );
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            None
+        );
+
+        links
+            .finish_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ok(()))
+            .await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            Some(target.clone())
+        );
+
+        links
+            .remove_desired(["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+            .await;
+        assert_eq!(links.desired_targets().await, Vec::new());
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            None
+        );
+    }
+
     #[test]
     fn mission_delivery_failures_do_not_emit_global_send_bytes_error() {
         assert!(!should_emit_global_send_bytes_error(SendTaskClass::Mission));
@@ -10579,7 +11371,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_delivery_readiness_uses_fresh_route_before_relay_fallback() {
+    fn direct_delivery_readiness_requires_active_link() {
         let announced_peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -10597,13 +11389,13 @@ mod tests {
             Some(1),
         );
 
-        assert!(sdk_peer_is_direct_delivery_ready(&announced_peer, false));
-        assert!(sdk_peer_is_direct_delivery_ready(&announced_peer, true));
+        assert!(!sdk_peer_is_direct_delivery_ready(&announced_peer, false));
+        assert!(!sdk_peer_is_direct_delivery_ready(&announced_peer, true));
         assert!(sdk_peer_is_direct_delivery_ready(&active_peer, true));
     }
 
     #[test]
-    fn direct_delivery_can_use_fresh_route_without_active_link() {
+    fn direct_delivery_rejects_fresh_route_without_active_link() {
         let mut inconsistent_connected_peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -10617,14 +11409,14 @@ mod tests {
         assert!(!sdk_peer_is_directly_reachable(
             &inconsistent_connected_peer
         ));
-        assert!(sdk_peer_is_direct_delivery_ready(
+        assert!(!sdk_peer_is_direct_delivery_ready(
             &inconsistent_connected_peer,
             true
         ));
     }
 
     #[test]
-    fn direct_delivery_can_use_observed_lxmf_route_for_stale_peer() {
+    fn direct_delivery_rejects_observed_lxmf_route_for_stale_peer() {
         let stale_peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -10635,11 +11427,11 @@ mod tests {
         );
 
         assert!(sdk_peer_has_observed_lxmf_delivery_route(&stale_peer));
-        assert!(sdk_peer_is_direct_delivery_ready(&stale_peer, true));
+        assert!(!sdk_peer_is_direct_delivery_ready(&stale_peer, true));
     }
 
     #[test]
-    fn direct_delivery_can_use_current_app_peer_with_old_lxmf_timestamp() {
+    fn direct_delivery_rejects_current_app_peer_with_old_lxmf_timestamp_without_link() {
         let mut peer = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -10652,7 +11444,7 @@ mod tests {
             Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
 
         assert!(!sdk_peer_has_observed_lxmf_delivery_route(&peer));
-        assert!(sdk_peer_is_direct_delivery_ready(&peer, true));
+        assert!(!sdk_peer_is_direct_delivery_ready(&peer, true));
     }
 
     #[test]
@@ -10673,14 +11465,14 @@ mod tests {
     }
 
     #[test]
-    fn stored_route_only_auto_send_uses_single_direct_probe_when_relay_exists() {
+    fn stored_route_only_auto_send_uses_propagation_without_direct_probe_when_relay_exists() {
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, None),
-            LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS
+            0
         );
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(11)),
-            LXMF_STORED_ROUTE_DIRECT_PROBE_ATTEMPTS
+            0
         );
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(1)),
@@ -10697,24 +11489,49 @@ mod tests {
     }
 
     #[test]
-    fn high_hop_stale_saved_route_prefers_propagation_lane() {
-        let stale_peer = send_peer(
+    fn direct_delivery_health_blocks_and_restores_destinations_after_cooldown() {
+        let health = DirectDeliveryHealth::default();
+        let destinations = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        ];
+
+        assert!(health.is_available("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 100));
+
+        health.mark_unhealthy(destinations.iter().map(String::as_str), 200);
+
+        assert!(!health.is_available("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 150));
+        assert!(!health.is_available("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 150));
+        assert!(health.is_available("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 201));
+
+        health.mark_unhealthy(destinations.iter().map(String::as_str), 300);
+        health.clear(destinations.iter().map(String::as_str));
+
+        assert!(health.is_available("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 250));
+        assert!(health.is_available("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 250));
+    }
+
+    #[test]
+    fn saved_peer_link_targets_prefer_lxmf_destinations() {
+        let mut saved_online = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            true,
+            Some(now_ms()),
+        );
+        saved_online.saved = true;
+        let mut saved_stale = send_peer(
+            "dddddddddddddddddddddddddddddddd",
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            Some("ffffffffffffffffffffffffffffffff"),
             true,
             false,
             None,
         );
-        let current_peer = send_peer(
-            "dddddddddddddddddddddddddddddddd",
-            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
-            Some("ffffffffffffffffffffffffffffffff"),
-            false,
-            false,
-            Some(now_ms()),
-        );
-        let active_peer = send_peer(
+        saved_stale.saved = true;
+        let unsaved_online = send_peer(
             "11111111111111111111111111111111",
             Some("22222222222222222222222222222222"),
             Some("33333333333333333333333333333333"),
@@ -10723,12 +11540,51 @@ mod tests {
             Some(now_ms()),
         );
 
+        assert_eq!(
+            saved_peer_link_targets(&[saved_online, saved_stale, unsaved_online]),
+            vec![ManagedPeerLinkTarget {
+                destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+                kind: ManagedPeerLinkKind::LxmfDelivery,
+            }]
+        );
+    }
+
+    #[test]
+    fn high_hop_stale_saved_route_prefers_propagation_lane() {
+        let mut stale_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            true,
+            false,
+            None,
+        );
+        stale_peer.saved = true;
+        let mut current_peer = send_peer(
+            "dddddddddddddddddddddddddddddddd",
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+            Some("ffffffffffffffffffffffffffffffff"),
+            false,
+            false,
+            Some(now_ms()),
+        );
+        current_peer.saved = true;
+        let mut active_peer = send_peer(
+            "11111111111111111111111111111111",
+            Some("22222222222222222222222222222222"),
+            Some("33333333333333333333333333333333"),
+            false,
+            true,
+            Some(now_ms()),
+        );
+        active_peer.saved = true;
+
         assert!(saved_peer_stored_route_prefers_propagation(
             &stale_peer,
             true,
             Some(11),
         ));
-        assert!(!saved_peer_stored_route_prefers_propagation(
+        assert!(saved_peer_stored_route_prefers_propagation(
             &stale_peer,
             true,
             Some(1),
@@ -10771,7 +11627,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_saved_peer_nonretriable_direct_failure_uses_propagation_when_relay_exists() {
+    fn auto_saved_peer_direct_failure_uses_propagation_when_relay_exists() {
         assert!(should_try_propagation_after_direct_failure(
             SendMode::Auto {},
             false,
@@ -10779,7 +11635,7 @@ mod tests {
             true,
             false,
         ));
-        assert!(!should_try_propagation_after_direct_failure(
+        assert!(should_try_propagation_after_direct_failure(
             SendMode::Auto {},
             false,
             true,
@@ -10981,8 +11837,8 @@ mod tests {
         messaging.record_announce(sdkmsg::AnnounceRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             identity_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-            destination_kind: "app".to_string(),
-            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Pixel".to_string(),
             display_name: Some("Pixel".to_string()),
             hops: 0,
             interface_hex: String::new(),
@@ -10991,8 +11847,8 @@ mod tests {
         messaging.record_announce(sdkmsg::AnnounceRecord {
             destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
             identity_hex: "dddddddddddddddddddddddddddddddd".to_string(),
-            destination_kind: "app".to_string(),
-            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Other".to_string(),
             display_name: Some("Other".to_string()),
             hops: 0,
             interface_hex: String::new(),
@@ -11029,6 +11885,7 @@ mod tests {
     fn operator_announce_message_accepts_rch_hub_announces() {
         let message = operator_announce_message(
             AnnounceClass::RchHubServer {},
+            false,
             Some("North Hub"),
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -11044,9 +11901,10 @@ mod tests {
     }
 
     #[test]
-    fn operator_announce_message_accepts_rem_peer_announces() {
+    fn operator_announce_message_accepts_rem_capable_lxmf_announces() {
         let message = operator_announce_message(
-            AnnounceClass::PeerApp {},
+            AnnounceClass::LxmfDelivery {},
+            true,
             Some("Pixel"),
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -11059,6 +11917,20 @@ mod tests {
         assert!(message.contains("dest=aaaaa..."));
         assert!(!message.contains("id="));
         assert!(message.contains("hops=1"));
+    }
+
+    #[test]
+    fn operator_announce_message_ignores_legacy_app_peer_announces() {
+        let message = operator_announce_message(
+            AnnounceClass::PeerApp {},
+            false,
+            Some("Pixel"),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            1,
+        );
+
+        assert!(message.is_none());
     }
 
     #[test]
@@ -11079,6 +11951,7 @@ mod tests {
     fn operator_announce_message_ignores_regular_lxmf_announces() {
         let message = operator_announce_message(
             AnnounceClass::LxmfDelivery {},
+            false,
             Some("LXMF Chat"),
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",

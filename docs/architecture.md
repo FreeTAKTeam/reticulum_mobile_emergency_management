@@ -4,9 +4,9 @@ This diagram shows the end-to-end mobile event replication flow over LXMF, inclu
 
 Current mobile behavior differs from the older store-centric sketch below in two important ways:
 - Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
-- When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local app destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
+- When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local LXMF delivery destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
 - The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
-- Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends target saved or explicitly managed peers that are mission-ready and currently direct-reachable (`active_link`, `communication_ready`, or native `Connected` state). If a saved peer is not directly reachable and a propagation relay is active, Rust sends that target via propagation instead of stalling on direct delivery first. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
+- Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends require a live managed LXMF link (`active_link=true` with native `Connected` state). Saved peers with known LXMF routes use propagation when an active relay is available, rather than being labeled as direct candidates from a recent announce alone. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
 - RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` refreshes a transient hub directory by sending `rem.registry.peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH and then uses those returned peers for direct sends. `Connected` sends outbound traffic only to the selected RCH, and an `effective_connected_mode=true` hub response temporarily upgrades `SemiAutonomous` to connected routing.
 - SOS uses the same numeric LXMF command slot in this repo: `FIELD_COMMANDS (0x09)`. The shared Rust constants are the source of truth, and the runtime separates SOS from RCH by envelope keys (`sos_state` / `incident_id` vs `command_type` / `command_id`). The earlier SOS note that said `FIELD_COMMANDS (0x06)` is stale for the current REM/RCH wire contract.
 
@@ -22,17 +22,18 @@ sequenceDiagram
     participant PNode as "nodeStore (Pixel/Poco)"
     participant PUI as "Events UI / eventsStore (Pixel/Poco)"
 
-    Note over S8Node,PNode: Peer discovery correlates app announce and lxmf/delivery announce by identity.
+    Note over S8Node,PNode: Peer discovery uses REM-capable lxmf.delivery announces. Legacy app destinations are aliases only.
 
     User->>S8UI: Create Event(type, summary)
     S8UI->>S8UI: Normalize EventRecord\nassign uid / entryUid / timestamps
     S8UI->>S8UI: Persist locally
 
-    S8UI->>S8Node: Read connected event peer routes
-    alt No connected peers
-        S8UI->>S8Node: Log warning\n"event stored locally, no connected peers"
-    else Connected peers found
-        loop For each connected peer
+    S8UI->>S8RT: upsert_event native command
+    S8RT->>S8RT: Build replication target set\nactive links direct\nsaved known routes via propagation relay
+    alt No eligible saved targets
+        S8RT-->>S8UI: Event stored locally\nno eligible replication target
+    else Eligible saved targets found
+        loop For each direct or propagation target
             alt No tracked LXMF delivery destination
                 S8UI->>S8Node: Log warning\n"skipped peer, no LXMF delivery destination"
             else LXMF delivery destination available
@@ -77,7 +78,7 @@ sequenceDiagram
     end
 ```
 
-This diagram shows the end-to-end mobile telemetry replication flow. Telemetry routing is mode-aware: in `Autonomous` it uses peers that advertise the `Telemetry` capability on the app destination, in `SemiAutonomous` it can target the latest hub-directory peers returned by RCH, and in `Connected` it sends only to the selected RCH.
+This diagram shows the end-to-end mobile telemetry replication flow. Telemetry routing is mode-aware: in `Autonomous` it uses peers that advertise the `Telemetry` capability in their REM-capable `lxmf.delivery` announce, in `SemiAutonomous` it can target the latest hub-directory peers returned by RCH, and in `Connected` it sends only to the selected RCH.
 
 ```mermaid
 sequenceDiagram
@@ -91,7 +92,7 @@ sequenceDiagram
     participant RNode as "nodeStore (Pixel/Poco)"
     participant RUI as "Telemetry UI / telemetryStore (Pixel/Poco)"
 
-    Note over TNode,RNode: Telemetry peers are selected from app-destination announces that include the Telemetry capability.
+    Note over TNode,RNode: Telemetry peers are selected from REM-capable lxmf.delivery announces that include the Telemetry capability.
 
     User->>TUI: Enable telemetry or publish local position
     TUI->>TUI: Read GPS fix\nnormalize TelemetryPosition
@@ -102,9 +103,9 @@ sequenceDiagram
         TUI->>TUI: Keep local position only
     else Telemetry peers available
         loop For each telemetry destination
-            TUI->>TNode: sendBytes(destination=app peer,\nfieldsBase64=telemetry payload,\nbytes=EMPTY)
+            TUI->>TNode: sendBytes(destination=lxmf delivery peer,\nfieldsBase64=telemetry payload,\nbytes=EMPTY)
             TNode->>TRT: Native send request
-            TRT->>RNS: Send transport packet to app destination
+            TRT->>RNS: Send transport packet to canonical LXMF delivery destination
             RNS-->>RRT: Deliver packet
             RRT-->>RNode: packetReceived(fieldsBase64)
             RNode-->>RUI: Parse telemetry field
@@ -113,9 +114,9 @@ sequenceDiagram
         end
     end
 
-    Note over TUI,RUI: Snapshot sync is also app-destination based.
+    Note over TUI,RUI: Snapshot sync also targets canonical LXMF delivery destinations.
     TUI->>TNode: Watch for newly seen telemetryDestinations
-    TNode->>TRT: sendBytes(destination=app peer,\nfieldsBase64=telemetry snapshot request,\nbytes=EMPTY)
+    TNode->>TRT: sendBytes(destination=lxmf delivery peer,\nfieldsBase64=telemetry snapshot request,\nbytes=EMPTY)
     TRT->>RNS: Send snapshot request
     RNS-->>RRT: Deliver request
     RRT-->>RNode: packetReceived(fieldsBase64)
@@ -135,8 +136,8 @@ sequenceDiagram
 - Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
 - Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
-- Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over app destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
-- Telemetry works even when only the app-destination route is healthy; events additionally require the peer's `lxmf/delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly.
+- Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over canonical LXMF delivery destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
+- Telemetry and events require the peer's REM-capable `lxmf.delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly. Legacy app destinations are inbound compatibility aliases, not routing targets.
 - Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
 
 ## Checklist / Excheck Flow
@@ -203,10 +204,10 @@ Transport:
 
 Routing:
 - Native `upsert_event()` fanout never includes merely discovered peers.
-- Event direct sends are scoped to saved or explicitly managed peers that are mission-ready and direct-reachable (`active_link=true`, `communication_ready=true`, or native `state=Connected`).
-- Saved peers that are not currently direct-reachable are sent via propagation when an active relay is available; merely discovered peers are never used as relay targets.
+- Event direct sends are scoped to saved or explicitly managed peers that are mission-ready and have a live direct link (`active_link=true` and native `state=Connected`).
+- Saved peers that are seen recently or have stored LXMF routes but no live direct link are sent via propagation when an active relay is available; merely discovered peers are never used as relay targets.
 - Each event target is attempted independently. One target timing out or returning a network error does not cancel the other target attempts.
-- Broadcast or direct send over the peer's **app destination** (`r3akt/emergency` path).
+- Broadcast or direct send over the peer's canonical **`lxmf.delivery` destination** (`r3akt/emergency` payload path).
 
 ### Event
 
@@ -303,7 +304,7 @@ The current REM mobile wire contract intentionally shares the same numeric comma
   - `FIELD_EVENT = 0x0D`
 - RCH-compatible mission/Event/EAM envelopes use `FIELD_COMMANDS (0x09)` with keys such as `command_id`, `correlation_id`, `command_type`, and `args`.
 - SOS uses that same `FIELD_COMMANDS (0x09)` slot, but its envelope keys are SOS-specific: `sos_state`, `incident_id`, `trigger_source`, and optional `audio_id`.
-- Telemetry snapshot requests also reuse `FIELD_COMMANDS (0x09)` as a small command list sent over the app destination.
+- Telemetry snapshot requests also reuse `FIELD_COMMANDS (0x09)` as a small command list sent over the canonical LXMF delivery destination.
 
 Parser separation is deliberate and happens by envelope shape, not by allocating different numeric field IDs:
 
@@ -371,11 +372,11 @@ Transport:
 - Live upsert:
   - sent with `nodeStore.sendBytes(destination, EMPTY_BYTES, { fieldsBase64 })`
   - this **is LXMF**
-  - routed to the peer's **app destination** selected from `telemetryDestinations`
+  - routed to the peer's canonical **`lxmf.delivery` destination** selected from `telemetryDestinations`
 - Snapshot request and snapshot response:
   - sent with `sendBytes(..., { fieldsBase64 })`
   - this **is LXMF**
-  - also routed to the peer's **app destination**
+  - also routed to the peer's canonical **`lxmf.delivery` destination**
 - Delete compatibility path:
   - sent with `nodeStore.sendJson(destination, message, dedicatedFields)`
   - this is **raw RNS direct**, not LXMF
@@ -398,7 +399,7 @@ Dedicated raw-field keys used for compatibility delete/upsert parsing:
 - `telemetry.deletedAt`
 
 Routing:
-- Telemetry uses the peer's **app destination** when that peer advertises the `Telemetry` capability.
+- Telemetry uses the peer's canonical **`lxmf.delivery` destination** when that peer advertises the `Telemetry` capability in REM announce app data.
 
 ### LXMF SDK Bridge
 
@@ -430,8 +431,10 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 
 - Rust owns the native app-state store, projection versioning, and `ProjectionInvalidated` events.
 - Mobile settings, saved peers, EAMs, events, telemetry positions, and conversation/message projections are queried from native state on mobile builds.
-- Peer availability on mobile now follows the configured stale window instead of a short announce-freshness heuristic. A peer can remain `Ready` without a fresh announce while its app and LXMF destinations are still known and the configured stale window has not expired; `active_link` is tracked separately from availability.
+- Peer availability on mobile now follows the configured stale window instead of a short announce-freshness heuristic. A peer can remain `Ready` without a fresh announce while its REM-capable LXMF delivery destination is still known and the configured stale window has not expired; `active_link` is tracked separately from availability.
 - Native `connectPeer()` now does more than request a route: it resolves the saved peer destination, opens an output link, and waits for `LinkEvent::Activated` before the runtime treats that peer as having a direct active link.
+- Native `disconnectPeer()` clears desired managed-link state and closes live links, but it preserves the saved peer record. Removing/unsaving a peer remains a separate operation.
+- UI labels reserve `Connected` for live links and use `Reachable` for recently heard REM-capable LXMF delivery announces or propagation-eligible saved routes.
 - TypeScript stores on mobile are being reduced to:
   - view filters and drafts
   - command dispatch

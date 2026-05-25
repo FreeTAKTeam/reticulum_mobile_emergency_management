@@ -225,15 +225,18 @@ const runningTitle = computed(() => {
 });
 const possiblePeerCount = computed(() => nodeStore.savedPeerCount);
 const connectedPeerCount = computed(() => nodeStore.connectedPeerCount);
+const reachablePeerCount = computed(() => nodeStore.reachablePeerCount);
 const peerCountLabel = computed(
-  () => `${possiblePeerCount.value}/${connectedPeerCount.value}`,
+  () => `${possiblePeerCount.value}/${connectedPeerCount.value}/${reachablePeerCount.value}`,
 );
 const connectedPeerCountTitle = computed(() => {
   const possible = possiblePeerCount.value;
   const connected = connectedPeerCount.value;
+  const reachable = reachablePeerCount.value;
   const possibleLabel = possible === 1 ? "1 saved peer" : `${possible} saved peers`;
-  const connectedLabel = connected === 1 ? "1 saved peer connected" : `${connected} saved peers connected`;
-  return `${possibleLabel}, ${connectedLabel}`;
+  const connectedLabel = connected === 1 ? "1 live link" : `${connected} live links`;
+  const reachableLabel = reachable === 1 ? "1 recently seen peer" : `${reachable} recently seen peers`;
+  return `${possibleLabel}, ${connectedLabel}, ${reachableLabel}`;
 });
 
 function isTabActive(path: string): boolean {
@@ -328,7 +331,7 @@ onUnmounted(() => {
           <span
             class="peer-count"
             data-testid="connected-peer-count"
-            aria-label="Saved peers and connected saved peers"
+            aria-label="Saved peers, live links, and recently seen saved peers"
             :title="connectedPeerCountTitle"
           >
             {{ peerCountLabel }}

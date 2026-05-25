@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -540,6 +541,10 @@ impl CompatBackend {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery events preserve separate routing and mission correlation fields"
+    )]
     fn record_delivery_update(
         &self,
         message_id_hex: &str,
@@ -712,8 +717,12 @@ pub(crate) struct PropagationFetchResult {
     pub(crate) destination_hex: String,
     pub(crate) available_count: usize,
     pub(crate) fetched_count: usize,
+    pub(crate) fetched_entry_count: usize,
+    pub(crate) extracted_payload_count: usize,
     pub(crate) imported_wires: Vec<Vec<u8>>,
     pub(crate) failed_count: usize,
+    pub(crate) malformed_count: usize,
+    pub(crate) decrypt_failed_count: usize,
 }
 
 pub(crate) struct RuntimeLxmfSdk {
@@ -937,6 +946,10 @@ impl RuntimeLxmfSdk {
         self.client.backend().record_hub_directory_updated(snapshot);
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_sent(
         &self,
         message_id_hex: &str,
@@ -961,6 +974,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps source and mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_acknowledged(
         &self,
         message_id_hex: &str,
@@ -987,6 +1004,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_failed(
         &self,
         message_id_hex: &str,
@@ -1012,6 +1033,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_timed_out(
         &self,
         message_id_hex: &str,
@@ -1375,6 +1400,10 @@ async fn compat_send_lxmf(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "propagation send boundary keeps resolved routing and delivery metadata explicit"
+)]
 async fn compat_send_lxmf_via_propagation(
     state: &SdkTransportState,
     remote_desc: &DestinationDesc,
@@ -1614,13 +1643,20 @@ async fn compat_fetch_propagated_lxmf(
             destination_hex,
             available_count,
             fetched_count: 0,
+            fetched_entry_count: 0,
+            extracted_payload_count: 0,
             imported_wires: Vec::new(),
             failed_count: 0,
+            malformed_count: 0,
+            decrypt_failed_count: 0,
         });
     }
 
     let mut payloads = Vec::new();
+    let mut fetched_entry_count = 0usize;
+    let mut malformed_count = 0usize;
     let mut failed_count = 0usize;
+    let mut decrypt_failed_count = 0usize;
     let mut last_fetch_error: Option<NodeError> = None;
     let mut fetch_queue = propagation_fetch_batches(transient_ids.as_slice())
         .into_iter()
@@ -1632,7 +1668,7 @@ async fn compat_fetch_propagated_lxmf(
             rmpv::Value::Array(batch.clone().into_iter().map(rmpv::Value::Binary).collect());
         let fetched_value = match propagation_remote_control_request(
             state,
-            relay_desc.clone(),
+            relay_desc,
             "/get",
             rmpv::Value::Array(vec![
                 fetch_ids,
@@ -1667,7 +1703,10 @@ async fn compat_fetch_propagated_lxmf(
             }
         };
         match rmpv_propagation_payload_array(&fetched_value) {
-            Ok(mut batch_payloads) => payloads.append(&mut batch_payloads),
+            Ok(mut batch_payloads) => {
+                fetched_entry_count = fetched_entry_count.saturating_add(batch_len);
+                payloads.append(&mut batch_payloads);
+            }
             Err(err) => {
                 if batch_len > 1 {
                     info!(
@@ -1684,6 +1723,7 @@ async fn compat_fetch_propagated_lxmf(
                     continue;
                 }
                 failed_count = failed_count.saturating_add(batch_len);
+                malformed_count = malformed_count.saturating_add(batch_len);
                 info!(
                     "[sync] propagation sync malformed fetch response relay={} destination={} batch={} shape={}",
                     relay_hex,
@@ -1701,14 +1741,16 @@ async fn compat_fetch_propagated_lxmf(
             return Err(err);
         }
     }
-    let fetched_count = payloads.len();
-    let mut imported_wires = Vec::with_capacity(fetched_count);
+    let extracted_payload_count = payloads.len();
+    let fetched_count = fetched_entry_count;
+    let mut imported_wires = Vec::with_capacity(extracted_payload_count);
     for (index, payload) in payloads.into_iter().enumerate() {
         match decrypt_local_propagated_wire(&local_identity, &destination_hash, payload.as_slice())
         {
             Ok(wire) => imported_wires.push(wire),
             Err(err) => {
                 failed_count = failed_count.saturating_add(1);
+                decrypt_failed_count = decrypt_failed_count.saturating_add(1);
                 info!(
                     "[sync] propagated payload import failed relay={} destination={} index={} reason={}",
                     relay_hex, destination_hex, index, err
@@ -1721,8 +1763,12 @@ async fn compat_fetch_propagated_lxmf(
         destination_hex,
         available_count,
         fetched_count,
+        fetched_entry_count,
+        extracted_payload_count,
         imported_wires,
         failed_count,
+        malformed_count,
+        decrypt_failed_count,
     })
 }
 
@@ -1740,7 +1786,7 @@ async fn propagation_remote_control_request(
         let relay_destination_hex = relay_desc.address_hash.to_hex_string();
         let link = ensure_lxmf_output_link(
             state,
-            relay_desc.clone(),
+            relay_desc,
             Some(path),
             Some(relay_destination_hex.as_str()),
             DEFAULT_LINK_CONNECT_TIMEOUT,
@@ -2031,6 +2077,65 @@ fn value_to_bytes(value: &rmpv::Value) -> Option<Vec<u8>> {
     }
 }
 
+fn rmpv_propagation_envelope_payloads(value: &rmpv::Value) -> Option<Vec<Vec<u8>>> {
+    let rmpv::Value::Array(entries) = value else {
+        return None;
+    };
+    if entries.len() < 2 {
+        return None;
+    }
+    let timestamp_like = matches!(
+        entries.first(),
+        Some(rmpv::Value::F32(_)) | Some(rmpv::Value::F64(_)) | Some(rmpv::Value::Integer(_))
+    );
+    if !timestamp_like {
+        return None;
+    }
+    let rmpv::Value::Array(payloads) = &entries[1] else {
+        return None;
+    };
+    let decoded = payloads
+        .iter()
+        .map(value_to_bytes)
+        .collect::<Option<Vec<_>>>()?;
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+fn propagation_payloads_from_bytes(bytes: &[u8]) -> Vec<Vec<u8>> {
+    if let Ok(value) = rmp_serde::from_slice::<rmpv::Value>(bytes) {
+        if let Some(payloads) = rmpv_propagation_envelope_payloads(&value) {
+            return payloads;
+        }
+    }
+    vec![bytes.to_vec()]
+}
+
+fn propagation_payloads_from_fetch_entry(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
+    match value {
+        rmpv::Value::Binary(bytes) => Ok(propagation_payloads_from_bytes(bytes)),
+        rmpv::Value::String(text) => {
+            let value = text.as_str().ok_or(NodeError::InternalError {})?;
+            let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
+            Ok(propagation_payloads_from_bytes(bytes.as_slice()))
+        }
+        rmpv::Value::Array(entries) => {
+            if entries.len() >= 2 {
+                if let Some(payloads) = rmpv_propagation_envelope_payloads(&entries[1]) {
+                    return Ok(payloads);
+                }
+                if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
+                    return Ok(propagation_payloads_from_bytes(bytes.as_slice()));
+                }
+            }
+            Err(NodeError::InternalError {})
+        }
+        _ => Err(NodeError::InternalError {}),
+    }
+}
+
 fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
     let rmpv::Value::Array(values) = value else {
         return Err(NodeError::InternalError {});
@@ -2045,28 +2150,17 @@ fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
 }
 
 fn rmpv_propagation_payload_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
     let rmpv::Value::Array(values) = value else {
         return Err(NodeError::InternalError {});
     };
-    values
-        .iter()
-        .map(|value| match value {
-            rmpv::Value::Binary(bytes) => Ok(bytes.clone()),
-            rmpv::Value::String(text) => {
-                let value = text.as_str().ok_or(NodeError::InternalError {})?;
-                hex::decode(value).map_err(|_| NodeError::InternalError {})
-            }
-            rmpv::Value::Array(entries) => {
-                if entries.len() >= 2 {
-                    if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
-                        return Ok(bytes);
-                    }
-                }
-                Err(NodeError::InternalError {})
-            }
-            _ => Err(NodeError::InternalError {}),
-        })
-        .collect()
+    let mut payloads = Vec::new();
+    for value in values {
+        payloads.extend(propagation_payloads_from_fetch_entry(value)?);
+    }
+    Ok(payloads)
 }
 
 fn rmpv_shape(value: &rmpv::Value) -> String {
@@ -2108,16 +2202,44 @@ fn propagation_fetch_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
         .collect()
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum PropagationPayloadDecryptError {
+    PayloadTooShort { len: usize },
+    DestinationMismatch { expected: String, actual: String },
+    DecryptFailed,
+}
+
+impl fmt::Display for PropagationPayloadDecryptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PayloadTooShort { len } => {
+                write!(f, "payload too short for propagation transient len={}", len)
+            }
+            Self::DestinationMismatch { expected, actual } => write!(
+                f,
+                "destination prefix mismatch expected={} actual={}",
+                expected, actual
+            ),
+            Self::DecryptFailed => write!(f, "propagation transient decrypt failed"),
+        }
+    }
+}
+
 fn decrypt_local_propagated_wire(
     identity: &PrivateIdentity,
     destination_hash: &AddressHash,
     transient_payload: &[u8],
-) -> Result<Vec<u8>, NodeError> {
+) -> Result<Vec<u8>, PropagationPayloadDecryptError> {
     if transient_payload.len() <= 16 + 32 {
-        return Err(NodeError::InvalidConfig {});
+        return Err(PropagationPayloadDecryptError::PayloadTooShort {
+            len: transient_payload.len(),
+        });
     }
     if &transient_payload[..16] != destination_hash.as_slice() {
-        return Err(NodeError::InvalidConfig {});
+        return Err(PropagationPayloadDecryptError::DestinationMismatch {
+            expected: destination_hash.to_hex_string(),
+            actual: hex::encode(&transient_payload[..16]),
+        });
     }
 
     for strip_stamp in [false, true] {
@@ -2152,7 +2274,7 @@ fn decrypt_local_propagated_wire(
         return Ok(wire);
     }
 
-    Err(NodeError::InvalidConfig {})
+    Err(PropagationPayloadDecryptError::DecryptFailed)
 }
 
 fn normalize_hex_32(s: &str) -> Option<String> {
@@ -2641,6 +2763,42 @@ mod tests {
     }
 
     #[test]
+    fn propagation_fetch_payload_array_unwraps_msgpack_envelopes() {
+        let first_transient = vec![0x11; 48];
+        let second_transient = vec![0x22; 64];
+        let third_transient = vec![0x33; 80];
+        let third_envelope = rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_002.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(third_transient.clone())]),
+        ]);
+        let first_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_000.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(first_transient.clone())]),
+        ]))
+        .expect("encode first envelope");
+        let second_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_001.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(second_transient.clone())]),
+        ]))
+        .expect("encode second envelope");
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(first_envelope),
+            rmpv::Value::Array(vec![
+                rmpv::Value::Binary(vec![0xAA; 32]),
+                rmpv::Value::Binary(second_envelope),
+            ]),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(vec![0xBB; 32]), third_envelope]),
+        ]);
+
+        let parsed = rmpv_propagation_payload_array(&value).expect("payload array");
+
+        assert_eq!(
+            parsed,
+            vec![first_transient, second_transient, third_transient]
+        );
+    }
+
+    #[test]
     fn propagation_link_response_frame_rejects_malformed_payloads() {
         let request_id = [0x11; 16];
         let valid = rmp_serde::to_vec(&rmpv::Value::Array(vec![
@@ -2753,5 +2911,67 @@ mod tests {
             transient.as_slice()
         )
         .is_err());
+    }
+
+    #[test]
+    fn propagated_payload_decrypt_error_identifies_destination_mismatch() {
+        let receiver = PrivateIdentity::new_from_name("propagation-error-receiver");
+        let other = PrivateIdentity::new_from_name("propagation-error-other");
+        let mut payload = vec![0u8; 16 + 32 + 1];
+        payload[..16].copy_from_slice(other.address_hash().as_slice());
+
+        let err =
+            decrypt_local_propagated_wire(&receiver, receiver.address_hash(), payload.as_slice())
+                .expect_err("wrong destination should fail before decrypt");
+
+        assert!(err
+            .to_string()
+            .contains("destination prefix mismatch expected="));
+        assert!(err
+            .to_string()
+            .contains(receiver.address_hash().to_hex_string().as_str()));
+        assert!(err
+            .to_string()
+            .contains(other.address_hash().to_hex_string().as_str()));
+    }
+
+    #[test]
+    fn propagated_envelope_from_fetch_response_decrypts_for_local_destination() {
+        let receiver = PrivateIdentity::new_from_name("propagation-envelope-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-envelope-sender");
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(receiver.address_hash().as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_100.0,
+            Some(b"enveloped-sync-content".to_vec()),
+            Some(b"enveloped-sync-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let envelope = wire
+            .pack_propagation_with_rng(
+                &lxmf_identity(receiver.as_identity()),
+                1_779_000_100.0,
+                OsRng,
+            )
+            .expect("pack envelope");
+        let fetched = rmpv::Value::Array(vec![rmpv::Value::Binary(envelope)]);
+        let payloads = rmpv_propagation_payload_array(&fetched).expect("payloads");
+
+        assert_eq!(payloads.len(), 1);
+        let decrypted = decrypt_local_propagated_wire(
+            &receiver,
+            receiver.address_hash(),
+            payloads[0].as_slice(),
+        )
+        .expect("decrypt local propagated wire");
+
+        assert_eq!(decrypted, packed);
     }
 }

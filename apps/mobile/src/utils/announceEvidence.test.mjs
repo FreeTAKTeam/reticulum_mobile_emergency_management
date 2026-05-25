@@ -16,14 +16,14 @@ const {
   peerHasRemAnnounceEvidence,
 } = await import(moduleUrl);
 
-test("REM app announce capabilities are visible in discovery", () => {
+test("REM capability text is recognized", () => {
   assert.equal(
     announceHasEmergencyCapabilities("R3AKT,EMergencyMessages,Telemetry;name=Pixel"),
     true,
   );
 });
 
-test("LXMF delivery enriches already REM-compatible peers", () => {
+test("REM LXMF delivery capabilities are visible in discovery", () => {
   assert.equal(
     peerHasRemAnnounceEvidence({
       appData: "R3AKT,EMergencyMessages,Telemetry;name=Poco",
@@ -34,7 +34,18 @@ test("LXMF delivery enriches already REM-compatible peers", () => {
   );
 });
 
-test("LXMF delivery alone is stored but not visible as a REM peer", () => {
+test("app-only REM capabilities are not discovery evidence", () => {
+  assert.equal(
+    peerHasRemAnnounceEvidence({
+      appData: "R3AKT,EMergencyMessages,Telemetry;name=Poco",
+      latestAnnounceClass: "PeerApp",
+      latestAnnounceKind: "app",
+    }),
+    false,
+  );
+});
+
+test("non-REM LXMF delivery is not visible as a REM peer", () => {
   assert.equal(
     peerHasRemAnnounceEvidence({
       appData: "92c404506f636fc0",

@@ -1,5 +1,7 @@
 import { pack, unpack } from "msgpackr";
 
+import { asRecord } from "./records";
+
 export const LXMF_FIELD_COMMANDS = 0x09;
 export const LXMF_FIELD_RESULTS = 0x0A;
 export const LXMF_FIELD_EVENT = 0x0D;
@@ -109,20 +111,6 @@ function getMapValue(source: unknown, key: number): unknown {
 
   const record = source as Record<string, unknown>;
   return record[String(key)] ?? record[key as unknown as keyof typeof record];
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  if (value instanceof Map) {
-    const normalized: Record<string, unknown> = {};
-    for (const [key, entry] of value.entries()) {
-      normalized[String(key)] = entry;
-    }
-    return normalized;
-  }
-  return value as Record<string, unknown>;
 }
 
 function asString(value: unknown): string | undefined {
