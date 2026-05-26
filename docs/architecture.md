@@ -150,10 +150,12 @@ Bundled templates are seeded through the same Rust store and include the same pi
 
 Live checklist deadlines are calculated from the checklist start DTG plus each task's `due_relative_minutes`. A pending task becomes late when the current time is after that due DTG. A completed task is `Complete Late` only when its `completed_at` timestamp is after the calculated due DTG. `CompletedDTG` is therefore a required-by deadline, not the actual completion timestamp.
 
-Initial autonomous sharing uses two steps:
+Initial autonomous sharing uses packet-first replication:
 
-- `checklist.create.online` carries the RCH-compatible checklist metadata and schema-level args.
-- `checklist.upload` follows immediately with the full checklist snapshot so a peer without the local template can hydrate the same columns, rows, cell values, deadline metadata, and participant list.
+- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits task and column snapshots so the create command remains packet-sized.
+- Checklist column schema is fanned out as compact per-column `checklist.update` patches before row/cell data. This is required for new/non-template checklists where the receiver cannot hydrate columns from a local template.
+- The initial rows are fanned out as compact `checklist.task.row.add` commands plus compact `checklist.task.cell.set` commands for non-empty cells, so the first sync can stay under the small LXMF packet budget instead of forcing resource transfer.
+- `checklist.upload` remains available for full snapshot hydration. Its content uses `rem.checklist.snapshot.v2` with a `zlib+msgpack` snapshot body; receivers also accept the older uncompressed `rem.checklist.snapshot.v1` format.
 
 Incremental collaboration keeps using the specific task commands:
 
@@ -163,7 +165,7 @@ Incremental collaboration keeps using the specific task commands:
 - `checklist.task.cell.set`
 - `checklist.task.status.set`
 
-Large checklist snapshots use the existing LXMF resource-capable delivery path rather than a separate transport. Smaller task edits send only the changed data. Incoming checklist commands update the Rust aggregate, emit `Checklists` and `ChecklistDetail` invalidations, and Android posts inbound checklist notifications through the same service notification path used by other operational updates.
+Large checklist snapshots use the existing LXMF resource-capable delivery path rather than a separate transport, but they are compressed before being placed in resource content. Smaller task edits send only the changed data. Incoming checklist commands update the Rust aggregate, emit `Checklists` and `ChecklistDetail` invalidations, and Android posts inbound checklist notifications through the same service notification path used by other operational updates.
 
 ## Payloads And Transport
 
@@ -216,7 +218,7 @@ Primary payload:
 - The command is placed inside an array carried in LXMF `FIELD_COMMANDS (0x09)`.
 - This matches the Hub model documented in `Reticulum-Telemetry-Hub/docs/architecture/LXMFfields.md`, where `FIELD_COMMANDS` contains command structures.
 
-Hub-compatible command array shape:
+Hub-compatible command array shape, expanded for readability:
 
 ```json
 [
@@ -246,14 +248,34 @@ Field placement:
 Mobile-specific note:
 - The mobile app currently often includes additional event args such as `entry_uid`, `server_time`, `client_time`, `keywords`, `content_hashes`, and may include `source.display_name`.
 - Those are extra fields inside the same Hub command structure; the core transport contract is still an array of commands inside `FIELD_COMMANDS`.
+- Native REM peer-to-peer replication uses compact aliases for small LXMF packets:
+  - `i` = `command_id`
+  - `c` = `correlation_id`
+  - `t` = `command_type`
+  - `s.r` = `source.rns_identity` (hex string or 16-byte binary identity)
+  - `s.n` = `source.display_name`
+  - `ts` = `timestamp` (RFC3339 string or millisecond epoch integer)
+  - `a` = `args`
+  - `to` = `topics`
+- Parsers accept both the expanded names and compact aliases. TypeScript hub bootstrap may still emit expanded names for hub compatibility.
+- Known command types use alphanumeric wire codes in native compact packets:
+  - `E1` = `mission.registry.log_entry.upsert`
+  - `E2` = `mission.registry.log_entry.upserted`
+  - `M1` = `mission.registry.eam.upsert`
+  - `M2` = `mission.registry.eam.delete`
+  - `M3` = `mission.registry.eam.upserted`
+  - `T1` = `mission.registry.telemetry.upsert`
+  - `S1` = `sos.status`
+  - `C1`..`CA` = checklist create/upload/update/delete/join/task commands
+- Checklist command args also use compact aliases in native peer-to-peer packets. Common examples are `cl` = `checklist_uid`, `m` = `mission_uid`, `tp` = `template_uid`, `tsk` = `task_uid`, `col` = `column_uid`, `v` = `value`, `us` = `user_status`, `pa` = `patch`, and `sn` / `sj` = snapshot payload fields. Parsers accept both the compact and expanded arg names. Full checklist snapshots are serialized as MsgPack and then zlib-compressed inside `rem.checklist.snapshot.v2`; older uncompressed snapshot content remains readable.
 
 Implementation mapping:
 - `apps/mobile/src/stores/eventsStore.ts` persists events in the same RCH envelope shape used on the wire.
-- `apps/mobile/src/utils/missionSync.ts` serializes the command array with `msgpackr.pack(new Map([[0x09, commands]]))`, then base64-encodes the raw MsgPack bytes.
+- `apps/mobile/src/utils/missionSync.ts` serializes TypeScript-originated command arrays with `msgpackr.pack(new Map([[0x09, commands]]))`, then base64-encodes the raw MsgPack bytes. It parses both expanded and compact command envelopes.
 - `packages/node-client/src/index.ts` forwards `fieldsBase64` unchanged to the Capacitor plugin in `sendBytes(...)`.
 - `crates/reticulum_mobile/src/jni_bridge.rs` base64-decodes `fields_base64` into `Vec<u8>` and passes those raw bytes to `node.send_bytes(...)`.
-- `crates/reticulum_mobile/src/runtime.rs` does not transform field names on send. It deserializes the raw MsgPack bytes into `message.fields` and separately reads metadata from the same byte slice using `parse_mission_sync_metadata(...)`.
-- Because the bridge passes raw MsgPack bytes through untouched, snake_case field names such as `command_id`, `command_type`, `correlation_id`, `mission_uid`, and `entry_uid` arrive in Rust exactly as produced by TypeScript.
+- `crates/reticulum_mobile/src/node.rs` builds native REM replication packets directly and uses compact command aliases/codes for event, EAM, telemetry, checklist, and SOS traffic.
+- `crates/reticulum_mobile/src/runtime.rs` deserializes raw MsgPack bytes into `message.fields` and separately reads metadata from the same byte slice using `parse_mission_sync_metadata(...)`.
 
 MECP event body contract:
 - REM event content uses compact MECP text in `args.content`, for example `MECP/2/P01 #A1`.
@@ -302,13 +324,13 @@ The current REM mobile wire contract intentionally shares the same numeric comma
   - `FIELD_COMMANDS = 0x09`
   - `FIELD_RESULTS = 0x0A`
   - `FIELD_EVENT = 0x0D`
-- RCH-compatible mission/Event/EAM envelopes use `FIELD_COMMANDS (0x09)` with keys such as `command_id`, `correlation_id`, `command_type`, and `args`.
-- SOS uses that same `FIELD_COMMANDS (0x09)` slot, but its envelope keys are SOS-specific: `sos_state`, `incident_id`, `trigger_source`, and optional `audio_id`.
+- RCH-compatible mission/Event/EAM envelopes use `FIELD_COMMANDS (0x09)` with expanded keys such as `command_id`, `correlation_id`, `command_type`, and `args`, or compact aliases such as `i`, `c`, `t`, and `a`.
+- SOS uses that same `FIELD_COMMANDS (0x09)` slot. Native REM emits the compact command code `S1` and compact SOS keys (`ss`, `ii`, `tr`, `sm`, optional `au`), while the parser still accepts legacy expanded keys.
 - Telemetry snapshot requests also reuse `FIELD_COMMANDS (0x09)` as a small command list sent over the canonical LXMF delivery destination.
 
 Parser separation is deliberate and happens by envelope shape, not by allocating different numeric field IDs:
 
-- `crates/reticulum_mobile/src/mission_sync.rs` now treats a `0x09` entry as mission-sync only when a command envelope exposes mission markers such as `command_id`, `correlation_id`, or `command_type`.
+- `crates/reticulum_mobile/src/mission_sync.rs` now treats a `0x09` entry as mission-sync only when a command envelope exposes mission markers such as `command_id`/`i`, `correlation_id`/`c`, or `command_type`/`t`.
 - `crates/reticulum_mobile/src/sos_fields.rs` now treats a `0x09` entry as SOS only when it can actually decode an SOS command map or SOS telemetry payload.
 - Targeted Rust tests cover both directions:
   - mission-sync ignores a pure SOS command envelope

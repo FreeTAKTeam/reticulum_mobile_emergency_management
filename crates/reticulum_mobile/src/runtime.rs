@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -9,10 +10,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::delivery_policy;
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
+use crate::mission_commands::{canonical_command_type, checklist_arg_code};
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
 use crate::sos::{location_from_alert, received_alert_from_sos};
 use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_from_text};
 use crossbeam_channel as cb;
+use flate2::read::ZlibDecoder;
 use fs_err as fs;
 use log::{debug, info, warn};
 use lxmf::announce::display_name_from_delivery_app_data;
@@ -22,17 +25,19 @@ use lxmf::message::Message as LxmfMessage;
 use lxmf::message::WireMessage as LxmfWireMessage;
 use lxmf_sdk::messaging::AnnounceRecord as LxmfSdkAnnounceRecord;
 use rand_core::OsRng;
-use reticulum::destination::link::{LinkEvent, LinkStatus};
-use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
-use reticulum::hash::AddressHash;
-use reticulum::identity::PrivateIdentity;
-use reticulum::iface::tcp_client::TcpClient;
-use reticulum::packet::{Packet, PacketDataBuffer, PropagationType};
-use reticulum::resource::ResourceEventKind;
-use reticulum::transport::{
+use reticulum::runtime::{
     DeliveryReceipt, ReceiptHandler, SendPacketOutcome as RnsSendOutcome, Transport,
     TransportConfig,
 };
+use reticulum::transport::destination::link::{Link, LinkEvent, LinkStatus};
+use reticulum::transport::destination::{
+    DestinationDesc, DestinationName, SingleInputDestination, SingleOutputDestination,
+};
+use reticulum::transport::hash::AddressHash;
+use reticulum::transport::identity::PrivateIdentity;
+use reticulum::transport::iface::tcp_client::TcpClient;
+use reticulum::transport::packet::{Packet, PacketDataBuffer, PacketType, PropagationType};
+use reticulum::transport::resource::ResourceEventKind;
 use rmpv::Value as MsgPackValue;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -51,14 +56,15 @@ use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
     AnnounceClass, AnnounceRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-    ChecklistRecord, ChecklistSyncState, ChecklistTaskRecord, ChecklistTaskStatus,
-    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, LogLevel,
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
-    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState,
-    ProjectionScope, SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord,
-    SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey, ChecklistTaskRecord,
+    ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
+    EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
+    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
+    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange,
+    PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
+    TelemetryPositionRecord,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -80,6 +86,7 @@ const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const SAVED_PEER_LINK_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(10);
 const SAVED_PEER_LINK_RECONNECT_DELAY: Duration = Duration::from_secs(1);
+const MANAGED_PEER_LINK_RECONNECT_TIMEOUT: Duration = Duration::from_secs(80);
 const SAVED_PEER_LINK_BACKOFF_BASE_MS: u64 = 2_000;
 const SAVED_PEER_LINK_BACKOFF_MAX_MS: u64 = 60_000;
 const SAVED_PEER_LINK_BACKOFF_MAX_ATTEMPTS: u32 = 6;
@@ -126,6 +133,7 @@ const MISSION_DIRECT_PRIORITY_MAX_DELAY: Duration = Duration::from_millis(800);
 const CHAT_DELIVERY_ACK_TITLE: &str = "REM delivery ack";
 const CHAT_DELIVERY_ACK_PREFIX: &str = "REM_DELIVERY_ACK:";
 const DEFAULT_EAM_GROUP_NAME: &str = "YELLOW";
+const DEFAULT_R3AKT_MISSION_UID: &str = "r3akt-default-mission";
 
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
@@ -146,6 +154,18 @@ fn current_timestamp_rfc3339() -> String {
     let minute = (seconds_of_day % 3_600) / 60;
     let second = seconds_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn timestamp_ms_to_rfc3339(timestamp_ms: u64) -> String {
+    let seconds_since_epoch = (timestamp_ms / 1_000) as i64;
+    let millis = timestamp_ms % 1_000;
+    let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
+    let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
 }
 
 #[derive(Debug, Clone)]
@@ -322,7 +342,8 @@ fn eam_command_action_from_command(
     projection: Option<EamProjectionRecord>,
     received_at_ms: u64,
 ) -> Option<EamCommandAction> {
-    if envelope.command_type != "mission.registry.eam.upsert" {
+    let command_type = canonical_command_type(envelope.command_type.as_str());
+    if command_type != "mission.registry.eam.upsert" {
         return None;
     }
 
@@ -397,9 +418,46 @@ fn eam_command_action_from_command(
     Some(EamCommandAction::Upsert(Box::new(record)))
 }
 
+fn compact_eam_fallback_callsign(
+    explicit: Option<String>,
+    source_hex: Option<&str>,
+    source_display_name: Option<&str>,
+) -> Option<String> {
+    explicit
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            source_display_name
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            source_hex
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.chars().take(8).collect())
+        })
+}
+
+fn compact_eam_fallback_team_member_uid(
+    explicit: Option<String>,
+    source_hex: Option<&str>,
+) -> Option<String> {
+    explicit
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            source_hex
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn eam_command_action_from_fields(
     fields_bytes: &[u8],
     received_at_ms: u64,
+    source_hex: Option<&str>,
+    source_display_name: Option<&str>,
 ) -> Option<EamCommandAction> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
     let field_entries = msgpack_map_entries(&fields)?;
@@ -410,15 +468,17 @@ fn eam_command_action_from_fields(
 
     for command in command_entries {
         let command_map = msgpack_map_entries(command)?;
-        let command_type =
-            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        let command_type = msgpack_get_named(command_map, &["command_type", "t"])
+            .and_then(msgpack_string)
+            .map(|value| canonical_command_type(value.as_str()).to_string())?;
         if command_type == "mission.registry.eam.delete" {
-            let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
-            let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
+            let args =
+                msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
+            let callsign = msgpack_get_named(args, &["callsign", "cs"]).and_then(msgpack_string)?;
             if callsign.trim().is_empty() {
                 return None;
             }
-            let deleted_at_ms = msgpack_get_named(args, &["deleted_at_ms"])
+            let deleted_at_ms = msgpack_get_named(args, &["deleted_at_ms", "d"])
                 .and_then(msgpack_u64)
                 .unwrap_or(received_at_ms);
             return Some(EamCommandAction::Delete {
@@ -429,47 +489,74 @@ fn eam_command_action_from_fields(
         if command_type != "mission.registry.eam.upsert" {
             continue;
         }
-        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
-        let source = msgpack_get_named(args, &["source"]).and_then(msgpack_map_entries);
+        let args = msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
+        let source = msgpack_get_named(command_map, &["source", "s"])
+            .and_then(msgpack_map_entries)
+            .or_else(|| msgpack_get_named(args, &["source", "s"]).and_then(msgpack_map_entries));
+        let field_source_display_name = source
+            .and_then(|source_map| msgpack_get_named(source_map, &["display_name", "n"]))
+            .and_then(msgpack_string);
+        let source_display_name = field_source_display_name
+            .clone()
+            .or_else(|| source_display_name.map(str::to_string));
+        let callsign = compact_eam_fallback_callsign(
+            msgpack_get_named(args, &["callsign", "cs"]).and_then(msgpack_string),
+            source_hex,
+            source_display_name.as_deref(),
+        )?;
+        let team_member_uid = compact_eam_fallback_team_member_uid(
+            msgpack_get_named(args, &["team_member_uid", "tm"]).and_then(msgpack_hex_or_string),
+            source_hex,
+        );
         let mut record = EamProjectionRecord {
-            callsign: msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?,
+            callsign,
             group_name: DEFAULT_EAM_GROUP_NAME.to_string(),
-            security_status: msgpack_get_named(args, &["security_status"])
-                .and_then(msgpack_string)
+            security_status: msgpack_get_named(args, &["security_status", "ss"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            capability_status: msgpack_get_named(args, &["capability_status"])
-                .and_then(msgpack_string)
+            capability_status: msgpack_get_named(args, &["capability_status", "ca"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            preparedness_status: msgpack_get_named(args, &["preparedness_status"])
-                .and_then(msgpack_string)
+            preparedness_status: msgpack_get_named(args, &["preparedness_status", "pr"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            medical_status: msgpack_get_named(args, &["medical_status"])
-                .and_then(msgpack_string)
+            medical_status: msgpack_get_named(args, &["medical_status", "me"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            mobility_status: msgpack_get_named(args, &["mobility_status"])
-                .and_then(msgpack_string)
+            mobility_status: msgpack_get_named(args, &["mobility_status", "mo"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            comms_status: msgpack_get_named(args, &["comms_status"])
-                .and_then(msgpack_string)
+            comms_status: msgpack_get_named(args, &["comms_status", "co"])
+                .and_then(msgpack_eam_status)
                 .unwrap_or_else(|| "Unknown".to_string()),
-            notes: msgpack_get_named(args, &["notes"]).and_then(msgpack_string),
+            notes: msgpack_get_named(args, &["notes", "no"]).and_then(msgpack_string),
             updated_at_ms: received_at_ms,
             deleted_at_ms: None,
-            eam_uid: msgpack_get_named(args, &["eam_uid"]).and_then(msgpack_string),
-            team_member_uid: msgpack_get_named(args, &["team_member_uid"]).and_then(msgpack_string),
-            team_uid: msgpack_get_named(args, &["team_uid"]).and_then(msgpack_string),
-            reported_at: msgpack_get_named(args, &["reported_at"]).and_then(msgpack_string),
-            reported_by: msgpack_get_named(args, &["reported_by"]).and_then(msgpack_string),
-            overall_status: None,
-            confidence: msgpack_get_named(args, &["confidence"]).and_then(msgpack_f64),
-            ttl_seconds: msgpack_get_named(args, &["ttl_seconds"]).and_then(msgpack_u64),
-            source: source.map(|source_map| EamSourceRecord {
-                rns_identity: msgpack_get_named(source_map, &["rns_identity"])
-                    .and_then(msgpack_string)
-                    .unwrap_or_default(),
-                display_name: msgpack_get_named(source_map, &["display_name"])
-                    .and_then(msgpack_string),
-            }),
+            eam_uid: msgpack_get_named(args, &["eam_uid", "u"]).and_then(msgpack_eam_uid),
+            team_member_uid,
+            team_uid: msgpack_get_named(args, &["team_uid", "tu"]).and_then(msgpack_string),
+            reported_at: msgpack_get_named(args, &["reported_at", "ra"]).and_then(msgpack_string),
+            reported_by: msgpack_get_named(args, &["reported_by", "rb"])
+                .and_then(msgpack_string)
+                .or_else(|| source_display_name.clone()),
+            overall_status: msgpack_get_named(args, &["overall_status", "os"])
+                .and_then(msgpack_eam_status),
+            confidence: msgpack_get_named(args, &["confidence", "cf"]).and_then(msgpack_f64),
+            ttl_seconds: msgpack_get_named(args, &["ttl_seconds", "ttl"]).and_then(msgpack_u64),
+            source: source
+                .map(|source_map| EamSourceRecord {
+                    rns_identity: msgpack_get_named(source_map, &["rns_identity", "r"])
+                        .and_then(msgpack_hex_or_string)
+                        .or_else(|| source_hex.map(str::to_string))
+                        .unwrap_or_default(),
+                    display_name: source_display_name.clone(),
+                })
+                .or_else(|| {
+                    source_hex.map(|source_hex| EamSourceRecord {
+                        rns_identity: source_hex.to_string(),
+                        display_name: source_display_name,
+                    })
+                }),
             sync_state: Some("synced".to_string()),
             sync_error: None,
             draft_created_at_ms: None,
@@ -491,10 +578,27 @@ async fn persist_received_eam_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
     body_utf8: &str,
+    source_hex: Option<&str>,
 ) -> bool {
     let received_at_ms = now_ms();
-    let parsed_from_fields =
-        fields_bytes.and_then(|value| eam_command_action_from_fields(value, received_at_ms));
+    let source_display_name = if let Some(source_hex) = source_hex {
+        state
+            .messaging
+            .lock()
+            .await
+            .peer_by_destination(source_hex)
+            .and_then(|peer| peer.display_name)
+    } else {
+        None
+    };
+    let parsed_from_fields = fields_bytes.and_then(|value| {
+        eam_command_action_from_fields(
+            value,
+            received_at_ms,
+            source_hex,
+            source_display_name.as_deref(),
+        )
+    });
     if metadata.is_none() && parsed_from_fields.is_none() {
         return false;
     }
@@ -595,16 +699,19 @@ fn event_projection_from_fields(
 
     for command in command_entries {
         let command_map = msgpack_map_entries(command)?;
-        let command_type =
-            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        let command_type = msgpack_get_named(command_map, &["command_type", "t"])
+            .and_then(msgpack_string)
+            .map(|value| canonical_command_type(value.as_str()).to_string())?;
         if command_type != "mission.registry.log_entry.upsert" {
             continue;
         }
-        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
-        let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries);
-        let uid = msgpack_get_named(args, &["entry_uid"]).and_then(msgpack_string)?;
-        let mission_uid = msgpack_get_named(args, &["mission_uid"]).and_then(msgpack_string)?;
-        let content = msgpack_get_named(args, &["content"])
+        let args = msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
+        let source = msgpack_get_named(command_map, &["source", "s"]).and_then(msgpack_map_entries);
+        let uid = msgpack_get_named(args, &["entry_uid", "u"]).and_then(msgpack_event_uid)?;
+        let mission_uid = msgpack_get_named(args, &["mission_uid", "m"])
+            .and_then(msgpack_mission_uid)
+            .unwrap_or_else(|| DEFAULT_R3AKT_MISSION_UID.to_string());
+        let content = msgpack_get_named(args, &["content", "ct"])
             .and_then(msgpack_string)
             .or_else(|| {
                 content_bytes.and_then(|bytes| {
@@ -612,20 +719,30 @@ fn event_projection_from_fields(
                     (!text.is_empty()).then_some(text)
                 })
             })?;
-        let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
-        let timestamp = msgpack_get_named(command_map, &["timestamp"])
-            .and_then(msgpack_string)
-            .or_else(|| msgpack_get_named(args, &["server_time"]).and_then(msgpack_string))
-            .or_else(|| msgpack_get_named(args, &["client_time"]).and_then(msgpack_string))
-            .unwrap_or_else(current_timestamp_rfc3339);
-        let command_id = msgpack_get_named(command_map, &["command_id"])
-            .and_then(msgpack_string)
-            .unwrap_or_else(|| format!("log-entry-{uid}"));
-        let source_identity = msgpack_get_named(args, &["source_identity"])
+        let callsign = msgpack_get_named(args, &["callsign", "cs"])
             .and_then(msgpack_string)
             .or_else(|| {
                 source.and_then(|source_map| {
-                    msgpack_get_named(source_map, &["rns_identity"]).and_then(msgpack_string)
+                    msgpack_get_named(source_map, &["display_name", "n"]).and_then(msgpack_string)
+                })
+            })?;
+        let timestamp = msgpack_get_named(command_map, &["timestamp", "ts"])
+            .and_then(msgpack_timestamp)
+            .or_else(|| msgpack_get_named(args, &["server_time", "st"]).and_then(msgpack_timestamp))
+            .or_else(|| msgpack_get_named(args, &["client_time", "ct"]).and_then(msgpack_timestamp))
+            .unwrap_or_else(current_timestamp_rfc3339);
+        let command_id = msgpack_get_named(args, &["ci"])
+            .and_then(|value| event_command_id_from_tail(uid.as_str(), value))
+            .or_else(|| {
+                msgpack_get_named(command_map, &["command_id", "i"]).and_then(msgpack_string)
+            })
+            .unwrap_or_else(|| format!("log-entry-{uid}"));
+        let source_identity = msgpack_get_named(args, &["source_identity", "si"])
+            .and_then(msgpack_string)
+            .or_else(|| {
+                source.and_then(|source_map| {
+                    msgpack_get_named(source_map, &["rns_identity", "r"])
+                        .and_then(msgpack_hex_or_string)
                 })
             })?;
         if uid.trim().is_empty()
@@ -638,19 +755,29 @@ fn event_projection_from_fields(
         {
             return None;
         }
-        let topics = msgpack_get_named(command_map, &["topics"])
-            .and_then(msgpack_string_vec)
+        let topics = msgpack_get_named(command_map, &["topics", "to"])
+            .and_then(|value| msgpack_event_topics(value, mission_uid.as_str()))
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| vec![mission_uid.clone()]);
+        let server_time = msgpack_get_named(args, &["server_time", "st"])
+            .and_then(msgpack_timestamp)
+            .unwrap_or_else(|| timestamp.clone());
+        let client_time = msgpack_get_named(args, &["client_time", "ct"])
+            .and_then(msgpack_timestamp)
+            .unwrap_or_else(|| timestamp.clone());
+        let correlation_id = msgpack_get_named(command_map, &["correlation_id", "c"])
+            .and_then(msgpack_string)
+            .or_else(|| Some(command_id.clone()));
         return Some(EventProjectionRecord {
             uid,
             command_id,
             source_identity,
-            source_display_name: msgpack_get_named(args, &["source_display_name"])
+            source_display_name: msgpack_get_named(args, &["source_display_name", "sn"])
                 .and_then(msgpack_string)
                 .or_else(|| {
                     source.and_then(|source_map| {
-                        msgpack_get_named(source_map, &["display_name"]).and_then(msgpack_string)
+                        msgpack_get_named(source_map, &["display_name", "n"])
+                            .and_then(msgpack_string)
                     })
                 }),
             timestamp,
@@ -658,18 +785,17 @@ fn event_projection_from_fields(
             mission_uid,
             content,
             callsign,
-            server_time: msgpack_get_named(args, &["server_time"]).and_then(msgpack_string),
-            client_time: msgpack_get_named(args, &["client_time"]).and_then(msgpack_string),
-            keywords: msgpack_get_named(args, &["keywords"])
-                .and_then(msgpack_string_vec)
+            server_time: Some(server_time),
+            client_time: Some(client_time),
+            keywords: msgpack_get_named(args, &["keywords", "kw"])
+                .and_then(msgpack_event_keywords)
                 .unwrap_or_default(),
-            content_hashes: msgpack_get_named(args, &["content_hashes"])
+            content_hashes: msgpack_get_named(args, &["content_hashes", "ch"])
                 .and_then(msgpack_string_vec)
                 .unwrap_or_default(),
             updated_at_ms: received_at_ms,
-            deleted_at_ms: msgpack_get_named(args, &["deleted_at_ms"]).and_then(msgpack_u64),
-            correlation_id: msgpack_get_named(command_map, &["correlation_id"])
-                .and_then(msgpack_string),
+            deleted_at_ms: msgpack_get_named(args, &["deleted_at_ms", "d"]).and_then(msgpack_u64),
+            correlation_id,
             topics,
         });
     }
@@ -690,15 +816,16 @@ fn telemetry_position_from_fields(
 
     for command in command_entries {
         let command_map = msgpack_map_entries(command)?;
-        let command_type =
-            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)?;
+        let command_type = msgpack_get_named(command_map, &["command_type", "t"])
+            .and_then(msgpack_string)
+            .map(|value| canonical_command_type(value.as_str()).to_string())?;
         if command_type != "mission.registry.telemetry.upsert" {
             continue;
         }
-        let args = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)?;
-        let callsign = msgpack_get_named(args, &["callsign"]).and_then(msgpack_string)?;
-        let lat = msgpack_get_named(args, &["lat"]).and_then(msgpack_f64)?;
-        let lon = msgpack_get_named(args, &["lon"]).and_then(msgpack_f64)?;
+        let args = msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
+        let callsign = msgpack_get_named(args, &["callsign", "cs"]).and_then(msgpack_string)?;
+        let lat = msgpack_get_named(args, &["lat", "la"]).and_then(msgpack_f64)?;
+        let lon = msgpack_get_named(args, &["lon", "lo"]).and_then(msgpack_f64)?;
         if callsign.trim().is_empty() || !lat.is_finite() || !lon.is_finite() {
             return None;
         }
@@ -706,11 +833,11 @@ fn telemetry_position_from_fields(
             callsign: callsign.trim().to_string(),
             lat,
             lon,
-            alt: msgpack_get_named(args, &["alt"]).and_then(msgpack_f64),
-            course: msgpack_get_named(args, &["course"]).and_then(msgpack_f64),
-            speed: msgpack_get_named(args, &["speed"]).and_then(msgpack_f64),
-            accuracy: msgpack_get_named(args, &["accuracy"]).and_then(msgpack_f64),
-            updated_at_ms: msgpack_get_named(args, &["updated_at_ms", "updatedAt"])
+            alt: msgpack_get_named(args, &["alt", "al"]).and_then(msgpack_f64),
+            course: msgpack_get_named(args, &["course", "cr"]).and_then(msgpack_f64),
+            speed: msgpack_get_named(args, &["speed", "sp"]).and_then(msgpack_f64),
+            accuracy: msgpack_get_named(args, &["accuracy", "ac"]).and_then(msgpack_f64),
+            updated_at_ms: msgpack_get_named(args, &["updated_at_ms", "updatedAt", "u"])
                 .and_then(msgpack_u64)
                 .unwrap_or(received_at_ms),
         });
@@ -880,15 +1007,16 @@ fn incoming_timestamp_is_newer(local_timestamp: Option<&str>, incoming_timestamp
 fn checklist_command_source_identity(
     command_map: &[(MsgPackValue, MsgPackValue)],
 ) -> Option<String> {
-    let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries)?;
-    msgpack_get_named(source, &["rns_identity"]).and_then(msgpack_string)
+    let source = msgpack_get_named(command_map, &["source", "s"]).and_then(msgpack_map_entries)?;
+    msgpack_get_named(source, &["rns_identity", "r"]).and_then(msgpack_hex_or_string)
 }
 
 fn checklist_command_source_display_name(
     command_map: &[(MsgPackValue, MsgPackValue)],
 ) -> Option<String> {
-    let source = msgpack_get_named(command_map, &["source"]).and_then(msgpack_map_entries)?;
-    let display_name = msgpack_get_named(source, &["display_name"]).and_then(msgpack_string)?;
+    let source = msgpack_get_named(command_map, &["source", "s"]).and_then(msgpack_map_entries)?;
+    let display_name =
+        msgpack_get_named(source, &["display_name", "n"]).and_then(msgpack_string)?;
     normalize_optional_string(Some(display_name.as_str()))
 }
 
@@ -898,8 +1026,8 @@ fn apply_checklist_creator_from_command(
     command_map: &[(MsgPackValue, MsgPackValue)],
     source_identity: Option<&str>,
 ) {
-    if let Some(created_by) =
-        msgpack_get_named(args, &["created_by_team_member_rns_identity"]).and_then(msgpack_string)
+    if let Some(created_by) = msgpack_get_checklist_arg(args, "created_by_team_member_rns_identity")
+        .and_then(msgpack_string)
     {
         checklist.created_by_team_member_rns_identity = created_by;
     }
@@ -912,7 +1040,7 @@ fn apply_checklist_creator_from_command(
             source_identity.unwrap_or_default().to_string();
     }
     checklist.created_by_team_member_display_name =
-        msgpack_get_named(args, &["created_by_team_member_display_name"])
+        msgpack_get_checklist_arg(args, "created_by_team_member_display_name")
             .and_then(msgpack_string)
             .and_then(|value| normalize_optional_string(Some(value.as_str())))
             .or_else(|| checklist_command_source_display_name(command_map))
@@ -1389,6 +1517,99 @@ fn blank_task_cells(columns: &[ChecklistColumnRecord], task_uid: &str) -> Vec<Ch
         .collect()
 }
 
+fn checklist_column_type_from_wire(value: &str) -> ChecklistColumnType {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "LONG_STRING" => ChecklistColumnType::LongString {},
+        "INTEGER" => ChecklistColumnType::Integer {},
+        "ACTUAL_TIME" => ChecklistColumnType::ActualTime {},
+        "RELATIVE_TIME" => ChecklistColumnType::RelativeTime {},
+        _ => ChecklistColumnType::ShortString {},
+    }
+}
+
+fn checklist_system_key_from_wire(value: &str) -> Option<ChecklistSystemColumnKey> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DUE_RELATIVE_DTG" => Some(ChecklistSystemColumnKey::DueRelativeDtg {}),
+        _ => None,
+    }
+}
+
+fn checklist_column_from_patch(
+    patch: &[(MsgPackValue, MsgPackValue)],
+    fallback_display_order: u32,
+) -> Option<ChecklistColumnRecord> {
+    let column_uid = msgpack_get_checklist_arg(patch, "column_uid").and_then(msgpack_string)?;
+    let column_name = msgpack_get_checklist_arg(patch, "column_name")
+        .and_then(msgpack_string)
+        .unwrap_or_else(|| column_uid.clone());
+    let display_order = msgpack_get_checklist_arg(patch, "display_order")
+        .and_then(msgpack_u64)
+        .map_or(fallback_display_order, |value| value as u32);
+    let column_type = msgpack_get_checklist_arg(patch, "column_type")
+        .and_then(msgpack_string)
+        .map_or(ChecklistColumnType::ShortString {}, |value| {
+            checklist_column_type_from_wire(value.as_str())
+        });
+    let column_editable = msgpack_get_checklist_arg(patch, "column_editable")
+        .and_then(msgpack_bool)
+        .unwrap_or(true);
+    let background_color =
+        msgpack_get_checklist_arg(patch, "row_background_color").and_then(msgpack_string);
+    let text_color = msgpack_get_checklist_arg(patch, "text_color").and_then(msgpack_string);
+    let is_removable = msgpack_get_checklist_arg(patch, "is_removable")
+        .and_then(msgpack_bool)
+        .unwrap_or(true);
+    let system_key = msgpack_get_checklist_arg(patch, "system_key")
+        .and_then(msgpack_string)
+        .and_then(|value| checklist_system_key_from_wire(value.as_str()));
+
+    Some(ChecklistColumnRecord {
+        column_uid,
+        column_name,
+        display_order,
+        column_type,
+        column_editable,
+        background_color,
+        text_color,
+        is_removable,
+        system_key,
+    })
+}
+
+fn merge_checklist_column(checklist: &mut ChecklistRecord, incoming: ChecklistColumnRecord) {
+    if let Some(existing) = checklist
+        .columns
+        .iter_mut()
+        .find(|column| column.column_uid == incoming.column_uid)
+    {
+        *existing = incoming;
+    } else {
+        checklist.columns.push(incoming);
+        checklist.columns.sort_by_key(|column| column.display_order);
+    }
+}
+
+fn should_apply_inbound_task_status(
+    task: &ChecklistTaskRecord,
+    incoming_status: ChecklistUserTaskStatus,
+    incoming_timestamp: &str,
+    inserted_placeholder: bool,
+) -> bool {
+    if inserted_placeholder {
+        return true;
+    }
+    match (task.user_status, incoming_status) {
+        (ChecklistUserTaskStatus::Pending {}, ChecklistUserTaskStatus::Complete {}) => true,
+        (ChecklistUserTaskStatus::Complete {}, ChecklistUserTaskStatus::Pending {}) => {
+            task.completed_at.as_deref().map_or_else(
+                || incoming_timestamp_is_newer(task.updated_at.as_deref(), incoming_timestamp),
+                |completed_at| incoming_timestamp_is_newer(Some(completed_at), incoming_timestamp),
+            )
+        }
+        _ => incoming_timestamp_is_newer(task.updated_at.as_deref(), incoming_timestamp),
+    }
+}
+
 fn placeholder_task_record(task_uid: &str, timestamp: &str) -> ChecklistTaskRecord {
     ChecklistTaskRecord {
         task_uid: task_uid.to_string(),
@@ -1436,12 +1657,12 @@ fn tombstoned_task_record(task_uid: &str, timestamp: &str) -> ChecklistTaskRecor
 fn checklist_snapshot_json_from_command(
     command_map: &[(MsgPackValue, MsgPackValue)],
 ) -> Option<String> {
-    if let Some(snapshot) = msgpack_get_named(command_map, &["snapshot"]) {
+    if let Some(snapshot) = msgpack_get_named(command_map, &["snapshot", "sn"]) {
         let json = msgpack_value_to_json(snapshot)?;
         return serde_json::to_string(&json).ok();
     }
     if let Some(snapshot_json) =
-        msgpack_get_named(command_map, &["snapshot_json"]).and_then(msgpack_string)
+        msgpack_get_named(command_map, &["snapshot_json", "sj"]).and_then(msgpack_string)
     {
         return Some(snapshot_json);
     }
@@ -1456,9 +1677,6 @@ fn checklist_snapshot_json_from_content(
     let snapshot_payload = rmp_serde::from_slice::<MsgPackValue>(content).ok()?;
     let entries = msgpack_map_entries(&snapshot_payload)?;
     let payload_type = msgpack_get_named(entries, &["type"]).and_then(msgpack_string)?;
-    if payload_type != "rem.checklist.snapshot.v1" {
-        return None;
-    }
     if let Some(payload_uid) =
         msgpack_get_named(entries, &["checklist_uid"]).and_then(msgpack_string)
     {
@@ -1466,18 +1684,54 @@ fn checklist_snapshot_json_from_content(
             return None;
         }
     }
-    let snapshot = msgpack_get_named(entries, &["snapshot"])?;
-    let json = msgpack_value_to_json(snapshot)?;
-    serde_json::to_string(&json).ok()
+    match payload_type.as_str() {
+        "rem.checklist.snapshot.v1" => {
+            let snapshot = msgpack_get_named(entries, &["snapshot"])?;
+            let json = msgpack_value_to_json(snapshot)?;
+            serde_json::to_string(&json).ok()
+        }
+        "rem.checklist.snapshot.v2" => {
+            let encoding = msgpack_get_named(entries, &["encoding"])
+                .and_then(msgpack_string)
+                .unwrap_or_default();
+            if encoding != "zlib+msgpack" {
+                return None;
+            }
+            let MsgPackValue::Binary(compressed_snapshot) =
+                msgpack_get_named(entries, &["snapshot"])?
+            else {
+                return None;
+            };
+            let mut decoder = ZlibDecoder::new(compressed_snapshot.as_slice());
+            let mut snapshot_msgpack = Vec::new();
+            decoder.read_to_end(&mut snapshot_msgpack).ok()?;
+            let snapshot =
+                rmp_serde::from_slice::<MsgPackValue>(snapshot_msgpack.as_slice()).ok()?;
+            let json = msgpack_value_to_json(&snapshot)?;
+            serde_json::to_string(&json).ok()
+        }
+        _ => None,
+    }
 }
 
 fn msgpack_json_arg<T: DeserializeOwned>(
     args: &[(MsgPackValue, MsgPackValue)],
     key: &str,
 ) -> Option<T> {
-    msgpack_get_named(args, &[key])
+    msgpack_get_checklist_arg(args, key)
         .and_then(msgpack_value_to_json)
         .and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn msgpack_get_checklist_arg<'a>(
+    args: &'a [(MsgPackValue, MsgPackValue)],
+    key: &str,
+) -> Option<&'a MsgPackValue> {
+    if let Some(code) = checklist_arg_code(key) {
+        msgpack_get_named(args, &[key, code])
+    } else {
+        msgpack_get_named(args, &[key])
+    }
 }
 
 fn msgpack_value_to_json(value: &MsgPackValue) -> Option<serde_json::Value> {
@@ -1526,13 +1780,16 @@ fn ensure_task_for_incoming_update(
     checklist: &mut ChecklistRecord,
     task_uid: &str,
     timestamp: &str,
+    number: Option<u32>,
 ) -> bool {
     if checklist.tasks.iter().any(|task| task.task_uid == task_uid) {
         return false;
     }
-    checklist
-        .tasks
-        .push(placeholder_task_record(task_uid, timestamp));
+    let mut task = placeholder_task_record(task_uid, timestamp);
+    if let Some(number) = number.filter(|value| *value > 0) {
+        task.number = number;
+    }
+    checklist.tasks.push(task);
     true
 }
 
@@ -1596,29 +1853,29 @@ fn persist_received_checklist_if_present(
         let Some(command_map) = msgpack_map_entries(command) else {
             continue;
         };
-        let Some(command_type) =
-            msgpack_get_named(command_map, &["command_type"]).and_then(msgpack_string)
+        let Some(command_type) = msgpack_get_named(command_map, &["command_type", "t"])
+            .and_then(msgpack_string)
+            .map(|value| canonical_command_type(value.as_str()).to_string())
         else {
             continue;
         };
         if !command_type.starts_with("checklist.") {
             continue;
         }
-        let timestamp = msgpack_get_named(command_map, &["timestamp"])
-            .and_then(msgpack_string)
+        let timestamp = msgpack_get_named(command_map, &["timestamp", "ts"])
+            .and_then(msgpack_timestamp)
             .unwrap_or_else(current_timestamp_rfc3339);
         let source_identity = checklist_command_source_identity(command_map);
-        let Some(args) = msgpack_get_named(command_map, &["args"]).and_then(msgpack_map_entries)
-        else {
-            continue;
-        };
+        let args = msgpack_get_named(command_map, &["args", "a"])
+            .and_then(msgpack_map_entries)
+            .unwrap_or(command_map);
 
         match command_type.as_str() {
             "checklist.create.online" => {
-                let checklist_uid = msgpack_get_named(args, &["checklist_uid"])
+                let checklist_uid = msgpack_get_checklist_arg(args, "checklist_uid")
                     .and_then(msgpack_string)
                     .or_else(|| {
-                        msgpack_get_named(command_map, &["command_id"])
+                        msgpack_get_named(command_map, &["command_id", "i"])
                             .and_then(msgpack_string)
                             .map(|value| value.trim_start_matches("cmd-").to_string())
                     });
@@ -1626,22 +1883,24 @@ fn persist_received_checklist_if_present(
                     continue;
                 };
                 let Some(mission_uid) =
-                    msgpack_get_named(args, &["mission_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "mission_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(template_uid) =
-                    msgpack_get_named(args, &["template_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "template_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
-                let Some(name) = msgpack_get_named(args, &["name"]).and_then(msgpack_string) else {
+                let Some(name) = msgpack_get_checklist_arg(args, "name").and_then(msgpack_string)
+                else {
                     continue;
                 };
-                let description = msgpack_get_named(args, &["description"])
+                let description = msgpack_get_checklist_arg(args, "description")
                     .and_then(msgpack_string)
                     .unwrap_or_default();
-                let start_time = msgpack_get_named(args, &["start_time"]).and_then(msgpack_string);
+                let start_time =
+                    msgpack_get_checklist_arg(args, "start_time").and_then(msgpack_string);
                 let existing = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .unwrap_or_default();
@@ -1689,17 +1948,17 @@ fn persist_received_checklist_if_present(
                     );
                 }
                 if let Some(total_tasks) =
-                    msgpack_get_named(args, &["total_tasks"]).and_then(msgpack_u64)
+                    msgpack_get_checklist_arg(args, "total_tasks").and_then(msgpack_u64)
                 {
                     checklist.expected_task_count = Some(total_tasks as u32);
                 }
                 if let Some(created_at) =
-                    msgpack_get_named(args, &["created_at"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "created_at").and_then(msgpack_string)
                 {
                     checklist.created_at = Some(created_at);
                 }
                 if let Some(uploaded_at) =
-                    msgpack_get_named(args, &["uploaded_at"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "uploaded_at").and_then(msgpack_string)
                 {
                     checklist.uploaded_at = Some(uploaded_at);
                 }
@@ -1788,7 +2047,7 @@ fn persist_received_checklist_if_present(
             }
             "checklist.upload" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -1824,7 +2083,7 @@ fn persist_received_checklist_if_present(
             }
             "checklist.update" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -1844,32 +2103,40 @@ fn persist_received_checklist_if_present(
                 {
                     continue;
                 }
-                let Some(patch) = msgpack_get_named(args, &["patch"]).and_then(msgpack_map_entries)
+                let Some(patch) =
+                    msgpack_get_checklist_arg(args, "patch").and_then(msgpack_map_entries)
                 else {
                     continue;
                 };
                 if let Some(value) =
-                    msgpack_get_named(patch, &["mission_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(patch, "mission_uid").and_then(msgpack_string)
                 {
                     checklist.mission_uid = normalize_optional_string(Some(value.as_str()));
                 }
                 if let Some(value) =
-                    msgpack_get_named(patch, &["template_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(patch, "template_uid").and_then(msgpack_string)
                 {
                     checklist.template_uid = normalize_optional_string(Some(value.as_str()));
                 }
-                if let Some(value) = msgpack_get_named(patch, &["name"]).and_then(msgpack_string) {
+                if let Some(value) =
+                    msgpack_get_checklist_arg(patch, "name").and_then(msgpack_string)
+                {
                     checklist.name = value.trim().to_string();
                 }
                 if let Some(value) =
-                    msgpack_get_named(patch, &["description"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(patch, "description").and_then(msgpack_string)
                 {
                     checklist.description = value.trim().to_string();
                 }
                 if let Some(value) =
-                    msgpack_get_named(patch, &["start_time"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(patch, "start_time").and_then(msgpack_string)
                 {
                     checklist.start_time = normalize_optional_string(Some(value.as_str()));
+                }
+                if let Some(column) =
+                    checklist_column_from_patch(patch, checklist.columns.len() as u32)
+                {
+                    merge_checklist_column(&mut checklist, column);
                 }
                 checklist.updated_at = Some(timestamp.clone());
                 set_checklist_last_changed_by(&mut checklist, source_identity.as_deref());
@@ -1883,7 +2150,7 @@ fn persist_received_checklist_if_present(
             }
             "checklist.delete" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -1907,16 +2174,16 @@ fn persist_received_checklist_if_present(
             }
             "checklist.task.row.add" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(task_uid) =
-                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
-                let Some(number) = msgpack_get_named(args, &["number"]).and_then(msgpack_u64)
+                let Some(number) = msgpack_get_checklist_arg(args, "number").and_then(msgpack_u64)
                 else {
                     continue;
                 };
@@ -1960,13 +2227,13 @@ fn persist_received_checklist_if_present(
                         continue;
                     }
                 }
-                let due_relative_minutes = msgpack_get_named(args, &["due_relative_minutes"])
+                let due_relative_minutes = msgpack_get_checklist_arg(args, "due_relative_minutes")
                     .and_then(msgpack_u64)
                     .map(|value| value as u32);
                 let legacy_value =
-                    msgpack_get_named(args, &["legacy_value"]).and_then(msgpack_string);
-                let due_dtg = msgpack_get_named(args, &["due_dtg"]).and_then(msgpack_string);
-                let notes = msgpack_get_named(args, &["notes"]).and_then(msgpack_string);
+                    msgpack_get_checklist_arg(args, "legacy_value").and_then(msgpack_string);
+                let due_dtg = msgpack_get_checklist_arg(args, "due_dtg").and_then(msgpack_string);
+                let notes = msgpack_get_checklist_arg(args, "notes").and_then(msgpack_string);
                 if let Some(incoming_task) = incoming_task_payload {
                     if let Some(index) = checklist
                         .tasks
@@ -2027,12 +2294,12 @@ fn persist_received_checklist_if_present(
             }
             "checklist.task.row.delete" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(task_uid) =
-                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -2097,12 +2364,12 @@ fn persist_received_checklist_if_present(
             }
             "checklist.task.status.set" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(task_uid) =
-                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -2124,34 +2391,67 @@ fn persist_received_checklist_if_present(
                     handled_any = true;
                     continue;
                 }
+                let incoming_number = msgpack_get_checklist_arg(args, "number")
+                    .and_then(msgpack_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0);
+                let resolved_task_uid = if checklist
+                    .tasks
+                    .iter()
+                    .any(|task| task.task_uid == task_uid && task.deleted_at.is_none())
+                {
+                    task_uid.clone()
+                } else {
+                    incoming_number
+                        .and_then(|number| {
+                            checklist
+                                .tasks
+                                .iter()
+                                .find(|task| task.number == number && task.deleted_at.is_none())
+                                .map(|task| task.task_uid.clone())
+                        })
+                        .unwrap_or_else(|| task_uid.clone())
+                };
                 let inserted_placeholder = ensure_task_for_incoming_update(
                     &mut checklist,
-                    task_uid.as_str(),
+                    resolved_task_uid.as_str(),
                     timestamp.as_str(),
+                    incoming_number,
                 );
-                let Ok(task) = find_checklist_task_mut(&mut checklist, task_uid.as_str()) else {
+                let Ok(task) = find_checklist_task_mut(&mut checklist, resolved_task_uid.as_str())
+                else {
                     continue;
                 };
-                if !inserted_placeholder
-                    && !incoming_timestamp_is_newer(task.updated_at.as_deref(), timestamp.as_str())
+                let user_status = if msgpack_get_checklist_arg(args, "completed")
+                    .and_then(msgpack_bool)
+                    .unwrap_or(false)
                 {
+                    ChecklistUserTaskStatus::Complete {}
+                } else {
+                    match msgpack_get_checklist_arg(args, "user_status")
+                        .and_then(msgpack_string)
+                        .as_deref()
+                    {
+                        Some("COMPLETE") => ChecklistUserTaskStatus::Complete {},
+                        _ => ChecklistUserTaskStatus::Pending {},
+                    }
+                };
+                if !should_apply_inbound_task_status(
+                    task,
+                    user_status,
+                    timestamp.as_str(),
+                    inserted_placeholder,
+                ) {
                     handled_any = true;
                     continue;
                 }
-                let user_status = match msgpack_get_named(args, &["user_status"])
-                    .and_then(msgpack_string)
-                    .as_deref()
-                {
-                    Some("COMPLETE") => ChecklistUserTaskStatus::Complete {},
-                    _ => ChecklistUserTaskStatus::Pending {},
-                };
                 task.user_status = user_status;
                 task.task_status = checklist_task_status_for(task.user_status, task.is_late);
                 task.updated_at = Some(timestamp.clone());
                 if task.task_status.is_complete() {
                     task.completed_at = Some(timestamp.clone());
                     task.completed_by_team_member_rns_identity =
-                        msgpack_get_named(args, &["changed_by_team_member_rns_identity"])
+                        msgpack_get_checklist_arg(args, "changed_by_team_member_rns_identity")
                             .and_then(msgpack_string)
                             .or_else(|| source_identity.clone());
                 } else {
@@ -2170,12 +2470,12 @@ fn persist_received_checklist_if_present(
             }
             "checklist.task.row.style.set" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(task_uid) =
-                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -2200,6 +2500,7 @@ fn persist_received_checklist_if_present(
                     &mut checklist,
                     task_uid.as_str(),
                     timestamp.as_str(),
+                    None,
                 );
                 let Ok(task) = find_checklist_task_mut(&mut checklist, task_uid.as_str()) else {
                     continue;
@@ -2210,12 +2511,12 @@ fn persist_received_checklist_if_present(
                     continue;
                 }
                 if let Some(value) =
-                    msgpack_get_named(args, &["row_background_color"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "row_background_color").and_then(msgpack_string)
                 {
                     task.row_background_color = normalize_optional_string(Some(value.as_str()));
                 }
                 if let Some(value) =
-                    msgpack_get_named(args, &["line_break_enabled"]).and_then(msgpack_bool)
+                    msgpack_get_checklist_arg(args, "line_break_enabled").and_then(msgpack_bool)
                 {
                     task.line_break_enabled = value;
                 }
@@ -2232,21 +2533,21 @@ fn persist_received_checklist_if_present(
             }
             "checklist.task.cell.set" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(task_uid) =
-                    msgpack_get_named(args, &["task_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
                 let Some(column_uid) =
-                    msgpack_get_named(args, &["column_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "column_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
-                let Some(value) = msgpack_get_named(args, &["value"]).and_then(msgpack_string)
+                let Some(value) = msgpack_get_checklist_arg(args, "value").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -2308,7 +2609,7 @@ fn persist_received_checklist_if_present(
                     cell.value = Some(value);
                     cell.updated_at = Some(timestamp.clone());
                     cell.updated_by_team_member_rns_identity =
-                        msgpack_get_named(args, &["updated_by_team_member_rns_identity"])
+                        msgpack_get_checklist_arg(args, "updated_by_team_member_rns_identity")
                             .and_then(msgpack_string)
                             .or_else(|| source_identity.clone());
                 } else {
@@ -2318,9 +2619,9 @@ fn persist_received_checklist_if_present(
                         column_uid: column_uid.clone(),
                         value: Some(value),
                         updated_at: Some(timestamp.clone()),
-                        updated_by_team_member_rns_identity: msgpack_get_named(
+                        updated_by_team_member_rns_identity: msgpack_get_checklist_arg(
                             args,
-                            &["updated_by_team_member_rns_identity"],
+                            "updated_by_team_member_rns_identity",
                         )
                         .and_then(msgpack_string)
                         .or_else(|| source_identity.clone()),
@@ -2339,7 +2640,7 @@ fn persist_received_checklist_if_present(
             }
             "checklist.join" => {
                 let Some(checklist_uid) =
-                    msgpack_get_named(args, &["checklist_uid"]).and_then(msgpack_string)
+                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
                 else {
                     continue;
                 };
@@ -2476,11 +2777,140 @@ fn msgpack_string(value: &MsgPackValue) -> Option<String> {
     }
 }
 
+fn msgpack_hex_or_string(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => Some(hex::encode(value)),
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_event_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => {
+            let hex = hex::encode(value);
+            Some(format!(
+                "evt-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_eam_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => {
+            let hex = hex::encode(value);
+            Some(format!(
+                "eam-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_eam_status(value: &MsgPackValue) -> Option<String> {
+    msgpack_string(value).map(|status| match status.as_str() {
+        "G" => "Green".to_string(),
+        "Y" => "Yellow".to_string(),
+        "R" => "Red".to_string(),
+        "U" => "Unknown".to_string(),
+        _ => status,
+    })
+}
+
+fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(bytes) if bytes.len() == 16 => {
+            let hex = hex::encode(bytes);
+            Some(format!(
+                "log-entry-{uid}-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_mission_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) if value.as_u64() == Some(0) => {
+            Some(DEFAULT_R3AKT_MISSION_UID.to_string())
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_timestamp(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) => value.as_u64().map(|timestamp| {
+            if timestamp < 10_000_000_000 {
+                timestamp_ms_to_rfc3339(timestamp.saturating_mul(1_000))
+            } else {
+                timestamp_ms_to_rfc3339(timestamp)
+            }
+        }),
+        _ => msgpack_string(value),
+    }
+}
+
 fn msgpack_string_vec(value: &MsgPackValue) -> Option<Vec<String>> {
     let MsgPackValue::Array(entries) = value else {
         return None;
     };
     Some(entries.iter().filter_map(msgpack_string).collect())
+}
+
+fn msgpack_event_keywords(value: &MsgPackValue) -> Option<Vec<String>> {
+    let MsgPackValue::Array(entries) = value else {
+        return None;
+    };
+    Some(
+        entries
+            .iter()
+            .filter_map(|entry| {
+                let keyword = msgpack_string(entry)?;
+                if keyword.len() <= 4 && keyword.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                    Some(format!("r3akt:event-type:{keyword}"))
+                } else {
+                    Some(keyword)
+                }
+            })
+            .collect(),
+    )
+}
+
+fn msgpack_event_topics(value: &MsgPackValue, mission_uid: &str) -> Option<Vec<String>> {
+    let MsgPackValue::Array(entries) = value else {
+        return None;
+    };
+    Some(
+        entries
+            .iter()
+            .filter_map(|entry| match entry {
+                MsgPackValue::Integer(value) if value.as_u64() == Some(0) => {
+                    Some(mission_uid.to_string())
+                }
+                MsgPackValue::Integer(value) if value.as_u64() == Some(1) => {
+                    Some("Default".to_string())
+                }
+                _ => msgpack_string(entry),
+            })
+            .collect(),
+    )
 }
 
 fn msgpack_bool(value: &MsgPackValue) -> Option<bool> {
@@ -2554,16 +2984,16 @@ impl InterfaceTrafficSample {
             .bytes
             .saturating_add(packet.data.as_slice().len() as u64);
         match packet.header.packet_type {
-            reticulum::packet::PacketType::Announce => {
+            PacketType::Announce => {
                 self.announces = self.announces.saturating_add(1);
             }
-            reticulum::packet::PacketType::Data => {
+            PacketType::Data => {
                 self.data = self.data.saturating_add(1);
             }
-            reticulum::packet::PacketType::Proof => {
+            PacketType::Proof => {
                 self.proofs = self.proofs.saturating_add(1);
             }
-            reticulum::packet::PacketType::LinkRequest => {
+            PacketType::LinkRequest => {
                 self.link_requests = self.link_requests.saturating_add(1);
             }
         }
@@ -2632,8 +3062,8 @@ fn spawn_interface_traffic_monitor(
 
 async fn announce_destinations(
     transport: &Arc<Transport>,
-    _app_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
-    lxmf_destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    _app_destination: &Arc<TokioMutex<SingleInputDestination>>,
+    lxmf_destination: &Arc<TokioMutex<SingleInputDestination>>,
     announce_capabilities: &Arc<TokioMutex<String>>,
     reason: &str,
 ) {
@@ -2660,7 +3090,7 @@ async fn announce_destinations(
 
 async fn send_announce_with_trace(
     transport: &Arc<Transport>,
-    destination: &Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    destination: &Arc<TokioMutex<SingleInputDestination>>,
     app_data: Option<&[u8]>,
     reason: &str,
     destination_kind: &str,
@@ -2890,16 +3320,10 @@ fn classify_announce(destination_kind: &str, app_data: &str) -> AnnounceClass {
 }
 
 fn announce_class_is_operator_relevant(class: AnnounceClass) -> bool {
-    matches!(
-        class,
-        AnnounceClass::RchHubServer {}
-    )
+    matches!(class, AnnounceClass::RchHubServer {})
 }
 
-fn announce_is_operator_relevant(
-    class: AnnounceClass,
-    is_rem_capable_lxmf_delivery: bool,
-) -> bool {
+fn announce_is_operator_relevant(class: AnnounceClass, is_rem_capable_lxmf_delivery: bool) -> bool {
     announce_class_is_operator_relevant(class)
         || (matches!(class, AnnounceClass::LxmfDelivery {}) && is_rem_capable_lxmf_delivery)
 }
@@ -3637,6 +4061,17 @@ impl ManagedPeerLinkBackoff {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ManagedPeerReconnectStart {
+    Started(ManagedPeerLinkTarget),
+    Backoff {
+        next_retry_at_ms: u64,
+        last_failure_reason: Option<String>,
+    },
+    AlreadyReconnecting,
+    NotDesired,
+}
+
 #[derive(Clone, Default)]
 struct ManagedPeerLinks {
     desired: Arc<TokioMutex<HashMap<String, ManagedPeerLinkTarget>>>,
@@ -3646,10 +4081,6 @@ struct ManagedPeerLinks {
 
 impl ManagedPeerLinks {
     async fn add_desired(&self, target: ManagedPeerLinkTarget) {
-        self.failures
-            .lock()
-            .await
-            .remove(target.destination_hex.as_str());
         self.desired
             .lock()
             .await
@@ -3695,36 +4126,33 @@ impl ManagedPeerLinks {
             .collect()
     }
 
-    async fn is_desired(&self, destination_hex: &str) -> bool {
-        let Some(normalized) = normalize_hex_32(destination_hex) else {
-            return false;
-        };
-        self.desired.lock().await.contains_key(normalized.as_str())
+    async fn clear_failure(&self, destination_hex: &str) {
+        if let Some(normalized) = normalize_hex_32(destination_hex) {
+            self.failures.lock().await.remove(normalized.as_str());
+        }
     }
 
-    async fn begin_reconnect(&self, destination_hex: &str) -> Option<ManagedPeerLinkTarget> {
-        let normalized = normalize_hex_32(destination_hex)?;
+    async fn begin_reconnect(&self, destination_hex: &str) -> ManagedPeerReconnectStart {
+        let Some(normalized) = normalize_hex_32(destination_hex) else {
+            return ManagedPeerReconnectStart::NotDesired;
+        };
         let now = now_ms();
-        let target = self
-            .desired
-            .lock()
-            .await
-            .get(normalized.as_str())
-            .cloned()?;
-        if self
-            .failures
-            .lock()
-            .await
-            .get(normalized.as_str())
-            .is_some_and(|failure| failure.next_retry_at_ms > now)
-        {
-            return None;
+        let Some(target) = self.desired.lock().await.get(normalized.as_str()).cloned() else {
+            return ManagedPeerReconnectStart::NotDesired;
+        };
+        if let Some(failure) = self.failures.lock().await.get(normalized.as_str()) {
+            if failure.next_retry_at_ms > now {
+                return ManagedPeerReconnectStart::Backoff {
+                    next_retry_at_ms: failure.next_retry_at_ms,
+                    last_failure_reason: failure.last_failure_reason.clone(),
+                };
+            }
         }
         let mut reconnecting = self.reconnecting.lock().await;
         if !reconnecting.insert(normalized.clone()) {
-            return None;
+            return ManagedPeerReconnectStart::AlreadyReconnecting;
         }
-        Some(target)
+        ManagedPeerReconnectStart::Started(target)
     }
 
     async fn finish_reconnect(&self, destination_hex: &str, result: Result<(), String>) {
@@ -4059,10 +4487,16 @@ fn projection_journal_path(storage_dir: Option<&str>) -> Option<PathBuf> {
         .map(|dir| PathBuf::from(dir).join(runtime_projection::PERSIST_FILENAME))
 }
 
+struct RestoredSavedPeerManagement {
+    route_request_destinations: Vec<String>,
+    link_targets: Vec<ManagedPeerLinkTarget>,
+    pruned_destinations: Vec<String>,
+}
+
 fn restore_saved_peer_management(
     messaging: &mut sdkmsg::MessagingStore,
-    saved_peers: &[crate::types::SavedPeerRecord],
-) -> Vec<String> {
+    saved_peers: &[SavedPeerRecord],
+) -> RestoredSavedPeerManagement {
     let mut restored_destinations = Vec::new();
     let mut seen_destinations = HashSet::new();
     for peer in saved_peers {
@@ -4075,7 +4509,215 @@ fn restore_saved_peer_management(
         messaging.mark_peer_saved(destination_hex.as_str(), true);
         restored_destinations.push(destination_hex);
     }
-    restored_destinations
+    let pruned_destinations = messaging.prune_saved_destinations_with_non_rem_announce_evidence();
+    if !pruned_destinations.is_empty() {
+        let pruned_set = pruned_destinations.iter().collect::<HashSet<_>>();
+        restored_destinations.retain(|destination| !pruned_set.contains(destination));
+    }
+    let mut link_targets = Vec::new();
+    let mut seen_link_targets = HashSet::new();
+    for destination_hex in &restored_destinations {
+        if let Some(target) = messaging
+            .peer_by_destination(destination_hex.as_str())
+            .and_then(|peer| managed_peer_link_target(&peer))
+            .filter(|target| seen_link_targets.insert(target.destination_hex.clone()))
+        {
+            link_targets.push(target);
+        }
+    }
+    RestoredSavedPeerManagement {
+        route_request_destinations: restored_destinations,
+        link_targets,
+        pruned_destinations,
+    }
+}
+
+fn normalized_saved_peer_destinations(saved_peers: &[SavedPeerRecord]) -> Vec<String> {
+    let mut destinations = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<Vec<_>>();
+    destinations.sort();
+    destinations.dedup();
+    destinations
+}
+
+fn normalized_unique_destinations(destinations: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut normalized = destinations
+        .into_iter()
+        .filter_map(|destination| normalize_hex_32(destination.as_str()))
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+async fn mark_peer_destinations_ignored(state: &NodeRuntimeState, destinations: &[String]) {
+    let destinations = normalized_unique_destinations(destinations.iter().cloned());
+    if destinations.is_empty() {
+        return;
+    }
+    {
+        let mut ignored = state.ignored_peer_destinations.lock().await;
+        ignored.extend(destinations.iter().cloned());
+    }
+    if let Err(err) = state.app_state.add_ignored_peer_destinations(&destinations) {
+        debug!(
+            "[peers] failed to persist ignored destinations={} reason={}",
+            destinations.join(","),
+            err,
+        );
+    }
+}
+
+async fn clear_ignored_peer_destinations(state: &NodeRuntimeState, destinations: &[String]) {
+    let destinations = normalized_unique_destinations(destinations.iter().cloned());
+    if destinations.is_empty() {
+        return;
+    }
+    {
+        let mut ignored = state.ignored_peer_destinations.lock().await;
+        for destination in &destinations {
+            ignored.remove(destination);
+        }
+    }
+    if let Err(err) = state
+        .app_state
+        .remove_ignored_peer_destinations(&destinations)
+    {
+        debug!(
+            "[peers] failed to clear ignored destinations={} reason={}",
+            destinations.join(","),
+            err,
+        );
+    }
+}
+
+async fn peer_destinations_are_ignored(
+    state: &NodeRuntimeState,
+    destinations: impl IntoIterator<Item = String>,
+) -> bool {
+    let destinations = normalized_unique_destinations(destinations);
+    if destinations.is_empty() {
+        return false;
+    }
+    let ignored = state.ignored_peer_destinations.lock().await;
+    destinations
+        .iter()
+        .any(|destination| ignored.contains(destination))
+}
+
+async fn apply_saved_peer_management_projection(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    saved_peers: &[SavedPeerRecord],
+) -> Result<(), NodeError> {
+    let desired_destinations = normalized_saved_peer_destinations(saved_peers);
+    let desired_set = desired_destinations.iter().cloned().collect::<HashSet<_>>();
+    clear_ignored_peer_destinations(state, desired_destinations.as_slice()).await;
+
+    let (cleanup_destinations, changed_destinations, desired_targets) = {
+        let mut messaging = state.messaging.lock().await;
+        let previous_saved = messaging.saved_destination_hexes();
+        let previous_saved_set = previous_saved.iter().cloned().collect::<HashSet<_>>();
+        let removed_saved = previous_saved_set
+            .difference(&desired_set)
+            .cloned()
+            .collect::<HashSet<_>>();
+        let previous_peers = messaging.list_peers();
+        let mut cleanup_destinations = removed_saved.clone();
+
+        for peer in &previous_peers {
+            let equivalents = equivalent_peer_destinations(peer)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let removed_match = equivalents
+                .iter()
+                .any(|destination| removed_saved.contains(destination));
+            let still_desired_match = equivalents
+                .iter()
+                .any(|destination| desired_set.contains(destination));
+            if removed_match && !still_desired_match {
+                cleanup_destinations.extend(equivalents);
+            }
+        }
+
+        let (added, removed) =
+            messaging.replace_saved_destinations(desired_destinations.iter().map(String::as_str));
+        let now = now_ms();
+        for destination in &cleanup_destinations {
+            if desired_set.contains(destination) {
+                continue;
+            }
+            messaging.mark_peer_saved(destination, false);
+            messaging.set_peer_active_link(destination, false, now);
+        }
+
+        let mut changed_destinations = cleanup_destinations.iter().cloned().collect::<Vec<_>>();
+        changed_destinations.extend(added);
+        changed_destinations.extend(removed);
+        changed_destinations.sort();
+        changed_destinations.dedup();
+
+        let mut seen_targets = HashSet::<String>::new();
+        let desired_targets = messaging
+            .list_peers()
+            .into_iter()
+            .filter(|peer| peer.saved)
+            .filter_map(|peer| managed_peer_link_target(&peer))
+            .filter(|target| seen_targets.insert(target.destination_hex.clone()))
+            .collect::<Vec<_>>();
+
+        let mut cleanup_destinations = cleanup_destinations.into_iter().collect::<Vec<_>>();
+        cleanup_destinations.sort();
+        cleanup_destinations.dedup();
+
+        (cleanup_destinations, changed_destinations, desired_targets)
+    };
+
+    cleanup_removed_saved_destinations(state, cleanup_destinations.as_slice()).await;
+    mark_peer_destinations_ignored(state, cleanup_destinations.as_slice()).await;
+
+    for target in desired_targets {
+        add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peers-updated").await;
+    }
+
+    for destination in &changed_destinations {
+        emit_peer_changed(state, bus, destination).await;
+    }
+    sync_auto_propagation_node(state, bus).await;
+    Ok(())
+}
+
+async fn cleanup_removed_saved_destinations(state: &NodeRuntimeState, destinations: &[String]) {
+    if destinations.is_empty() {
+        return;
+    }
+    state
+        .direct_delivery_health
+        .clear(destinations.iter().map(String::as_str));
+    state
+        .managed_peer_links
+        .remove_desired(destinations.iter().map(String::as_str))
+        .await;
+    let links_to_close = {
+        let mut connected = state.connected_peers.lock().await;
+        let mut out_links = state.out_links.lock().await;
+        let mut links_to_close = Vec::new();
+        for destination in destinations {
+            let Ok(address_hash) = parse_address_hash(destination.as_str()) else {
+                continue;
+            };
+            connected.remove(&address_hash);
+            if let Some(link) = out_links.remove(&address_hash) {
+                links_to_close.push(link);
+            }
+        }
+        links_to_close
+    };
+    for link in links_to_close {
+        link.lock().await.close();
+    }
 }
 
 async fn seed_runtime_projection_snapshot(
@@ -4153,6 +4795,14 @@ async fn record_peer_link_state(
 ) {
     let canonical_destination_hex =
         canonical_app_destination_hex(state, link_destination_hex).await;
+    if active {
+        clear_peer_direct_delivery_unhealthy(
+            state,
+            link_destination_hex,
+            Some(canonical_destination_hex.as_str()),
+        )
+        .await;
+    }
     let change = {
         let mut messaging = state.messaging.lock().await;
         if active {
@@ -4504,6 +5154,43 @@ async fn clear_peer_direct_delivery_unhealthy(
     state
         .direct_delivery_health
         .clear(destinations.iter().map(String::as_str));
+}
+
+async fn close_output_links_for_direct_delivery_failure(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    resolved_destination_hex: Option<&str>,
+) {
+    let destinations = equivalent_direct_delivery_destinations(
+        state,
+        requested_destination_hex,
+        resolved_destination_hex,
+    )
+    .await;
+    if destinations.is_empty() {
+        return;
+    }
+
+    let mut stale_links = Vec::new();
+    {
+        let mut links = state.out_links.lock().await;
+        for destination in &destinations {
+            let Ok(address_hash) = parse_address_hash(destination) else {
+                continue;
+            };
+            if let Some(link) = links.remove(&address_hash) {
+                stale_links.push((destination.clone(), link));
+            }
+        }
+    }
+
+    for (destination, link) in stale_links {
+        link.lock().await.close();
+        debug!(
+            "[link][maintain] destination={} status=closed reason=direct-delivery-failed",
+            destination,
+        );
+    }
 }
 
 async fn peer_direct_delivery_available(state: &NodeRuntimeState, destination_hex: &str) -> bool {
@@ -5128,8 +5815,22 @@ async fn resolve_peer_route(
             now_ms(),
         );
     }
+    let desired_link_target = {
+        let messaging = state.messaging.lock().await;
+        if messaging.is_peer_saved(destination_hex) {
+            messaging
+                .peer_by_destination(destination_hex)
+                .and_then(|peer| managed_peer_link_target(&peer))
+        } else {
+            None
+        }
+    };
     emit_peer_changed(state, bus, destination_hex).await;
     emit_peer_resolved_for_destination(state, bus, destination_hex).await;
+    if let Some(target) = desired_link_target {
+        add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
+            .await;
+    }
     sync_auto_propagation_node(state, bus).await;
     Ok(())
 }
@@ -5152,18 +5853,34 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
                 tokio::time::sleep(Duration::from_secs(delay_secs)).await;
             }
 
-            let should_retry = {
+            let (should_retry, cached_target) = {
                 let messaging = state.messaging.lock().await;
                 if !messaging.is_peer_saved(destination_hex.as_str()) {
-                    false
+                    (false, None)
                 } else {
-                    messaging
-                        .peer_by_destination(destination_hex.as_str())
-                        .is_none_or(|peer| !sdk_peer_has_known_delivery_route(&peer))
+                    let peer = messaging.peer_by_destination(destination_hex.as_str());
+                    let should_retry = peer
+                        .as_ref()
+                        .is_none_or(|peer| !sdk_peer_has_known_delivery_route(peer));
+                    let cached_target = if should_retry {
+                        None
+                    } else {
+                        peer.as_ref().and_then(managed_peer_link_target)
+                    };
+                    (should_retry, cached_target)
                 }
             };
 
             if !should_retry {
+                if let Some(target) = cached_target {
+                    add_desired_managed_peer_link_and_schedule(
+                        &state,
+                        &bus,
+                        target,
+                        "saved-peer-resolution-cached",
+                    )
+                    .await;
+                }
                 state
                     .peer_resolution_inflight
                     .lock()
@@ -5344,6 +6061,10 @@ pub enum Command {
         destination_hex: String,
         resp: cb::Sender<Result<(), NodeError>>,
     },
+    SetSavedPeers {
+        peers: Vec<SavedPeerRecord>,
+        resp: cb::Sender<Result<(), NodeError>>,
+    },
     SendBytes {
         destination_hex: String,
         bytes: Vec<u8>,
@@ -5417,11 +6138,11 @@ struct NodeRuntimeState {
     identity: PrivateIdentity,
     app_destination_hex: String,
     transport: Arc<Transport>,
-    lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    lxmf_destination: Arc<TokioMutex<SingleInputDestination>>,
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
-    out_links:
-        Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>>,
+    out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
+    connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
     pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
@@ -5435,6 +6156,7 @@ struct NodeRuntimeState {
     propagation_sync_inflight: Arc<AtomicBool>,
     direct_delivery_health: DirectDeliveryHealth,
     managed_peer_links: ManagedPeerLinks,
+    ignored_peer_destinations: Arc<TokioMutex<HashSet<String>>>,
     send_task_permits: SendTaskPermits,
     mission_destination_locks: MissionDestinationLocks,
 }
@@ -5507,7 +6229,7 @@ async fn ensure_destination_desc(
 async fn ensure_output_link(
     state: &NodeRuntimeState,
     desc: DestinationDesc,
-) -> Result<Arc<TokioMutex<reticulum::destination::link::Link>>, NodeError> {
+) -> Result<Arc<TokioMutex<Link>>, NodeError> {
     const MAX_ATTEMPTS: usize = 3;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
 
@@ -5552,7 +6274,21 @@ async fn ensure_output_link(
 }
 
 fn managed_peer_link_target(peer: &sdkmsg::PeerRecord) -> Option<ManagedPeerLinkTarget> {
-    if !peer.saved || peer.stale {
+    let has_saved_route_target = peer.saved
+        && peer
+            .lxmf_destination_hex
+            .as_deref()
+            .and_then(normalize_hex_32)
+            .is_some();
+    if peer.stale && !has_saved_route_target {
+        return None;
+    }
+    if !peer.saved
+        && !peer
+            .app_data
+            .as_deref()
+            .is_some_and(app_data_has_rem_peer_capabilities)
+    {
         return None;
     }
     if let Some(destination_hex) = peer
@@ -5604,6 +6340,68 @@ async fn register_desired_managed_peer_link(
     Some(target)
 }
 
+async fn add_desired_managed_peer_link_and_schedule(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    target: ManagedPeerLinkTarget,
+    reason: &str,
+) {
+    state.managed_peer_links.add_desired(target.clone()).await;
+    if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
+        if output_link_is_active(state, &destination).await {
+            clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
+                .await;
+            record_peer_link_state(state, bus, target.destination_hex.as_str(), true).await;
+            info!(
+                "[link][maintain] destination={} status=active reason={}",
+                target.destination_hex, reason,
+            );
+            return;
+        }
+    }
+    state
+        .managed_peer_links
+        .clear_failure(target.destination_hex.as_str())
+        .await;
+    match state
+        .managed_peer_links
+        .begin_reconnect(target.destination_hex.as_str())
+        .await
+    {
+        ManagedPeerReconnectStart::Started(target) => {
+            info!(
+                "[link][maintain] destination={} status=scheduled reason={}",
+                target.destination_hex, reason,
+            );
+            spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);
+        }
+        ManagedPeerReconnectStart::AlreadyReconnecting => {
+            info!(
+                "[link][maintain] destination={} status=deferred reason={} detail=reconnecting",
+                target.destination_hex, reason,
+            );
+        }
+        ManagedPeerReconnectStart::Backoff {
+            next_retry_at_ms,
+            last_failure_reason,
+        } => {
+            info!(
+                "[link][maintain] destination={} status=deferred reason={} detail=backoff next_retry_at_ms={} last_failure={}",
+                target.destination_hex,
+                reason,
+                next_retry_at_ms,
+                last_failure_reason.as_deref().unwrap_or("-"),
+            );
+        }
+        ManagedPeerReconnectStart::NotDesired => {
+            info!(
+                "[link][maintain] destination={} status=deferred reason={} detail=not-desired",
+                target.destination_hex, reason,
+            );
+        }
+    }
+}
+
 async fn output_link_is_active(state: &NodeRuntimeState, destination: &AddressHash) -> bool {
     let link = state.out_links.lock().await.get(destination).cloned();
     let Some(link) = link else {
@@ -5623,17 +6421,25 @@ async fn ensure_managed_peer_link(
     };
     if output_link_is_active(state, &destination).await {
         clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None).await;
+        record_peer_link_state(state, bus, target.destination_hex.as_str(), true).await;
         return Ok(());
     }
+    info!(
+        "[link][maintain] destination={} status=connecting kind={:?}",
+        target.destination_hex, target.kind,
+    );
     let desc =
         match ensure_destination_desc(state, destination, Some(target.kind.destination_name()))
             .await
         {
             Ok(desc) => desc,
             Err(err) => {
-                debug!(
-                    "[link][maintain] destination={} status=resolve-failed reason={}",
-                    target.destination_hex, err,
+                mark_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
+                    .await;
+                record_peer_link_state(state, bus, target.destination_hex.as_str(), false).await;
+                info!(
+                    "[link][maintain] destination={} status=resolve-failed kind={:?} reason={}",
+                    target.destination_hex, target.kind, err,
                 );
                 return Err(err);
             }
@@ -5643,16 +6449,18 @@ async fn ensure_managed_peer_link(
             clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
                 .await;
             record_peer_link_state(state, bus, target.destination_hex.as_str(), true).await;
-            debug!(
-                "[link][maintain] destination={} status=active",
-                target.destination_hex,
+            info!(
+                "[link][maintain] destination={} status=active kind={:?}",
+                target.destination_hex, target.kind,
             );
             Ok(())
         }
         Err(err) => {
-            debug!(
-                "[link][maintain] destination={} status=failed reason={}",
-                target.destination_hex, err,
+            mark_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None).await;
+            record_peer_link_state(state, bus, target.destination_hex.as_str(), false).await;
+            info!(
+                "[link][maintain] destination={} status=failed kind={:?} reason={}",
+                target.destination_hex, target.kind, err,
             );
             Err(err)
         }
@@ -5662,16 +6470,34 @@ async fn ensure_managed_peer_link(
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
     let targets = state.managed_peer_links.desired_targets().await;
     for target in targets {
+        if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
+            if output_link_is_active(state, &destination).await {
+                clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
+                    .await;
+                record_peer_link_state(state, bus, target.destination_hex.as_str(), true).await;
+                continue;
+            }
+        }
         let still_saved_and_current =
             peer_for_any_destination_hex(state, target.destination_hex.as_str())
                 .await
                 .is_some_and(|peer| managed_peer_link_target(&peer).is_some());
         if still_saved_and_current {
-            if let Err(err) = ensure_managed_peer_link(state, bus, target.clone()).await {
-                state
-                    .managed_peer_links
-                    .finish_reconnect(target.destination_hex.as_str(), Err(err.to_string()))
-                    .await;
+            match state
+                .managed_peer_links
+                .begin_reconnect(target.destination_hex.as_str())
+                .await
+            {
+                ManagedPeerReconnectStart::Started(target) => {
+                    info!(
+                        "[link][maintain] destination={} status=scheduled reason=periodic-maintenance",
+                        target.destination_hex,
+                    );
+                    spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);
+                }
+                ManagedPeerReconnectStart::AlreadyReconnecting
+                | ManagedPeerReconnectStart::Backoff { .. }
+                | ManagedPeerReconnectStart::NotDesired => {}
             }
         } else {
             state
@@ -5689,7 +6515,31 @@ fn spawn_managed_peer_link_reconnect(
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(SAVED_PEER_LINK_RECONNECT_DELAY).await;
-        let result = ensure_managed_peer_link(&state, &bus, target.clone()).await;
+        let result = match tokio::time::timeout(
+            MANAGED_PEER_LINK_RECONNECT_TIMEOUT,
+            ensure_managed_peer_link(&state, &bus, target.clone()),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                mark_peer_direct_delivery_unhealthy(&state, target.destination_hex.as_str(), None)
+                    .await;
+                record_peer_link_state(&state, &bus, target.destination_hex.as_str(), false).await;
+                if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
+                    if let Some(stale) = state.out_links.lock().await.remove(&destination) {
+                        stale.lock().await.close();
+                    }
+                }
+                info!(
+                    "[link][maintain] destination={} status=failed kind={:?} reason=reconnect-timeout timeout_ms={}",
+                    target.destination_hex,
+                    target.kind,
+                    MANAGED_PEER_LINK_RECONNECT_TIMEOUT.as_millis(),
+                );
+                Err(NodeError::Timeout {})
+            }
+        };
         state
             .managed_peer_links
             .finish_reconnect(
@@ -5698,7 +6548,7 @@ fn spawn_managed_peer_link_reconnect(
             )
             .await;
         if let Err(err) = result {
-            debug!(
+            info!(
                 "[link][maintain] destination={} status=reconnect-backoff reason={}",
                 target.destination_hex, err,
             );
@@ -6324,6 +7174,7 @@ async fn send_lxmf_with_delivery_policy(
         mission_direct_priority_delay_for_hops(direct_priority_hops);
 
     let mut last_error: Option<NodeError> = None;
+    let mut last_resolved_destination_hex: Option<String> = None;
 
     for attempt in 1..=direct_attempts {
         let resolved_destination_hex = resolve_lxmf_destination_for_send(
@@ -6332,6 +7183,7 @@ async fn send_lxmf_with_delivery_policy(
             require_current_peer,
         )
         .await?;
+        last_resolved_destination_hex = Some(resolved_destination_hex.clone());
         info!(
             "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
             requested_destination_hex,
@@ -6380,13 +7232,14 @@ async fn send_lxmf_with_delivery_policy(
             );
             state
                 .sdk
-                .send_lxmf(
+                .send_lxmf_with_direct_attempt(
                     destination,
                     body,
                     title.clone(),
                     fields_bytes.clone(),
                     metadata.clone(),
                     send_mode,
+                    Some(attempt),
                 )
                 .await
         };
@@ -6417,6 +7270,7 @@ async fn send_lxmf_with_delivery_policy(
                 return Ok(report);
             }
             Ok(report) => {
+                last_resolved_destination_hex = Some(report.resolved_destination_hex.clone());
                 info!(
                     "[lxmf][mission] send attempt {attempt}/{direct_attempts} failed destination={} mode={:?} outcome={:?}",
                     requested_destination_hex,
@@ -6424,25 +7278,6 @@ async fn send_lxmf_with_delivery_policy(
                     report.outcome,
                 );
                 last_error = Some(NodeError::NetworkError {});
-                if should_try_propagation_after_direct_failure(
-                    send_mode,
-                    is_accepted_result,
-                    has_active_relay,
-                    is_saved_peer,
-                    false,
-                ) {
-                    mark_peer_direct_delivery_unhealthy(
-                        state,
-                        requested_destination_hex,
-                        Some(report.resolved_destination_hex.as_str()),
-                    )
-                    .await;
-                    info!(
-                        "[lxmf][mission] direct delivery failed for saved peer {}; retrying via propagation relay",
-                        requested_destination_hex,
-                    );
-                    break;
-                }
             }
             Err(err) => {
                 let retriable = is_retriable_lxmf_error(&err);
@@ -6453,21 +7288,6 @@ async fn send_lxmf_with_delivery_policy(
                     err,
                 );
                 last_error = Some(err);
-                if should_try_propagation_after_direct_failure(
-                    send_mode,
-                    is_accepted_result,
-                    has_active_relay,
-                    is_saved_peer,
-                    retriable,
-                ) {
-                    mark_peer_direct_delivery_unhealthy(state, requested_destination_hex, None)
-                        .await;
-                    info!(
-                        "[lxmf][mission] direct delivery errored for saved peer {}; retrying via propagation relay",
-                        requested_destination_hex,
-                    );
-                    break;
-                }
                 if !retriable {
                     break;
                 }
@@ -6504,6 +7324,38 @@ async fn send_lxmf_with_delivery_policy(
             direct_delivery_ready,
         );
     } else {
+        if should_try_propagation_after_direct_failure(
+            send_mode,
+            is_accepted_result,
+            has_active_relay,
+            is_saved_peer,
+            last_error.as_ref().is_some_and(is_retriable_lxmf_error),
+        ) {
+            mark_peer_direct_delivery_unhealthy(
+                state,
+                requested_destination_hex,
+                last_resolved_destination_hex.as_deref(),
+            )
+            .await;
+            close_output_links_for_direct_delivery_failure(
+                state,
+                requested_destination_hex,
+                last_resolved_destination_hex.as_deref(),
+            )
+            .await;
+            record_peer_link_state(state, bus, requested_destination_hex, false).await;
+            if let Some(target) =
+                register_desired_managed_peer_link(state, requested_destination_hex).await
+            {
+                if let ManagedPeerReconnectStart::Started(target) = state
+                    .managed_peer_links
+                    .begin_reconnect(target.destination_hex.as_str())
+                    .await
+                {
+                    spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);
+                }
+            }
+        }
         info!(
             "[lxmf][mission] auto delivery exhausted destination={}; retrying via propagation relay",
             requested_destination_hex,
@@ -6681,6 +7533,7 @@ async fn emit_received_payload(
                 Some(metadata),
                 fields_bytes.as_deref(),
                 body_utf8.as_str(),
+                source_hex.as_deref(),
             )
             .await;
             let persisted_event = persist_received_event_if_present(
@@ -7140,7 +7993,7 @@ async fn send_chat_delivery_ack_if_needed(
 
 async fn wait_for_link_active(
     transport: &Arc<Transport>,
-    link: &Arc<TokioMutex<reticulum::destination::link::Link>>,
+    link: &Arc<TokioMutex<Link>>,
 ) -> Result<(), NodeError> {
     if link.lock().await.status() == LinkStatus::Active {
         return Ok(());
@@ -7657,9 +8510,8 @@ pub async fn run_node(
     let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
-    let out_links: Arc<
-        TokioMutex<HashMap<AddressHash, Arc<TokioMutex<reticulum::destination::link::Link>>>>,
-    > = Arc::new(TokioMutex::new(HashMap::new()));
+    let out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>> =
+        Arc::new(TokioMutex::new(HashMap::new()));
     let connected_peers: Arc<TokioMutex<HashSet<AddressHash>>> =
         Arc::new(TokioMutex::new(HashSet::new()));
     let peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>> =
@@ -7677,6 +8529,14 @@ pub async fn run_node(
     let propagation_sync_inflight = Arc::new(AtomicBool::new(false));
     let direct_delivery_health = DirectDeliveryHealth::default();
     let managed_peer_links = ManagedPeerLinks::default();
+    let ignored_peer_destinations = Arc::new(TokioMutex::new(
+        app_state
+            .get_ignored_peer_destinations()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|destination| normalize_hex_32(destination.as_str()))
+            .collect::<HashSet<_>>(),
+    ));
     let send_task_permits = SendTaskPermits::new();
     let mission_destination_locks = MissionDestinationLocks::new();
     let projection_journal = Arc::new(RuntimeProjectionJournal::new(
@@ -7705,6 +8565,7 @@ pub async fn run_node(
         peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
+        connected_peers: connected_peers.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
         messaging: messaging.clone(),
@@ -7721,6 +8582,7 @@ pub async fn run_node(
         propagation_sync_inflight: propagation_sync_inflight.clone(),
         direct_delivery_health: direct_delivery_health.clone(),
         managed_peer_links: managed_peer_links.clone(),
+        ignored_peer_destinations: ignored_peer_destinations.clone(),
         send_task_permits: send_task_permits.clone(),
         mission_destination_locks: mission_destination_locks.clone(),
     };
@@ -7744,7 +8606,7 @@ pub async fn run_node(
         }
     }
 
-    let restored_saved_destinations = {
+    let restored_saved_management = {
         let saved_peers = state.app_state.get_saved_peers().unwrap_or_default();
         let mut messaging = state.messaging.lock().await;
         restore_saved_peer_management(&mut messaging, saved_peers.as_slice())
@@ -7759,13 +8621,31 @@ pub async fn run_node(
 
     refresh_peer_snapshot(&state).await;
     sync_auto_propagation_node(&state, &bus).await;
-    if !restored_saved_destinations.is_empty() {
+    if !restored_saved_management.pruned_destinations.is_empty() {
+        info!(
+            "[peers] pruned restored saved peers with non-rem lxmf announce evidence destinations={}",
+            restored_saved_management.pruned_destinations.join(","),
+        );
+        for destination in &restored_saved_management.pruned_destinations {
+            emit_peer_changed(&state, &bus, destination).await;
+        }
+    }
+    if !restored_saved_management
+        .route_request_destinations
+        .is_empty()
+    {
         info!(
             "[announce] restored saved peers route requests destinations={}",
-            restored_saved_destinations.join(","),
+            restored_saved_management
+                .route_request_destinations
+                .join(","),
         );
     }
-    for destination_hex in restored_saved_destinations {
+    for target in restored_saved_management.link_targets {
+        add_desired_managed_peer_link_and_schedule(&state, &bus, target, "saved-peer-restore")
+            .await;
+    }
+    for destination_hex in restored_saved_management.route_request_destinations {
         if let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) {
             if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
                 transport.request_path(&destination, None, None).await;
@@ -7833,8 +8713,8 @@ pub async fn run_node(
         });
     }
 
-    // Keep explicitly desired peer links warm. Fresh announces update
-    // reachability, but they do not create maintained links by themselves.
+    // Keep desired peer links warm. Fresh REM-capable LXMF delivery announces
+    // add desired link targets; explicit disconnect removes them.
     {
         let bus = bus.clone();
         let state = state.clone();
@@ -8005,9 +8885,9 @@ pub async fn run_node(
                             from_lxmf_sdk_announce_record(sdk_announce_record.clone());
                         let announce_class = announce_record.announce_class;
                         let app_data = announce_record.app_data.clone();
-                        let is_rem_capable_lxmf_delivery =
-                            destination_kind == DESTINATION_KIND_LXMF_DELIVERY
-                                && app_data_has_rem_peer_capabilities(&app_data);
+                        let is_rem_capable_lxmf_delivery = destination_kind
+                            == DESTINATION_KIND_LXMF_DELIVERY
+                            && app_data_has_rem_peer_capabilities(&app_data);
                         let display_name = announce_record.display_name.clone();
                         state
                             .messaging
@@ -8102,6 +8982,46 @@ pub async fn run_node(
                             emit_peer_changed(&state, &bus, &destination_hex).await;
                             emit_peer_resolved_for_destination(&state, &bus, &destination_hex)
                                 .await;
+                            let ignored = peer_destinations_are_ignored(
+                                &state,
+                                [destination_hex.clone(), app_destination_hex.clone()],
+                            )
+                            .await;
+                            if is_rem_capable_lxmf_delivery && !ignored {
+                                add_desired_managed_peer_link_and_schedule(
+                                    &state,
+                                    &bus,
+                                    ManagedPeerLinkTarget {
+                                        destination_hex: destination_hex.clone(),
+                                        kind: ManagedPeerLinkKind::LxmfDelivery,
+                                    },
+                                    "rem-lxmf-announce",
+                                )
+                                .await;
+                            } else if is_rem_capable_lxmf_delivery {
+                                debug!(
+                                    "[link][maintain] destination={} status=ignored reason=rem-lxmf-announce",
+                                    destination_hex,
+                                );
+                            }
+                        }
+                        let pruned_saved_destinations = {
+                            let mut messaging = state.messaging.lock().await;
+                            messaging.prune_saved_destinations_with_non_rem_announce_evidence()
+                        };
+                        if !pruned_saved_destinations.is_empty() {
+                            info!(
+                                "[peers] pruned saved peers with non-rem lxmf announce evidence destinations={}",
+                                pruned_saved_destinations.join(",")
+                            );
+                            cleanup_removed_saved_destinations(
+                                &state,
+                                pruned_saved_destinations.as_slice(),
+                            )
+                            .await;
+                            for destination in &pruned_saved_destinations {
+                                emit_peer_changed(&state, &bus, destination).await;
+                            }
                         }
                         sync_auto_propagation_node(&state, &bus).await;
                     }
@@ -8312,34 +9232,47 @@ pub async fn run_node(
                                 );
                                 state.out_links.lock().await.remove(&event.address_hash);
                                 connected_peers.lock().await.remove(&event.address_hash);
+                                record_peer_link_state(&state, &bus, &destination_hex, false).await;
                                 mark_peer_direct_delivery_unhealthy(
                                     &state,
                                     destination_hex.as_str(),
                                     None,
                                 )
                                 .await;
-                                if let Some(target) = state
+                                match state
                                     .managed_peer_links
                                     .begin_reconnect(destination_hex.as_str())
                                     .await
                                 {
-                                    spawn_managed_peer_link_reconnect(
-                                        state.clone(),
-                                        bus.clone(),
-                                        target,
-                                    );
-                                } else if state
-                                    .managed_peer_links
-                                    .is_desired(destination_hex.as_str())
-                                    .await
-                                {
-                                    debug!(
-                                        "[link][event] kind=closed destination={} desired=true status=reconnect-deferred",
-                                        destination_hex,
-                                    );
-                                } else {
-                                    record_peer_link_state(&state, &bus, &destination_hex, false)
-                                        .await;
+                                    ManagedPeerReconnectStart::Started(target) => {
+                                        info!(
+                                            "[link][event] kind=closed destination={} desired=true status=reconnect-scheduled",
+                                            destination_hex,
+                                        );
+                                        spawn_managed_peer_link_reconnect(
+                                            state.clone(),
+                                            bus.clone(),
+                                            target,
+                                        );
+                                    }
+                                    ManagedPeerReconnectStart::Backoff {
+                                        next_retry_at_ms,
+                                        last_failure_reason,
+                                    } => {
+                                        debug!(
+                                            "[link][event] kind=closed destination={} desired=true status=reconnect-deferred detail=backoff next_retry_at_ms={} last_failure={}",
+                                            destination_hex,
+                                            next_retry_at_ms,
+                                            last_failure_reason.as_deref().unwrap_or("-"),
+                                        );
+                                    }
+                                    ManagedPeerReconnectStart::AlreadyReconnecting => {
+                                        debug!(
+                                            "[link][event] kind=closed destination={} desired=true status=reconnect-deferred detail=reconnecting",
+                                            destination_hex,
+                                        );
+                                    }
+                                    ManagedPeerReconnectStart::NotDesired => {}
                                 }
                             }
                             LinkEvent::Data(_) => {}
@@ -8449,6 +9382,8 @@ pub async fn run_node(
                         .lock()
                         .await
                         .mark_peer_saved(&destination_hex, true);
+                    clear_ignored_peer_destinations(&state, std::slice::from_ref(&destination_hex))
+                        .await;
                     emit_peer_changed(&state, &bus, &destination_hex).await;
                     state
                         .sdk
@@ -8521,6 +9456,7 @@ pub async fn run_node(
                         .managed_peer_links
                         .remove_desired(destinations.iter().map(String::as_str))
                         .await;
+                    mark_peer_destinations_ignored(&state, destinations.as_slice()).await;
                     connected_peers.lock().await.remove(&dest);
                     for destination in &destinations {
                         if let Ok(destination) = parse_address_hash(destination.as_str()) {
@@ -8540,6 +9476,10 @@ pub async fn run_node(
                     Ok::<(), NodeError>(())
                 }
                 .await;
+                let _ = resp.send(result);
+            }
+            Command::SetSavedPeers { peers, resp } => {
+                let result = apply_saved_peer_management_projection(&state, &bus, &peers).await;
                 let _ = resp.send(result);
             }
             Command::SendBytes {
@@ -9510,6 +10450,61 @@ mod tests {
     }
 
     #[test]
+    fn compact_eam_fields_derive_sender_identity_and_callsign_from_lxmf_source() {
+        let source_hex = "fb4c70e20cfac047b899ca2f3671b50a";
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (MsgPackValue::from("i"), MsgPackValue::from("m:eam:1")),
+                (MsgPackValue::from("t"), MsgPackValue::from("M1")),
+                (
+                    MsgPackValue::from("a"),
+                    MsgPackValue::Map(vec![
+                        (MsgPackValue::from("tu"), MsgPackValue::from("blue-team")),
+                        (MsgPackValue::from("ss"), MsgPackValue::from("G")),
+                        (MsgPackValue::from("ca"), MsgPackValue::from("Y")),
+                        (MsgPackValue::from("pr"), MsgPackValue::from("G")),
+                        (MsgPackValue::from("me"), MsgPackValue::from("G")),
+                        (MsgPackValue::from("mo"), MsgPackValue::from("G")),
+                        (MsgPackValue::from("co"), MsgPackValue::from("Y")),
+                    ]),
+                ),
+            ])]),
+        )]);
+        let bytes = rmp_serde::to_vec(&fields).expect("fields");
+
+        let action = eam_command_action_from_fields(
+            bytes.as_slice(),
+            1_700_000_000_000,
+            Some(source_hex),
+            Some("Pixelcorvo"),
+        )
+        .expect("compact eam should parse");
+
+        let EamCommandAction::Upsert(record) = action else {
+            panic!("expected EAM upsert");
+        };
+        assert_eq!(record.callsign, "Pixelcorvo");
+        assert_eq!(record.team_member_uid.as_deref(), Some(source_hex));
+        assert_eq!(record.team_uid.as_deref(), Some("blue-team"));
+        assert_eq!(
+            record
+                .source
+                .as_ref()
+                .map(|source| source.rns_identity.as_str()),
+            Some(source_hex)
+        );
+        assert_eq!(
+            record
+                .source
+                .as_ref()
+                .and_then(|source| source.display_name.as_deref()),
+            Some("Pixelcorvo")
+        );
+        assert!(record.notes.is_none());
+    }
+
+    #[test]
     fn operational_ack_is_only_built_for_inbound_commands() {
         let metadata = MissionSyncMetadata {
             command_present: true,
@@ -10434,11 +11429,66 @@ mod tests {
     }
 
     #[test]
+    fn native_upload_snapshot_decodes_from_compressed_msgpack_content() {
+        use std::io::Write as _;
+
+        let snapshot = MsgPackValue::Map(vec![
+            (MsgPackValue::from("uid"), MsgPackValue::from("chk-native")),
+            (MsgPackValue::from("name"), MsgPackValue::from("Native")),
+            (
+                MsgPackValue::from("tasks"),
+                MsgPackValue::Array(vec![MsgPackValue::Map(vec![(
+                    MsgPackValue::from("task_uid"),
+                    MsgPackValue::from("task-1"),
+                )])]),
+            ),
+        ]);
+        let snapshot_msgpack = rmp_serde::to_vec(&snapshot).expect("snapshot msgpack");
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder
+            .write_all(snapshot_msgpack.as_slice())
+            .expect("write compressed snapshot");
+        let compressed_snapshot = encoder.finish().expect("finish compressed snapshot");
+        let content = MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("type"),
+                MsgPackValue::from("rem.checklist.snapshot.v2"),
+            ),
+            (
+                MsgPackValue::from("checklist_uid"),
+                MsgPackValue::from("chk-native"),
+            ),
+            (
+                MsgPackValue::from("encoding"),
+                MsgPackValue::from("zlib+msgpack"),
+            ),
+            (
+                MsgPackValue::from("snapshot"),
+                MsgPackValue::Binary(compressed_snapshot),
+            ),
+        ]);
+        let bytes = rmp_serde::to_vec(&content).expect("snapshot content");
+        let snapshot_json =
+            checklist_snapshot_json_from_content(Some(bytes.as_slice()), "chk-native")
+                .expect("compressed content snapshot");
+
+        assert!(snapshot_json.contains("\"uid\":\"chk-native\""));
+        assert!(snapshot_json.contains("\"task_uid\":\"task-1\""));
+        assert!(
+            checklist_snapshot_json_from_content(Some(bytes.as_slice()), "chk-other").is_none()
+        );
+    }
+
+    #[test]
     fn first_status_update_can_apply_to_missing_task_placeholder() {
         let mut checklist =
             blank_checklist_record("chk-missing-task", "2026-04-22T12:00:00Z", None);
-        let inserted =
-            ensure_task_for_incoming_update(&mut checklist, "task-missing", "2026-04-22T12:01:00Z");
+        let inserted = ensure_task_for_incoming_update(
+            &mut checklist,
+            "task-missing",
+            "2026-04-22T12:01:00Z",
+            None,
+        );
         let task = find_checklist_task_mut(&mut checklist, "task-missing").expect("task inserted");
 
         assert!(inserted);
@@ -10533,6 +11583,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn inbound_complete_status_applies_even_when_cell_update_is_newer() {
+        let mut task =
+            checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:05:00.000000000Z");
+        task.cells.push(checklist_test_cell(
+            "task-1",
+            "col-task",
+            "Existing",
+            "2026-04-22T12:10:00.000000000Z",
+        ));
+        task.updated_at = Some("2026-04-22T12:10:00.000000000Z".to_string());
+
+        assert!(should_apply_inbound_task_status(
+            &task,
+            ChecklistUserTaskStatus::Complete {},
+            "2026-04-22T12:07:00.000000000Z",
+            false,
+        ));
+    }
+
+    #[test]
+    fn inbound_pending_status_does_not_revert_newer_complete() {
+        let mut task =
+            checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:05:00.000000000Z");
+        task.user_status = ChecklistUserTaskStatus::Complete {};
+        task.task_status = ChecklistTaskStatus::Complete {};
+        task.completed_at = Some("2026-04-22T12:10:00.000000000Z".to_string());
+        task.updated_at = Some("2026-04-22T12:10:00.000000000Z".to_string());
+
+        assert!(!should_apply_inbound_task_status(
+            &task,
+            ChecklistUserTaskStatus::Pending {},
+            "2026-04-22T12:07:00.000000000Z",
+            false,
+        ));
+        assert!(should_apply_inbound_task_status(
+            &task,
+            ChecklistUserTaskStatus::Pending {},
+            "2026-04-22T12:11:00.000000000Z",
+            false,
+        ));
+    }
+
     fn checklist_status_fields(
         checklist_uid: &str,
         task_uid: Option<&str>,
@@ -10571,6 +11664,36 @@ mod tests {
             ])]),
         )]);
         rmp_serde::to_vec(&fields).expect("status fields")
+    }
+
+    fn compact_checklist_status_fields(
+        checklist_uid: &str,
+        task_uid: &str,
+        number: Option<u32>,
+        timestamp: &str,
+        user_status: &str,
+    ) -> Vec<u8> {
+        let mut args = vec![
+            (MsgPackValue::from("cl"), MsgPackValue::from(checklist_uid)),
+            (MsgPackValue::from("tsk"), MsgPackValue::from(task_uid)),
+            (MsgPackValue::from("us"), MsgPackValue::from(user_status)),
+        ];
+        if let Some(number) = number {
+            args.push((MsgPackValue::from("no"), MsgPackValue::from(number)));
+        }
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                (MsgPackValue::from("t"), MsgPackValue::from("C6")),
+                (
+                    MsgPackValue::from("i"),
+                    MsgPackValue::from("cmd-status-test"),
+                ),
+                (MsgPackValue::from("ts"), MsgPackValue::from(timestamp)),
+                (MsgPackValue::from("a"), MsgPackValue::Map(args)),
+            ])]),
+        )]);
+        rmp_serde::to_vec(&fields).expect("compact status fields")
     }
 
     #[test]
@@ -10626,6 +11749,123 @@ mod tests {
             stored.tasks[0].user_status,
             ChecklistUserTaskStatus::Complete {}
         ));
+    }
+
+    #[test]
+    fn compact_checklist_status_update_is_persisted() {
+        let storage_dir =
+            std::env::temp_dir().join(format!("rem-runtime-checklist-status-compact-{}", now_ms()));
+        let store = AppStateStore::new(Some(
+            storage_dir
+                .to_str()
+                .expect("temporary storage dir should be utf-8"),
+        ))
+        .expect("app state store");
+        let task = checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:05:00.000000000Z");
+        let checklist = checklist_test_record("2026-04-22T12:05:00.000000000Z", task);
+        store
+            .upsert_checklist(&checklist, "seed-checklist")
+            .expect("seed checklist");
+        let bus = EventBus::new();
+        let fields = compact_checklist_status_fields(
+            "chk-merge",
+            "task-1",
+            None,
+            "2026-04-22T12:06:00.000000000Z",
+            "COMPLETE",
+        );
+
+        assert!(persist_received_checklist_if_present(
+            &store,
+            &bus,
+            None,
+            Some(fields.as_slice()),
+            None,
+        ));
+
+        let stored = store
+            .get_checklist_any("chk-merge")
+            .expect("stored checklist query")
+            .expect("stored checklist");
+        assert!(matches!(
+            stored.tasks[0].user_status,
+            ChecklistUserTaskStatus::Complete {}
+        ));
+        assert_eq!(
+            stored.tasks[0].updated_at.as_deref(),
+            Some("2026-04-22T12:06:00.000000000Z")
+        );
+    }
+
+    #[test]
+    fn compact_checklist_status_update_resolves_visible_row_by_number_when_task_uid_differs() {
+        let storage_dir = std::env::temp_dir().join(format!(
+            "rem-runtime-checklist-status-row-number-{}",
+            now_ms()
+        ));
+        let store = AppStateStore::new(Some(
+            storage_dir
+                .to_str()
+                .expect("temporary storage dir should be utf-8"),
+        ))
+        .expect("app state store");
+        let task_one =
+            checklist_test_task("local-task-1", 1, "First", "2026-04-22T12:05:00.000000000Z");
+        let task_two = checklist_test_task(
+            "local-task-2",
+            2,
+            "Second",
+            "2026-04-22T12:05:00.000000000Z",
+        );
+        let mut checklist = checklist_test_record("2026-04-22T12:05:00.000000000Z", task_one);
+        checklist.tasks.push(task_two);
+        normalize_checklist_record(&mut checklist);
+        store
+            .upsert_checklist(&checklist, "seed-checklist")
+            .expect("seed checklist");
+        let bus = EventBus::new();
+        let fields = compact_checklist_status_fields(
+            "chk-merge",
+            "remote-task-2",
+            Some(2),
+            "2026-04-22T12:06:00.000000000Z",
+            "COMPLETE",
+        );
+
+        assert!(persist_received_checklist_if_present(
+            &store,
+            &bus,
+            None,
+            Some(fields.as_slice()),
+            None,
+        ));
+
+        let stored = store
+            .get_checklist_any("chk-merge")
+            .expect("stored checklist query")
+            .expect("stored checklist");
+        let first = stored
+            .tasks
+            .iter()
+            .find(|task| task.task_uid == "local-task-1")
+            .expect("first task");
+        let second = stored
+            .tasks
+            .iter()
+            .find(|task| task.task_uid == "local-task-2")
+            .expect("second task");
+        assert!(matches!(
+            first.user_status,
+            ChecklistUserTaskStatus::Pending {}
+        ));
+        assert!(matches!(
+            second.user_status,
+            ChecklistUserTaskStatus::Complete {}
+        ));
+        assert!(!stored
+            .tasks
+            .iter()
+            .any(|task| task.task_uid == "remote-task-2"));
     }
 
     #[test]
@@ -11294,13 +12534,13 @@ mod tests {
             links
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .await,
-            Some(target.clone())
+            ManagedPeerReconnectStart::Started(target.clone())
         );
         assert_eq!(
             links
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .await,
-            None
+            ManagedPeerReconnectStart::AlreadyReconnecting
         );
 
         links
@@ -11310,7 +12550,7 @@ mod tests {
             links
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .await,
-            Some(target.clone())
+            ManagedPeerReconnectStart::Started(target.clone())
         );
 
         links
@@ -11321,7 +12561,84 @@ mod tests {
             links
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .await,
-            None
+            ManagedPeerReconnectStart::NotDesired
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_peer_links_keep_backoff_when_target_is_readded_without_new_route_evidence() {
+        let links = ManagedPeerLinks::default();
+        let target = ManagedPeerLinkTarget {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        };
+
+        links.add_desired(target.clone()).await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(target.clone())
+        );
+        links
+            .finish_reconnect(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Err("link failed".to_string()),
+            )
+            .await;
+
+        links.add_desired(target).await;
+
+        match links
+            .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .await
+        {
+            ManagedPeerReconnectStart::Backoff {
+                last_failure_reason,
+                ..
+            } => assert_eq!(last_failure_reason.as_deref(), Some("link failed")),
+            other => panic!("expected backoff, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_rem_announce_clears_managed_link_backoff_for_new_connection_attempt() {
+        let links = ManagedPeerLinks::default();
+        let target = ManagedPeerLinkTarget {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        };
+
+        links.add_desired(target.clone()).await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(target.clone())
+        );
+        links
+            .finish_reconnect(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                Err("link failed".to_string()),
+            )
+            .await;
+        match links
+            .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .await
+        {
+            ManagedPeerReconnectStart::Backoff { .. } => {}
+            other => panic!("expected backoff before fresh announce, got {other:?}"),
+        }
+
+        links
+            .clear_failure("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .await;
+
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(target)
         );
     }
 
@@ -11465,14 +12782,14 @@ mod tests {
     }
 
     #[test]
-    fn stored_route_only_auto_send_uses_propagation_without_direct_probe_when_relay_exists() {
+    fn connected_auto_send_keeps_direct_retry_budget_even_with_relay() {
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, None),
             0
         );
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(11)),
-            0
+            LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(1)),
@@ -11485,6 +12802,26 @@ mod tests {
         assert_eq!(
             direct_attempt_budget_for_send(SendMode::DirectOnly {}, true, true, false, Some(11)),
             LXMF_DIRECT_ATTEMPTS
+        );
+    }
+
+    #[test]
+    fn announced_rem_lxmf_peers_are_managed_link_targets_without_save() {
+        let announced_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            Some("cccccccccccccccccccccccccccccccc"),
+            false,
+            false,
+            Some(now_ms()),
+        );
+
+        assert_eq!(
+            managed_peer_link_target(&announced_peer),
+            Some(ManagedPeerLinkTarget {
+                destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+                kind: ManagedPeerLinkKind::LxmfDelivery,
+            })
         );
     }
 
@@ -11512,7 +12849,7 @@ mod tests {
     }
 
     #[test]
-    fn saved_peer_link_targets_prefer_lxmf_destinations() {
+    fn managed_peer_link_targets_include_saved_and_announced_lxmf_destinations() {
         let mut saved_online = send_peer(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -11542,10 +12879,20 @@ mod tests {
 
         assert_eq!(
             saved_peer_link_targets(&[saved_online, saved_stale, unsaved_online]),
-            vec![ManagedPeerLinkTarget {
-                destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
-                kind: ManagedPeerLinkKind::LxmfDelivery,
-            }]
+            vec![
+                ManagedPeerLinkTarget {
+                    destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
+                    kind: ManagedPeerLinkKind::LxmfDelivery,
+                },
+                ManagedPeerLinkTarget {
+                    destination_hex: "ffffffffffffffffffffffffffffffff".to_string(),
+                    kind: ManagedPeerLinkKind::LxmfDelivery,
+                },
+                ManagedPeerLinkTarget {
+                    destination_hex: "33333333333333333333333333333333".to_string(),
+                    kind: ManagedPeerLinkKind::LxmfDelivery,
+                },
+            ]
         );
     }
 
@@ -11854,6 +13201,16 @@ mod tests {
             interface_hex: String::new(),
             received_at_ms: now,
         });
+        messaging.record_announce(sdkmsg::AnnounceRecord {
+            destination_hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+            identity_hex: "ffffffffffffffffffffffffffffffff".to_string(),
+            destination_kind: "lxmf_delivery".to_string(),
+            app_data: "Sideband;name=NonRem".to_string(),
+            display_name: Some("NonRem".to_string()),
+            hops: 0,
+            interface_hex: String::new(),
+            received_at_ms: now,
+        });
 
         let restored = restore_saved_peer_management(
             &mut messaging,
@@ -11868,17 +13225,34 @@ mod tests {
                     label: Some("Pixel duplicate".to_string()),
                     saved_at_ms: now,
                 },
+                crate::types::SavedPeerRecord {
+                    destination_hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+                    label: Some("Non REM".to_string()),
+                    saved_at_ms: now,
+                },
             ],
         );
 
         assert_eq!(
-            restored,
+            restored.route_request_destinations,
             vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+        );
+        assert_eq!(
+            restored.link_targets,
+            vec![ManagedPeerLinkTarget {
+                destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                kind: ManagedPeerLinkKind::LxmfDelivery,
+            }]
+        );
+        assert_eq!(
+            restored.pruned_destinations,
+            vec!["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string()]
         );
         let mut peers = messaging.list_peers();
         peers.sort_by(|left, right| left.destination_hex.cmp(&right.destination_hex));
         assert!(peers[0].saved);
         assert!(!peers[1].saved);
+        assert!(!messaging.is_peer_saved("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"));
     }
 
     #[test]

@@ -156,7 +156,11 @@ pub(crate) fn peer_has_known_lxmf_route<P: PeerDeliveryState + ?Sized>(peer: &P)
     if normalize_hex_32(peer.destination_hex()).is_none() {
         return false;
     }
-    if peer.lxmf_destination_hex().and_then(normalize_hex_32).is_none() {
+    if peer
+        .lxmf_destination_hex()
+        .and_then(normalize_hex_32)
+        .is_none()
+    {
         return false;
     }
     true
@@ -221,11 +225,12 @@ pub(crate) fn direct_attempt_budget_for_send(
     direct_priority_free_hops: u8,
     lxmf_direct_attempts: usize,
 ) -> usize {
+    let _ = direct_priority_hops;
+    let _ = direct_priority_free_hops;
     if matches!(send_mode, types::SendMode::Auto {})
         && has_active_relay
         && can_try_stored_lxmf_route
-        && (direct_priority_hops.is_some_and(|hops| hops > direct_priority_free_hops)
-            || !direct_delivery_ready)
+        && !direct_delivery_ready
     {
         return 0;
     }

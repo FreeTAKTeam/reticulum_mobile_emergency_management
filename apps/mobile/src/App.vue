@@ -19,6 +19,7 @@ import {
   resolveAndroidRouteBackAction,
   runBackNavigationHandlers,
 } from "./utils/androidBackNavigation";
+import { appVersion } from "./utils/appVersion";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 
 const nodeStore = useNodeStore();
@@ -30,7 +31,6 @@ const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
-const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {

@@ -86,6 +86,7 @@ const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
 const NODE_START_TIMEOUT_MS = 15_000;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
+const REMOVED_PEERS_STORAGE_KEY = "reticulum.mobile.removedPeers.v1";
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -462,6 +463,36 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
   return out;
 }
 
+function loadRemovedPeerDestinations(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(REMOVED_PEERS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [destinationRaw, removedAtRaw] of Object.entries(parsed)) {
+      const destination = normalizeDestinationHex(destinationRaw);
+      if (!isValidDestinationHex(destination)) {
+        continue;
+      }
+      const removedAt = Number(removedAtRaw);
+      out[destination] = Number.isFinite(removedAt) ? removedAt : nowMs();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function storeRemovedPeerDestinations(destinations: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(REMOVED_PEERS_STORAGE_KEY, JSON.stringify(destinations));
+  } catch {
+    // Local storage can be unavailable in restricted webviews; native removal still applies.
+  }
+}
+
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
   const displayName = normalizeStoredDisplayName(settings.displayName);
   return {
@@ -489,6 +520,7 @@ export const useNodeStore = defineStore("node", () => {
   const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>({});
+  const removedByDestination = reactive<Record<string, number>>(loadRemovedPeerDestinations());
   const appDestinationByIdentity = reactive<Record<string, string>>({});
   const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
   const livePresenceByDestination = reactive<Record<string, number>>({});
@@ -2007,6 +2039,8 @@ export const useNodeStore = defineStore("node", () => {
     if (!savedPeer) {
       throw new Error(`Save peer ${destination} before connecting.`);
     }
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
+    clearPeerRemoved(destination, discovered);
 
     try {
       clearLastError();
@@ -2142,6 +2176,8 @@ export const useNodeStore = defineStore("node", () => {
     if (!isValidDestinationHex(destination)) {
       return;
     }
+    clearPeerRemoved(requestedDestination, discovered);
+    clearPeerRemoved(destination, discovered);
     const nextSavedPeers = {
       ...savedByDestination,
       [destination]: {
@@ -2154,6 +2190,29 @@ export const useNodeStore = defineStore("node", () => {
       delete nextSavedPeers[requestedDestination];
     }
     await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
+  }
+
+  async function removePeer(destinationRaw: string): Promise<void> {
+    await init();
+    const destination = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(destination)) {
+      return;
+    }
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
+    const removedDestinations = markPeerRemoved(destination, discovered);
+    const nextSavedPeers = { ...savedByDestination };
+    for (const removedDestination of removedDestinations) {
+      delete nextSavedPeers[removedDestination];
+      delete discoveredByDestination[removedDestination];
+    }
+    await persistSavedPeersProjection(nextSavedPeers, `explicit remove ${destination}`);
+    if (client.value && status.value.running) {
+      try {
+        await client.value.disconnectPeer(destination);
+      } catch (error: unknown) {
+        appendLog("Debug", `[peers] remove disconnect skipped destination=${destination}: ${errorMessage(error)}`);
+      }
+    }
   }
 
   async function unsavePeer(destinationRaw: string): Promise<void> {
@@ -2375,9 +2434,50 @@ export const useNodeStore = defineStore("node", () => {
     );
   }
 
+  function knownDestinationsForPeer(
+    destinationRaw: string,
+    peer?: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
+  ): string[] {
+    const destinations = [
+      destinationRaw,
+      peer?.destination,
+      peer?.lxmfDestinationHex,
+      peer?.identityHex,
+    ]
+      .map((value) => normalizeDestinationHex(value ?? ""))
+      .filter(isValidDestinationHex);
+    return [...new Set(destinations)];
+  }
+
+  function peerIsRemoved(
+    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
+  ): boolean {
+    return knownDestinationsForPeer(peer.destination, peer).some((destination) =>
+      removedByDestination[destination] !== undefined,
+    );
+  }
+
+  function markPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): string[] {
+    const destinations = knownDestinationsForPeer(destinationRaw, peer);
+    const removedAt = nowMs();
+    for (const destination of destinations) {
+      removedByDestination[destination] = removedAt;
+    }
+    storeRemovedPeerDestinations({ ...removedByDestination });
+    return destinations;
+  }
+
+  function clearPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): void {
+    for (const destination of knownDestinationsForPeer(destinationRaw, peer)) {
+      delete removedByDestination[destination];
+    }
+    storeRemovedPeerDestinations({ ...removedByDestination });
+  }
+
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
+      .filter((peer) => !peerIsRemoved(peer))
       .filter((peer) => !isLocalPeer(peer))
       .sort((a, b) => {
         const byRank = peerSortRank(b) - peerSortRank(a);
@@ -2392,6 +2492,7 @@ export const useNodeStore = defineStore("node", () => {
   const remAnnouncedPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => !peerIsRemoved(peer))
       .filter((peer) => hasActualRemAnnounce(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
@@ -2938,6 +3039,7 @@ export const useNodeStore = defineStore("node", () => {
     forgetHubRegistryLinkage,
     setAnnounceCapabilities,
     savePeer,
+    removePeer,
     unsavePeer,
     setPeerLabel,
     updateSettings,

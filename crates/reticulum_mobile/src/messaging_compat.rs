@@ -359,6 +359,95 @@ impl MessagingStore {
         }
     }
 
+    pub fn saved_destination_hexes(&self) -> Vec<String> {
+        let mut destinations = self.saved_destinations.iter().cloned().collect::<Vec<_>>();
+        destinations.sort();
+        destinations
+    }
+
+    pub fn replace_saved_destinations<I, S>(
+        &mut self,
+        destinations: I,
+    ) -> (Vec<String>, Vec<String>)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let next = destinations
+            .into_iter()
+            .map(|destination| normalize_hex(destination.as_ref()))
+            .filter(|destination| !destination.is_empty())
+            .collect::<HashSet<_>>();
+        let current = self.saved_destinations.clone();
+        let mut added = next.difference(&current).cloned().collect::<Vec<_>>();
+        let mut removed = current.difference(&next).cloned().collect::<Vec<_>>();
+        added.sort();
+        removed.sort();
+
+        for destination in &removed {
+            self.mark_peer_saved(destination, false);
+        }
+        for destination in &added {
+            self.mark_peer_saved(destination, true);
+        }
+
+        (added, removed)
+    }
+
+    pub fn prune_saved_destinations_with_non_rem_announce_evidence(&mut self) -> Vec<String> {
+        let mut app_dest_by_identity = HashMap::<String, String>::new();
+        let mut lxmf_dest_by_identity = HashMap::<String, String>::new();
+        let mut app_records = HashMap::<String, AnnounceRecord>::new();
+        let mut lxmf_records = HashMap::<String, AnnounceRecord>::new();
+
+        for record in self.announce_records.values() {
+            if record.destination_kind == "app" {
+                app_dest_by_identity
+                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
+                app_records.insert(record.destination_hex.clone(), record.clone());
+            } else if record.destination_kind == "lxmf_delivery" {
+                lxmf_dest_by_identity
+                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
+                lxmf_records.insert(record.destination_hex.clone(), record.clone());
+            }
+        }
+        for (identity_hex, destination_hex) in &self.resolved_app_destination_by_identity {
+            app_dest_by_identity
+                .entry(identity_hex.clone())
+                .or_insert_with(|| destination_hex.clone());
+        }
+        for (identity_hex, lxmf_destination_hex) in &self.resolved_lxmf_by_identity {
+            lxmf_dest_by_identity
+                .entry(identity_hex.clone())
+                .or_insert_with(|| lxmf_destination_hex.clone());
+        }
+
+        let mut removed = Vec::new();
+        for saved_destination in self.saved_destination_hexes() {
+            let lxmf_record = lxmf_records.get(saved_destination.as_str()).or_else(|| {
+                app_records
+                    .get(saved_destination.as_str())
+                    .map(|record| record.identity_hex.as_str())
+                    .or_else(|| {
+                        self.resolved_app_identity_by_destination
+                            .get(saved_destination.as_str())
+                            .map(String::as_str)
+                    })
+                    .and_then(|identity| lxmf_dest_by_identity.get(identity))
+                    .and_then(|lxmf_destination| lxmf_records.get(lxmf_destination.as_str()))
+            });
+            let has_non_rem_lxmf_evidence = lxmf_record.is_some_and(|record| {
+                let app_data = record.app_data.trim();
+                !app_data.is_empty() && !supports_mission_traffic(Some(app_data))
+            });
+            if has_non_rem_lxmf_evidence {
+                self.mark_peer_saved(saved_destination.as_str(), false);
+                removed.push(saved_destination);
+            }
+        }
+        removed
+    }
+
     pub fn is_peer_saved(&self, destination_hex: &str) -> bool {
         let normalized = normalize_hex(destination_hex);
         !normalized.is_empty() && self.saved_destinations.contains(normalized.as_str())
@@ -495,7 +584,9 @@ impl MessagingStore {
                 .filter(|lxmf_destination| {
                     lxmf_records
                         .get(lxmf_destination.as_str())
-                        .is_some_and(|record| supports_mission_traffic(Some(record.app_data.as_str())))
+                        .is_some_and(|record| {
+                            supports_mission_traffic(Some(record.app_data.as_str()))
+                        })
                 })
                 .cloned()
                 .unwrap_or_else(|| saved_destination.clone());
@@ -508,9 +599,9 @@ impl MessagingStore {
             if !projected_destinations.insert(destination_hex.clone()) {
                 continue;
             }
-            let lxmf_record = lxmf_records.get(&destination_hex).filter(|record| {
-                supports_mission_traffic(Some(record.app_data.as_str()))
-            });
+            let lxmf_record = lxmf_records
+                .get(&destination_hex)
+                .filter(|record| supports_mission_traffic(Some(record.app_data.as_str())));
             let identity_hex = lxmf_record
                 .map(|record| record.identity_hex.clone())
                 .or_else(|| {
@@ -537,8 +628,9 @@ impl MessagingStore {
             let app_alias_destination = identity_hex
                 .as_ref()
                 .and_then(|identity| app_dest_by_identity.get(identity));
-            let saved_alias = app_alias_destination
-                .is_some_and(|app_destination| self.saved_destinations.contains(app_destination.as_str()));
+            let saved_alias = app_alias_destination.is_some_and(|app_destination| {
+                self.saved_destinations.contains(app_destination.as_str())
+            });
             let saved = self.saved_destinations.contains(destination_hex.as_str()) || saved_alias;
             let last_resolution_error = self
                 .last_resolution_errors
@@ -644,18 +736,16 @@ impl MessagingStore {
 
     pub fn peer_by_destination(&self, destination_hex: &str) -> Option<PeerRecord> {
         let normalized = normalize_hex(destination_hex);
-        self.list_peers()
-            .into_iter()
-            .find(|peer| {
-                peer.destination_hex == normalized
-                    || peer.lxmf_destination_hex.as_deref() == Some(normalized.as_str())
-                    || peer
-                        .identity_hex
-                        .as_ref()
-                        .and_then(|identity_hex| self.app_destination_for_identity(identity_hex))
-                        .as_deref()
-                        == Some(normalized.as_str())
-            })
+        self.list_peers().into_iter().find(|peer| {
+            peer.destination_hex == normalized
+                || peer.lxmf_destination_hex.as_deref() == Some(normalized.as_str())
+                || peer
+                    .identity_hex
+                    .as_ref()
+                    .and_then(|identity_hex| self.app_destination_for_identity(identity_hex))
+                    .as_deref()
+                    == Some(normalized.as_str())
+        })
     }
 
     pub fn peer_change_for_destination(&self, destination_hex: &str) -> Option<PeerChange> {
@@ -1695,6 +1785,75 @@ mod tests {
         );
         assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
         assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(20));
+    }
+
+    #[test]
+    fn replace_saved_destinations_clears_removed_peer_presence() {
+        let mut store = MessagingStore::default();
+        store.mark_peer_saved("oldpeer", true);
+        store.mark_peer_saved("keptpeer", true);
+        store.set_peer_active_link("oldpeer", true, current_time_ms());
+        store.record_resolution_error("oldpeer", Some("stale route".to_string()));
+
+        let (added, removed) =
+            store.replace_saved_destinations(["keptpeer".to_string(), "newpeer".to_string()]);
+
+        assert_eq!(added, vec!["newpeer".to_string()]);
+        assert_eq!(removed, vec!["oldpeer".to_string()]);
+        assert_eq!(
+            store.saved_destination_hexes(),
+            vec!["keptpeer".to_string(), "newpeer".to_string()]
+        );
+        assert!(!store.is_peer_saved("oldpeer"));
+        assert!(!store
+            .peer_by_destination("oldpeer")
+            .is_some_and(|peer| peer.active_link));
+    }
+
+    #[test]
+    fn prune_saved_destinations_with_non_rem_lxmf_evidence_removes_contaminated_peers() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.mark_peer_saved("sidebandlxmf", true);
+        store.mark_peer_saved("rempeer", true);
+        store.mark_peer_saved("emptyroute", true);
+        store.record_announce(AnnounceRecord {
+            destination_hex: "sidebandlxmf".into(),
+            identity_hex: "sidebandidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "92c40553696c6b65c0".into(),
+            display_name: Some("Silke".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "rempeer".into(),
+            identity_hex: "remidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Pixel".into(),
+            display_name: Some("Pixel".into()),
+            hops: 0,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(10),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "emptyroute".into(),
+            identity_hex: "emptyidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "".into(),
+            display_name: None,
+            hops: 0,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(5),
+        });
+
+        let removed = store.prune_saved_destinations_with_non_rem_announce_evidence();
+
+        assert_eq!(removed, vec!["sidebandlxmf".to_string()]);
+        assert!(!store.is_peer_saved("sidebandlxmf"));
+        assert!(store.is_peer_saved("emptyroute"));
+        assert!(store.is_peer_saved("rempeer"));
     }
 
     #[test]

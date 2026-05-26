@@ -331,6 +331,16 @@ async function onAddPeer(destination: string): Promise<void> {
   );
 }
 
+async function onRemovePeer(destination: string): Promise<void> {
+  const peerName = peerNotificationName(destination);
+  await runNodeAction(
+    () => nodeStore.removePeer(destination),
+    `removed ${peerName}`,
+    "Peer",
+    `remove ${peerName}`,
+  );
+}
+
 async function onSavedPeerConnectToggle(destination: string): Promise<void> {
   const disconnecting = savedPeerConnectionLabel(destination) === "Disconnect";
   const peerName = peerNotificationName(destination);
@@ -477,6 +487,7 @@ async function runNodeAction(
             >
               Add
             </button>
+            <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
           </div>
         </article>
       </div>
@@ -528,7 +539,7 @@ async function runNodeAction(
             <button type="button" @click="onSavedPeerConnectToggle(peer.destination)">
               {{ savedPeerConnectionLabel(peer.destination) }}
             </button>
-            <button type="button" @click="nodeStore.unsavePeer(peer.destination)">Remove</button>
+            <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
           </div>
         </article>
       </div>

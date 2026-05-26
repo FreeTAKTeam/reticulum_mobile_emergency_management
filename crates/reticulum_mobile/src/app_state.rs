@@ -149,6 +149,10 @@ impl AppStateStore {
                     json TEXT NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS ignored_peers (
+                    destination_hex TEXT PRIMARY KEY,
+                    updated_at_ms INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS eams (
                     callsign_key TEXT PRIMARY KEY,
                     team_uid TEXT,
@@ -420,6 +424,79 @@ impl AppStateStore {
         )?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(invalidation)
+    }
+
+    pub(crate) fn get_ignored_peer_destinations(&self) -> Result<Vec<String>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare("SELECT destination_hex FROM ignored_peers ORDER BY updated_at_ms DESC")
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| NodeError::IoError {})?;
+        let mut destinations = Vec::new();
+        for row in rows {
+            destinations.push(row.map_err(|_| NodeError::IoError {})?);
+        }
+        Ok(destinations)
+    }
+
+    pub(crate) fn add_ignored_peer_destinations(
+        &self,
+        destinations: &[String],
+    ) -> Result<(), NodeError> {
+        if destinations.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let updated_at_ms = now_ms() as i64;
+        for destination in destinations {
+            let normalized = destination.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            transaction
+                .execute(
+                    "INSERT INTO ignored_peers (destination_hex, updated_at_ms)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(destination_hex) DO UPDATE SET
+                        updated_at_ms = excluded.updated_at_ms",
+                    params![normalized, updated_at_ms],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_ignored_peer_destinations(
+        &self,
+        destinations: &[String],
+    ) -> Result<(), NodeError> {
+        if destinations.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        for destination in destinations {
+            let normalized = destination.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            transaction
+                .execute(
+                    "DELETE FROM ignored_peers WHERE destination_hex = ?1",
+                    params![normalized],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
     }
 
     pub fn upsert_announce(&self, record: &AnnounceRecord) -> Result<(), NodeError> {
@@ -3268,6 +3345,39 @@ mod tests {
                 default_task_due_step_minutes,
             },
         }
+    }
+
+    #[test]
+    fn ignored_peer_destinations_persist_and_can_be_cleared() {
+        let storage_dir = test_storage_dir("ignored-peers");
+        let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+        let destinations = vec![
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        ];
+
+        store
+            .add_ignored_peer_destinations(destinations.as_slice())
+            .expect("add ignored peers");
+        store
+            .add_ignored_peer_destinations(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()])
+            .expect("dedupe ignored peer");
+
+        let restored = AppStateStore::new(storage_dir.to_str())
+            .expect("restored store")
+            .get_ignored_peer_destinations()
+            .expect("ignored peers");
+        assert_eq!(restored.len(), 2);
+        assert!(restored.contains(&"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()));
+        assert!(restored.contains(&"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()));
+
+        store
+            .remove_ignored_peer_destinations(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()])
+            .expect("remove ignored peer");
+        let remaining = store
+            .get_ignored_peer_destinations()
+            .expect("remaining ignored peers");
+        assert_eq!(remaining, vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
     }
 
     fn message(

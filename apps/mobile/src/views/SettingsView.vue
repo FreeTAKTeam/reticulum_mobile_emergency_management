@@ -6,6 +6,7 @@ import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
+import { appVersion } from "../utils/appVersion";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
@@ -22,7 +23,6 @@ const sosCardRef = useTemplateRef<{
   saveSettings: () => Promise<void>;
   hasUnsavedChanges: () => boolean;
 }>("sosCard");
-const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 const savingSettings = ref(false);
 
 const aboutItems = [
