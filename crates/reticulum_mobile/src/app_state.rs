@@ -2072,7 +2072,7 @@ impl AppStateStore {
         let transaction = connection
             .transaction()
             .map_err(|_| NodeError::IoError {})?;
-        for template in default_checklist_templates() {
+        for template in default_checklist_templates()? {
             self.write_checklist_template_tx(&transaction, &template)?;
         }
         transaction.commit().map_err(|_| NodeError::IoError {})?;
@@ -2928,8 +2928,107 @@ fn checklist_template_from_rows(
     template
 }
 
-fn default_checklist_templates() -> Vec<ChecklistTemplateRecord> {
-    vec![
+struct BundledChecklistTemplateCsv {
+    uid: &'static str,
+    name: &'static str,
+    description: &'static str,
+    source_filename: &'static str,
+    csv_text: &'static str,
+}
+
+const BUNDLED_CHECKLIST_TEMPLATE_CSVS: &[BundledChecklistTemplateCsv] = &[
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-dependents-pets-special-needs",
+        name: "Dependents, Pets, and Special Needs",
+        description: "Prepared-citizen care plan for dependents, pets, and people with special needs.",
+        source_filename: "dependents_pets_special_needs.csv",
+        csv_text: include_str!("default_checklist_templates/dependents_pets_special_needs.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-evacuation-plan",
+        name: "Evacuation Plan",
+        description: "Prepared-citizen evacuation planning checklist for routes, triggers, supplies, and accountability.",
+        source_filename: "evacuation_plan.csv",
+        csv_text: include_str!("default_checklist_templates/evacuation_plan.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-household-readiness-score",
+        name: "Household Readiness Score",
+        description: "Prepared-citizen readiness scoring checklist for household water, power, medical, communications, and evacuation posture.",
+        source_filename: "household_readiness_score.csv",
+        csv_text: include_str!("default_checklist_templates/household_readiness_score.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-comms-drill",
+        name: "Playbook: Communications Drill",
+        description: "Prepared-citizen drill checklist for validating REM, Reticulum, and trusted-group communications.",
+        source_filename: "playbook_comms_drill.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_comms_drill.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-evacuation",
+        name: "Playbook: Evacuation",
+        description: "Prepared-citizen playbook checklist for executing an evacuation.",
+        source_filename: "playbook_evacuation.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_evacuation.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-power-outage",
+        name: "Playbook: Power Outage",
+        description: "Prepared-citizen playbook checklist for power outage response and communications continuity.",
+        source_filename: "playbook_power_outage.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_power_outage.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-shelter-in-place",
+        name: "Playbook: Shelter In Place",
+        description: "Prepared-citizen playbook checklist for shelter-in-place activation and sustainment.",
+        source_filename: "playbook_shelter_in_place.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_shelter_in_place.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-storm-prep",
+        name: "Playbook: Storm Prep",
+        description: "Prepared-citizen playbook checklist for storm preparation and household readiness.",
+        source_filename: "playbook_storm_prep.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_storm_prep.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-playbook-wildfire-flood",
+        name: "Playbook: Wildfire and Flood",
+        description: "Prepared-citizen playbook checklist for wildfire, flood, smoke, and evacuation readiness.",
+        source_filename: "playbook_wildfire_flood.csv",
+        csv_text: include_str!("default_checklist_templates/playbook_wildfire_flood.csv"),
+    },
+    BundledChecklistTemplateCsv {
+        uid: "tmpl-prepared-citizen-shelter-in-place-plan",
+        name: "Shelter In Place Plan",
+        description: "Prepared-citizen shelter-in-place planning checklist for supplies, safety, care, and communications.",
+        source_filename: "shelter_in_place_plan.csv",
+        csv_text: include_str!("default_checklist_templates/shelter_in_place_plan.csv"),
+    },
+];
+
+fn checklist_template_from_bundled_csv(
+    source: &BundledChecklistTemplateCsv,
+) -> Result<ChecklistTemplateRecord, NodeError> {
+    let mut template = parse_checklist_template_csv(
+        &ChecklistTemplateImportCsvRequest {
+            template_uid: Some(source.uid.to_string()),
+            name: source.name.to_string(),
+            description: Some(source.description.to_string()),
+            csv_text: source.csv_text.to_string(),
+            source_filename: Some(source.source_filename.to_string()),
+        },
+        DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+    )?;
+    template.origin_type = ChecklistOriginType::RchTemplate {};
+    normalize_checklist_template(&mut template);
+    Ok(template)
+}
+
+fn default_checklist_templates() -> Result<Vec<ChecklistTemplateRecord>, NodeError> {
+    let mut templates = vec![
         checklist_template_from_rows(
             "tmpl-24-hour-survival-pack",
             "24 Hour Survival Pack",
@@ -2987,7 +3086,11 @@ fn default_checklist_templates() -> Vec<ChecklistTemplateRecord> {
                 ("Handheld radio", "Backup local comms", "Communications", 1),
             ],
         ),
-    ]
+    ];
+    for source in BUNDLED_CHECKLIST_TEMPLATE_CSVS {
+        templates.push(checklist_template_from_bundled_csv(source)?);
+    }
+    Ok(templates)
 }
 
 fn projection_scope_name(scope: ProjectionScope) -> &'static str {
@@ -4123,10 +4226,16 @@ mod tests {
         let templates = store
             .list_checklist_templates()
             .expect("list checklist templates");
-        assert_eq!(templates.len(), 3);
+        assert_eq!(templates.len(), 13);
         assert!(templates
             .iter()
             .any(|template| template.uid == "tmpl-24-hour-survival-pack"));
+        assert!(templates
+            .iter()
+            .any(|template| template.uid == "tmpl-prepared-citizen-shelter-in-place-plan"));
+        assert!(templates
+            .iter()
+            .any(|template| template.uid == "tmpl-prepared-citizen-playbook-comms-drill"));
         assert!(templates.iter().all(|template| {
             template.columns.iter().any(|column| {
                 column.system_key == Some(ChecklistSystemColumnKey::DueRelativeDtg {})
