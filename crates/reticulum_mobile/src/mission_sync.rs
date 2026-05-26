@@ -2,6 +2,7 @@ use rmpv::Value as MsgPackValue;
 use std::borrow::ToOwned;
 
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_EVENT, FIELD_RESULTS};
+use crate::mission_commands::{canonical_command_type, checklist_arg_code};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MissionSyncMetadata {
@@ -122,11 +123,89 @@ fn msgpack_get_named<'a>(
     None
 }
 
+fn msgpack_get_checklist_arg<'a>(
+    entries: &'a [(MsgPackValue, MsgPackValue)],
+    key: &str,
+) -> Option<&'a MsgPackValue> {
+    if let Some(code) = checklist_arg_code(key) {
+        msgpack_get_named(entries, &[key, code])
+    } else {
+        msgpack_get_named(entries, &[key])
+    }
+}
+
 fn msgpack_string(value: &MsgPackValue) -> Option<String> {
     match value {
         MsgPackValue::String(value) => value.as_str().map(ToOwned::to_owned),
         MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
         _ => None,
+    }
+}
+
+fn msgpack_hex_or_string(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => Some(hex::encode(value)),
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_event_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => {
+            let hex = hex::encode(value);
+            Some(format!(
+                "evt-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_eam_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(value) if value.len() == 16 => {
+            let hex = hex::encode(value);
+            Some(format!(
+                "eam-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Binary(bytes) if bytes.len() == 16 => {
+            let hex = hex::encode(bytes);
+            Some(format!(
+                "log-entry-{uid}-{}-{}-{}-{}-{}",
+                &hex[0..8],
+                &hex[8..12],
+                &hex[12..16],
+                &hex[16..20],
+                &hex[20..32],
+            ))
+        }
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_mission_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) if value.as_u64() == Some(0) => {
+            Some("r3akt-default-mission".to_string())
+        }
+        _ => msgpack_string(value),
     }
 }
 
@@ -152,55 +231,83 @@ fn parse_string_field(
     }
 }
 
+fn parse_event_uid_field(
+    entries: &[(MsgPackValue, MsgPackValue)],
+    keys: &[&str],
+    slot: &mut Option<String>,
+) {
+    set_if_none(
+        slot,
+        keys.iter()
+            .find_map(|key| msgpack_get_named(entries, &[*key]).and_then(msgpack_event_uid)),
+    );
+}
+
+fn parse_mission_uid_field(
+    entries: &[(MsgPackValue, MsgPackValue)],
+    keys: &[&str],
+    slot: &mut Option<String>,
+) {
+    set_if_none(
+        slot,
+        keys.iter()
+            .find_map(|key| msgpack_get_named(entries, &[*key]).and_then(msgpack_mission_uid)),
+    );
+}
+
 fn parse_identifier_fields(
     entries: &[(MsgPackValue, MsgPackValue)],
     metadata: &mut MissionSyncMetadata,
 ) {
-    parse_string_field(
+    parse_event_uid_field(
         entries,
-        &["eam_uid", "event_uid", "entry_uid", "entryUid", "uid"],
+        &["eam_uid", "event_uid", "entry_uid", "entryUid", "uid", "u"],
         &mut metadata.event_uid,
-        false,
     );
-    parse_string_field(entries, &["eam_uid", "uid"], &mut metadata.eam_uid, false);
-    parse_string_field(
-        entries,
-        &[
+    set_if_none(
+        &mut metadata.eam_uid,
+        ["eam_uid", "uid", "u"]
+            .iter()
+            .find_map(|key| msgpack_get_named(entries, &[*key]).and_then(msgpack_eam_uid)),
+    );
+    set_if_none(
+        &mut metadata.team_member_uid,
+        [
             "team_member_uid",
             "teamMemberUid",
             "subject_id",
             "subjectId",
-        ],
-        &mut metadata.team_member_uid,
-        false,
+            "tm",
+        ]
+        .iter()
+        .find_map(|key| msgpack_get_named(entries, &[*key]).and_then(msgpack_hex_or_string)),
     );
     parse_string_field(
         entries,
-        &["team_uid", "teamUid", "team_id", "teamId"],
+        &["team_uid", "teamUid", "team_id", "teamId", "tu"],
         &mut metadata.team_uid,
         false,
     );
-    parse_string_field(
+    parse_mission_uid_field(
         entries,
-        &["mission_uid", "missionUid", "uid"],
+        &["mission_uid", "missionUid", "uid", "m"],
         &mut metadata.mission_uid,
-        false,
     );
     parse_string_field(
         entries,
-        &["checklist_uid", "checklistUid"],
+        &["checklist_uid", "checklistUid", "cl"],
         &mut metadata.checklist_uid,
         false,
     );
     parse_string_field(
         entries,
-        &["task_uid", "taskUid"],
+        &["task_uid", "taskUid", "tsk"],
         &mut metadata.task_uid,
         false,
     );
     parse_string_field(
         entries,
-        &["column_uid", "columnUid"],
+        &["column_uid", "columnUid", "col"],
         &mut metadata.column_uid,
         false,
     );
@@ -211,30 +318,46 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
         return;
     };
     let entries = map.as_slice();
-    let has_command_markers = msgpack_get_named(entries, &["command_id"]).is_some()
-        || msgpack_get_named(entries, &["correlation_id"]).is_some()
-        || msgpack_get_named(entries, &["command_type"]).is_some();
+    let has_command_markers = msgpack_get_named(entries, &["command_id", "i"]).is_some()
+        || msgpack_get_named(entries, &["correlation_id", "c"]).is_some()
+        || msgpack_get_named(entries, &["command_type", "t"]).is_some();
     if !has_command_markers {
         return;
     }
     metadata.command_present = true;
-    parse_string_field(entries, &["command_id"], &mut metadata.command_id, false);
     parse_string_field(
         entries,
-        &["correlation_id"],
+        &["command_id", "i"],
+        &mut metadata.command_id,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["correlation_id", "c"],
         &mut metadata.correlation_id,
         false,
     );
     parse_string_field(
         entries,
-        &["command_type"],
+        &["command_type", "t"],
         &mut metadata.command_type,
         false,
     );
-    if let Some(args) = msgpack_get_named(entries, &["args"]) {
+    parse_identifier_fields(entries, metadata);
+    if let Some(args) = msgpack_get_named(entries, &["args", "a"]) {
         if let Some(args_entries) = msgpack_map_entries(args) {
             parse_identifier_fields(args_entries, metadata);
-            if let Some(patch) = msgpack_get_named(args_entries, &["patch"]) {
+            if let Some(uid) = metadata.event_uid.as_deref() {
+                if let Some(command_id) = msgpack_get_named(args_entries, &["ci"])
+                    .and_then(|value| event_command_id_from_tail(uid, value))
+                {
+                    metadata.command_id = Some(command_id);
+                }
+            }
+            if metadata.correlation_id.is_none() {
+                metadata.correlation_id = metadata.command_id.clone();
+            }
+            if let Some(patch) = msgpack_get_checklist_arg(args_entries, "patch") {
                 if let Some(patch_entries) = msgpack_map_entries(patch) {
                     parse_identifier_fields(patch_entries, metadata);
                 }
@@ -322,6 +445,22 @@ pub(crate) fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<Mission
     }
 
     if metadata.is_mission_related() {
+        if let Some(command_type) = metadata.command_type.as_deref() {
+            metadata.command_type = Some(canonical_command_type(command_type).to_string());
+        }
+        if metadata.command_type.as_deref() == Some("mission.registry.log_entry.upsert")
+            && metadata.event_uid.is_some()
+            && metadata.mission_uid.is_none()
+        {
+            metadata.mission_uid = Some("r3akt-default-mission".to_string());
+        }
+        if matches!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.eam.upsert" | "mission.registry.eam.delete")
+        ) && metadata.eam_uid.is_some()
+        {
+            metadata.event_uid = metadata.eam_uid.clone();
+        }
         if metadata.event_uid.is_none() {
             metadata.event_uid = metadata.eam_uid.clone();
         }

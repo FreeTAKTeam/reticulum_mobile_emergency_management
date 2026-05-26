@@ -4,14 +4,12 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useChecklistsStore } from "../stores/checklistsStore";
-import { useNodeStore } from "../stores/nodeStore";
 import {
   type ChecklistFilter,
   type ChecklistSegment,
   type ChecklistStatus,
 } from "../utils/checklists";
 
-const nodeStore = useNodeStore();
 const checklistsStore = useChecklistsStore();
 const {
   liveUiRecords,
@@ -99,22 +97,6 @@ const filterItems: Array<{ value: ChecklistFilter; label: string }> = [
   { value: "completed", label: "Completed" },
 ];
 
-const isSyncing = ref(false);
-
-async function requestSync(): Promise<void> {
-  if (isSyncing.value) {
-    return;
-  }
-  isSyncing.value = true;
-  try {
-    await nodeStore.requestLxmfSync();
-  } catch {
-    // nodeStore surfaces sync errors through existing app state.
-  } finally {
-    isSyncing.value = false;
-  }
-}
-
 function statusCardClass(status: ChecklistStatus): string {
   return `status-${status}`;
 }
@@ -141,10 +123,6 @@ function toggleCreateForm(): void {
     resetCreateForm();
   }
   isCreateFormVisible.value = !isCreateFormVisible.value;
-}
-
-function openChecklistHelp(): void {
-  isChecklistHelpVisible.value = true;
 }
 
 function closeChecklistHelp(): void {

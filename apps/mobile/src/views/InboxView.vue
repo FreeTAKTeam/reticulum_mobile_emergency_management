@@ -70,12 +70,12 @@ const activeConversationId = computed(() =>
 );
 const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
   const seen = new Set<string>();
-  return nodeStore.discoveredPeers
-    .filter((peer) => peer.activeLink)
+  return nodeStore.reachablePeers
     .filter((peer) => nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
       const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
-      const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
+      const baseName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
+      const displayName = peer.activeLink ? `${baseName} (Connected)` : `${baseName} (Reachable)`;
       return { value, displayName };
     })
     .filter((option) => {
@@ -231,12 +231,6 @@ const targetTelemetryPosition = computed(() => {
     }
   }
   return null;
-});
-
-const syncStatusLabel = computed(() => {
-  const status = nodeStore.syncStatus;
-  const detail = safeTrim(status.detail);
-  return detail ? `${status.phase}: ${detail}` : status.phase;
 });
 
 function formatCoordinate(value: number, positiveLabel: string, negativeLabel: string): string {
@@ -416,9 +410,9 @@ onUnmounted(() => {
         <button
           class="utility-chip peer-chip"
           type="button"
-          aria-label="Select connected peer"
+          aria-label="Select reachable peer"
           :aria-expanded="isPeerPickerVisible"
-          title="Select connected peer"
+          title="Select reachable peer"
           @click="togglePeerPicker"
         >
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -427,7 +421,7 @@ onUnmounted(() => {
             <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
             <path d="M16 3.13a3 3 0 0 1 0 5.74" />
           </svg>
-          <span>Connected Peers</span>
+          <span>Reachable Peers</span>
           <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="m7 10 5 5 5-5" />
           </svg>
@@ -435,9 +429,9 @@ onUnmounted(() => {
         <button
           class="create-toggle utility-new"
           type="button"
-          aria-label="Select connected peer"
+          aria-label="Select reachable peer"
           :aria-expanded="isPeerPickerVisible"
-          title="Select connected peer"
+          title="Select reachable peer"
           @click="togglePeerPicker"
         >
           <span aria-hidden="true">+</span>
@@ -452,12 +446,12 @@ onUnmounted(() => {
     >
       <select
         :value="selectedDestinationHex"
-        aria-label="Select connected peer"
+        aria-label="Select reachable peer"
         class="thread-picker-select"
         :disabled="threadDestinationOptions.length === 0"
         @change="handleThreadDestinationSelected"
       >
-        <option value="">Select connected peer</option>
+        <option value="">Select reachable peer</option>
         <option
           v-for="option in threadDestinationOptions"
           :key="option.value"
@@ -467,7 +461,7 @@ onUnmounted(() => {
         </option>
       </select>
       <p v-if="threadDestinationOptions.length === 0" class="peer-picker-empty">
-        No connected saved peers available.
+        No reachable saved peers available.
       </p>
     </form>
 

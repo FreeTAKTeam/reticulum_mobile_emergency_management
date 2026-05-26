@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,17 +18,19 @@ use lxmf_sdk::{
     StartRequest,
 };
 use rand_core::OsRng;
-use reticulum::destination::link::{Link, LinkEvent, LinkStatus};
-use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
-use reticulum::hash::{address_hash, AddressHash};
-use reticulum::identity::{DecryptIdentity, PrivateIdentity};
-use reticulum::packet::LXMF_MAX_PAYLOAD;
-use reticulum::packet::{
+use reticulum::runtime::{ReceivedData, SendPacketOutcome as RnsSendOutcome, Transport};
+use reticulum::transport::destination::link::{Link, LinkEvent, LinkStatus};
+use reticulum::transport::destination::{
+    DestinationDesc, DestinationName, SingleInputDestination, SingleOutputDestination,
+};
+use reticulum::transport::hash::{address_hash, AddressHash};
+use reticulum::transport::identity::{DecryptIdentity, PrivateIdentity};
+use reticulum::transport::packet::LXMF_MAX_PAYLOAD;
+use reticulum::transport::packet::{
     ContextFlag, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
     PacketDataBuffer, PacketType, PropagationType,
 };
-use reticulum::resource::ResourceEventKind;
-use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport};
+use reticulum::transport::resource::{ResourceEvent, ResourceEventKind};
 use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
@@ -46,7 +49,9 @@ const ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(
 const PROPAGATION_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
 const PROPAGATION_FETCH_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
 const PROPAGATION_FETCH_BATCH_SIZE: usize = 1;
+const PROPAGATION_PURGE_BATCH_SIZE: usize = 8;
 const PROPAGATION_FETCH_TRANSFER_LIMIT_KB: u64 = 10_240;
+const PROPAGATION_STAMP_BYTES: [u8; 32] = [0u8; 32];
 const COMPAT_EVENT_RETENTION_LIMIT: usize = 2_048;
 const COMPAT_DELIVERY_RETENTION_LIMIT: usize = 1_024;
 const COMPAT_SEND_REPORT_RETENTION_LIMIT: usize = 512;
@@ -120,7 +125,25 @@ fn metadata_is_accepted_result(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+#[cfg(test)]
 fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String {
+    idempotency_key_for_send_attempt(base_key, send_mode, None)
+}
+
+fn idempotency_key_for_send_attempt(
+    base_key: &str,
+    send_mode: SendMode,
+    direct_attempt: Option<usize>,
+) -> String {
+    if let Some(attempt) = direct_attempt {
+        return match send_mode {
+            SendMode::PropagationOnly {} => format!("{base_key}:propagation"),
+            SendMode::DirectOnly {} | SendMode::Auto {} => {
+                format!("{base_key}:direct-attempt-{attempt}")
+            }
+        };
+    }
+
     match send_mode {
         SendMode::PropagationOnly {} => format!("{base_key}:propagation"),
         SendMode::DirectOnly {} => format!("{base_key}:direct"),
@@ -128,7 +151,7 @@ fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String 
     }
 }
 
-fn lxmf_identity(identity: &reticulum::identity::Identity) -> lxmf::identity::Identity {
+fn lxmf_identity(identity: &reticulum::transport::identity::Identity) -> lxmf::identity::Identity {
     lxmf::identity::Identity::new_from_slices(
         identity.public_key_bytes(),
         identity.verifying_key_bytes(),
@@ -289,7 +312,7 @@ const EVENT_DELIVERY_UPDATED: &str = "reticulum.delivery_updated";
 pub(crate) struct SdkTransportState {
     pub(crate) identity: PrivateIdentity,
     pub(crate) transport: Arc<Transport>,
-    pub(crate) lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    pub(crate) lxmf_destination: Arc<TokioMutex<SingleInputDestination>>,
     pub(crate) known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     pub(crate) out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
     pub(crate) active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
@@ -540,6 +563,10 @@ impl CompatBackend {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery events preserve separate routing and mission correlation fields"
+    )]
     fn record_delivery_update(
         &self,
         message_id_hex: &str,
@@ -712,8 +739,12 @@ pub(crate) struct PropagationFetchResult {
     pub(crate) destination_hex: String,
     pub(crate) available_count: usize,
     pub(crate) fetched_count: usize,
+    pub(crate) fetched_entry_count: usize,
+    pub(crate) extracted_payload_count: usize,
     pub(crate) imported_wires: Vec<Vec<u8>>,
     pub(crate) failed_count: usize,
+    pub(crate) malformed_count: usize,
+    pub(crate) decrypt_failed_count: usize,
 }
 
 pub(crate) struct RuntimeLxmfSdk {
@@ -762,6 +793,32 @@ impl RuntimeLxmfSdk {
         fields_bytes: Option<Vec<u8>>,
         metadata: Option<MissionSyncMetadata>,
         send_mode: SendMode,
+    ) -> Result<LxmfSendReport, NodeError> {
+        self.send_lxmf_with_direct_attempt(
+            destination,
+            content,
+            title,
+            fields_bytes,
+            metadata,
+            send_mode,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "send boundary keeps payload, metadata, mode, and retry identity explicit"
+    )]
+    pub(crate) async fn send_lxmf_with_direct_attempt(
+        &self,
+        destination: AddressHash,
+        content: &[u8],
+        title: Option<String>,
+        fields_bytes: Option<Vec<u8>>,
+        metadata: Option<MissionSyncMetadata>,
+        send_mode: SendMode,
+        direct_attempt: Option<usize>,
     ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .client
@@ -816,8 +873,11 @@ impl RuntimeLxmfSdk {
             .as_ref()
             .and_then(|value| value.tracking_key().map(ToOwned::to_owned))
         {
-            request = request
-                .with_idempotency_key(idempotency_key_for_send_mode(&idempotency_key, send_mode));
+            request = request.with_idempotency_key(idempotency_key_for_send_attempt(
+                &idempotency_key,
+                send_mode,
+                direct_attempt,
+            ));
         }
 
         let client = self.client.clone();
@@ -937,6 +997,10 @@ impl RuntimeLxmfSdk {
         self.client.backend().record_hub_directory_updated(snapshot);
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_sent(
         &self,
         message_id_hex: &str,
@@ -961,6 +1025,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps source and mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_acknowledged(
         &self,
         message_id_hex: &str,
@@ -987,6 +1055,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_failed(
         &self,
         message_id_hex: &str,
@@ -1012,6 +1084,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_timed_out(
         &self,
         message_id_hex: &str,
@@ -1375,6 +1451,10 @@ async fn compat_send_lxmf(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "propagation send boundary keeps resolved routing and delivery metadata explicit"
+)]
 async fn compat_send_lxmf_via_propagation(
     state: &SdkTransportState,
     remote_desc: &DestinationDesc,
@@ -1401,18 +1481,21 @@ async fn compat_send_lxmf_via_propagation(
         .map_err(|_| sdk_transport("failed to resolve propagation relay"))?;
     let propagated_payload = LxmfWireMessage::unpack(wire)
         .map_err(|_| sdk_internal("failed to unpack lxmf wire message"))?
-        .pack_propagation_with_rng(
+        .pack_propagation_with_options_and_rng(
             &lxmf_identity(&remote_desc.identity),
             crate::runtime::now_ms() as f64 / 1000.0,
+            Some(PROPAGATION_STAMP_BYTES.as_slice()),
             OsRng,
         )
+        .map(|(payload, _transient_id)| payload)
         .map_err(|_| sdk_internal("failed to encode propagated lxmf payload"))?;
     let relay_destination_hex = relay_desc.address_hash.to_hex_string();
 
     info!(
-        "[lxmf][events][sdk] path=propagation requested_destination={} resolved_destination={} relay_destination={} message_id={} wire_bytes={} propagated_bytes={} max_wire_bytes={}",
+        "[lxmf][events][sdk] path=propagation requested_destination={} resolved_destination={} recipient_identity={} relay_destination={} message_id={} wire_bytes={} propagated_bytes={} max_wire_bytes={}",
         requested_destination_hex,
         resolved_destination_hex,
+        remote_desc.identity.address_hash.to_hex_string(),
         relay_destination_hex,
         message_id_hex,
         wire.len(),
@@ -1614,13 +1697,20 @@ async fn compat_fetch_propagated_lxmf(
             destination_hex,
             available_count,
             fetched_count: 0,
+            fetched_entry_count: 0,
+            extracted_payload_count: 0,
             imported_wires: Vec::new(),
             failed_count: 0,
+            malformed_count: 0,
+            decrypt_failed_count: 0,
         });
     }
 
-    let mut payloads = Vec::new();
+    let mut payloads = Vec::<(Option<Vec<u8>>, Vec<u8>)>::new();
+    let mut fetched_entry_count = 0usize;
+    let mut malformed_count = 0usize;
     let mut failed_count = 0usize;
+    let mut decrypt_failed_count = 0usize;
     let mut last_fetch_error: Option<NodeError> = None;
     let mut fetch_queue = propagation_fetch_batches(transient_ids.as_slice())
         .into_iter()
@@ -1632,7 +1722,7 @@ async fn compat_fetch_propagated_lxmf(
             rmpv::Value::Array(batch.clone().into_iter().map(rmpv::Value::Binary).collect());
         let fetched_value = match propagation_remote_control_request(
             state,
-            relay_desc.clone(),
+            relay_desc,
             "/get",
             rmpv::Value::Array(vec![
                 fetch_ids,
@@ -1667,7 +1757,19 @@ async fn compat_fetch_propagated_lxmf(
             }
         };
         match rmpv_propagation_payload_array(&fetched_value) {
-            Ok(mut batch_payloads) => payloads.append(&mut batch_payloads),
+            Ok(batch_payloads) => {
+                fetched_entry_count = fetched_entry_count.saturating_add(batch_len);
+                if batch_payloads.len() == batch_len {
+                    payloads.extend(
+                        batch
+                            .into_iter()
+                            .zip(batch_payloads)
+                            .map(|(transient_id, payload)| (Some(transient_id), payload)),
+                    );
+                } else {
+                    payloads.extend(batch_payloads.into_iter().map(|payload| (None, payload)));
+                }
+            }
             Err(err) => {
                 if batch_len > 1 {
                     info!(
@@ -1684,6 +1786,7 @@ async fn compat_fetch_propagated_lxmf(
                     continue;
                 }
                 failed_count = failed_count.saturating_add(batch_len);
+                malformed_count = malformed_count.saturating_add(batch_len);
                 info!(
                     "[sync] propagation sync malformed fetch response relay={} destination={} batch={} shape={}",
                     relay_hex,
@@ -1701,19 +1804,83 @@ async fn compat_fetch_propagated_lxmf(
             return Err(err);
         }
     }
-    let fetched_count = payloads.len();
-    let mut imported_wires = Vec::with_capacity(fetched_count);
-    for (index, payload) in payloads.into_iter().enumerate() {
+    let extracted_payload_count = payloads.len();
+    let fetched_count = fetched_entry_count;
+    let mut imported_wires = Vec::with_capacity(extracted_payload_count);
+    let mut fetched_transient_ids_to_purge = Vec::<Vec<u8>>::new();
+    for (index, (transient_id, payload)) in payloads.into_iter().enumerate() {
         match decrypt_local_propagated_wire(&local_identity, &destination_hash, payload.as_slice())
         {
-            Ok(wire) => imported_wires.push(wire),
+            Ok(wire) => {
+                if let Some(transient_id) = transient_id {
+                    fetched_transient_ids_to_purge.push(transient_id);
+                }
+                imported_wires.push(wire);
+            }
             Err(err) => {
                 failed_count = failed_count.saturating_add(1);
+                decrypt_failed_count = decrypt_failed_count.saturating_add(1);
+                let transient_destination_hex = payload
+                    .get(..16)
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "-".to_string());
+                let retained = queue_fetched_transient_id_for_purge(
+                    &mut fetched_transient_ids_to_purge,
+                    transient_id,
+                );
                 info!(
-                    "[sync] propagated payload import failed relay={} destination={} index={} reason={}",
-                    relay_hex, destination_hex, index, err
+                    "[sync] propagated payload import failed relay={} destination={} local_identity={} transient_destination={} index={} reason={} retained={}",
+                    relay_hex,
+                    destination_hex,
+                    local_identity.address_hash().to_hex_string(),
+                    transient_destination_hex,
+                    index,
+                    err,
+                    retained
                 );
             }
+        }
+    }
+    fetched_transient_ids_to_purge.sort();
+    fetched_transient_ids_to_purge.dedup();
+    if !fetched_transient_ids_to_purge.is_empty() {
+        let purge_count = fetched_transient_ids_to_purge.len();
+        let mut purged_count = 0usize;
+        let mut purge_failed_count = 0usize;
+        for batch in propagation_purge_batches(&fetched_transient_ids_to_purge) {
+            let batch_count = batch.len();
+            let haves = rmpv::Value::Array(batch.into_iter().map(rmpv::Value::Binary).collect());
+            match propagation_remote_control_fire_and_forget(
+                state,
+                relay_desc,
+                "/get",
+                rmpv::Value::Array(vec![rmpv::Value::Nil, haves]),
+                direct_iface,
+            )
+            .await
+            {
+                Ok(_) => {
+                    purged_count = purged_count.saturating_add(batch_count);
+                }
+                Err(err) => {
+                    purge_failed_count = purge_failed_count.saturating_add(batch_count);
+                    info!(
+                        "[sync] propagation sync purge batch failed relay={} destination={} purged={} reason={}",
+                        relay_hex, destination_hex, batch_count, err
+                    );
+                }
+            }
+        }
+        if purged_count > 0 {
+            info!(
+                "[sync] propagation sync queued purge for fetched entries relay={} destination={} purged={} failed={}",
+                relay_hex, destination_hex, purged_count, purge_failed_count
+            );
+        } else if purge_failed_count > 0 {
+            info!(
+                "[sync] propagation sync purge failed relay={} destination={} purged={} reason=all_batches_failed",
+                relay_hex, destination_hex, purge_count
+            );
         }
     }
 
@@ -1721,8 +1888,12 @@ async fn compat_fetch_propagated_lxmf(
         destination_hex,
         available_count,
         fetched_count,
+        fetched_entry_count,
+        extracted_payload_count,
         imported_wires,
         failed_count,
+        malformed_count,
+        decrypt_failed_count,
     })
 }
 
@@ -1740,7 +1911,7 @@ async fn propagation_remote_control_request(
         let relay_destination_hex = relay_desc.address_hash.to_hex_string();
         let link = ensure_lxmf_output_link(
             state,
-            relay_desc.clone(),
+            relay_desc,
             Some(path),
             Some(relay_destination_hex.as_str()),
             DEFAULT_LINK_CONNECT_TIMEOUT,
@@ -1824,6 +1995,69 @@ async fn propagation_remote_control_request(
     }
 
     Err(last_error.unwrap_or(NodeError::Timeout {}))
+}
+
+async fn propagation_remote_control_fire_and_forget(
+    state: &SdkTransportState,
+    relay_desc: DestinationDesc,
+    path: &str,
+    data: rmpv::Value,
+    direct_iface: Option<AddressHash>,
+) -> Result<(), NodeError> {
+    let relay_destination_hex = relay_desc.address_hash.to_hex_string();
+    let link = ensure_lxmf_output_link(
+        state,
+        relay_desc,
+        Some(path),
+        Some(relay_destination_hex.as_str()),
+        DEFAULT_LINK_CONNECT_TIMEOUT,
+        DEFAULT_LINK_CONNECT_ATTEMPTS,
+    )
+    .await?;
+    let link_id = *link.lock().await.id();
+    let identify_payload = build_link_identify_payload(&state.identity, &link_id);
+    if let Err(err) = send_link_context_packet(
+        &state.transport,
+        &link,
+        PacketContext::LinkIdentify,
+        identify_payload.as_slice(),
+        direct_iface,
+    )
+    .await
+    {
+        clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+        info!(
+            "[sync] propagation control identify failed relay={} path={} reason={}",
+            relay_desc.address_hash.to_hex_string(),
+            path,
+            err
+        );
+        return Err(err);
+    }
+
+    let request_payload = build_link_request_payload(path, data)?;
+    match send_link_context_packet(
+        &state.transport,
+        &link,
+        PacketContext::Request,
+        request_payload.as_slice(),
+        direct_iface,
+    )
+    .await
+    {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(NodeError::InternalError {}),
+        Err(err) => {
+            clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+            info!(
+                "[sync] propagation control request failed relay={} path={} reason={}",
+                relay_desc.address_hash.to_hex_string(),
+                path,
+                err
+            );
+            Err(err)
+        }
+    }
 }
 
 fn build_link_identify_payload(identity: &PrivateIdentity, link_id: &AddressHash) -> Vec<u8> {
@@ -1922,8 +2156,8 @@ async fn send_link_context_packet(
 }
 
 async fn wait_for_link_request_response(
-    data_rx: &mut tokio::sync::broadcast::Receiver<reticulum::transport::ReceivedData>,
-    resource_rx: &mut tokio::sync::broadcast::Receiver<reticulum::resource::ResourceEvent>,
+    data_rx: &mut tokio::sync::broadcast::Receiver<ReceivedData>,
+    resource_rx: &mut tokio::sync::broadcast::Receiver<ResourceEvent>,
     expected_destination: AddressHash,
     expected_link_id: AddressHash,
     request_id: [u8; 16],
@@ -2031,6 +2265,65 @@ fn value_to_bytes(value: &rmpv::Value) -> Option<Vec<u8>> {
     }
 }
 
+fn rmpv_propagation_envelope_payloads(value: &rmpv::Value) -> Option<Vec<Vec<u8>>> {
+    let rmpv::Value::Array(entries) = value else {
+        return None;
+    };
+    if entries.len() < 2 {
+        return None;
+    }
+    let timestamp_like = matches!(
+        entries.first(),
+        Some(rmpv::Value::F32(_)) | Some(rmpv::Value::F64(_)) | Some(rmpv::Value::Integer(_))
+    );
+    if !timestamp_like {
+        return None;
+    }
+    let rmpv::Value::Array(payloads) = &entries[1] else {
+        return None;
+    };
+    let decoded = payloads
+        .iter()
+        .map(value_to_bytes)
+        .collect::<Option<Vec<_>>>()?;
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+fn propagation_payloads_from_bytes(bytes: &[u8]) -> Vec<Vec<u8>> {
+    if let Ok(value) = rmp_serde::from_slice::<rmpv::Value>(bytes) {
+        if let Some(payloads) = rmpv_propagation_envelope_payloads(&value) {
+            return payloads;
+        }
+    }
+    vec![bytes.to_vec()]
+}
+
+fn propagation_payloads_from_fetch_entry(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
+    match value {
+        rmpv::Value::Binary(bytes) => Ok(propagation_payloads_from_bytes(bytes)),
+        rmpv::Value::String(text) => {
+            let value = text.as_str().ok_or(NodeError::InternalError {})?;
+            let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
+            Ok(propagation_payloads_from_bytes(bytes.as_slice()))
+        }
+        rmpv::Value::Array(entries) => {
+            if entries.len() >= 2 {
+                if let Some(payloads) = rmpv_propagation_envelope_payloads(&entries[1]) {
+                    return Ok(payloads);
+                }
+                if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
+                    return Ok(propagation_payloads_from_bytes(bytes.as_slice()));
+                }
+            }
+            Err(NodeError::InternalError {})
+        }
+        _ => Err(NodeError::InternalError {}),
+    }
+}
+
 fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
     let rmpv::Value::Array(values) = value else {
         return Err(NodeError::InternalError {});
@@ -2045,28 +2338,17 @@ fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
 }
 
 fn rmpv_propagation_payload_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
     let rmpv::Value::Array(values) = value else {
         return Err(NodeError::InternalError {});
     };
-    values
-        .iter()
-        .map(|value| match value {
-            rmpv::Value::Binary(bytes) => Ok(bytes.clone()),
-            rmpv::Value::String(text) => {
-                let value = text.as_str().ok_or(NodeError::InternalError {})?;
-                hex::decode(value).map_err(|_| NodeError::InternalError {})
-            }
-            rmpv::Value::Array(entries) => {
-                if entries.len() >= 2 {
-                    if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
-                        return Ok(bytes);
-                    }
-                }
-                Err(NodeError::InternalError {})
-            }
-            _ => Err(NodeError::InternalError {}),
-        })
-        .collect()
+    let mut payloads = Vec::new();
+    for value in values {
+        payloads.extend(propagation_payloads_from_fetch_entry(value)?);
+    }
+    Ok(payloads)
 }
 
 fn rmpv_shape(value: &rmpv::Value) -> String {
@@ -2108,16 +2390,63 @@ fn propagation_fetch_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
         .collect()
 }
 
+fn propagation_purge_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
+    transient_ids
+        .chunks(PROPAGATION_PURGE_BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+fn queue_fetched_transient_id_for_purge(
+    purge_queue: &mut Vec<Vec<u8>>,
+    transient_id: Option<Vec<u8>>,
+) -> bool {
+    if let Some(transient_id) = transient_id {
+        purge_queue.push(transient_id);
+        false
+    } else {
+        true
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PropagationPayloadDecryptError {
+    PayloadTooShort { len: usize },
+    DestinationMismatch { expected: String, actual: String },
+    DecryptFailed,
+}
+
+impl fmt::Display for PropagationPayloadDecryptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PayloadTooShort { len } => {
+                write!(f, "payload too short for propagation transient len={}", len)
+            }
+            Self::DestinationMismatch { expected, actual } => write!(
+                f,
+                "destination prefix mismatch expected={} actual={}",
+                expected, actual
+            ),
+            Self::DecryptFailed => write!(f, "propagation transient decrypt failed"),
+        }
+    }
+}
+
 fn decrypt_local_propagated_wire(
     identity: &PrivateIdentity,
     destination_hash: &AddressHash,
     transient_payload: &[u8],
-) -> Result<Vec<u8>, NodeError> {
+) -> Result<Vec<u8>, PropagationPayloadDecryptError> {
     if transient_payload.len() <= 16 + 32 {
-        return Err(NodeError::InvalidConfig {});
+        return Err(PropagationPayloadDecryptError::PayloadTooShort {
+            len: transient_payload.len(),
+        });
     }
     if &transient_payload[..16] != destination_hash.as_slice() {
-        return Err(NodeError::InvalidConfig {});
+        return Err(PropagationPayloadDecryptError::DestinationMismatch {
+            expected: destination_hash.to_hex_string(),
+            actual: hex::encode(&transient_payload[..16]),
+        });
     }
 
     for strip_stamp in [false, true] {
@@ -2131,28 +2460,53 @@ fn decrypt_local_propagated_wire(
         };
 
         let ciphertext = &payload[16..];
-        if ciphertext.len() <= 32 {
-            continue;
+        if let Ok(decrypted) =
+            decrypt_propagation_ciphertext(identity, destination_hash, ciphertext)
+        {
+            let mut wire = Vec::with_capacity(16 + decrypted.len());
+            wire.extend_from_slice(destination_hash.as_slice());
+            wire.extend_from_slice(decrypted.as_slice());
+            return Ok(wire);
         }
-        let Ok(ephemeral_key) = <[u8; 32]>::try_from(&ciphertext[..32]) else {
-            continue;
-        };
-        let public_key = PublicKey::from(ephemeral_key);
-        let derived_key =
-            identity.derive_key(&public_key, Some(identity.address_hash().as_slice()));
-        let token = &ciphertext[32..];
-        let mut plaintext = vec![0u8; token.len()];
-        let Ok(decrypted) = identity.decrypt(OsRng, token, &derived_key, &mut plaintext) else {
-            continue;
-        };
-
-        let mut wire = Vec::with_capacity(16 + decrypted.len());
-        wire.extend_from_slice(destination_hash.as_slice());
-        wire.extend_from_slice(decrypted);
-        return Ok(wire);
     }
 
-    Err(NodeError::InvalidConfig {})
+    Err(PropagationPayloadDecryptError::DecryptFailed)
+}
+
+fn decrypt_propagation_ciphertext(
+    identity: &PrivateIdentity,
+    destination_hash: &AddressHash,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, PropagationPayloadDecryptError> {
+    if ciphertext.len() <= 32 {
+        return Err(PropagationPayloadDecryptError::DecryptFailed);
+    }
+    let Ok(ephemeral_key) = <[u8; 32]>::try_from(&ciphertext[..32]) else {
+        return Err(PropagationPayloadDecryptError::DecryptFailed);
+    };
+    let public_key = PublicKey::from(ephemeral_key);
+    let token = &ciphertext[32..];
+
+    let mut salts = Vec::with_capacity(2);
+    salts.push(identity.address_hash().as_slice());
+    if destination_hash.as_slice() != identity.address_hash().as_slice() {
+        salts.push(destination_hash.as_slice());
+    }
+
+    for salt in salts {
+        let derived_key = identity.derive_key(&public_key, Some(salt));
+        let mut plaintext = vec![0u8; token.len()];
+        let Ok(decrypted_len) = identity
+            .decrypt(OsRng, token, &derived_key, &mut plaintext)
+            .map(|decrypted| decrypted.len())
+        else {
+            continue;
+        };
+        plaintext.truncate(decrypted_len);
+        return Ok(plaintext);
+    }
+
+    Err(PropagationPayloadDecryptError::DecryptFailed)
 }
 
 fn normalize_hex_32(s: &str) -> Option<String> {
@@ -2371,6 +2725,7 @@ async fn wait_for_link_active(
 mod tests {
     use super::*;
     use lxmf::message::Payload;
+    use reticulum::transport::identity::EncryptIdentity;
 
     #[test]
     fn send_request_preserves_raw_payload_and_fields_extensions() {
@@ -2423,6 +2778,30 @@ mod tests {
         );
         assert_eq!(
             idempotency_key_for_send_mode("mission-corr-1", SendMode::PropagationOnly {}),
+            "mission-corr-1:propagation"
+        );
+    }
+
+    #[test]
+    fn direct_retry_idempotency_keys_are_unique_per_link_attempt() {
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::Auto {}, Some(1)),
+            "mission-corr-1:direct-attempt-1"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::Auto {}, Some(2)),
+            "mission-corr-1:direct-attempt-2"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::DirectOnly {}, Some(3)),
+            "mission-corr-1:direct-attempt-3"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt(
+                "mission-corr-1",
+                SendMode::PropagationOnly {},
+                Some(1)
+            ),
             "mission-corr-1:propagation"
         );
     }
@@ -2641,6 +3020,42 @@ mod tests {
     }
 
     #[test]
+    fn propagation_fetch_payload_array_unwraps_msgpack_envelopes() {
+        let first_transient = vec![0x11; 48];
+        let second_transient = vec![0x22; 64];
+        let third_transient = vec![0x33; 80];
+        let third_envelope = rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_002.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(third_transient.clone())]),
+        ]);
+        let first_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_000.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(first_transient.clone())]),
+        ]))
+        .expect("encode first envelope");
+        let second_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_001.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(second_transient.clone())]),
+        ]))
+        .expect("encode second envelope");
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(first_envelope),
+            rmpv::Value::Array(vec![
+                rmpv::Value::Binary(vec![0xAA; 32]),
+                rmpv::Value::Binary(second_envelope),
+            ]),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(vec![0xBB; 32]), third_envelope]),
+        ]);
+
+        let parsed = rmpv_propagation_payload_array(&value).expect("payload array");
+
+        assert_eq!(
+            parsed,
+            vec![first_transient, second_transient, third_transient]
+        );
+    }
+
+    #[test]
     fn propagation_link_response_frame_rejects_malformed_payloads() {
         let request_id = [0x11; 16];
         let valid = rmp_serde::to_vec(&rmpv::Value::Array(vec![
@@ -2719,6 +3134,41 @@ mod tests {
     }
 
     #[test]
+    fn propagation_purge_batches_are_bounded() {
+        let ids = (0u8..20).map(|value| vec![value]).collect::<Vec<_>>();
+
+        let batches = propagation_purge_batches(ids.as_slice());
+
+        assert_eq!(batches.len(), 3);
+        assert!(batches
+            .iter()
+            .all(|batch| batch.len() <= PROPAGATION_PURGE_BATCH_SIZE));
+        assert_eq!(
+            batches[0],
+            (0u8..8).map(|value| vec![value]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            batches[2],
+            (16u8..20).map(|value| vec![value]).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn propagation_decrypt_failures_with_transient_ids_are_purged() {
+        let mut purge_queue = Vec::new();
+
+        let retained = queue_fetched_transient_id_for_purge(&mut purge_queue, Some(vec![0xAA]));
+
+        assert!(!retained);
+        assert_eq!(purge_queue, vec![vec![0xAA]]);
+
+        let retained = queue_fetched_transient_id_for_purge(&mut purge_queue, None);
+
+        assert!(retained);
+        assert_eq!(purge_queue, vec![vec![0xAA]]);
+    }
+
+    #[test]
     fn propagated_payload_decrypts_only_for_local_destination() {
         let receiver = PrivateIdentity::new_from_name("propagation-sync-receiver");
         let sender = PrivateIdentity::new_from_name("propagation-sync-sender");
@@ -2753,5 +3203,135 @@ mod tests {
             transient.as_slice()
         )
         .is_err());
+    }
+
+    #[test]
+    fn propagated_payload_decrypt_accepts_delivery_hash_salt() {
+        let receiver = PrivateIdentity::new_from_name("propagation-delivery-salt-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-delivery-salt-sender");
+        let delivery_hash = AddressHash::new_from_hex_string("42424242424242424242424242424242")
+            .expect("delivery hash");
+        assert_ne!(delivery_hash.as_slice(), receiver.address_hash().as_slice());
+        let payload = b"delivery-hash-salted-propagation";
+        let receiver_public = PublicKey::from(*receiver.as_identity().public_key.as_bytes());
+        let derived_key = sender.derive_key(&receiver_public, Some(delivery_hash.as_slice()));
+        let mut token_buf = vec![0u8; payload.len() + 256];
+        let token = sender
+            .encrypt(OsRng, payload, &derived_key, &mut token_buf)
+            .expect("encrypt with delivery hash salt");
+
+        let mut transient = Vec::new();
+        transient.extend_from_slice(delivery_hash.as_slice());
+        transient.extend_from_slice(sender.as_identity().public_key.as_bytes());
+        transient.extend_from_slice(token);
+
+        let decrypted =
+            decrypt_local_propagated_wire(&receiver, &delivery_hash, transient.as_slice())
+                .expect("delivery hash salt fallback should decrypt");
+
+        assert_eq!(&decrypted[16..], payload);
+    }
+
+    #[test]
+    fn propagated_payload_decrypts_lxmf_delivery_destination_hash() {
+        let receiver = PrivateIdentity::new_from_name("propagation-lxmf-delivery-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-lxmf-delivery-sender");
+        let delivery_destination = SingleOutputDestination::new(
+            *receiver.as_identity(),
+            DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+        );
+        let delivery_hash = delivery_destination.desc.address_hash;
+        assert_ne!(delivery_hash.as_slice(), receiver.address_hash().as_slice());
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(delivery_hash.as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_050.0,
+            Some(b"delivery-destination-content".to_vec()),
+            Some(b"delivery-destination-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let envelope = wire
+            .pack_propagation_with_rng(
+                &lxmf_identity(receiver.as_identity()),
+                1_779_000_050.0,
+                OsRng,
+            )
+            .expect("pack envelope");
+        let payloads = propagation_payloads_from_bytes(envelope.as_slice());
+
+        let decrypted =
+            decrypt_local_propagated_wire(&receiver, &delivery_hash, payloads[0].as_slice())
+                .expect("decrypt delivery-destination propagated wire");
+
+        assert_eq!(decrypted, packed);
+    }
+
+    #[test]
+    fn propagated_payload_decrypt_error_identifies_destination_mismatch() {
+        let receiver = PrivateIdentity::new_from_name("propagation-error-receiver");
+        let other = PrivateIdentity::new_from_name("propagation-error-other");
+        let mut payload = vec![0u8; 16 + 32 + 1];
+        payload[..16].copy_from_slice(other.address_hash().as_slice());
+
+        let err =
+            decrypt_local_propagated_wire(&receiver, receiver.address_hash(), payload.as_slice())
+                .expect_err("wrong destination should fail before decrypt");
+
+        assert!(err
+            .to_string()
+            .contains("destination prefix mismatch expected="));
+        assert!(err
+            .to_string()
+            .contains(receiver.address_hash().to_hex_string().as_str()));
+        assert!(err
+            .to_string()
+            .contains(other.address_hash().to_hex_string().as_str()));
+    }
+
+    #[test]
+    fn propagated_envelope_from_fetch_response_decrypts_for_local_destination() {
+        let receiver = PrivateIdentity::new_from_name("propagation-envelope-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-envelope-sender");
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(receiver.address_hash().as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_100.0,
+            Some(b"enveloped-sync-content".to_vec()),
+            Some(b"enveloped-sync-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let envelope = wire
+            .pack_propagation_with_rng(
+                &lxmf_identity(receiver.as_identity()),
+                1_779_000_100.0,
+                OsRng,
+            )
+            .expect("pack envelope");
+        let fetched = rmpv::Value::Array(vec![rmpv::Value::Binary(envelope)]);
+        let payloads = rmpv_propagation_payload_array(&fetched).expect("payloads");
+
+        assert_eq!(payloads.len(), 1);
+        let decrypted = decrypt_local_propagated_wire(
+            &receiver,
+            receiver.address_hash(),
+            payloads[0].as_slice(),
+        )
+        .expect("decrypt local propagated wire");
+
+        assert_eq!(decrypted, packed);
     }
 }

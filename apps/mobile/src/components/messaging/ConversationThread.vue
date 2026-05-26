@@ -44,11 +44,6 @@ function safeTrim(value: unknown): string {
 }
 
 const canSend = computed(() => draft.value.trim().length > 0 && Boolean(props.destinationHex));
-const hasReadablePeerName = computed(() => {
-  const displayName = safeTrim(props.displayName);
-  const destinationHex = safeTrim(props.destinationHex);
-  return displayName.length > 0 && displayName.toLowerCase() !== destinationHex.toLowerCase();
-});
 const hasTargetPosition = computed(() =>
   Boolean(safeTrim(props.targetLatitude) || safeTrim(props.targetLongitude)),
 );

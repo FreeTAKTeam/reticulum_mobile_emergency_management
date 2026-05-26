@@ -1,7 +1,6 @@
 import type { PacketReceivedEvent } from "@reticulum/node-client";
 
 import {
-  buildMissionCommandFieldsBase64,
   createMissionCommandEnvelope,
   parseMissionSyncFields,
   type MissionCommandEnvelope,

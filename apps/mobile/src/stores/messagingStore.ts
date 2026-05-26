@@ -275,18 +275,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     };
   }
 
-  function conversationSetForRefresh(conversationId: string): Set<string> {
-    const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId) {
-      return new Set();
-    }
-    return resolvedConversationIds(normalizedConversationId);
-  }
-
-  function mergeFetchedMessages(
-    requestedConversationId: string,
-    items: MessageRecord[],
-  ): void {
+  function mergeFetchedMessages(items: MessageRecord[]): void {
     const fetchedMessages = items.map((message) => cloneMessage(message));
 
     const next: StoredMessages = {};
@@ -536,7 +525,7 @@ export const useMessagingStore = defineStore("messaging", () => {
           }
         }
         const items = await client.listMessages(resolvedConversationId || undefined);
-        mergeFetchedMessages(resolvedConversationId, items);
+        mergeFetchedMessages(items);
         nextConversationId = queuedMessagesConversationId ?? "";
       } while (nextConversationId);
     })();
@@ -565,7 +554,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     const client = getProjectionClient(nodeStore.settings.clientMode);
     await refreshConversations();
     const items = await client.listMessages(undefined);
-    mergeFetchedMessages("", items);
+    mergeFetchedMessages(items);
     primeOperationalNotificationScope(
       "chat",
       items
@@ -690,7 +679,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
-      method: "Direct",
+      method: "Opportunistic",
       state: "Queued",
       detail: undefined,
       sentAtMs: now,
@@ -711,7 +700,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Direct",
+        method: "Opportunistic",
         state: "Queued",
         detail: undefined,
         sentAtMs: now,
@@ -729,7 +718,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Direct",
+        method: "Opportunistic",
         state: "Failed",
         detail: error instanceof Error ? error.message : "Send failed",
         sentAtMs: now,
@@ -1118,7 +1107,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       destinationHex: conversation?.destinationHex ?? normalizedDestination,
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       bodyUtf8,
-      method: "Direct",
+      method: "Opportunistic",
       state: "Queued",
       sentAtMs: now,
       updatedAtMs: now,

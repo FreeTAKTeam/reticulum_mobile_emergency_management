@@ -359,6 +359,95 @@ impl MessagingStore {
         }
     }
 
+    pub fn saved_destination_hexes(&self) -> Vec<String> {
+        let mut destinations = self.saved_destinations.iter().cloned().collect::<Vec<_>>();
+        destinations.sort();
+        destinations
+    }
+
+    pub fn replace_saved_destinations<I, S>(
+        &mut self,
+        destinations: I,
+    ) -> (Vec<String>, Vec<String>)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let next = destinations
+            .into_iter()
+            .map(|destination| normalize_hex(destination.as_ref()))
+            .filter(|destination| !destination.is_empty())
+            .collect::<HashSet<_>>();
+        let current = self.saved_destinations.clone();
+        let mut added = next.difference(&current).cloned().collect::<Vec<_>>();
+        let mut removed = current.difference(&next).cloned().collect::<Vec<_>>();
+        added.sort();
+        removed.sort();
+
+        for destination in &removed {
+            self.mark_peer_saved(destination, false);
+        }
+        for destination in &added {
+            self.mark_peer_saved(destination, true);
+        }
+
+        (added, removed)
+    }
+
+    pub fn prune_saved_destinations_with_non_rem_announce_evidence(&mut self) -> Vec<String> {
+        let mut app_dest_by_identity = HashMap::<String, String>::new();
+        let mut lxmf_dest_by_identity = HashMap::<String, String>::new();
+        let mut app_records = HashMap::<String, AnnounceRecord>::new();
+        let mut lxmf_records = HashMap::<String, AnnounceRecord>::new();
+
+        for record in self.announce_records.values() {
+            if record.destination_kind == "app" {
+                app_dest_by_identity
+                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
+                app_records.insert(record.destination_hex.clone(), record.clone());
+            } else if record.destination_kind == "lxmf_delivery" {
+                lxmf_dest_by_identity
+                    .insert(record.identity_hex.clone(), record.destination_hex.clone());
+                lxmf_records.insert(record.destination_hex.clone(), record.clone());
+            }
+        }
+        for (identity_hex, destination_hex) in &self.resolved_app_destination_by_identity {
+            app_dest_by_identity
+                .entry(identity_hex.clone())
+                .or_insert_with(|| destination_hex.clone());
+        }
+        for (identity_hex, lxmf_destination_hex) in &self.resolved_lxmf_by_identity {
+            lxmf_dest_by_identity
+                .entry(identity_hex.clone())
+                .or_insert_with(|| lxmf_destination_hex.clone());
+        }
+
+        let mut removed = Vec::new();
+        for saved_destination in self.saved_destination_hexes() {
+            let lxmf_record = lxmf_records.get(saved_destination.as_str()).or_else(|| {
+                app_records
+                    .get(saved_destination.as_str())
+                    .map(|record| record.identity_hex.as_str())
+                    .or_else(|| {
+                        self.resolved_app_identity_by_destination
+                            .get(saved_destination.as_str())
+                            .map(String::as_str)
+                    })
+                    .and_then(|identity| lxmf_dest_by_identity.get(identity))
+                    .and_then(|lxmf_destination| lxmf_records.get(lxmf_destination.as_str()))
+            });
+            let has_non_rem_lxmf_evidence = lxmf_record.is_some_and(|record| {
+                let app_data = record.app_data.trim();
+                !app_data.is_empty() && !supports_mission_traffic(Some(app_data))
+            });
+            if has_non_rem_lxmf_evidence {
+                self.mark_peer_saved(saved_destination.as_str(), false);
+                removed.push(saved_destination);
+            }
+        }
+        removed
+    }
+
     pub fn is_peer_saved(&self, destination_hex: &str) -> bool {
         let normalized = normalize_hex(destination_hex);
         !normalized.is_empty() && self.saved_destinations.contains(normalized.as_str())
@@ -476,54 +565,115 @@ impl MessagingStore {
         }
 
         let mut candidate_destinations = HashSet::<String>::new();
-        candidate_destinations.extend(app_records.keys().cloned());
-        candidate_destinations.extend(self.saved_destinations.iter().cloned());
-        candidate_destinations.extend(self.resolved_app_identity_by_destination.keys().cloned());
+        candidate_destinations.extend(
+            lxmf_records
+                .iter()
+                .filter(|(_, record)| supports_mission_traffic(Some(record.app_data.as_str())))
+                .map(|(destination_hex, _)| destination_hex.clone()),
+        );
+        for saved_destination in &self.saved_destinations {
+            let canonical_destination = app_records
+                .get(saved_destination)
+                .map(|record| record.identity_hex.as_str())
+                .or_else(|| {
+                    self.resolved_app_identity_by_destination
+                        .get(saved_destination)
+                        .map(String::as_str)
+                })
+                .and_then(|identity| lxmf_dest_by_identity.get(identity))
+                .filter(|lxmf_destination| {
+                    lxmf_records
+                        .get(lxmf_destination.as_str())
+                        .is_some_and(|record| {
+                            supports_mission_traffic(Some(record.app_data.as_str()))
+                        })
+                })
+                .cloned()
+                .unwrap_or_else(|| saved_destination.clone());
+            candidate_destinations.insert(canonical_destination);
+        }
 
         let mut peers = Vec::<PeerRecord>::new();
+        let mut projected_destinations = HashSet::<String>::new();
         for destination_hex in candidate_destinations {
-            let app_record = app_records.get(&destination_hex);
-            let identity_hex = app_record
+            if !projected_destinations.insert(destination_hex.clone()) {
+                continue;
+            }
+            let lxmf_record = lxmf_records
+                .get(&destination_hex)
+                .filter(|record| supports_mission_traffic(Some(record.app_data.as_str())));
+            let identity_hex = lxmf_record
                 .map(|record| record.identity_hex.clone())
+                .or_else(|| {
+                    app_records
+                        .get(&destination_hex)
+                        .map(|record| record.identity_hex.clone())
+                })
                 .or_else(|| {
                     self.resolved_app_identity_by_destination
                         .get(&destination_hex)
                         .cloned()
                 });
-            let lxmf_destination_hex = identity_hex
+            let app_record = identity_hex
                 .as_ref()
-                .and_then(|identity| lxmf_dest_by_identity.get(identity).cloned());
-            let lxmf_record = lxmf_destination_hex
+                .and_then(|identity| app_dest_by_identity.get(identity))
+                .and_then(|value| app_records.get(value));
+            let lxmf_destination_hex = lxmf_record
+                .map(|record| record.destination_hex.clone())
+                .or_else(|| {
+                    identity_hex
+                        .as_ref()
+                        .and_then(|identity| lxmf_dest_by_identity.get(identity).cloned())
+                });
+            let app_alias_destination = identity_hex
                 .as_ref()
-                .and_then(|value| lxmf_records.get(value));
-            let saved = self.saved_destinations.contains(destination_hex.as_str());
-            let active_link = self
+                .and_then(|identity| app_dest_by_identity.get(identity));
+            let saved_alias = app_alias_destination.is_some_and(|app_destination| {
+                self.saved_destinations.contains(app_destination.as_str())
+            });
+            let saved = self.saved_destinations.contains(destination_hex.as_str()) || saved_alias;
+            let last_resolution_error = self
+                .last_resolution_errors
+                .get(&destination_hex)
+                .cloned()
+                .or_else(|| {
+                    identity_hex
+                        .as_ref()
+                        .and_then(|identity| app_dest_by_identity.get(identity))
+                        .and_then(|app_destination| {
+                            self.last_resolution_errors.get(app_destination).cloned()
+                        })
+                });
+            let announce_last_seen_at_ms = lxmf_record.map(|record| record.received_at_ms);
+            let lxmf_last_seen_at_ms = announce_last_seen_at_ms;
+            let has_transport_link = self
                 .active_link_destinations
                 .contains(destination_hex.as_str())
+                || app_alias_destination
+                    .is_some_and(|value| self.active_link_destinations.contains(value.as_str()))
                 || lxmf_destination_hex
                     .as_ref()
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
-            let last_resolution_error = self.last_resolution_errors.get(&destination_hex).cloned();
-            let announce_last_seen_at_ms = app_record.map(|record| record.received_at_ms);
-            let lxmf_last_seen_at_ms = lxmf_record.map(|record| record.received_at_ms);
-            let peer_app_data = app_record.map(|record| record.app_data.as_str());
-            let mission_capable = app_record.is_some() && supports_mission_traffic(peer_app_data);
+            let active_link = has_transport_link;
+            let latest_route_seen_at_ms = announce_last_seen_at_ms;
+            let peer_app_data = lxmf_record.map(|record| record.app_data.as_str());
+            let mission_capable = supports_mission_traffic(peer_app_data);
             let unsaved_recent = announce_last_seen_at_ms.is_some_and(|seen_at_ms| {
                 now_ms.saturating_sub(seen_at_ms) <= self.peer_stale_after_ms
             });
             if !saved && (!mission_capable || !unsaved_recent) {
                 continue;
             }
-            let latest_seen_at_ms = announce_last_seen_at_ms.unwrap_or(0);
+            let latest_seen_at_ms = latest_route_seen_at_ms.unwrap_or(0);
             let stale = peer_is_stale(
                 saved,
                 active_link,
-                announce_last_seen_at_ms,
+                latest_route_seen_at_ms,
                 now_ms,
                 self.peer_stale_after_ms,
             );
             let availability_state = peer_availability_state(
-                app_record.is_some(),
+                lxmf_record.is_some(),
                 identity_hex.as_ref(),
                 lxmf_destination_hex.as_ref(),
                 stale,
@@ -532,7 +682,9 @@ impl MessagingStore {
                 destination_hex: destination_hex.clone(),
                 identity_hex,
                 lxmf_destination_hex: lxmf_destination_hex.clone(),
-                display_name: lxmf_record.and_then(|record| record.display_name.clone()),
+                display_name: lxmf_record
+                    .and_then(|record| record.display_name.clone())
+                    .or_else(|| app_record.and_then(|record| record.display_name.clone())),
                 app_data: peer_app_data.map(ToOwned::to_owned),
                 state: compatibility_peer_state(saved, availability_state, active_link),
                 saved,
@@ -542,7 +694,14 @@ impl MessagingStore {
                 last_resolution_attempt_at_ms: self
                     .last_resolution_attempt_at_ms
                     .get(&destination_hex)
-                    .copied(),
+                    .copied()
+                    .or_else(|| {
+                        app_alias_destination.and_then(|app_destination| {
+                            self.last_resolution_attempt_at_ms
+                                .get(app_destination)
+                                .copied()
+                        })
+                    }),
                 last_seen_at_ms: latest_seen_at_ms,
                 announce_last_seen_at_ms,
                 lxmf_last_seen_at_ms,
@@ -577,9 +736,16 @@ impl MessagingStore {
 
     pub fn peer_by_destination(&self, destination_hex: &str) -> Option<PeerRecord> {
         let normalized = normalize_hex(destination_hex);
-        self.list_peers()
-            .into_iter()
-            .find(|peer| peer.destination_hex == normalized)
+        self.list_peers().into_iter().find(|peer| {
+            peer.destination_hex == normalized
+                || peer.lxmf_destination_hex.as_deref() == Some(normalized.as_str())
+                || peer
+                    .identity_hex
+                    .as_ref()
+                    .and_then(|identity_hex| self.app_destination_for_identity(identity_hex))
+                    .as_deref()
+                    == Some(normalized.as_str())
+        })
     }
 
     pub fn peer_change_for_destination(&self, destination_hex: &str) -> Option<PeerChange> {
@@ -876,7 +1042,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn peer_projection_merges_app_and_lxmf_announces() {
+    fn legacy_app_alias_projects_canonical_lxmf_peer() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -893,7 +1059,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -904,18 +1070,18 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].destination_hex, "appdest");
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
         assert_eq!(peers[0].lxmf_destination_hex.as_deref(), Some("lxmfdest"));
         assert_eq!(peers[0].display_name.as_deref(), Some("Alice"));
         assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(!peers[0].active_link);
         assert!(peers[0].saved);
-        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(20));
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
         assert!(!peers[0].stale);
     }
 
     #[test]
-    fn peer_last_seen_comes_from_app_announce_not_lxmf_delivery() {
+    fn peer_identity_and_last_seen_come_from_rem_lxmf_delivery_announce() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -932,22 +1098,29 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
             received_at_ms: now,
         });
-        store.mark_peer_saved("appdest", true);
+        store.mark_peer_saved("lxmfdest", true);
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(60_000));
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
+        assert_eq!(peers[0].lxmf_destination_hex.as_deref(), Some("lxmfdest"));
+        assert_eq!(peers[0].last_seen_at_ms, now);
+        assert_eq!(peers[0].announce_last_seen_at_ms, Some(now));
         assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(now));
+        assert_eq!(
+            peers[0].app_data.as_deref(),
+            Some("R3AKT,EMergencyMessages,Telemetry;name=Alice")
+        );
     }
 
     #[test]
-    fn saved_peer_staleness_uses_app_announce_not_lxmf_delivery() {
+    fn saved_peer_staleness_uses_recent_rem_lxmf_announce() {
         let mut store = MessagingStore::new(30);
         let now = current_time_ms();
         let stale_app_seen_at = now.saturating_sub((31 * 60 * 1000) as u64);
@@ -965,7 +1138,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -975,12 +1148,14 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert!(peers[0].stale);
-        assert_eq!(peers[0].last_seen_at_ms, stale_app_seen_at);
+        assert!(!peers[0].stale);
+        assert_eq!(peers[0].state, PeerState::Disconnected);
+        assert!(!peers[0].active_link);
+        assert_eq!(peers[0].last_seen_at_ms, now);
     }
 
     #[test]
-    fn failed_saved_peer_resolution_preserves_last_seen_from_announces() {
+    fn failed_saved_peer_resolution_preserves_last_seen_from_rem_lxmf_announces() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -993,6 +1168,16 @@ mod tests {
             interface_hex: "iface".into(),
             received_at_ms: now.saturating_sub(10_000),
         });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 15,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(9_000),
+        });
         store.mark_peer_saved("appdest", true);
         store.record_resolution_attempt("appdest", now);
         store.record_resolution_error("appdest", Some("timeout".into()));
@@ -1000,10 +1185,11 @@ mod tests {
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
         assert!(!peers[0].stale);
-        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10_000));
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(9_000));
         assert_eq!(
             peers[0].announce_last_seen_at_ms,
-            Some(now.saturating_sub(10_000))
+            Some(now.saturating_sub(9_000))
         );
         assert_eq!(peers[0].last_resolution_error.as_deref(), Some("timeout"));
 
@@ -1012,6 +1198,16 @@ mod tests {
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
             app_data: "R3AKT,EMergencyMessages".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_add(1),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1080,7 +1276,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "Alice".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 5,
             interface_hex: "iface".into(),
@@ -1092,6 +1288,7 @@ mod tests {
         let peer = store
             .peer_by_destination("appdest")
             .expect("saved peer should be projected from lxmf announce");
+        assert_eq!(peer.destination_hex, "lxmfdest");
         assert_eq!(peer.lxmf_destination_hex.as_deref(), Some("lxmfdest"));
         assert_eq!(peer.display_name.as_deref(), Some("Alice"));
         assert_eq!(peer.lxmf_last_seen_at_ms, Some(now));
@@ -1151,6 +1348,53 @@ mod tests {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.mark_peer_saved("lxmfdest", true);
+        store.set_peer_active_link("lxmfdest", true, now);
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].state, PeerState::Connected);
+        assert!(peers[0].active_link);
+    }
+
+    #[test]
+    fn saved_peer_with_recent_rem_lxmf_announce_is_reachable_without_active_transport_link() {
+        let mut store = MessagingStore::new(30);
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now,
+        });
+        store.mark_peer_saved("lxmfdest", true);
+
+        let peer = store
+            .peer_by_destination("lxmfdest")
+            .expect("saved recent peer should be projected");
+        assert_eq!(peer.state, PeerState::Disconnected);
+        assert!(!peer.active_link);
+        assert!(!peer.stale);
+    }
+
+    #[test]
+    fn saved_peer_with_recent_lxmf_announce_is_not_stale_after_link_clear() {
+        let mut store = MessagingStore::new(30);
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
             destination_hex: "appdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "app".into(),
@@ -1158,15 +1402,90 @@ mod tests {
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
-            received_at_ms: now.saturating_sub(20),
+            received_at_ms: now.saturating_sub(31 * 60 * 1000),
         });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now,
+        });
+        store.record_resolution_result("appdest", "identity", "lxmfdest", now);
         store.mark_peer_saved("appdest", true);
-        store.set_peer_active_link("appdest", true, now);
+        store.set_peer_active_link("lxmfdest", true, now);
+        store.set_peer_active_link("lxmfdest", false, now.saturating_add(1));
 
-        let peers = store.list_peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].state, PeerState::Connected);
-        assert!(peers[0].active_link);
+        let peer = store
+            .peer_by_destination("appdest")
+            .expect("saved peer with fresh lxmf route should be projected");
+        assert_eq!(peer.destination_hex, "lxmfdest");
+        assert_eq!(peer.state, PeerState::Disconnected);
+        assert!(!peer.active_link);
+        assert!(!peer.stale);
+    }
+
+    #[test]
+    fn saved_peer_with_stale_rem_lxmf_announce_is_disconnected() {
+        let mut store = MessagingStore::new(30);
+        let now = current_time_ms();
+        let stale_seen_at = now.saturating_sub(31 * 60 * 1000);
+        store.record_announce(AnnounceRecord {
+            destination_hex: "appdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "app".into(),
+            app_data: "R3AKT,EMergencyMessages".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale_seen_at,
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: stale_seen_at,
+        });
+        store.record_resolution_result("appdest", "identity", "lxmfdest", now);
+        store.mark_peer_saved("appdest", true);
+
+        let peer = store
+            .peer_by_destination("appdest")
+            .expect("saved stale peer should be projected");
+        assert_eq!(peer.destination_hex, "lxmfdest");
+        assert_eq!(peer.state, PeerState::Disconnected);
+        assert!(!peer.active_link);
+        assert!(peer.stale);
+    }
+
+    #[test]
+    fn unsaved_recent_peer_does_not_project_connected_without_active_link() {
+        let mut store = MessagingStore::new(30);
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
+            display_name: Some("Alice".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now,
+        });
+
+        let peer = store
+            .peer_by_destination("lxmfdest")
+            .expect("recent mission-capable peer should be projected");
+        assert_eq!(peer.state, PeerState::Disconnected);
+        assert!(!peer.active_link);
+        assert!(!peer.stale);
     }
 
     #[test]
@@ -1187,7 +1506,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Alice".into(),
             display_name: Some("Alice".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1303,7 +1622,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Poco".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1312,7 +1631,7 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].destination_hex, "appdest");
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
         assert!(!peers[0].saved);
         assert_eq!(peers[0].state, PeerState::Disconnected);
         assert!(!peers[0].stale);
@@ -1337,7 +1656,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=S8".into(),
             display_name: Some("S8".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1376,7 +1695,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_app_announce_replaces_stale_destination_for_identity() {
+    fn latest_app_alias_resolves_to_canonical_lxmf_destination_for_identity() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1403,7 +1722,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=New".into(),
             display_name: Some("New".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1420,11 +1739,11 @@ mod tests {
             .into_iter()
             .map(|peer| peer.destination_hex)
             .collect::<Vec<_>>();
-        assert_eq!(peer_destinations, vec!["appdest-new".to_string()]);
+        assert_eq!(peer_destinations, vec!["lxmfdest".to_string()]);
     }
 
     #[test]
-    fn empty_app_announce_does_not_erase_mission_capabilities() {
+    fn empty_legacy_app_announce_does_not_erase_lxmf_mission_capabilities() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1441,7 +1760,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Poco".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1462,10 +1781,79 @@ mod tests {
         assert_eq!(peers.len(), 1);
         assert_eq!(
             peers[0].app_data.as_deref(),
-            Some("R3AKT,EMergencyMessages,Telemetry")
+            Some("R3AKT,EMergencyMessages,Telemetry;name=Poco")
         );
         assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
-        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(20));
+    }
+
+    #[test]
+    fn replace_saved_destinations_clears_removed_peer_presence() {
+        let mut store = MessagingStore::default();
+        store.mark_peer_saved("oldpeer", true);
+        store.mark_peer_saved("keptpeer", true);
+        store.set_peer_active_link("oldpeer", true, current_time_ms());
+        store.record_resolution_error("oldpeer", Some("stale route".to_string()));
+
+        let (added, removed) =
+            store.replace_saved_destinations(["keptpeer".to_string(), "newpeer".to_string()]);
+
+        assert_eq!(added, vec!["newpeer".to_string()]);
+        assert_eq!(removed, vec!["oldpeer".to_string()]);
+        assert_eq!(
+            store.saved_destination_hexes(),
+            vec!["keptpeer".to_string(), "newpeer".to_string()]
+        );
+        assert!(!store.is_peer_saved("oldpeer"));
+        assert!(!store
+            .peer_by_destination("oldpeer")
+            .is_some_and(|peer| peer.active_link));
+    }
+
+    #[test]
+    fn prune_saved_destinations_with_non_rem_lxmf_evidence_removes_contaminated_peers() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.mark_peer_saved("sidebandlxmf", true);
+        store.mark_peer_saved("rempeer", true);
+        store.mark_peer_saved("emptyroute", true);
+        store.record_announce(AnnounceRecord {
+            destination_hex: "sidebandlxmf".into(),
+            identity_hex: "sidebandidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "92c40553696c6b65c0".into(),
+            display_name: Some("Silke".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(20),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "rempeer".into(),
+            identity_hex: "remidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages,Telemetry;name=Pixel".into(),
+            display_name: Some("Pixel".into()),
+            hops: 0,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(10),
+        });
+        store.record_announce(AnnounceRecord {
+            destination_hex: "emptyroute".into(),
+            identity_hex: "emptyidentity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "".into(),
+            display_name: None,
+            hops: 0,
+            interface_hex: "iface".into(),
+            received_at_ms: now.saturating_sub(5),
+        });
+
+        let removed = store.prune_saved_destinations_with_non_rem_announce_evidence();
+
+        assert_eq!(removed, vec!["sidebandlxmf".to_string()]);
+        assert!(!store.is_peer_saved("sidebandlxmf"));
+        assert!(store.is_peer_saved("emptyroute"));
+        assert!(store.is_peer_saved("rempeer"));
     }
 
     #[test]
@@ -1486,7 +1874,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Poco".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1501,7 +1889,32 @@ mod tests {
     }
 
     #[test]
-    fn lxmf_only_announce_does_not_create_peer_record() {
+    fn rem_lxmf_only_announce_creates_canonical_peer_record() {
+        let mut store = MessagingStore::default();
+        let now = current_time_ms();
+        store.record_announce(AnnounceRecord {
+            destination_hex: "lxmfdest".into(),
+            identity_hex: "identity".into(),
+            destination_kind: "lxmf_delivery".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Poco".into(),
+            display_name: Some("Poco".into()),
+            hops: 1,
+            interface_hex: "iface".into(),
+            received_at_ms: now,
+        });
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
+        assert_eq!(peers[0].lxmf_destination_hex.as_deref(), Some("lxmfdest"));
+        assert_eq!(peers[0].last_seen_at_ms, now);
+        assert_eq!(peers[0].announce_last_seen_at_ms, Some(now));
+        assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(now));
+        assert_eq!(peers[0].display_name.as_deref(), Some("Poco"));
+    }
+
+    #[test]
+    fn non_rem_lxmf_only_announce_does_not_create_peer_record() {
         let mut store = MessagingStore::default();
         store.record_announce(AnnounceRecord {
             destination_hex: "lxmfdest".into(),
@@ -1518,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn last_seen_comes_only_from_app_announces() {
+    fn last_seen_comes_from_rem_lxmf_delivery_announces() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
         store.record_announce(AnnounceRecord {
@@ -1535,7 +1948,7 @@ mod tests {
             destination_hex: "lxmfdest".into(),
             identity_hex: "identity".into(),
             destination_kind: "lxmf_delivery".into(),
-            app_data: "chat".into(),
+            app_data: "R3AKT,EMergencyMessages;name=Poco".into(),
             display_name: Some("Poco".into()),
             hops: 1,
             interface_hex: "iface".into(),
@@ -1544,7 +1957,12 @@ mod tests {
 
         let peers = store.list_peers();
         assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(40));
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
+        assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
+        assert_eq!(
+            peers[0].announce_last_seen_at_ms,
+            Some(now.saturating_sub(10))
+        );
         assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(now.saturating_sub(10)));
     }
 }

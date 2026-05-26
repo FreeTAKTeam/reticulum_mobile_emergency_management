@@ -43,7 +43,7 @@ export async function checkSetupPermissions(): Promise<SetupPermissionSnapshot> 
   }
 }
 
-export async function requestLocationPermission(): Promise<SetupPermissionState> {
+export function requestLocationPermission(): Promise<SetupPermissionState> {
   return telemetryService.requestPermission();
 }
 

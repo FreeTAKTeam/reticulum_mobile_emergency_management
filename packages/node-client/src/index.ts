@@ -781,7 +781,7 @@ export interface ReticulumNodeClient {
 }
 
 export interface ReticulumNodeClientFactoryOptions {
-  mode?: "auto" | "capacitor" | "web";
+  mode?: "auto" | "capacitor" | "mock" | "web";
 }
 
 const GREEK_CALLSIGN_PREFIXES = [
@@ -3579,13 +3579,17 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
 
 class WebReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  private status: NodeStatus = {
-    running: false,
-    name: "",
-    identityHex: randomHex32(),
-    appDestinationHex: randomHex32(),
-    lxmfDestinationHex: randomHex32(),
-  };
+  private status: NodeStatus = (() => {
+    const lxmfDestinationHex = randomHex32();
+    return {
+      running: false,
+      name: "",
+      identityHex: randomHex32(),
+      appDestinationHex: lxmfDestinationHex,
+      lxmfDestinationHex,
+    };
+  })();
+  private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
   private readonly checklists: ChecklistRecord[] = [];
@@ -3602,15 +3606,33 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       ...this.connected.values(),
     ]);
     const now = Date.now();
-    return [...destinations].map((destinationHex) => ({
-      destinationHex,
-      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
-      saved: this.savedPeers.has(destinationHex),
-      stale: false,
-      activeLink: this.connected.has(destinationHex),
-      hubDerived: false,
-      lastSeenAtMs: now,
-    }));
+    return [...destinations].map((destinationHex) => {
+      const activeLink = this.connected.has(destinationHex);
+      return {
+        destinationHex,
+        lxmfDestinationHex: destinationHex,
+        state: activeLink ? "Connected" : "Disconnected",
+        saved: this.savedPeers.has(destinationHex),
+        stale: false,
+        activeLink,
+        hubDerived: false,
+        lastSeenAtMs: activeLink ? now : 0,
+      };
+    });
+  }
+
+  private emitLocalAnnounce(): void {
+    this.emitter.emit("announceReceived", {
+      destinationHex: this.status.lxmfDestinationHex,
+      identityHex: this.status.identityHex,
+      destinationKind: "lxmf_delivery",
+      announceClass: "LxmfDelivery",
+      appData: this.capabilities,
+      displayName: this.status.name,
+      hops: 1,
+      interfaceHex: randomHex32(),
+      receivedAtMs: Date.now(),
+    });
   }
 
   async start(config: NodeConfig): Promise<void> {
@@ -3632,7 +3654,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         change: {
           destinationHex,
           state: "Disconnected",
-          saved: false,
+          saved: this.savedPeers.has(destinationHex),
           stale: false,
           activeLink: false,
           hubDerived: false,
@@ -3690,7 +3712,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        saved: false,
+        saved: this.savedPeers.has(normalized),
         stale: false,
         activeLink: false,
         hubDerived: false,
@@ -3699,7 +3721,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async announceNow(): Promise<void> {}
+  async announceNow(): Promise<void> {
+    this.emitLocalAnnounce();
+  }
 
   async requestPeerIdentity(_destinationHex: string): Promise<void> {}
 
@@ -3746,7 +3770,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     }
   }
 
-  async setAnnounceCapabilities(_capabilityString: string): Promise<void> {}
+  async setAnnounceCapabilities(capabilityString: string): Promise<void> {
+    this.capabilities = capabilityString;
+    this.emitLocalAnnounce();
+  }
 
   async setLogLevel(level: LogLevel): Promise<void> {
     this.emitter.emit("log", {
@@ -3819,7 +3846,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     }
   }
   async getOperationalSummary(): Promise<OperationalSummary> {
-    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
+    const connectedPeerCount = countConnectedSavedPeers(this.connected, this.savedPeers);
     return {
       running: this.status.running,
       peerCountTotal: this.currentPeerRecords().length,
@@ -4058,15 +4085,25 @@ function randomHex32(): string {
   return out;
 }
 
+function countConnectedSavedPeers(
+  connected: Set<string>,
+  savedPeers: Map<string, SavedPeerRecord>,
+): number {
+  return [...connected].filter((destination) => savedPeers.has(destination)).length;
+}
+
 class MockReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  private status: NodeStatus = {
-    running: false,
-    name: "mock-node",
-    identityHex: randomHex32(),
-    appDestinationHex: randomHex32(),
-    lxmfDestinationHex: randomHex32(),
-  };
+  private status: NodeStatus = (() => {
+    const lxmfDestinationHex = randomHex32();
+    return {
+      running: false,
+      name: "mock-node",
+      identityHex: randomHex32(),
+      appDestinationHex: lxmfDestinationHex,
+      lxmfDestinationHex,
+    };
+  })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
   private announceTimer: number | null = null;
   private readonly connected = new Set<string>();
@@ -4085,23 +4122,27 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       ...this.connected.values(),
     ]);
     const now = Date.now();
-    return [...destinations].map((destinationHex) => ({
-      destinationHex,
-      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
-      saved: this.savedPeers.has(destinationHex),
-      stale: false,
-      activeLink: this.connected.has(destinationHex),
-      hubDerived: false,
-      lastSeenAtMs: now,
-    }));
+    return [...destinations].map((destinationHex) => {
+      const activeLink = this.connected.has(destinationHex);
+      return {
+        destinationHex,
+        lxmfDestinationHex: destinationHex,
+        state: activeLink ? "Connected" : "Disconnected",
+        saved: this.savedPeers.has(destinationHex),
+        stale: false,
+        activeLink,
+        hubDerived: false,
+        lastSeenAtMs: activeLink ? now : 0,
+      };
+    });
   }
 
   private emitAnnounce(
     destinationHex: string,
     appData: string,
     identityHex = randomHex32(),
-    destinationKind: AnnounceDestinationKind = "app",
-    announceClass: AnnounceClass = "PeerApp",
+    destinationKind: AnnounceDestinationKind = "lxmf_delivery",
+    announceClass: AnnounceClass = "LxmfDelivery",
   ): void {
     this.emitter.emit("announceReceived", {
       destinationHex,
@@ -4121,10 +4162,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     }
     for (const [index, peer] of MOCK_ANNOUNCED_PEERS.entries()) {
       const identityHex = MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32();
-      this.emitAnnounce(peer, "R3AKT,EMergencyMessages", identityHex, "app");
-      this.emitAnnounce(randomHex32(), "6ac46f686174", identityHex, "lxmf_delivery");
+      this.emitAnnounce(peer, this.capabilities, identityHex);
     }
-    this.emitAnnounce(randomHex32(), "LXMF,Chat", randomHex32(), "other");
+    this.emitAnnounce(randomHex32(), "LXMF,Chat", randomHex32(), "other", "Other");
 
     this.announceTimer = window.setInterval(() => {
       const shuffled = [...MOCK_ANNOUNCED_PEERS.entries()].sort(() => Math.random() - 0.5);
@@ -4133,7 +4173,6 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         destinationHex,
         Math.random() > 0.25 ? this.capabilities : "R3AKT,Other",
         MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32(),
-        "app",
       );
     }, 5000);
   }
@@ -4161,6 +4200,19 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async stop(): Promise<void> {
+    for (const destinationHex of this.connected) {
+      this.emitter.emit("peerChanged", {
+        change: {
+          destinationHex,
+          state: "Disconnected",
+          saved: this.savedPeers.has(destinationHex),
+          stale: false,
+          activeLink: false,
+          hubDerived: false,
+          lastSeenAtMs: Date.now(),
+        },
+      });
+    }
     this.status = {
       ...this.status,
       running: false,
@@ -4214,7 +4266,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        saved: false,
+        saved: this.savedPeers.has(normalized),
         stale: false,
         activeLink: false,
         hubDerived: false,
@@ -4224,7 +4276,11 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async announceNow(): Promise<void> {
-    this.emitAnnounce(this.status.appDestinationHex, this.capabilities, this.status.identityHex, "app");
+    this.emitAnnounce(
+      this.status.lxmfDestinationHex,
+      this.capabilities,
+      this.status.identityHex,
+    );
   }
 
   async requestPeerIdentity(_destinationHex: string): Promise<void> {}
@@ -4287,7 +4343,11 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
     this.capabilities = capabilityString;
-    this.emitAnnounce(this.status.appDestinationHex, capabilityString);
+    this.emitAnnounce(
+      this.status.lxmfDestinationHex,
+      capabilityString,
+      this.status.identityHex,
+    );
   }
 
   async setLogLevel(level: LogLevel): Promise<void> {
@@ -4361,7 +4421,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     }
   }
   async getOperationalSummary(): Promise<OperationalSummary> {
-    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
+    const connectedPeerCount = countConnectedSavedPeers(this.connected, this.savedPeers);
     return {
       running: this.status.running,
       peerCountTotal: this.currentPeerRecords().length,
@@ -4555,6 +4615,9 @@ export function createReticulumNodeClient(
   const mode = options.mode ?? "auto";
   if (mode === "web") {
     return new WebReticulumNodeClient();
+  }
+  if (mode === "mock") {
+    return new MockReticulumNodeClient();
   }
   if (mode === "capacitor") {
     return new CapacitorReticulumNodeClient();

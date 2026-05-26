@@ -31,6 +31,7 @@ import {
   type EamTeamSummaryResult,
   type EamWireStatus,
 } from "../types/domain";
+import { asRecord } from "./records";
 
 export type EamCommandEnvelope<T extends EamCommandType = EamCommandType> = Omit<
   MissionCommandEnvelope,
@@ -77,20 +78,6 @@ const EAM_STATUS_PRIORITY: Record<EamWireStatus, number> = {
   Yellow: 2,
   Red: 3,
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  if (value instanceof Map) {
-    const normalized: Record<string, unknown> = {};
-    for (const [key, entry] of value.entries()) {
-      normalized[String(key)] = entry;
-    }
-    return normalized;
-  }
-  return value as Record<string, unknown>;
-}
 
 function asString(value: unknown): string | undefined {
   if (typeof value !== "string") {
