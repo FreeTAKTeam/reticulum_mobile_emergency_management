@@ -309,8 +309,12 @@ Verification:
 
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
-- If the peer is known but is not currently direct-deliverable and an active propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
+- REM also registers its own local **`lxmf/propagation` destination** at runtime. This hosted local node is part of the propagation layer, not a separate offline queue.
+- If the peer is known but is not currently direct-deliverable and an active external propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
 - If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
+- Propagation send candidates are ordered from active/configured external relays to alternate external relays, then the hosted local propagation node. If no peer or external relay is reachable, the local propagation node still accepts the message, persists it in `app_state.db`, marks it pending replication, and returns normal propagation acceptance to the caller.
+- A runtime maintenance loop checks connectivity state from live peer links and discovered propagation relays. Offline state accepts locally without network access, degraded state keeps retry/backoff metadata, and online state drains pending local propagation records through the selected external propagation relay.
+- Local propagation persistence is idempotent by message id and does not downgrade replicated or delivered state when a stale duplicate is seen.
 
 Acknowledgement:
 - Sender success is tracked from the LXMF response path, not just packet send.

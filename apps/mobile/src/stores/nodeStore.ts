@@ -7,6 +7,7 @@ import {
   type SendMode,
   type SavedPeerRecord,
   type SyncStatus,
+  type PropagationNodeStatus,
   createReticulumNodeClient,
   type AnnounceReceivedEvent,
   type HubDirectoryUpdatedEvent,
@@ -100,6 +101,19 @@ const EMPTY_STATUS: NodeStatus = {
 const EMPTY_SYNC_STATUS: SyncStatus = {
   phase: "Idle",
   messagesReceived: 0,
+};
+
+const EMPTY_PROPAGATION_NODE_STATUS: PropagationNodeStatus = {
+  nodeIdHex: "",
+  connectivityState: "Offline",
+  online: false,
+  connectedPeers: 0,
+  connectedPropagationNodes: 0,
+  pendingMessages: 0,
+  failedDeliveryAttempts: 0,
+  pendingReplicationCount: 0,
+  retryQueueSize: 0,
+  localStorageHealthy: true,
 };
 
 const EMPTY_OPERATIONAL_SUMMARY = {
@@ -531,6 +545,7 @@ export const useNodeStore = defineStore("node", () => {
   const readinessError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
+  const propagationNodeStatus = ref<PropagationNodeStatus>({ ...EMPTY_PROPAGATION_NODE_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
   const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
   const telemetryDestinations = ref<string[]>([]);
@@ -1861,6 +1876,7 @@ export const useNodeStore = defineStore("node", () => {
   async function refreshMessagingState(): Promise<void> {
     if (!client.value || !status.value.running) {
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
+      propagationNodeStatus.value = { ...EMPTY_PROPAGATION_NODE_STATUS };
       telemetryDestinations.value = [];
       return;
     }
@@ -1870,9 +1886,15 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     refreshMessagingStatePromise = (async () => {
-      const [peers, nextSyncStatus, nextTelemetryDestinations] = await Promise.all([
+      const [
+        peers,
+        nextSyncStatus,
+        nextPropagationNodeStatus,
+        nextTelemetryDestinations,
+      ] = await Promise.all([
         client.value!.listPeers(),
         client.value!.getLxmfSyncStatus(),
+        client.value!.getPropagationNodeStatus(),
         client.value!.listTelemetryDestinations(),
       ]);
       reconcileNativePeerSnapshot(peers);
@@ -1880,6 +1902,7 @@ export const useNodeStore = defineStore("node", () => {
         upsertResolvedPeer(peer);
       }
       syncStatus.value = { ...nextSyncStatus };
+      propagationNodeStatus.value = { ...nextPropagationNodeStatus };
       telemetryDestinations.value = [...nextTelemetryDestinations];
     })()
       .catch((error: unknown) => {
@@ -2981,6 +3004,7 @@ export const useNodeStore = defineStore("node", () => {
     settings,
     status,
     syncStatus,
+    propagationNodeStatus,
     operationalSummary,
     announceByDestination,
     hubDirectorySnapshot,

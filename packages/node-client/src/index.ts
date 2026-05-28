@@ -233,6 +233,25 @@ export interface SyncStatus {
   detail?: string;
 }
 
+export type PropagationConnectivityState = "Offline" | "Degraded" | "Online";
+
+export interface PropagationNodeStatus {
+  nodeIdHex: string;
+  connectivityState: PropagationConnectivityState;
+  online: boolean;
+  connectedPeers: number;
+  connectedPropagationNodes: number;
+  pendingMessages: number;
+  failedDeliveryAttempts: number;
+  pendingReplicationCount: number;
+  retryQueueSize: number;
+  lastSuccessfulSyncAtMs?: number;
+  lastFailedSyncAtMs?: number;
+  lastOnlineAtMs?: number;
+  lastOfflineAtMs?: number;
+  localStorageHealthy: boolean;
+}
+
 export interface SendLxmfRequest {
   destinationHex: string;
   bodyUtf8: string;
@@ -664,6 +683,7 @@ export interface ReticulumNodeClient {
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
   deleteConversation(conversationId: string): Promise<void>;
   getLxmfSyncStatus(): Promise<SyncStatus>;
+  getPropagationNodeStatus(): Promise<PropagationNodeStatus>;
   listTelemetryDestinations(): Promise<string[]>;
   legacyImportCompleted(): Promise<boolean>;
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
@@ -930,6 +950,7 @@ interface ReticulumNodePlugin {
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
   deleteConversation(options: { conversationId: string }): Promise<void>;
   getLxmfSyncStatus(): Promise<Record<string, unknown>>;
+  getPropagationNodeStatus(): Promise<Record<string, unknown>>;
   listTelemetryDestinations(): Promise<{ items: string[] }>;
   legacyImportCompleted(): Promise<{ completed: boolean }>;
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
@@ -1657,6 +1678,47 @@ function toSyncStatus(raw: Record<string, unknown>): SyncStatus {
           : undefined,
     messagesReceived: Number(raw.messagesReceived ?? raw.messages_received ?? 0),
     detail: typeof raw.detail === "string" ? raw.detail : undefined,
+  };
+}
+
+function toPropagationConnectivityState(raw: unknown): PropagationConnectivityState {
+  const value = enumVariantName(raw) || String(raw ?? "").trim();
+  const valid: PropagationConnectivityState[] = ["Offline", "Degraded", "Online"];
+  return valid.includes(value as PropagationConnectivityState)
+    ? (value as PropagationConnectivityState)
+    : "Offline";
+}
+
+function optionalNumber(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+}
+
+function toPropagationNodeStatus(raw: Record<string, unknown>): PropagationNodeStatus {
+  return {
+    nodeIdHex: normalizeHex(raw.nodeIdHex ?? raw.node_id_hex ?? ""),
+    connectivityState: toPropagationConnectivityState(
+      raw.connectivityState ?? raw.connectivity_state,
+    ),
+    online: Boolean(raw.online),
+    connectedPeers: Number(raw.connectedPeers ?? raw.connected_peers ?? 0),
+    connectedPropagationNodes: Number(
+      raw.connectedPropagationNodes ?? raw.connected_propagation_nodes ?? 0,
+    ),
+    pendingMessages: Number(raw.pendingMessages ?? raw.pending_messages ?? 0),
+    failedDeliveryAttempts: Number(
+      raw.failedDeliveryAttempts ?? raw.failed_delivery_attempts ?? 0,
+    ),
+    pendingReplicationCount: Number(
+      raw.pendingReplicationCount ?? raw.pending_replication_count ?? 0,
+    ),
+    retryQueueSize: Number(raw.retryQueueSize ?? raw.retry_queue_size ?? 0),
+    lastSuccessfulSyncAtMs: optionalNumber(
+      raw.lastSuccessfulSyncAtMs ?? raw.last_successful_sync_at_ms,
+    ),
+    lastFailedSyncAtMs: optionalNumber(raw.lastFailedSyncAtMs ?? raw.last_failed_sync_at_ms),
+    lastOnlineAtMs: optionalNumber(raw.lastOnlineAtMs ?? raw.last_online_at_ms),
+    lastOfflineAtMs: optionalNumber(raw.lastOfflineAtMs ?? raw.last_offline_at_ms),
+    localStorageHealthy: Boolean(raw.localStorageHealthy ?? raw.local_storage_healthy),
   };
 }
 
@@ -3236,6 +3298,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toSyncStatus(await this.plugin.getLxmfSyncStatus());
   }
 
+  async getPropagationNodeStatus(): Promise<PropagationNodeStatus> {
+    await this.ready();
+    return toPropagationNodeStatus(await this.plugin.getPropagationNodeStatus());
+  }
+
   async listTelemetryDestinations(): Promise<string[]> {
     await this.ready();
     const result = await this.plugin.listTelemetryDestinations();
@@ -3579,6 +3646,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
 
 class WebReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
+  private readonly localPropagationNodeHex = randomHex32();
   private status: NodeStatus = (() => {
     const lxmfDestinationHex = randomHex32();
     return {
@@ -3816,6 +3884,14 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       phase: "Idle",
       messagesReceived: 0,
     };
+  }
+
+  async getPropagationNodeStatus(): Promise<PropagationNodeStatus> {
+    return localPropagationStatus(
+      this.localPropagationNodeHex,
+      this.status.running,
+      this.connected.size,
+    );
   }
 
   async listTelemetryDestinations(): Promise<string[]> {
@@ -4092,8 +4168,28 @@ function countConnectedSavedPeers(
   return [...connected].filter((destination) => savedPeers.has(destination)).length;
 }
 
+function localPropagationStatus(
+  nodeIdHex: string,
+  running: boolean,
+  connectedPeers: number,
+): PropagationNodeStatus {
+  return {
+    nodeIdHex,
+    connectivityState: running && connectedPeers > 0 ? "Online" : "Offline",
+    online: running && connectedPeers > 0,
+    connectedPeers,
+    connectedPropagationNodes: 0,
+    pendingMessages: 0,
+    failedDeliveryAttempts: 0,
+    pendingReplicationCount: 0,
+    retryQueueSize: 0,
+    localStorageHealthy: true,
+  };
+}
+
 class MockReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
+  private readonly localPropagationNodeHex = randomHex32();
   private status: NodeStatus = (() => {
     const lxmfDestinationHex = randomHex32();
     return {
@@ -4391,6 +4487,14 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       phase: "Idle",
       messagesReceived: 0,
     };
+  }
+
+  async getPropagationNodeStatus(): Promise<PropagationNodeStatus> {
+    return localPropagationStatus(
+      this.localPropagationNodeHex,
+      this.status.running,
+      this.connected.size,
+    );
   }
 
   async listTelemetryDestinations(): Promise<string[]> {

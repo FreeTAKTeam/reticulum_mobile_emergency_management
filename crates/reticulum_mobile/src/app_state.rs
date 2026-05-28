@@ -16,10 +16,12 @@ use crate::types::{
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, MessageDirection,
-    MessageRecord, NodeError, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
-    SosAlertRecord, SosAudioRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord,
-    TelemetryPositionRecord, DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload,
+    LocalPropagationCounts, LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
+    LocalPropagationReplicationStatus, MessageDirection, MessageRecord, NodeError,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
+    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
+    DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
 };
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
@@ -187,6 +189,22 @@ impl AppStateStore {
                     updated_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS local_propagation_messages (
+                    message_id_hex TEXT PRIMARY KEY,
+                    target_hex TEXT NOT NULL,
+                    delivery_status TEXT NOT NULL,
+                    replication_status TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL,
+                    next_retry_at_ms INTEGER,
+                    updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_local_propagation_pending
+                    ON local_propagation_messages (
+                        replication_status,
+                        next_retry_at_ms,
+                        updated_at_ms
+                    );
                 CREATE TABLE IF NOT EXISTS announces (
                     destination_hex TEXT PRIMARY KEY,
                     identity_hex TEXT NOT NULL,
@@ -1469,6 +1487,159 @@ impl AppStateStore {
         Ok(records)
     }
 
+    pub fn store_local_propagation_message(
+        &self,
+        message: &LocalPropagationMessageRecord,
+    ) -> Result<(), NodeError> {
+        let mut record = normalize_local_propagation_message(message);
+        if let Some(existing) = self.get_local_propagation_message(record.message_id_hex.as_str())?
+        {
+            record = merge_local_propagation_message(&existing, &record);
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_local_propagation_message_tx(&transaction, &record)?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn get_local_propagation_message(
+        &self,
+        message_id_hex: &str,
+    ) -> Result<Option<LocalPropagationMessageRecord>, NodeError> {
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM local_propagation_messages WHERE message_id_hex = ?1",
+                params![message_id_hex.trim().to_ascii_lowercase()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub fn list_pending_local_propagation_messages(
+        &self,
+        limit: u32,
+        now_ms: u64,
+    ) -> Result<Vec<LocalPropagationMessageRecord>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT json FROM local_propagation_messages
+                 WHERE replication_status != 'replicated'
+                   AND (next_retry_at_ms IS NULL OR next_retry_at_ms <= ?1)
+                 ORDER BY updated_at_ms ASC, message_id_hex ASC
+                 LIMIT ?2",
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map(params![now_ms as i64, i64::from(limit.max(1))], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|_| NodeError::IoError {})?;
+        let mut records = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|_| NodeError::IoError {})?;
+            records.push(deserialize_json(&raw)?);
+        }
+        Ok(records)
+    }
+
+    pub fn mark_local_propagation_replicated(
+        &self,
+        message_id_hex: &str,
+        node_id_hex: &str,
+        attempted_at_ms: u64,
+    ) -> Result<(), NodeError> {
+        let Some(mut record) = self.get_local_propagation_message(message_id_hex)? else {
+            return Ok(());
+        };
+        record.replication_status = LocalPropagationReplicationStatus::Replicated {};
+        record.last_attempted_replication_at_ms = Some(attempted_at_ms);
+        record.updated_at_ms = record.updated_at_ms.max(attempted_at_ms);
+        record.next_retry_at_ms = None;
+        record.last_error = None;
+        record.replicated_node_hex = Some(node_id_hex.trim().to_ascii_lowercase());
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_local_propagation_message_tx(&transaction, &record)?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn mark_local_propagation_failed(
+        &self,
+        message_id_hex: &str,
+        attempted_at_ms: u64,
+        error: &str,
+    ) -> Result<(), NodeError> {
+        let Some(mut record) = self.get_local_propagation_message(message_id_hex)? else {
+            return Ok(());
+        };
+        record.replication_status = LocalPropagationReplicationStatus::Failed {};
+        record.retry_count = record.retry_count.saturating_add(1);
+        record.last_attempted_replication_at_ms = Some(attempted_at_ms);
+        record.updated_at_ms = record.updated_at_ms.max(attempted_at_ms);
+        record.next_retry_at_ms = Some(next_local_propagation_retry_at(
+            attempted_at_ms,
+            record.retry_count,
+        ));
+        record.last_error = Some(error.to_string());
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_local_propagation_message_tx(&transaction, &record)?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn local_propagation_counts(&self) -> Result<LocalPropagationCounts, NodeError> {
+        let connection = self.connect()?;
+        let now = now_ms() as i64;
+        let count = |sql: &str| -> Result<u32, NodeError> {
+            connection
+                .query_row(sql, [], |row| row.get::<_, i64>(0))
+                .map(|value| value.max(0) as u32)
+                .map_err(|_| NodeError::IoError {})
+        };
+        let total_messages = count("SELECT COUNT(1) FROM local_propagation_messages")?;
+        let pending_messages = count(
+            "SELECT COUNT(1) FROM local_propagation_messages
+             WHERE delivery_status = 'pending' OR replication_status = 'pending'",
+        )?;
+        let failed_delivery_count = count(
+            "SELECT COUNT(1) FROM local_propagation_messages
+             WHERE delivery_status = 'failed' OR replication_status = 'failed'",
+        )?;
+        let pending_replication_count = count(
+            "SELECT COUNT(1) FROM local_propagation_messages
+             WHERE replication_status != 'replicated'",
+        )?;
+        let retry_queue_size = connection
+            .query_row(
+                "SELECT COUNT(1) FROM local_propagation_messages
+                 WHERE next_retry_at_ms IS NOT NULL AND next_retry_at_ms > ?1",
+                params![now],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value.max(0) as u32)
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(LocalPropagationCounts {
+            total_messages,
+            pending_messages,
+            failed_delivery_count,
+            pending_replication_count,
+            retry_queue_size,
+        })
+    }
+
     #[cfg(test)]
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
         self.list_conversations_resolved(&ConversationPeerResolver::default())
@@ -2124,6 +2295,49 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn write_local_propagation_message_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        message: &LocalPropagationMessageRecord,
+    ) -> Result<(), NodeError> {
+        let record = normalize_local_propagation_message(message);
+        let json = serialize_json(&record)?;
+        transaction
+            .execute(
+                "INSERT INTO local_propagation_messages (
+                    message_id_hex,
+                    target_hex,
+                    delivery_status,
+                    replication_status,
+                    retry_count,
+                    next_retry_at_ms,
+                    updated_at_ms,
+                    json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(message_id_hex) DO UPDATE SET
+                    target_hex = excluded.target_hex,
+                    delivery_status = excluded.delivery_status,
+                    replication_status = excluded.replication_status,
+                    retry_count = excluded.retry_count,
+                    next_retry_at_ms = excluded.next_retry_at_ms,
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                params![
+                    record.message_id_hex,
+                    record.target_hex,
+                    local_propagation_delivery_status_name(record.delivery_status),
+                    local_propagation_replication_status_name(record.replication_status),
+                    i64::from(record.retry_count),
+                    record.next_retry_at_ms.map(|value| value as i64),
+                    record.updated_at_ms as i64,
+                    json,
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
     fn repair_message_conversations(
         &self,
         connection: &Connection,
@@ -2328,6 +2542,128 @@ fn serialize_json<T: Serialize>(value: &T) -> Result<String, NodeError> {
 
 fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, NodeError> {
     serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
+}
+
+fn normalize_local_propagation_message(
+    message: &LocalPropagationMessageRecord,
+) -> LocalPropagationMessageRecord {
+    let mut record = message.clone();
+    record.message_id_hex = record.message_id_hex.trim().to_ascii_lowercase();
+    record.sender_id_hex = record.sender_id_hex.trim().to_ascii_lowercase();
+    record.target_hex = record.target_hex.trim().to_ascii_lowercase();
+    record.message_type = record.message_type.trim().to_ascii_lowercase();
+    record.replicated_node_hex = record
+        .replicated_node_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    record
+}
+
+fn local_propagation_delivery_status_name(status: LocalPropagationDeliveryStatus) -> &'static str {
+    match status {
+        LocalPropagationDeliveryStatus::Pending {} => "pending",
+        LocalPropagationDeliveryStatus::Delivered {} => "delivered",
+        LocalPropagationDeliveryStatus::Failed {} => "failed",
+    }
+}
+
+fn local_propagation_replication_status_name(
+    status: LocalPropagationReplicationStatus,
+) -> &'static str {
+    match status {
+        LocalPropagationReplicationStatus::Pending {} => "pending",
+        LocalPropagationReplicationStatus::Replicated {} => "replicated",
+        LocalPropagationReplicationStatus::Failed {} => "failed",
+    }
+}
+
+fn local_propagation_delivery_status_rank(status: LocalPropagationDeliveryStatus) -> u8 {
+    match status {
+        LocalPropagationDeliveryStatus::Pending {} => 0,
+        LocalPropagationDeliveryStatus::Failed {} => 1,
+        LocalPropagationDeliveryStatus::Delivered {} => 2,
+    }
+}
+
+fn local_propagation_replication_status_rank(status: LocalPropagationReplicationStatus) -> u8 {
+    match status {
+        LocalPropagationReplicationStatus::Pending {} => 0,
+        LocalPropagationReplicationStatus::Failed {} => 1,
+        LocalPropagationReplicationStatus::Replicated {} => 2,
+    }
+}
+
+fn max_optional_u64(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn merge_local_propagation_message(
+    existing: &LocalPropagationMessageRecord,
+    incoming: &LocalPropagationMessageRecord,
+) -> LocalPropagationMessageRecord {
+    let mut merged = incoming.clone();
+    merged.created_at_ms = existing.created_at_ms.min(incoming.created_at_ms);
+    merged.updated_at_ms = existing.updated_at_ms.max(incoming.updated_at_ms);
+    if local_propagation_delivery_status_rank(existing.delivery_status)
+        > local_propagation_delivery_status_rank(incoming.delivery_status)
+    {
+        merged.delivery_status = existing.delivery_status;
+    }
+    if local_propagation_replication_status_rank(existing.replication_status)
+        > local_propagation_replication_status_rank(incoming.replication_status)
+    {
+        merged.replication_status = existing.replication_status;
+    }
+    merged.retry_count = existing.retry_count.max(incoming.retry_count);
+    merged.last_attempted_delivery_at_ms = max_optional_u64(
+        existing.last_attempted_delivery_at_ms,
+        incoming.last_attempted_delivery_at_ms,
+    );
+    merged.last_attempted_replication_at_ms = max_optional_u64(
+        existing.last_attempted_replication_at_ms,
+        incoming.last_attempted_replication_at_ms,
+    );
+    if matches!(
+        merged.replication_status,
+        LocalPropagationReplicationStatus::Replicated {}
+    ) {
+        merged.next_retry_at_ms = None;
+        merged.replicated_node_hex = existing
+            .replicated_node_hex
+            .clone()
+            .or_else(|| incoming.replicated_node_hex.clone());
+    }
+    merged.acknowledgement_state = incoming
+        .acknowledgement_state
+        .clone()
+        .or_else(|| existing.acknowledgement_state.clone());
+    merged.signature_metadata = incoming
+        .signature_metadata
+        .clone()
+        .or_else(|| existing.signature_metadata.clone());
+    merged.causal_metadata = incoming
+        .causal_metadata
+        .clone()
+        .or_else(|| existing.causal_metadata.clone());
+    if existing.updated_at_ms > incoming.updated_at_ms {
+        merged.last_error = existing.last_error.clone().or(merged.last_error);
+    }
+    merged
+}
+
+fn next_local_propagation_retry_at(attempted_at_ms: u64, retry_count: u32) -> u64 {
+    const BASE_DELAY_MS: u64 = 1_000;
+    const MAX_DELAY_MS: u64 = 5 * 60_000;
+    let exponent = retry_count.saturating_sub(1).min(8);
+    let multiplier = 1_u64.checked_shl(exponent).unwrap_or(u64::MAX);
+    let delay = BASE_DELAY_MS.saturating_mul(multiplier).min(MAX_DELAY_MS);
+    attempted_at_ms.saturating_add(delay)
 }
 
 fn announce_class_name(class: AnnounceClass) -> &'static str {
@@ -3406,8 +3742,9 @@ mod tests {
         ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
         ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
         ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
-        MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
-        TelemetrySettingsRecord,
+        LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
+        LocalPropagationReplicationStatus, MessageState, ProjectionScope, SosAlertRecord,
+        SosLocationRecord, SosMessageKind, TelemetrySettingsRecord,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3506,6 +3843,110 @@ mod tests {
             received_at_ms: None,
             updated_at_ms,
         }
+    }
+
+    fn local_propagation_message(
+        id: &str,
+        target_hex: &str,
+        created_at_ms: u64,
+    ) -> LocalPropagationMessageRecord {
+        LocalPropagationMessageRecord {
+            message_id_hex: id.to_string(),
+            sender_id_hex: "local-sender".to_string(),
+            target_hex: target_hex.to_string(),
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+            payload_base64: "cGVyc2lzdGVkIHBheWxvYWQ=".to_string(),
+            title: Some("offline".to_string()),
+            message_type: "lxmf".to_string(),
+            delivery_status: LocalPropagationDeliveryStatus::Pending {},
+            replication_status: LocalPropagationReplicationStatus::Pending {},
+            retry_count: 0,
+            last_attempted_delivery_at_ms: None,
+            last_attempted_replication_at_ms: None,
+            next_retry_at_ms: None,
+            acknowledgement_state: None,
+            signature_metadata: Some("signed".to_string()),
+            causal_metadata: Some("lamport=1".to_string()),
+            fields_base64: None,
+            last_error: None,
+            replicated_node_hex: None,
+        }
+    }
+
+    #[test]
+    fn local_propagation_messages_persist_and_survive_restart() {
+        let storage_dir = test_storage_dir("local-propagation-persist");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let message = local_propagation_message(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            10,
+        );
+
+        store
+            .store_local_propagation_message(&message)
+            .expect("store local propagation message");
+
+        let restarted =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("restart");
+        let pending = restarted
+            .list_pending_local_propagation_messages(100, 20)
+            .expect("pending messages");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].message_id_hex, message.message_id_hex);
+        assert_eq!(
+            pending[0].replication_status,
+            LocalPropagationReplicationStatus::Pending {}
+        );
+    }
+
+    #[test]
+    fn local_propagation_messages_are_idempotent_and_do_not_downgrade_state() {
+        let storage_dir = test_storage_dir("local-propagation-dedupe");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let mut message = local_propagation_message(
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            10,
+        );
+        store
+            .store_local_propagation_message(&message)
+            .expect("store pending");
+        store
+            .mark_local_propagation_replicated(
+                message.message_id_hex.as_str(),
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                20,
+            )
+            .expect("mark replicated");
+
+        message.updated_at_ms = 15;
+        message.replication_status = LocalPropagationReplicationStatus::Pending {};
+        store
+            .store_local_propagation_message(&message)
+            .expect("store stale duplicate");
+
+        let counts = store
+            .local_propagation_counts()
+            .expect("local propagation counts");
+        assert_eq!(counts.total_messages, 1);
+        assert_eq!(counts.pending_replication_count, 0);
+        assert_eq!(counts.failed_delivery_count, 0);
+        let restored = store
+            .get_local_propagation_message(message.message_id_hex.as_str())
+            .expect("get restored")
+            .expect("message present");
+        assert_eq!(
+            restored.replication_status,
+            LocalPropagationReplicationStatus::Replicated {}
+        );
+        assert_eq!(
+            restored.replicated_node_hex.as_deref(),
+            Some("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+        );
     }
 
     fn announce(

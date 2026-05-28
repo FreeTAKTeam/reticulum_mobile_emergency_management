@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::delivery_policy;
+use crate::local_propagation;
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_commands::{canonical_command_type, checklist_arg_code};
@@ -59,12 +60,12 @@ use crate::types::{
     ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey, ChecklistTaskRecord,
     ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
     EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
-    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
-    LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange,
-    PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
-    TelemetryPositionRecord,
+    LocalPropagationReplicationStatus, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
+    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
+    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
+    PeerChange, PeerRecord, PeerState, PropagationConnectivityState, PropagationNodeStatus,
+    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
+    SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -92,6 +93,8 @@ const SAVED_PEER_LINK_BACKOFF_MAX_MS: u64 = 60_000;
 const SAVED_PEER_LINK_BACKOFF_MAX_ATTEMPTS: u32 = 6;
 const AUTO_PROPAGATION_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 const AUTO_PROPAGATION_SYNC_LIMIT: u32 = 100;
+const LOCAL_PROPAGATION_DRAIN_INTERVAL: Duration = Duration::from_secs(10);
+const LOCAL_PROPAGATION_DRAIN_LIMIT: u32 = 25;
 const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
     "topic_broker",
     "group_chat",
@@ -3064,6 +3067,7 @@ async fn announce_destinations(
     transport: &Arc<Transport>,
     _app_destination: &Arc<TokioMutex<SingleInputDestination>>,
     lxmf_destination: &Arc<TokioMutex<SingleInputDestination>>,
+    local_propagation_destination: &Arc<TokioMutex<SingleInputDestination>>,
     announce_capabilities: &Arc<TokioMutex<String>>,
     reason: &str,
 ) {
@@ -3084,6 +3088,24 @@ async fn announce_destinations(
         Some(caps.as_bytes()),
         reason,
         DESTINATION_KIND_LXMF_DELIVERY,
+    )
+    .await;
+    let propagation_hex = local_propagation_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
+    info!(
+        "[announce] sending reason={} kind={} destination={}",
+        reason, DESTINATION_KIND_LXMF_PROPAGATION, propagation_hex,
+    );
+    send_announce_with_trace(
+        transport,
+        local_propagation_destination,
+        Some(b"REM,local-propagation-node"),
+        reason,
+        DESTINATION_KIND_LXMF_PROPAGATION,
     )
     .await;
 }
@@ -3805,6 +3827,27 @@ struct PendingLxmfAcknowledgement {
 struct RegisteredPendingLxmfDelivery {
     pending: PendingLxmfDelivery,
     buffered_ack: Option<PendingLxmfAcknowledgement>,
+}
+
+#[derive(Debug, Clone)]
+struct PropagationConnectivityRuntimeState {
+    state: PropagationConnectivityState,
+    last_online_at_ms: Option<u64>,
+    last_offline_at_ms: Option<u64>,
+    last_successful_sync_at_ms: Option<u64>,
+    last_failed_sync_at_ms: Option<u64>,
+}
+
+impl Default for PropagationConnectivityRuntimeState {
+    fn default() -> Self {
+        Self {
+            state: PropagationConnectivityState::Offline {},
+            last_online_at_ms: None,
+            last_offline_at_ms: None,
+            last_successful_sync_at_ms: None,
+            last_failed_sync_at_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5071,11 +5114,14 @@ fn direct_attempt_budget_for_send(
 fn should_try_propagation_after_direct_failure(
     send_mode: SendMode,
     is_accepted_result: bool,
-    has_active_relay: bool,
+    has_propagation_candidate: bool,
     saved_peer: bool,
-    _retriable: bool,
+    retriable: bool,
 ) -> bool {
-    matches!(send_mode, SendMode::Auto {}) && !is_accepted_result && has_active_relay && saved_peer
+    matches!(send_mode, SendMode::Auto {})
+        && !is_accepted_result
+        && has_propagation_candidate
+        && (saved_peer || retriable)
 }
 
 async fn equivalent_direct_delivery_destinations(
@@ -5514,6 +5560,21 @@ fn propagation_sync_candidate_relays(
     candidates
 }
 
+fn propagation_send_candidate_relays(
+    announces: &[sdkmsg::AnnounceRecord],
+    active_relay_hex: &str,
+    preferred_destination_hex: Option<&str>,
+    local_propagation_node_hex: &str,
+) -> Vec<String> {
+    let mut candidates =
+        propagation_sync_candidate_relays(announces, active_relay_hex, preferred_destination_hex);
+    let local = local_propagation_node_hex.trim();
+    if !local.is_empty() && !candidates.iter().any(|candidate| candidate == local) {
+        candidates.push(local.to_string());
+    }
+    candidates
+}
+
 async fn run_propagation_sync_job(
     state: NodeRuntimeState,
     bus: EventBus,
@@ -5690,6 +5751,7 @@ async fn run_propagation_sync_job(
             "[sync] propagation sync complete relay={} {}",
             relay_candidate, detail
         );
+        mark_local_propagation_sync_success(&state, now_ms()).await;
         state
             .propagation_sync_inflight
             .store(false, Ordering::Release);
@@ -5712,9 +5774,218 @@ async fn run_propagation_sync_job(
     )
     .await;
     info!("[sync] propagation sync failed reason={detail}");
+    mark_local_propagation_sync_failure(&state, now_ms()).await;
     state
         .propagation_sync_inflight
         .store(false, Ordering::Release);
+}
+
+async fn external_propagation_relay_count(state: &NodeRuntimeState) -> usize {
+    state
+        .messaging
+        .lock()
+        .await
+        .list_announces()
+        .into_iter()
+        .filter(|record| {
+            record.destination_kind == DESTINATION_KIND_LXMF_PROPAGATION
+                && record.destination_hex != state.local_propagation_node_hex
+        })
+        .count()
+}
+
+async fn refresh_propagation_connectivity_state(
+    state: &NodeRuntimeState,
+    next_state: PropagationConnectivityState,
+) {
+    let now = now_ms();
+    let mut guard = state.propagation_connectivity.lock().await;
+    if guard.state == next_state {
+        return;
+    }
+    guard.state = next_state;
+    match next_state {
+        PropagationConnectivityState::Online {} => guard.last_online_at_ms = Some(now),
+        PropagationConnectivityState::Offline {} => guard.last_offline_at_ms = Some(now),
+        PropagationConnectivityState::Degraded {} => {}
+    }
+}
+
+async fn mark_local_propagation_sync_success(state: &NodeRuntimeState, at_ms: u64) {
+    let mut guard = state.propagation_connectivity.lock().await;
+    guard.state = PropagationConnectivityState::Online {};
+    guard.last_online_at_ms = Some(at_ms);
+    guard.last_successful_sync_at_ms = Some(at_ms);
+}
+
+async fn mark_local_propagation_sync_failure(state: &NodeRuntimeState, at_ms: u64) {
+    let mut guard = state.propagation_connectivity.lock().await;
+    guard.state = PropagationConnectivityState::Degraded {};
+    guard.last_failed_sync_at_ms = Some(at_ms);
+}
+
+async fn propagation_node_status_snapshot(
+    state: &NodeRuntimeState,
+) -> Result<PropagationNodeStatus, NodeError> {
+    let counts = state.app_state.local_propagation_counts()?;
+    let connected_peers = state.connected_peers.lock().await.len() as u32;
+    let connected_propagation_nodes = external_propagation_relay_count(state).await as u32;
+    let inferred_state = if connected_propagation_nodes > 0 || connected_peers > 0 {
+        PropagationConnectivityState::Online {}
+    } else {
+        PropagationConnectivityState::Offline {}
+    };
+    refresh_propagation_connectivity_state(state, inferred_state).await;
+    let connectivity = state.propagation_connectivity.lock().await.clone();
+    Ok(PropagationNodeStatus {
+        node_id_hex: state.local_propagation_node_hex.clone(),
+        connectivity_state: connectivity.state,
+        online: matches!(connectivity.state, PropagationConnectivityState::Online {}),
+        connected_peers,
+        connected_propagation_nodes,
+        pending_messages: counts.pending_messages,
+        failed_delivery_attempts: counts.failed_delivery_count,
+        pending_replication_count: counts.pending_replication_count,
+        retry_queue_size: counts.retry_queue_size,
+        last_successful_sync_at_ms: connectivity.last_successful_sync_at_ms,
+        last_failed_sync_at_ms: connectivity.last_failed_sync_at_ms,
+        last_online_at_ms: connectivity.last_online_at_ms,
+        last_offline_at_ms: connectivity.last_offline_at_ms,
+        local_storage_healthy: true,
+    })
+}
+
+async fn drain_local_propagation_node_once(state: &NodeRuntimeState, bus: &EventBus) {
+    let Some(relay_hex) = state
+        .active_propagation_node_hex
+        .lock()
+        .await
+        .clone()
+        .filter(|relay| relay != &state.local_propagation_node_hex)
+    else {
+        let external_relays = external_propagation_relay_count(state).await;
+        let next_state = if external_relays > 0 || !state.connected_peers.lock().await.is_empty() {
+            PropagationConnectivityState::Online {}
+        } else {
+            PropagationConnectivityState::Offline {}
+        };
+        refresh_propagation_connectivity_state(state, next_state).await;
+        return;
+    };
+
+    let pending = match state
+        .app_state
+        .list_pending_local_propagation_messages(LOCAL_PROPAGATION_DRAIN_LIMIT, now_ms())
+    {
+        Ok(messages) => messages,
+        Err(err) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!("failed to read local propagation messages: {err}"),
+            });
+            return;
+        }
+    };
+    if pending.is_empty() {
+        refresh_propagation_connectivity_state(state, PropagationConnectivityState::Online {}).await;
+        return;
+    }
+
+    let original_relay = state.active_propagation_node_hex.lock().await.clone();
+    for record in pending {
+        if matches!(
+            record.replication_status,
+            LocalPropagationReplicationStatus::Replicated {}
+        ) {
+            continue;
+        }
+        let attempted_at_ms = now_ms();
+        let Some(payload) = local_propagation::decode_payload(record.payload_base64.as_str())
+        else {
+            let _ = state.app_state.mark_local_propagation_failed(
+                record.message_id_hex.as_str(),
+                attempted_at_ms,
+                "invalid local propagation payload",
+            );
+            mark_local_propagation_sync_failure(state, attempted_at_ms).await;
+            continue;
+        };
+        let fields_bytes = record
+            .fields_base64
+            .as_deref()
+            .and_then(local_propagation::decode_payload);
+        let metadata = fields_bytes
+            .as_deref()
+            .and_then(parse_mission_sync_metadata);
+        let Ok(destination) = parse_address_hash(record.target_hex.as_str()) else {
+            let _ = state.app_state.mark_local_propagation_failed(
+                record.message_id_hex.as_str(),
+                attempted_at_ms,
+                "invalid local propagation target",
+            );
+            mark_local_propagation_sync_failure(state, attempted_at_ms).await;
+            continue;
+        };
+        *state.active_propagation_node_hex.lock().await = Some(relay_hex.clone());
+        let send_result = state
+            .sdk
+            .send_lxmf(
+                destination,
+                payload.as_slice(),
+                record.title.clone(),
+                fields_bytes,
+                metadata,
+                SendMode::PropagationOnly {},
+            )
+            .await;
+        match send_result {
+            Ok(report) if lxmf_send_succeeded(report.outcome) => {
+                let _ = state.app_state.mark_local_propagation_replicated(
+                    record.message_id_hex.as_str(),
+                    relay_hex.as_str(),
+                    attempted_at_ms,
+                );
+                if let Some(updated) = state
+                    .messaging
+                    .lock()
+                    .await
+                    .update_message(
+                        record.message_id_hex.as_str(),
+                        sdkmsg::MessageState::SentToPropagation,
+                        Some(format!("replicated to propagation node {relay_hex}")),
+                        attempted_at_ms,
+                    )
+                    .map(from_sdk_message_record)
+                {
+                    upsert_message_record(state, bus, updated.clone(), false).await;
+                    bus.emit(NodeEvent::MessageUpdated { message: updated });
+                }
+                mark_local_propagation_sync_success(state, attempted_at_ms).await;
+                info!(
+                    "[sync] local propagation replicated message_id={} relay={}",
+                    record.message_id_hex, relay_hex,
+                );
+            }
+            Ok(report) => {
+                let detail = format!("relay send failed: {:?}", send_outcome_to_udl(report.outcome));
+                let _ = state.app_state.mark_local_propagation_failed(
+                    record.message_id_hex.as_str(),
+                    attempted_at_ms,
+                    detail.as_str(),
+                );
+                mark_local_propagation_sync_failure(state, attempted_at_ms).await;
+            }
+            Err(err) => {
+                let _ = state.app_state.mark_local_propagation_failed(
+                    record.message_id_hex.as_str(),
+                    attempted_at_ms,
+                    err.to_string().as_str(),
+                );
+                mark_local_propagation_sync_failure(state, attempted_at_ms).await;
+            }
+        }
+    }
+    *state.active_propagation_node_hex.lock().await = original_relay;
 }
 
 async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
@@ -6120,6 +6391,9 @@ pub enum Command {
     GetLxmfSyncStatus {
         resp: cb::Sender<Result<SyncStatus, NodeError>>,
     },
+    GetPropagationNodeStatus {
+        resp: cb::Sender<Result<PropagationNodeStatus, NodeError>>,
+    },
     SetAnnounceCapabilities {
         capability_string: String,
         resp: cb::Sender<Result<(), NodeError>>,
@@ -6152,6 +6426,8 @@ struct NodeRuntimeState {
     projection_journal: Arc<RuntimeProjectionJournal>,
     sdk: Arc<RuntimeLxmfSdk>,
     active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
+    local_propagation_node_hex: String,
+    propagation_connectivity: Arc<TokioMutex<PropagationConnectivityRuntimeState>>,
     preferred_propagation_node_hex: Option<String>,
     propagation_sync_inflight: Arc<AtomicBool>,
     direct_delivery_health: DirectDeliveryHealth,
@@ -7177,12 +7453,23 @@ async fn send_lxmf_with_delivery_policy(
     let mut last_resolved_destination_hex: Option<String> = None;
 
     for attempt in 1..=direct_attempts {
-        let resolved_destination_hex = resolve_lxmf_destination_for_send(
+        let resolved_destination_hex = match resolve_lxmf_destination_for_send(
             state,
             requested_destination_hex,
             require_current_peer,
         )
-        .await?;
+        .await
+        {
+            Ok(destination) => destination,
+            Err(err) => {
+                info!(
+                    "[lxmf][mission] send attempt {attempt}/{direct_attempts} route unavailable destination={} mode={:?} err={}",
+                    requested_destination_hex, send_mode, err,
+                );
+                last_error = Some(err);
+                break;
+            }
+        };
         last_resolved_destination_hex = Some(resolved_destination_hex.clone());
         info!(
             "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
@@ -7310,10 +7597,11 @@ async fn send_lxmf_with_delivery_policy(
         }
     }
 
-    if !matches!(send_mode, SendMode::Auto {}) || !has_active_propagation_relay(state).await {
+    if !matches!(send_mode, SendMode::Auto {}) {
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }
 
+    let has_propagation_candidate = true;
     if direct_attempts == 0 {
         info!(
             "[lxmf][mission] auto delivery using propagation without direct probe destination={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
@@ -7324,13 +7612,13 @@ async fn send_lxmf_with_delivery_policy(
             direct_delivery_ready,
         );
     } else {
-        if should_try_propagation_after_direct_failure(
-            send_mode,
-            is_accepted_result,
-            has_active_relay,
-            is_saved_peer,
-            last_error.as_ref().is_some_and(is_retriable_lxmf_error),
-        ) {
+            if should_try_propagation_after_direct_failure(
+                send_mode,
+                is_accepted_result,
+                has_propagation_candidate,
+                is_saved_peer,
+                last_error.as_ref().is_some_and(is_retriable_lxmf_error),
+            ) {
             mark_peer_direct_delivery_unhealthy(
                 state,
                 requested_destination_hex,
@@ -7397,6 +7685,67 @@ async fn send_lxmf_with_delivery_policy(
     Ok(report)
 }
 
+async fn accept_lxmf_for_local_propagation(
+    state: &NodeRuntimeState,
+    destination: AddressHash,
+    body: &[u8],
+    title: Option<String>,
+    fields_bytes: Option<Vec<u8>>,
+    metadata: Option<MissionSyncMetadata>,
+    detail: Option<String>,
+) -> Result<LxmfSendReport, NodeError> {
+    let accepted_at_ms = now_ms();
+    let target_hex = destination.to_hex_string();
+    let sender_id_hex = state
+        .lxmf_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
+    let message_id_hex = local_propagation::build_local_message_id(
+        sender_id_hex.as_str(),
+        target_hex.as_str(),
+        body,
+        title.as_deref(),
+        fields_bytes.as_deref(),
+        accepted_at_ms,
+    );
+    let record = local_propagation::build_local_record(
+        message_id_hex.clone(),
+        sender_id_hex,
+        target_hex.clone(),
+        body,
+        title,
+        fields_bytes,
+        accepted_at_ms,
+        detail,
+    );
+    state.app_state.store_local_propagation_message(&record)?;
+    info!(
+        "[lxmf][mission] local propagation node accepted message_id={} destination={} local_node={} retry_count={}",
+        message_id_hex,
+        target_hex,
+        state.local_propagation_node_hex,
+        record.retry_count,
+    );
+    Ok(LxmfSendReport {
+        outcome: RnsSendOutcome::SentDirect,
+        message_id_hex,
+        resolved_destination_hex: target_hex,
+        metadata: metadata.clone(),
+        track_delivery_timeout: metadata
+            .as_ref()
+            .is_some_and(|value| value.command_present && value.tracking_key().is_some()),
+        used_propagation_node: true,
+        method: LxmfDeliveryMethod::Propagated {},
+        representation: LxmfDeliveryRepresentation::Packet {},
+        relay_destination_hex: Some(state.local_propagation_node_hex.clone()),
+        fallback_stage: None,
+        receipt_hash_hex: None,
+    })
+}
+
 async fn send_lxmf_via_propagation_candidates(
     state: &NodeRuntimeState,
     destination: AddressHash,
@@ -7409,10 +7758,11 @@ async fn send_lxmf_via_propagation_candidates(
     let original_relay = state.active_propagation_node_hex.lock().await.clone();
     let active_relay_hex = original_relay.as_deref().unwrap_or("");
     let announces = state.messaging.lock().await.list_announces();
-    let mut relay_candidates = propagation_sync_candidate_relays(
+    let mut relay_candidates = propagation_send_candidate_relays(
         announces.as_slice(),
         active_relay_hex,
         state.preferred_propagation_node_hex.as_deref(),
+        state.local_propagation_node_hex.as_str(),
     );
     if relay_candidates.is_empty() {
         return Err(delivery_route_unavailable_error());
@@ -7421,6 +7771,20 @@ async fn send_lxmf_via_propagation_candidates(
     let mut last_error = None;
     for (index, relay_candidate) in relay_candidates.drain(..).enumerate() {
         let attempt_number = index + 1;
+        if relay_candidate == state.local_propagation_node_hex {
+            let report = accept_lxmf_for_local_propagation(
+                state,
+                destination,
+                body,
+                title,
+                fields_bytes,
+                metadata,
+                last_error.as_ref().map(ToString::to_string),
+            )
+            .await;
+            *state.active_propagation_node_hex.lock().await = original_relay;
+            return report;
+        }
         *state.active_propagation_node_hex.lock().await = Some(relay_candidate.clone());
         info!(
             "[lxmf][mission] propagation send relay attempt relay={} attempt={}/{} destination={}",
@@ -8480,6 +8844,12 @@ pub async fn run_node(
             DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
         )
         .await;
+    let local_propagation_destination = transport
+        .add_destination(
+            identity.clone(),
+            DestinationName::new(LXMF_PROPAGATION_NAME.0, LXMF_PROPAGATION_NAME.1),
+        )
+        .await;
 
     let transport = Arc::new(transport);
     let tcp_endpoint_registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::new()));
@@ -8500,6 +8870,12 @@ pub async fn run_node(
         .address_hash
         .to_hex_string();
     let lxmf_destination_hex = lxmf_destination
+        .lock()
+        .await
+        .desc
+        .address_hash
+        .to_hex_string();
+    let local_propagation_node_hex = local_propagation_destination
         .lock()
         .await
         .desc
@@ -8526,6 +8902,9 @@ pub async fn run_node(
     )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
+    let propagation_connectivity = Arc::new(TokioMutex::new(
+        PropagationConnectivityRuntimeState::default(),
+    ));
     let propagation_sync_inflight = Arc::new(AtomicBool::new(false));
     let direct_delivery_health = DirectDeliveryHealth::default();
     let managed_peer_links = ManagedPeerLinks::default();
@@ -8575,6 +8954,8 @@ pub async fn run_node(
         projection_journal: projection_journal.clone(),
         sdk: sdk.clone(),
         active_propagation_node_hex: active_propagation_node_hex.clone(),
+        local_propagation_node_hex: local_propagation_node_hex.clone(),
+        propagation_connectivity: propagation_connectivity.clone(),
         preferred_propagation_node_hex: config
             .hub_identity_hash
             .as_ref()
@@ -8763,6 +9144,22 @@ pub async fn run_node(
         });
     }
 
+    // Local propagation node maintenance. The hosted node accepts while fully
+    // offline, then drains pending records through the normal propagation relay
+    // path as soon as an external relay is selected again.
+    {
+        let bus = bus.clone();
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(LOCAL_PROPAGATION_DRAIN_INTERVAL);
+            loop {
+                interval.tick().await;
+                sync_auto_propagation_node(&state, &bus).await;
+                drain_local_propagation_node_once(&state, &bus).await;
+            }
+        });
+    }
+
     // Transport delivery receipts.
     {
         let bus = bus.clone();
@@ -8807,6 +9204,7 @@ pub async fn run_node(
         let transport = transport.clone();
         let app_destination = app_destination.clone();
         let lxmf_destination = lxmf_destination.clone();
+        let local_propagation_destination = local_propagation_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
         tokio::spawn(async move {
             for delay_secs in STARTUP_ANNOUNCE_DELAYS_SECS {
@@ -8817,6 +9215,7 @@ pub async fn run_node(
                     &transport,
                     &app_destination,
                     &lxmf_destination,
+                    &local_propagation_destination,
                     &announce_capabilities,
                     "startup-burst",
                 )
@@ -8829,6 +9228,7 @@ pub async fn run_node(
         let transport = transport.clone();
         let app_destination = app_destination.clone();
         let lxmf_destination = lxmf_destination.clone();
+        let local_propagation_destination = local_propagation_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
         let interval_secs = effective_announce_interval_seconds(config.announce_interval_seconds);
         tokio::spawn(async move {
@@ -8840,6 +9240,7 @@ pub async fn run_node(
                     &transport,
                     &app_destination,
                     &lxmf_destination,
+                    &local_propagation_destination,
                     &announce_capabilities,
                     "periodic",
                 )
@@ -9329,6 +9730,7 @@ pub async fn run_node(
                     &transport,
                     &app_destination,
                     &lxmf_destination,
+                    &local_propagation_destination,
                     &announce_capabilities,
                     "manual",
                 )
@@ -9364,6 +9766,7 @@ pub async fn run_node(
                     &transport,
                     &app_destination,
                     &lxmf_destination,
+                    &local_propagation_destination,
                     &announce_capabilities,
                     "capabilities-updated",
                 )
@@ -10041,6 +10444,9 @@ pub async fn run_node(
                 let _ = resp.send(Ok(from_sdk_sync_status(
                     state.messaging.lock().await.sync_status(),
                 )));
+            }
+            Command::GetPropagationNodeStatus { resp } => {
+                let _ = resp.send(propagation_node_status_snapshot(&state).await);
             }
             Command::BroadcastBytes { bytes, resp } => {
                 let result = async {
@@ -10918,6 +11324,30 @@ mod tests {
                 "33333333333333333333333333333333".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn propagation_send_candidates_include_local_node_when_external_relays_missing() {
+        let local = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let candidates = propagation_send_candidate_relays(&[], "", None, local);
+
+        assert_eq!(candidates, vec![local.to_string()]);
+    }
+
+    #[test]
+    fn propagation_send_candidates_try_external_relays_before_local_node() {
+        let active = "11111111111111111111111111111111";
+        let local = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let announces = vec![
+            propagation_announce(active, 1, 200),
+            propagation_announce("22222222222222222222222222222222", 0, 300),
+        ];
+
+        let candidates =
+            propagation_send_candidate_relays(announces.as_slice(), active, None, local);
+
+        assert_eq!(candidates.last().map(String::as_str), Some(local));
+        assert!(candidates.contains(&active.to_string()));
     }
 
     #[test]

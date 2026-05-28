@@ -36,14 +36,15 @@ use crate::types::{
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
-    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord,
+    PropagationConnectivityState, PropagationNodeStatus, ProjectionInvalidation, ProjectionScope,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const DEFAULT_R3AKT_MISSION_UID: &str = "r3akt-default-mission";
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const LXMF_SYNC_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -84,6 +85,7 @@ struct NodeInner {
     app_state: AppStateStore,
     bus: EventBus,
     status: Arc<Mutex<NodeStatus>>,
+    local_propagation_node_hex: Arc<Mutex<String>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
@@ -148,6 +150,29 @@ fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
                 Err(_) => panic!("failed to initialize app state store"),
             }
         }
+    }
+}
+
+fn propagation_node_status_from_store(
+    app_state: &AppStateStore,
+    node_id_hex: String,
+) -> PropagationNodeStatus {
+    let counts = app_state.local_propagation_counts().unwrap_or_default();
+    PropagationNodeStatus {
+        node_id_hex,
+        connectivity_state: PropagationConnectivityState::Offline {},
+        online: false,
+        connected_peers: 0,
+        connected_propagation_nodes: 0,
+        pending_messages: counts.pending_messages,
+        failed_delivery_attempts: counts.failed_delivery_count,
+        pending_replication_count: counts.pending_replication_count,
+        retry_queue_size: counts.retry_queue_size,
+        last_successful_sync_at_ms: None,
+        last_failed_sync_at_ms: None,
+        last_online_at_ms: None,
+        last_offline_at_ms: None,
+        local_storage_healthy: true,
     }
 }
 
@@ -2913,6 +2938,7 @@ impl Node {
                 app_state: create_app_state_store(storage_dir),
                 bus: EventBus::new(),
                 status: Arc::new(Mutex::new(initial)),
+                local_propagation_node_hex: Arc::new(Mutex::new(String::new())),
                 peers_snapshot: Arc::new(Mutex::new(Vec::new())),
                 sync_status_snapshot: Arc::new(Mutex::new(SyncStatus {
                     phase: crate::types::SyncPhase::Idle {},
@@ -2966,6 +2992,12 @@ impl Node {
         )
         .desc
         .address_hash;
+        let local_propagation_hash = SingleInputDestination::new(
+            identity.clone(),
+            DestinationName::new(LXMF_PROPAGATION_NAME.0, LXMF_PROPAGATION_NAME.1),
+        )
+        .desc
+        .address_hash;
 
         if let Ok(mut guard) = inner.status.lock() {
             *guard = NodeStatus {
@@ -2975,6 +3007,9 @@ impl Node {
                 app_destination_hex: lxmf_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
             };
+        }
+        if let Ok(mut guard) = inner.local_propagation_node_hex.lock() {
+            *guard = local_propagation_hash.to_hex_string();
         }
 
         let prestart_state = {
@@ -3639,6 +3674,30 @@ impl Node {
             &tx.expect("checked above"),
             Command::GetLxmfSyncStatus { resp: resp_tx },
         )?;
+        resp_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or(Err(NodeError::Timeout {}))
+    }
+
+    pub fn get_propagation_node_status(&self) -> Result<PropagationNodeStatus, NodeError> {
+        let (tx, fallback) = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let node_id_hex = inner
+                .local_propagation_node_hex
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            (
+                inner.cmd_tx.clone(),
+                propagation_node_status_from_store(&inner.app_state, node_id_hex),
+            )
+        };
+
+        let Some(tx) = tx else {
+            return Ok(fallback);
+        };
+        let (resp_tx, resp_rx) = cb::bounded(1);
+        dispatch_command(&tx, Command::GetPropagationNodeStatus { resp: resp_tx })?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))

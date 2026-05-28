@@ -208,6 +208,27 @@ pub enum SyncPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PropagationConnectivityState {
+    Offline {},
+    Degraded {},
+    Online {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocalPropagationDeliveryStatus {
+    Pending {},
+    Delivered {},
+    Failed {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocalPropagationReplicationStatus {
+    Pending {},
+    Replicated {},
+    Failed {},
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SosState {
     Idle {},
     Countdown {},
@@ -481,6 +502,57 @@ pub struct SyncStatus {
     pub completed_at_ms: Option<u64>,
     pub messages_received: u32,
     pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalPropagationMessageRecord {
+    pub message_id_hex: String,
+    pub sender_id_hex: String,
+    pub target_hex: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub payload_base64: String,
+    pub title: Option<String>,
+    pub message_type: String,
+    pub delivery_status: LocalPropagationDeliveryStatus,
+    pub replication_status: LocalPropagationReplicationStatus,
+    pub retry_count: u32,
+    pub last_attempted_delivery_at_ms: Option<u64>,
+    pub last_attempted_replication_at_ms: Option<u64>,
+    pub next_retry_at_ms: Option<u64>,
+    pub acknowledgement_state: Option<String>,
+    pub signature_metadata: Option<String>,
+    pub causal_metadata: Option<String>,
+    pub fields_base64: Option<String>,
+    pub last_error: Option<String>,
+    pub replicated_node_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LocalPropagationCounts {
+    pub total_messages: u32,
+    pub pending_messages: u32,
+    pub failed_delivery_count: u32,
+    pub pending_replication_count: u32,
+    pub retry_queue_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PropagationNodeStatus {
+    pub node_id_hex: String,
+    pub connectivity_state: PropagationConnectivityState,
+    pub online: bool,
+    pub connected_peers: u32,
+    pub connected_propagation_nodes: u32,
+    pub pending_messages: u32,
+    pub failed_delivery_attempts: u32,
+    pub pending_replication_count: u32,
+    pub retry_queue_size: u32,
+    pub last_successful_sync_at_ms: Option<u64>,
+    pub last_failed_sync_at_ms: Option<u64>,
+    pub last_online_at_ms: Option<u64>,
+    pub last_offline_at_ms: Option<u64>,
+    pub local_storage_healthy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

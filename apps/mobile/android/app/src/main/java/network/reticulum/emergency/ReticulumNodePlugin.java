@@ -512,6 +512,16 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getPropagationNodeStatus(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get propagation node status.",
+            "Native propagation node status JSON parse failed.",
+            ReticulumNodeService::getPropagationNodeStatusJson
+        );
+    }
+
+    @PluginMethod
     public void listTelemetryDestinations(PluginCall call) {
         runStringServiceCall(
             call,

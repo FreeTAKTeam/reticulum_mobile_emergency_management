@@ -21,9 +21,10 @@ use crate::types::{
     HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
-    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
+    PeerChange, PeerRecord, PeerState, PropagationConnectivityState, PropagationNodeStatus,
+    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord,
+    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
+    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
     TelemetryPositionRecord, TelemetrySettingsRecord,
 };
 
@@ -1575,6 +1576,33 @@ fn sync_phase_to_str(phase: SyncPhase) -> &'static str {
     }
 }
 
+fn propagation_connectivity_state_to_str(state: PropagationConnectivityState) -> &'static str {
+    match state {
+        PropagationConnectivityState::Offline {} => "Offline",
+        PropagationConnectivityState::Degraded {} => "Degraded",
+        PropagationConnectivityState::Online {} => "Online",
+    }
+}
+
+fn propagation_node_status_json(status: &PropagationNodeStatus) -> Value {
+    json!({
+        "nodeIdHex": status.node_id_hex,
+        "connectivityState": propagation_connectivity_state_to_str(status.connectivity_state),
+        "online": status.online,
+        "connectedPeers": status.connected_peers,
+        "connectedPropagationNodes": status.connected_propagation_nodes,
+        "pendingMessages": status.pending_messages,
+        "failedDeliveryAttempts": status.failed_delivery_attempts,
+        "pendingReplicationCount": status.pending_replication_count,
+        "retryQueueSize": status.retry_queue_size,
+        "lastSuccessfulSyncAtMs": status.last_successful_sync_at_ms,
+        "lastFailedSyncAtMs": status.last_failed_sync_at_ms,
+        "lastOnlineAtMs": status.last_online_at_ms,
+        "lastOfflineAtMs": status.last_offline_at_ms,
+        "localStorageHealthy": status.local_storage_healthy
+    })
+}
+
 fn log_level_to_str(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Trace {} => "Trace",
@@ -2584,6 +2612,40 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfS
     };
     match node.get_lxmf_sync_status() {
         Ok(status) => ok_json_result(&mut env, &status),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getPropagationNodeStatusJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = match guard.node.as_ref() {
+        Some(v) => v,
+        None => {
+            set_last_error("NotRunning", "node not initialized");
+            return ptr::null_mut();
+        }
+    };
+    match node.get_propagation_node_status() {
+        Ok(status) => {
+            clear_last_error();
+            make_jstring_or_null(
+                &mut env,
+                propagation_node_status_json(&status).to_string(),
+            )
+        }
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()

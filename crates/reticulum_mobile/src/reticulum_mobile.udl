@@ -99,6 +99,12 @@ enum SyncPhase {
   "Failed"
 };
 
+enum PropagationConnectivityState { "Offline", "Degraded", "Online" };
+
+enum LocalPropagationDeliveryStatus { "Pending", "Delivered", "Failed" };
+
+enum LocalPropagationReplicationStatus { "Pending", "Replicated", "Failed" };
+
 enum ProjectionScope {
   "AppSettings",
   "SavedPeers",
@@ -276,6 +282,54 @@ dictionary SyncStatus {
   u64? completed_at_ms;
   u32 messages_received;
   string? detail;
+};
+
+dictionary LocalPropagationMessageRecord {
+  string message_id_hex;
+  string sender_id_hex;
+  string target_hex;
+  u64 created_at_ms;
+  u64 updated_at_ms;
+  string payload_base64;
+  string? title;
+  string message_type;
+  LocalPropagationDeliveryStatus delivery_status;
+  LocalPropagationReplicationStatus replication_status;
+  u32 retry_count;
+  u64? last_attempted_delivery_at_ms;
+  u64? last_attempted_replication_at_ms;
+  u64? next_retry_at_ms;
+  string? acknowledgement_state;
+  string? signature_metadata;
+  string? causal_metadata;
+  string? fields_base64;
+  string? last_error;
+  string? replicated_node_hex;
+};
+
+dictionary LocalPropagationCounts {
+  u32 total_messages;
+  u32 pending_messages;
+  u32 failed_delivery_count;
+  u32 pending_replication_count;
+  u32 retry_queue_size;
+};
+
+dictionary PropagationNodeStatus {
+  string node_id_hex;
+  PropagationConnectivityState connectivity_state;
+  boolean online;
+  u32 connected_peers;
+  u32 connected_propagation_nodes;
+  u32 pending_messages;
+  u32 failed_delivery_attempts;
+  u32 pending_replication_count;
+  u32 retry_queue_size;
+  u64? last_successful_sync_at_ms;
+  u64? last_failed_sync_at_ms;
+  u64? last_online_at_ms;
+  u64? last_offline_at_ms;
+  boolean local_storage_healthy;
 };
 
 dictionary HubDirectoryPeerRecord {
@@ -783,6 +837,8 @@ interface Node {
   sequence<MessageRecord> list_messages(string? conversation_id);
   [Throws=NodeError]
   SyncStatus get_lxmf_sync_status();
+  [Throws=NodeError]
+  PropagationNodeStatus get_propagation_node_status();
   [Throws=NodeError]
   sequence<string> list_telemetry_destinations();
 

@@ -397,6 +397,10 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.getLxmfSyncStatusJson();
     }
 
+    public synchronized String getPropagationNodeStatusJson() {
+        return ReticulumBridge.getPropagationNodeStatusJson();
+    }
+
     public synchronized String listTelemetryDestinationsJson() {
         return ReticulumBridge.listTelemetryDestinationsJson();
     }

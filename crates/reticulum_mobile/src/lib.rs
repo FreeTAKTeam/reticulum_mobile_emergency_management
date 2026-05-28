@@ -2,6 +2,7 @@ mod app_state;
 mod delivery_policy;
 mod event_bus;
 mod jni_bridge;
+mod local_propagation;
 mod logger;
 mod lxmf_fields;
 mod messaging_compat;
@@ -28,14 +29,17 @@ pub use types::{
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ChecklistUserTaskStatus,
     ConversationRecord, EamProjectionRecord, EamSourceRecord, EamTeamSummaryRecord,
     EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
-    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    HubSettingsRecord, LegacyImportPayload, LocalPropagationCounts,
+    LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
+    LocalPropagationReplicationStatus, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, OperationalSummary, PeerChange, PeerRecord, PeerState,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
-    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TelemetrySettingsRecord,
+    PropagationConnectivityState, PropagationNodeStatus, ProjectionInvalidation, ProjectionScope,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    TelemetrySettingsRecord,
 };
 
 pub fn healthcheck() -> String {

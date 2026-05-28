@@ -29,6 +29,7 @@ public final class ReticulumBridge {
     public static native String listMessagesJson(String payloadJson);
     public static native int deleteConversationJson(String payloadJson);
     public static native String getLxmfSyncStatusJson();
+    public static native String getPropagationNodeStatusJson();
     public static native String listTelemetryDestinationsJson();
     public static native String legacyImportCompletedJson();
     public static native int importLegacyStateJson(String payloadJson);

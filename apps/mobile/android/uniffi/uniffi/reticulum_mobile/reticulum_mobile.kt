@@ -856,6 +856,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -868,168 +870,170 @@ internal interface UniffiLib : Library {
                 uniffiCheckApiChecksums(lib)
                 }
         }
-        
+
         // The Cleaner for the whole library
         internal val CLEANER: UniffiCleaner by lazy {
             UniffiCleaner.create()
         }
     }
 
-    fun uniffi_reticulum_mobile_fn_clone_eventsubscription(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_clone_eventsubscription(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_reticulum_mobile_fn_free_eventsubscription(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_free_eventsubscription(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_eventsubscription_close(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_eventsubscription_close(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_eventsubscription_next(`ptr`: Pointer,`timeoutMs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_eventsubscription_next(`ptr`: Pointer,`timeoutMs`: Int,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_clone_node(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_clone_node(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_reticulum_mobile_fn_free_node(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_free_node(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_constructor_node_new(uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_constructor_node_new(uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_reticulum_mobile_fn_method_node_add_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_add_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_announce_now(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_announce_now(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_broadcast_bytes(`ptr`: Pointer,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_broadcast_bytes(`ptr`: Pointer,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_cancel_lxmf(`ptr`: Pointer,`messageIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_cancel_lxmf(`ptr`: Pointer,`messageIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_connect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_connect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_create_online_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_create_online_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_deactivate_sos(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_deactivate_sos(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_delete_checklist_task_row(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_delete_eam(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_delete_eam(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_delete_event(`ptr`: Pointer,`uid`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_delete_event(`ptr`: Pointer,`uid`: RustBuffer.ByValue,`deletedAtMs`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_delete_local_telemetry(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_delete_local_telemetry(`ptr`: Pointer,`callsign`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_disconnect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_disconnect_peer(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_get_app_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_app_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_eam_team_summary(`ptr`: Pointer,`teamUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_eam_team_summary(`ptr`: Pointer,`teamUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_eams(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_eams(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_lxmf_sync_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_lxmf_sync_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_operational_summary(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_operational_summary(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_saved_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_propagation_node_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_sos_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_saved_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_sos_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_sos_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_sos_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_get_telemetry_positions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_status(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_import_legacy_state(`ptr`: Pointer,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_get_telemetry_positions(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_import_legacy_state(`ptr`: Pointer,`payload`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_join_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_join_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_legacy_import_completed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_legacy_import_completed(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
-    fun uniffi_reticulum_mobile_fn_method_node_list_active_checklists(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_active_checklists(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_announces(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_announces(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_conversations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_conversations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_messages(`ptr`: Pointer,`conversationId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_messages(`ptr`: Pointer,`conversationId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_sos_alerts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_alerts(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_sos_audio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_audio(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_sos_locations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_sos_locations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_list_telemetry_destinations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_list_telemetry_destinations(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_record_local_telemetry_fix(`ptr`: Pointer,`position`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_record_local_telemetry_fix(`ptr`: Pointer,`position`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_record_sos_audio(`ptr`: Pointer,`audio`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_record_sos_audio(`ptr`: Pointer,`audio`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_refresh_hub_directory(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_refresh_hub_directory(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_request_lxmf_sync(`ptr`: Pointer,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_request_lxmf_sync(`ptr`: Pointer,`limit`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_request_peer_identity(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_request_peer_identity(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_restart(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_restart(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_retry_lxmf(`ptr`: Pointer,`messageIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_retry_lxmf(`ptr`: Pointer,`messageIdHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_send_bytes(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,`fieldsBytes`: RustBuffer.ByValue,`sendMode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_send_bytes(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,`fieldsBytes`: RustBuffer.ByValue,`sendMode`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_send_lxmf(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_send_lxmf(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_set_active_propagation_node(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_active_propagation_node(`ptr`: Pointer,`destinationHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_announce_capabilities(`ptr`: Pointer,`capabilityString`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_announce_capabilities(`ptr`: Pointer,`capabilityString`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_app_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_app_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_cell(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_cell(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_row_style(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_row_style(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_status(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_checklist_task_status(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_log_level(`ptr`: Pointer,`level`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_log_level(`ptr`: Pointer,`level`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_saved_peers(`ptr`: Pointer,`peers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_saved_peers(`ptr`: Pointer,`peers`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_sos_pin(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_sos_pin(`ptr`: Pointer,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_set_sos_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_set_sos_settings(`ptr`: Pointer,`settings`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_start(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_start(`ptr`: Pointer,`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_stop(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_accelerometer_sample(`ptr`: Pointer,`x`: Double,`y`: Double,`z`: Double,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_accelerometer_sample(`ptr`: Pointer,`x`: Double,`y`: Double,`z`: Double,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_device_telemetry(`ptr`: Pointer,`telemetry`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_device_telemetry(`ptr`: Pointer,`telemetry`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_screen_event(`ptr`: Pointer,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_submit_sos_screen_event(`ptr`: Pointer,`atMs`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_subscribe_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_subscribe_events(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
-    fun uniffi_reticulum_mobile_fn_method_node_trigger_sos(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_trigger_sos(`ptr`: Pointer,`source`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun uniffi_reticulum_mobile_fn_method_node_update_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_update_checklist(`ptr`: Pointer,`request`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_upsert_eam(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_upsert_eam(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_method_node_upsert_event(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_method_node_upsert_event(`ptr`: Pointer,`record`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun uniffi_reticulum_mobile_fn_func_healthcheck(uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_reticulum_mobile_fn_func_healthcheck(uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_reticulum_mobile_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_reticulum_mobile_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
-    fun ffi_reticulum_mobile_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
-    fun ffi_reticulum_mobile_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_reticulum_mobile_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1037,7 +1041,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_u8(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun ffi_reticulum_mobile_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1045,7 +1049,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_i8(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Byte
     fun ffi_reticulum_mobile_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1053,7 +1057,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_u16(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Short
     fun ffi_reticulum_mobile_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1061,7 +1065,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_i16(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Short
     fun ffi_reticulum_mobile_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1069,7 +1073,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_u32(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Int
     fun ffi_reticulum_mobile_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1077,7 +1081,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_i32(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Int
     fun ffi_reticulum_mobile_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1085,7 +1089,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_u64(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     fun ffi_reticulum_mobile_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1093,7 +1097,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_i64(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Long
     fun ffi_reticulum_mobile_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1101,7 +1105,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_f32(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Float
     fun ffi_reticulum_mobile_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1109,7 +1113,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_f64(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Double
     fun ffi_reticulum_mobile_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1117,7 +1121,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_pointer(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Pointer
     fun ffi_reticulum_mobile_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1125,7 +1129,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_rust_buffer(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun ffi_reticulum_mobile_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
     ): Unit
@@ -1133,7 +1137,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_reticulum_mobile_rust_future_free_void(`handle`: Long,
     ): Unit
-    fun ffi_reticulum_mobile_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun ffi_reticulum_mobile_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): Unit
     fun uniffi_reticulum_mobile_checksum_func_healthcheck(
     ): Short
@@ -1180,6 +1184,8 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_checksum_method_node_get_lxmf_sync_status(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_operational_summary(
+    ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_get_propagation_node_status(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_saved_peers(
     ): Short
@@ -1277,7 +1283,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun ffi_reticulum_mobile_uniffi_contract_version(
     ): Int
-    
+
 }
 
 private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
@@ -1359,6 +1365,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_operational_summary() != 51509.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_get_propagation_node_status() != 11075.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_saved_peers() != 31984.toShort()) {
@@ -1542,7 +1551,7 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
         }
     }
 
-/** 
+/**
  * Used to instantiate an interface without an actual pointer, for fakes in tests, mostly.
  *
  * @suppress
@@ -1907,11 +1916,11 @@ private class JavaLangRefCleanable(
     override fun clean() = cleanable.clean()
 }
 public interface EventSubscriptionInterface {
-    
+
     fun `close`()
-    
+
     fun `next`(`timeoutMs`: kotlin.UInt): NodeEvent?
-    
+
     companion object
 }
 
@@ -1997,15 +2006,15 @@ open class EventSubscription: Disposable, AutoCloseable, EventSubscriptionInterf
     }
 
     override fun `close`()
-        = 
+        =
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_eventsubscription_close(
         it, _status)
 }
     }
-    
-    
+
+
 
     override fun `next`(`timeoutMs`: kotlin.UInt): NodeEvent? {
             return FfiConverterOptionalTypeNodeEvent.lift(
@@ -2017,14 +2026,14 @@ open class EventSubscription: Disposable, AutoCloseable, EventSubscriptionInterf
     }
     )
     }
-    
 
-    
 
-    
-    
+
+
+
+
     companion object
-    
+
 }
 
 /**
@@ -2155,139 +2164,141 @@ public object FfiConverterTypeEventSubscription: FfiConverter<EventSubscription,
 
 
 public interface NodeInterface {
-    
+
     fun `addChecklistTaskRow`(`request`: ChecklistTaskRowAddRequest)
-    
+
     fun `announceNow`()
-    
+
     fun `broadcastBytes`(`bytes`: List<kotlin.UByte>)
-    
+
     fun `cancelLxmf`(`messageIdHex`: kotlin.String)
-    
+
     fun `connectPeer`(`destinationHex`: kotlin.String)
-    
+
     fun `createOnlineChecklist`(`request`: ChecklistCreateOnlineRequest)
-    
+
     fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord
-    
+
     fun `deleteChecklist`(`request`: ChecklistDeleteRequest)
-    
+
     fun `deleteChecklistTaskRow`(`request`: ChecklistTaskRowDeleteRequest)
-    
+
     fun `deleteEam`(`callsign`: kotlin.String, `deletedAtMs`: kotlin.ULong)
-    
+
     fun `deleteEvent`(`uid`: kotlin.String, `deletedAtMs`: kotlin.ULong)
-    
+
     fun `deleteLocalTelemetry`(`callsign`: kotlin.String)
-    
+
     fun `disconnectPeer`(`destinationHex`: kotlin.String)
-    
+
     fun `getAppSettings`(): AppSettingsRecord?
-    
+
     fun `getChecklist`(`checklistUid`: kotlin.String): ChecklistRecord?
-    
+
     fun `getEamTeamSummary`(`teamUid`: kotlin.String): EamTeamSummaryRecord?
-    
+
     fun `getEams`(): List<EamProjectionRecord>
-    
+
     fun `getEvents`(): List<EventProjectionRecord>
-    
+
     fun `getLxmfSyncStatus`(): SyncStatus
-    
+
     fun `getOperationalSummary`(): OperationalSummary
-    
+
+    fun `getPropagationNodeStatus`(): PropagationNodeStatus
+
     fun `getSavedPeers`(): List<SavedPeerRecord>
-    
+
     fun `getSosSettings`(): SosSettingsRecord
-    
+
     fun `getSosStatus`(): SosStatusRecord
-    
+
     fun `getStatus`(): NodeStatus
-    
+
     fun `getTelemetryPositions`(): List<TelemetryPositionRecord>
-    
+
     fun `importLegacyState`(`payload`: LegacyImportPayload)
-    
+
     fun `joinChecklist`(`checklistUid`: kotlin.String)
-    
+
     fun `legacyImportCompleted`(): kotlin.Boolean
-    
+
     fun `listActiveChecklists`(`request`: ChecklistListActiveRequest?): List<ChecklistRecord>
-    
+
     fun `listAnnounces`(): List<AnnounceRecord>
-    
+
     fun `listConversations`(): List<ConversationRecord>
-    
+
     fun `listMessages`(`conversationId`: kotlin.String?): List<MessageRecord>
-    
+
     fun `listPeers`(): List<PeerRecord>
-    
+
     fun `listSosAlerts`(): List<SosAlertRecord>
-    
+
     fun `listSosAudio`(): List<SosAudioRecord>
-    
+
     fun `listSosLocations`(): List<SosLocationRecord>
-    
+
     fun `listTelemetryDestinations`(): List<kotlin.String>
-    
+
     fun `recordLocalTelemetryFix`(`position`: TelemetryPositionRecord)
-    
+
     fun `recordSosAudio`(`audio`: SosAudioRecord)
-    
+
     fun `refreshHubDirectory`()
-    
+
     fun `requestLxmfSync`(`limit`: kotlin.UInt?)
-    
+
     fun `requestPeerIdentity`(`destinationHex`: kotlin.String)
-    
+
     fun `restart`(`config`: NodeConfig)
-    
+
     fun `retryLxmf`(`messageIdHex`: kotlin.String)
-    
+
     fun `sendBytes`(`destinationHex`: kotlin.String, `bytes`: List<kotlin.UByte>, `fieldsBytes`: List<kotlin.UByte>?, `sendMode`: SendMode)
-    
+
     fun `sendLxmf`(`request`: SendLxmfRequest): kotlin.String
-    
+
     fun `setActivePropagationNode`(`destinationHex`: kotlin.String?)
-    
+
     fun `setAnnounceCapabilities`(`capabilityString`: kotlin.String)
-    
+
     fun `setAppSettings`(`settings`: AppSettingsRecord)
-    
+
     fun `setChecklistTaskCell`(`request`: ChecklistTaskCellSetRequest)
-    
+
     fun `setChecklistTaskRowStyle`(`request`: ChecklistTaskRowStyleSetRequest)
-    
+
     fun `setChecklistTaskStatus`(`request`: ChecklistTaskStatusSetRequest)
-    
+
     fun `setLogLevel`(`level`: LogLevel)
-    
+
     fun `setSavedPeers`(`peers`: List<SavedPeerRecord>)
-    
+
     fun `setSosPin`(`pin`: kotlin.String?)
-    
+
     fun `setSosSettings`(`settings`: SosSettingsRecord)
-    
+
     fun `start`(`config`: NodeConfig)
-    
+
     fun `stop`()
-    
+
     fun `submitSosAccelerometerSample`(`x`: kotlin.Double, `y`: kotlin.Double, `z`: kotlin.Double, `atMs`: kotlin.ULong): SosStatusRecord?
-    
+
     fun `submitSosDeviceTelemetry`(`telemetry`: SosDeviceTelemetryRecord)
-    
+
     fun `submitSosScreenEvent`(`atMs`: kotlin.ULong): SosStatusRecord?
-    
+
     fun `subscribeEvents`(): EventSubscription
-    
+
     fun `triggerSos`(`source`: SosTriggerSource): SosStatusRecord
-    
+
     fun `updateChecklist`(`request`: ChecklistUpdateRequest)
-    
+
     fun `upsertEam`(`record`: EamProjectionRecord)
-    
+
     fun `upsertEvent`(`record`: EventProjectionRecord)
-    
+
     companion object
 }
 
@@ -2379,79 +2390,79 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
         }
     }
 
-    
+
     @Throws(NodeException::class)override fun `addChecklistTaskRow`(`request`: ChecklistTaskRowAddRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_add_checklist_task_row(
         it, FfiConverterTypeChecklistTaskRowAddRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `announceNow`()
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_announce_now(
         it, _status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `broadcastBytes`(`bytes`: List<kotlin.UByte>)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_broadcast_bytes(
         it, FfiConverterSequenceUByte.lower(`bytes`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `cancelLxmf`(`messageIdHex`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_cancel_lxmf(
         it, FfiConverterString.lower(`messageIdHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `connectPeer`(`destinationHex`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_connect_peer(
         it, FfiConverterString.lower(`destinationHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `createOnlineChecklist`(`request`: ChecklistCreateOnlineRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_create_online_checklist(
         it, FfiConverterTypeChecklistCreateOnlineRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `deactivateSos`(`pin`: kotlin.String?): SosStatusRecord {
             return FfiConverterTypeSosStatusRecord.lift(
     callWithPointer {
@@ -2462,81 +2473,81 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `deleteChecklist`(`request`: ChecklistDeleteRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_checklist(
         it, FfiConverterTypeChecklistDeleteRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `deleteChecklistTaskRow`(`request`: ChecklistTaskRowDeleteRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_checklist_task_row(
         it, FfiConverterTypeChecklistTaskRowDeleteRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `deleteEam`(`callsign`: kotlin.String, `deletedAtMs`: kotlin.ULong)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_eam(
         it, FfiConverterString.lower(`callsign`),FfiConverterULong.lower(`deletedAtMs`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `deleteEvent`(`uid`: kotlin.String, `deletedAtMs`: kotlin.ULong)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_event(
         it, FfiConverterString.lower(`uid`),FfiConverterULong.lower(`deletedAtMs`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `deleteLocalTelemetry`(`callsign`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_delete_local_telemetry(
         it, FfiConverterString.lower(`callsign`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `disconnectPeer`(`destinationHex`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_disconnect_peer(
         it, FfiConverterString.lower(`destinationHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `getAppSettings`(): AppSettingsRecord? {
             return FfiConverterOptionalTypeAppSettingsRecord.lift(
     callWithPointer {
@@ -2547,9 +2558,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getChecklist`(`checklistUid`: kotlin.String): ChecklistRecord? {
             return FfiConverterOptionalTypeChecklistRecord.lift(
     callWithPointer {
@@ -2560,9 +2571,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getEamTeamSummary`(`teamUid`: kotlin.String): EamTeamSummaryRecord? {
             return FfiConverterOptionalTypeEamTeamSummaryRecord.lift(
     callWithPointer {
@@ -2573,9 +2584,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getEams`(): List<EamProjectionRecord> {
             return FfiConverterSequenceTypeEamProjectionRecord.lift(
     callWithPointer {
@@ -2586,9 +2597,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getEvents`(): List<EventProjectionRecord> {
             return FfiConverterSequenceTypeEventProjectionRecord.lift(
     callWithPointer {
@@ -2599,9 +2610,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getLxmfSyncStatus`(): SyncStatus {
             return FfiConverterTypeSyncStatus.lift(
     callWithPointer {
@@ -2612,9 +2623,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getOperationalSummary`(): OperationalSummary {
             return FfiConverterTypeOperationalSummary.lift(
     callWithPointer {
@@ -2625,9 +2636,22 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
+    @Throws(NodeException::class)override fun `getPropagationNodeStatus`(): PropagationNodeStatus {
+            return FfiConverterTypePropagationNodeStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_propagation_node_status(
+        it, _status)
+}
+    }
+    )
+    }
+
+
+
     @Throws(NodeException::class)override fun `getSavedPeers`(): List<SavedPeerRecord> {
             return FfiConverterSequenceTypeSavedPeerRecord.lift(
     callWithPointer {
@@ -2638,9 +2662,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getSosSettings`(): SosSettingsRecord {
             return FfiConverterTypeSosSettingsRecord.lift(
     callWithPointer {
@@ -2651,9 +2675,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getSosStatus`(): SosStatusRecord {
             return FfiConverterTypeSosStatusRecord.lift(
     callWithPointer {
@@ -2664,7 +2688,7 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
+
 
     override fun `getStatus`(): NodeStatus {
             return FfiConverterTypeNodeStatus.lift(
@@ -2676,9 +2700,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `getTelemetryPositions`(): List<TelemetryPositionRecord> {
             return FfiConverterSequenceTypeTelemetryPositionRecord.lift(
     callWithPointer {
@@ -2689,33 +2713,33 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `importLegacyState`(`payload`: LegacyImportPayload)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_import_legacy_state(
         it, FfiConverterTypeLegacyImportPayload.lower(`payload`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `joinChecklist`(`checklistUid`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_join_checklist(
         it, FfiConverterString.lower(`checklistUid`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `legacyImportCompleted`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     callWithPointer {
@@ -2726,9 +2750,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listActiveChecklists`(`request`: ChecklistListActiveRequest?): List<ChecklistRecord> {
             return FfiConverterSequenceTypeChecklistRecord.lift(
     callWithPointer {
@@ -2739,9 +2763,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listAnnounces`(): List<AnnounceRecord> {
             return FfiConverterSequenceTypeAnnounceRecord.lift(
     callWithPointer {
@@ -2752,9 +2776,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listConversations`(): List<ConversationRecord> {
             return FfiConverterSequenceTypeConversationRecord.lift(
     callWithPointer {
@@ -2765,9 +2789,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listMessages`(`conversationId`: kotlin.String?): List<MessageRecord> {
             return FfiConverterSequenceTypeMessageRecord.lift(
     callWithPointer {
@@ -2778,9 +2802,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listPeers`(): List<PeerRecord> {
             return FfiConverterSequenceTypePeerRecord.lift(
     callWithPointer {
@@ -2791,9 +2815,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listSosAlerts`(): List<SosAlertRecord> {
             return FfiConverterSequenceTypeSosAlertRecord.lift(
     callWithPointer {
@@ -2804,9 +2828,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listSosAudio`(): List<SosAudioRecord> {
             return FfiConverterSequenceTypeSosAudioRecord.lift(
     callWithPointer {
@@ -2817,9 +2841,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listSosLocations`(): List<SosLocationRecord> {
             return FfiConverterSequenceTypeSosLocationRecord.lift(
     callWithPointer {
@@ -2830,9 +2854,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `listTelemetryDestinations`(): List<kotlin.String> {
             return FfiConverterSequenceString.lift(
     callWithPointer {
@@ -2843,105 +2867,105 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `recordLocalTelemetryFix`(`position`: TelemetryPositionRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_record_local_telemetry_fix(
         it, FfiConverterTypeTelemetryPositionRecord.lower(`position`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `recordSosAudio`(`audio`: SosAudioRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_record_sos_audio(
         it, FfiConverterTypeSosAudioRecord.lower(`audio`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `refreshHubDirectory`()
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_refresh_hub_directory(
         it, _status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `requestLxmfSync`(`limit`: kotlin.UInt?)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_request_lxmf_sync(
         it, FfiConverterOptionalUInt.lower(`limit`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `requestPeerIdentity`(`destinationHex`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_request_peer_identity(
         it, FfiConverterString.lower(`destinationHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `restart`(`config`: NodeConfig)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_restart(
         it, FfiConverterTypeNodeConfig.lower(`config`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `retryLxmf`(`messageIdHex`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_retry_lxmf(
         it, FfiConverterString.lower(`messageIdHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `sendBytes`(`destinationHex`: kotlin.String, `bytes`: List<kotlin.UByte>, `fieldsBytes`: List<kotlin.UByte>?, `sendMode`: SendMode)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_send_bytes(
         it, FfiConverterString.lower(`destinationHex`),FfiConverterSequenceUByte.lower(`bytes`),FfiConverterOptionalSequenceUByte.lower(`fieldsBytes`),FfiConverterTypeSendMode.lower(`sendMode`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `sendLxmf`(`request`: SendLxmfRequest): kotlin.String {
             return FfiConverterString.lift(
     callWithPointer {
@@ -2952,152 +2976,152 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `setActivePropagationNode`(`destinationHex`: kotlin.String?)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_active_propagation_node(
         it, FfiConverterOptionalString.lower(`destinationHex`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setAnnounceCapabilities`(`capabilityString`: kotlin.String)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_announce_capabilities(
         it, FfiConverterString.lower(`capabilityString`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setAppSettings`(`settings`: AppSettingsRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_app_settings(
         it, FfiConverterTypeAppSettingsRecord.lower(`settings`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setChecklistTaskCell`(`request`: ChecklistTaskCellSetRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_cell(
         it, FfiConverterTypeChecklistTaskCellSetRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setChecklistTaskRowStyle`(`request`: ChecklistTaskRowStyleSetRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_row_style(
         it, FfiConverterTypeChecklistTaskRowStyleSetRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setChecklistTaskStatus`(`request`: ChecklistTaskStatusSetRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_checklist_task_status(
         it, FfiConverterTypeChecklistTaskStatusSetRequest.lower(`request`),_status)
 }
     }
-    
-    
+
+
 
     override fun `setLogLevel`(`level`: LogLevel)
-        = 
+        =
     callWithPointer {
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_log_level(
         it, FfiConverterTypeLogLevel.lower(`level`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setSavedPeers`(`peers`: List<SavedPeerRecord>)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_saved_peers(
         it, FfiConverterSequenceTypeSavedPeerRecord.lower(`peers`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setSosPin`(`pin`: kotlin.String?)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_sos_pin(
         it, FfiConverterOptionalString.lower(`pin`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `setSosSettings`(`settings`: SosSettingsRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_set_sos_settings(
         it, FfiConverterTypeSosSettingsRecord.lower(`settings`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `start`(`config`: NodeConfig)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_start(
         it, FfiConverterTypeNodeConfig.lower(`config`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `stop`()
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_stop(
         it, _status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `submitSosAccelerometerSample`(`x`: kotlin.Double, `y`: kotlin.Double, `z`: kotlin.Double, `atMs`: kotlin.ULong): SosStatusRecord? {
             return FfiConverterOptionalTypeSosStatusRecord.lift(
     callWithPointer {
@@ -3108,21 +3132,21 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `submitSosDeviceTelemetry`(`telemetry`: SosDeviceTelemetryRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_submit_sos_device_telemetry(
         it, FfiConverterTypeSosDeviceTelemetryRecord.lower(`telemetry`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `submitSosScreenEvent`(`atMs`: kotlin.ULong): SosStatusRecord? {
             return FfiConverterOptionalTypeSosStatusRecord.lift(
     callWithPointer {
@@ -3133,7 +3157,7 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
+
 
     override fun `subscribeEvents`(): EventSubscription {
             return FfiConverterTypeEventSubscription.lift(
@@ -3145,9 +3169,9 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `triggerSos`(`source`: SosTriggerSource): SosStatusRecord {
             return FfiConverterTypeSosStatusRecord.lift(
     callWithPointer {
@@ -3158,50 +3182,50 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     }
     )
     }
-    
 
-    
+
+
     @Throws(NodeException::class)override fun `updateChecklist`(`request`: ChecklistUpdateRequest)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_update_checklist(
         it, FfiConverterTypeChecklistUpdateRequest.lower(`request`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `upsertEam`(`record`: EamProjectionRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_upsert_eam(
         it, FfiConverterTypeEamProjectionRecord.lower(`record`),_status)
 }
     }
-    
-    
 
-    
+
+
+
     @Throws(NodeException::class)override fun `upsertEvent`(`record`: EventProjectionRecord)
-        = 
+        =
     callWithPointer {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_upsert_event(
         it, FfiConverterTypeEventProjectionRecord.lower(`record`),_status)
 }
     }
-    
-    
 
-    
 
-    
-    
+
+
+
+
+
     companion object
-    
+
 }
 
 /**
@@ -3235,17 +3259,17 @@ public object FfiConverterTypeNode: FfiConverter<Node, Pointer> {
 
 
 data class AnnounceRecord (
-    var `destinationHex`: kotlin.String, 
-    var `identityHex`: kotlin.String, 
-    var `destinationKind`: kotlin.String, 
-    var `announceClass`: AnnounceClass, 
-    var `appData`: kotlin.String, 
-    var `displayName`: kotlin.String?, 
-    var `hops`: kotlin.UByte, 
-    var `interfaceHex`: kotlin.String, 
+    var `destinationHex`: kotlin.String,
+    var `identityHex`: kotlin.String,
+    var `destinationKind`: kotlin.String,
+    var `announceClass`: AnnounceClass,
+    var `appData`: kotlin.String,
+    var `displayName`: kotlin.String?,
+    var `hops`: kotlin.UByte,
+    var `interfaceHex`: kotlin.String,
     var `receivedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -3295,17 +3319,17 @@ public object FfiConverterTypeAnnounceRecord: FfiConverterRustBuffer<AnnounceRec
 
 
 data class AppSettingsRecord (
-    var `displayName`: kotlin.String, 
-    var `autoConnectSaved`: kotlin.Boolean, 
-    var `announceCapabilities`: kotlin.String, 
-    var `tcpClients`: List<kotlin.String>, 
-    var `broadcast`: kotlin.Boolean, 
-    var `announceIntervalSeconds`: kotlin.UInt, 
-    var `telemetry`: TelemetrySettingsRecord, 
-    var `hub`: HubSettingsRecord, 
+    var `displayName`: kotlin.String,
+    var `autoConnectSaved`: kotlin.Boolean,
+    var `announceCapabilities`: kotlin.String,
+    var `tcpClients`: List<kotlin.String>,
+    var `broadcast`: kotlin.Boolean,
+    var `announceIntervalSeconds`: kotlin.UInt,
+    var `telemetry`: TelemetrySettingsRecord,
+    var `hub`: HubSettingsRecord,
     var `checklists`: ChecklistSettingsRecord
 ) {
-    
+
     companion object
 }
 
@@ -3355,14 +3379,14 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
 
 
 data class ChecklistCellRecord (
-    var `cellUid`: kotlin.String, 
-    var `taskUid`: kotlin.String, 
-    var `columnUid`: kotlin.String, 
-    var `value`: kotlin.String?, 
-    var `updatedAt`: kotlin.String?, 
+    var `cellUid`: kotlin.String,
+    var `taskUid`: kotlin.String,
+    var `columnUid`: kotlin.String,
+    var `value`: kotlin.String?,
+    var `updatedAt`: kotlin.String?,
     var `updatedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3403,17 +3427,17 @@ public object FfiConverterTypeChecklistCellRecord: FfiConverterRustBuffer<Checkl
 
 
 data class ChecklistColumnRecord (
-    var `columnUid`: kotlin.String, 
-    var `columnName`: kotlin.String, 
-    var `displayOrder`: kotlin.UInt, 
-    var `columnType`: ChecklistColumnType, 
-    var `columnEditable`: kotlin.Boolean, 
-    var `backgroundColor`: kotlin.String?, 
-    var `textColor`: kotlin.String?, 
-    var `isRemovable`: kotlin.Boolean, 
+    var `columnUid`: kotlin.String,
+    var `columnName`: kotlin.String,
+    var `displayOrder`: kotlin.UInt,
+    var `columnType`: ChecklistColumnType,
+    var `columnEditable`: kotlin.Boolean,
+    var `backgroundColor`: kotlin.String?,
+    var `textColor`: kotlin.String?,
+    var `isRemovable`: kotlin.Boolean,
     var `systemKey`: ChecklistSystemColumnKey?
 ) {
-    
+
     companion object
 }
 
@@ -3463,16 +3487,16 @@ public object FfiConverterTypeChecklistColumnRecord: FfiConverterRustBuffer<Chec
 
 
 data class ChecklistCreateOnlineRequest (
-    var `checklistUid`: kotlin.String?, 
-    var `missionUid`: kotlin.String?, 
-    var `templateUid`: kotlin.String, 
-    var `name`: kotlin.String, 
-    var `description`: kotlin.String, 
-    var `startTime`: kotlin.String, 
-    var `createdByTeamMemberRnsIdentity`: kotlin.String?, 
+    var `checklistUid`: kotlin.String?,
+    var `missionUid`: kotlin.String?,
+    var `templateUid`: kotlin.String,
+    var `name`: kotlin.String,
+    var `description`: kotlin.String,
+    var `startTime`: kotlin.String,
+    var `createdByTeamMemberRnsIdentity`: kotlin.String?,
     var `createdByTeamMemberDisplayName`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3519,10 +3543,10 @@ public object FfiConverterTypeChecklistCreateOnlineRequest: FfiConverterRustBuff
 
 
 data class ChecklistDeleteRequest (
-    var `checklistUid`: kotlin.String, 
+    var `checklistUid`: kotlin.String,
     var `deleteRemote`: kotlin.Boolean
 ) {
-    
+
     companion object
 }
 
@@ -3551,13 +3575,13 @@ public object FfiConverterTypeChecklistDeleteRequest: FfiConverterRustBuffer<Che
 
 
 data class ChecklistFeedPublicationRecord (
-    var `publicationUid`: kotlin.String, 
-    var `checklistUid`: kotlin.String, 
-    var `missionFeedUid`: kotlin.String, 
-    var `publishedAt`: kotlin.String?, 
+    var `publicationUid`: kotlin.String,
+    var `checklistUid`: kotlin.String,
+    var `missionFeedUid`: kotlin.String,
+    var `publishedAt`: kotlin.String?,
     var `publishedByTeamMemberRnsIdentity`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -3595,10 +3619,10 @@ public object FfiConverterTypeChecklistFeedPublicationRecord: FfiConverterRustBu
 
 
 data class ChecklistListActiveRequest (
-    var `search`: kotlin.String?, 
+    var `search`: kotlin.String?,
     var `sortBy`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3627,34 +3651,34 @@ public object FfiConverterTypeChecklistListActiveRequest: FfiConverterRustBuffer
 
 
 data class ChecklistRecord (
-    var `uid`: kotlin.String, 
-    var `missionUid`: kotlin.String?, 
-    var `templateUid`: kotlin.String?, 
-    var `templateVersion`: kotlin.UInt?, 
-    var `templateName`: kotlin.String?, 
-    var `name`: kotlin.String, 
-    var `description`: kotlin.String, 
-    var `startTime`: kotlin.String?, 
-    var `mode`: ChecklistMode, 
-    var `syncState`: ChecklistSyncState, 
-    var `originType`: ChecklistOriginType, 
-    var `checklistStatus`: ChecklistTaskStatus, 
-    var `createdAt`: kotlin.String?, 
-    var `createdByTeamMemberRnsIdentity`: kotlin.String, 
-    var `createdByTeamMemberDisplayName`: kotlin.String?, 
-    var `updatedAt`: kotlin.String?, 
-    var `lastChangedByTeamMemberRnsIdentity`: kotlin.String?, 
-    var `deletedAt`: kotlin.String?, 
-    var `uploadedAt`: kotlin.String?, 
-    var `participantRnsIdentities`: List<kotlin.String>, 
-    var `expectedTaskCount`: kotlin.UInt?, 
-    var `progressPercent`: kotlin.Double, 
-    var `counts`: ChecklistStatusCounts, 
-    var `columns`: List<ChecklistColumnRecord>, 
-    var `tasks`: List<ChecklistTaskRecord>, 
+    var `uid`: kotlin.String,
+    var `missionUid`: kotlin.String?,
+    var `templateUid`: kotlin.String?,
+    var `templateVersion`: kotlin.UInt?,
+    var `templateName`: kotlin.String?,
+    var `name`: kotlin.String,
+    var `description`: kotlin.String,
+    var `startTime`: kotlin.String?,
+    var `mode`: ChecklistMode,
+    var `syncState`: ChecklistSyncState,
+    var `originType`: ChecklistOriginType,
+    var `checklistStatus`: ChecklistTaskStatus,
+    var `createdAt`: kotlin.String?,
+    var `createdByTeamMemberRnsIdentity`: kotlin.String,
+    var `createdByTeamMemberDisplayName`: kotlin.String?,
+    var `updatedAt`: kotlin.String?,
+    var `lastChangedByTeamMemberRnsIdentity`: kotlin.String?,
+    var `deletedAt`: kotlin.String?,
+    var `uploadedAt`: kotlin.String?,
+    var `participantRnsIdentities`: List<kotlin.String>,
+    var `expectedTaskCount`: kotlin.UInt?,
+    var `progressPercent`: kotlin.Double,
+    var `counts`: ChecklistStatusCounts,
+    var `columns`: List<ChecklistColumnRecord>,
+    var `tasks`: List<ChecklistTaskRecord>,
     var `feedPublications`: List<ChecklistFeedPublicationRecord>
 ) {
-    
+
     companion object
 }
 
@@ -3757,7 +3781,7 @@ public object FfiConverterTypeChecklistRecord: FfiConverterRustBuffer<ChecklistR
 data class ChecklistSettingsRecord (
     var `defaultTaskDueStepMinutes`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -3783,11 +3807,11 @@ public object FfiConverterTypeChecklistSettingsRecord: FfiConverterRustBuffer<Ch
 
 
 data class ChecklistStatusCounts (
-    var `pendingCount`: kotlin.UInt, 
-    var `lateCount`: kotlin.UInt, 
+    var `pendingCount`: kotlin.UInt,
+    var `lateCount`: kotlin.UInt,
     var `completeCount`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -3819,13 +3843,13 @@ public object FfiConverterTypeChecklistStatusCounts: FfiConverterRustBuffer<Chec
 
 
 data class ChecklistTaskCellSetRequest (
-    var `checklistUid`: kotlin.String, 
-    var `taskUid`: kotlin.String, 
-    var `columnUid`: kotlin.String, 
-    var `value`: kotlin.String, 
+    var `checklistUid`: kotlin.String,
+    var `taskUid`: kotlin.String,
+    var `columnUid`: kotlin.String,
+    var `value`: kotlin.String,
     var `updatedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -3863,25 +3887,25 @@ public object FfiConverterTypeChecklistTaskCellSetRequest: FfiConverterRustBuffe
 
 
 data class ChecklistTaskRecord (
-    var `taskUid`: kotlin.String, 
-    var `number`: kotlin.UInt, 
-    var `userStatus`: ChecklistUserTaskStatus, 
-    var `taskStatus`: ChecklistTaskStatus, 
-    var `isLate`: kotlin.Boolean, 
-    var `updatedAt`: kotlin.String?, 
-    var `deletedAt`: kotlin.String?, 
-    var `customStatus`: kotlin.Int?, 
-    var `dueRelativeMinutes`: kotlin.UInt?, 
-    var `dueDtg`: kotlin.String?, 
-    var `notes`: kotlin.String?, 
-    var `rowBackgroundColor`: kotlin.String?, 
-    var `lineBreakEnabled`: kotlin.Boolean, 
-    var `completedAt`: kotlin.String?, 
-    var `completedByTeamMemberRnsIdentity`: kotlin.String?, 
-    var `legacyValue`: kotlin.String?, 
+    var `taskUid`: kotlin.String,
+    var `number`: kotlin.UInt,
+    var `userStatus`: ChecklistUserTaskStatus,
+    var `taskStatus`: ChecklistTaskStatus,
+    var `isLate`: kotlin.Boolean,
+    var `updatedAt`: kotlin.String?,
+    var `deletedAt`: kotlin.String?,
+    var `customStatus`: kotlin.Int?,
+    var `dueRelativeMinutes`: kotlin.UInt?,
+    var `dueDtg`: kotlin.String?,
+    var `notes`: kotlin.String?,
+    var `rowBackgroundColor`: kotlin.String?,
+    var `lineBreakEnabled`: kotlin.Boolean,
+    var `completedAt`: kotlin.String?,
+    var `completedByTeamMemberRnsIdentity`: kotlin.String?,
+    var `legacyValue`: kotlin.String?,
     var `cells`: List<ChecklistCellRecord>
 ) {
-    
+
     companion object
 }
 
@@ -3955,14 +3979,14 @@ public object FfiConverterTypeChecklistTaskRecord: FfiConverterRustBuffer<Checkl
 
 
 data class ChecklistTaskRowAddRequest (
-    var `checklistUid`: kotlin.String, 
-    var `taskUid`: kotlin.String?, 
-    var `number`: kotlin.UInt, 
-    var `dueRelativeMinutes`: kotlin.UInt?, 
-    var `legacyValue`: kotlin.String?, 
+    var `checklistUid`: kotlin.String,
+    var `taskUid`: kotlin.String?,
+    var `number`: kotlin.UInt,
+    var `dueRelativeMinutes`: kotlin.UInt?,
+    var `legacyValue`: kotlin.String?,
     var `changedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4003,11 +4027,11 @@ public object FfiConverterTypeChecklistTaskRowAddRequest: FfiConverterRustBuffer
 
 
 data class ChecklistTaskRowDeleteRequest (
-    var `checklistUid`: kotlin.String, 
-    var `taskUid`: kotlin.String, 
+    var `checklistUid`: kotlin.String,
+    var `taskUid`: kotlin.String,
     var `changedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4039,13 +4063,13 @@ public object FfiConverterTypeChecklistTaskRowDeleteRequest: FfiConverterRustBuf
 
 
 data class ChecklistTaskRowStyleSetRequest (
-    var `checklistUid`: kotlin.String, 
-    var `taskUid`: kotlin.String, 
-    var `rowBackgroundColor`: kotlin.String?, 
-    var `lineBreakEnabled`: kotlin.Boolean?, 
+    var `checklistUid`: kotlin.String,
+    var `taskUid`: kotlin.String,
+    var `rowBackgroundColor`: kotlin.String?,
+    var `lineBreakEnabled`: kotlin.Boolean?,
     var `changedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4083,12 +4107,12 @@ public object FfiConverterTypeChecklistTaskRowStyleSetRequest: FfiConverterRustB
 
 
 data class ChecklistTaskStatusSetRequest (
-    var `checklistUid`: kotlin.String, 
-    var `taskUid`: kotlin.String, 
-    var `userStatus`: ChecklistUserTaskStatus, 
+    var `checklistUid`: kotlin.String,
+    var `taskUid`: kotlin.String,
+    var `userStatus`: ChecklistUserTaskStatus,
     var `changedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4123,13 +4147,13 @@ public object FfiConverterTypeChecklistTaskStatusSetRequest: FfiConverterRustBuf
 
 
 data class ChecklistUpdatePatch (
-    var `missionUid`: kotlin.String?, 
-    var `templateUid`: kotlin.String?, 
-    var `name`: kotlin.String?, 
-    var `description`: kotlin.String?, 
+    var `missionUid`: kotlin.String?,
+    var `templateUid`: kotlin.String?,
+    var `name`: kotlin.String?,
+    var `description`: kotlin.String?,
     var `startTime`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4167,11 +4191,11 @@ public object FfiConverterTypeChecklistUpdatePatch: FfiConverterRustBuffer<Check
 
 
 data class ChecklistUpdateRequest (
-    var `checklistUid`: kotlin.String, 
-    var `patch`: ChecklistUpdatePatch, 
+    var `checklistUid`: kotlin.String,
+    var `patch`: ChecklistUpdatePatch,
     var `changedByTeamMemberRnsIdentity`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4203,15 +4227,15 @@ public object FfiConverterTypeChecklistUpdateRequest: FfiConverterRustBuffer<Che
 
 
 data class ConversationRecord (
-    var `conversationId`: kotlin.String, 
-    var `peerDestinationHex`: kotlin.String, 
-    var `peerDisplayName`: kotlin.String?, 
-    var `lastMessagePreview`: kotlin.String?, 
-    var `lastMessageAtMs`: kotlin.ULong, 
-    var `unreadCount`: kotlin.UInt, 
+    var `conversationId`: kotlin.String,
+    var `peerDestinationHex`: kotlin.String,
+    var `peerDisplayName`: kotlin.String?,
+    var `lastMessagePreview`: kotlin.String?,
+    var `lastMessageAtMs`: kotlin.ULong,
+    var `unreadCount`: kotlin.UInt,
     var `lastMessageState`: MessageState?
 ) {
-    
+
     companion object
 }
 
@@ -4255,32 +4279,32 @@ public object FfiConverterTypeConversationRecord: FfiConverterRustBuffer<Convers
 
 
 data class EamProjectionRecord (
-    var `callsign`: kotlin.String, 
-    var `groupName`: kotlin.String, 
-    var `securityStatus`: kotlin.String, 
-    var `capabilityStatus`: kotlin.String, 
-    var `preparednessStatus`: kotlin.String, 
-    var `medicalStatus`: kotlin.String, 
-    var `mobilityStatus`: kotlin.String, 
-    var `commsStatus`: kotlin.String, 
-    var `notes`: kotlin.String?, 
-    var `updatedAtMs`: kotlin.ULong, 
-    var `deletedAtMs`: kotlin.ULong?, 
-    var `eamUid`: kotlin.String?, 
-    var `teamMemberUid`: kotlin.String?, 
-    var `teamUid`: kotlin.String?, 
-    var `reportedAt`: kotlin.String?, 
-    var `reportedBy`: kotlin.String?, 
-    var `overallStatus`: kotlin.String?, 
-    var `confidence`: kotlin.Double?, 
-    var `ttlSeconds`: kotlin.ULong?, 
-    var `source`: EamSourceRecord?, 
-    var `syncState`: kotlin.String?, 
-    var `syncError`: kotlin.String?, 
-    var `draftCreatedAtMs`: kotlin.ULong?, 
+    var `callsign`: kotlin.String,
+    var `groupName`: kotlin.String,
+    var `securityStatus`: kotlin.String,
+    var `capabilityStatus`: kotlin.String,
+    var `preparednessStatus`: kotlin.String,
+    var `medicalStatus`: kotlin.String,
+    var `mobilityStatus`: kotlin.String,
+    var `commsStatus`: kotlin.String,
+    var `notes`: kotlin.String?,
+    var `updatedAtMs`: kotlin.ULong,
+    var `deletedAtMs`: kotlin.ULong?,
+    var `eamUid`: kotlin.String?,
+    var `teamMemberUid`: kotlin.String?,
+    var `teamUid`: kotlin.String?,
+    var `reportedAt`: kotlin.String?,
+    var `reportedBy`: kotlin.String?,
+    var `overallStatus`: kotlin.String?,
+    var `confidence`: kotlin.Double?,
+    var `ttlSeconds`: kotlin.ULong?,
+    var `source`: EamSourceRecord?,
+    var `syncState`: kotlin.String?,
+    var `syncError`: kotlin.String?,
+    var `draftCreatedAtMs`: kotlin.ULong?,
     var `lastSyncedAtMs`: kotlin.ULong?
 ) {
-    
+
     companion object
 }
 
@@ -4375,10 +4399,10 @@ public object FfiConverterTypeEamProjectionRecord: FfiConverterRustBuffer<EamPro
 
 
 data class EamSourceRecord (
-    var `rnsIdentity`: kotlin.String, 
+    var `rnsIdentity`: kotlin.String,
     var `displayName`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4407,17 +4431,17 @@ public object FfiConverterTypeEamSourceRecord: FfiConverterRustBuffer<EamSourceR
 
 
 data class EamTeamSummaryRecord (
-    var `teamUid`: kotlin.String, 
-    var `total`: kotlin.UInt, 
-    var `activeTotal`: kotlin.UInt, 
-    var `deletedTotal`: kotlin.UInt, 
-    var `overallStatus`: kotlin.String?, 
-    var `greenTotal`: kotlin.UInt, 
-    var `yellowTotal`: kotlin.UInt, 
-    var `redTotal`: kotlin.UInt, 
+    var `teamUid`: kotlin.String,
+    var `total`: kotlin.UInt,
+    var `activeTotal`: kotlin.UInt,
+    var `deletedTotal`: kotlin.UInt,
+    var `overallStatus`: kotlin.String?,
+    var `greenTotal`: kotlin.UInt,
+    var `yellowTotal`: kotlin.UInt,
+    var `redTotal`: kotlin.UInt,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -4467,25 +4491,25 @@ public object FfiConverterTypeEamTeamSummaryRecord: FfiConverterRustBuffer<EamTe
 
 
 data class EventProjectionRecord (
-    var `uid`: kotlin.String, 
-    var `commandId`: kotlin.String, 
-    var `sourceIdentity`: kotlin.String, 
-    var `sourceDisplayName`: kotlin.String?, 
-    var `timestamp`: kotlin.String, 
-    var `commandType`: kotlin.String, 
-    var `missionUid`: kotlin.String, 
-    var `content`: kotlin.String, 
-    var `callsign`: kotlin.String, 
-    var `serverTime`: kotlin.String?, 
-    var `clientTime`: kotlin.String?, 
-    var `keywords`: List<kotlin.String>, 
-    var `contentHashes`: List<kotlin.String>, 
-    var `updatedAtMs`: kotlin.ULong, 
-    var `deletedAtMs`: kotlin.ULong?, 
-    var `correlationId`: kotlin.String?, 
+    var `uid`: kotlin.String,
+    var `commandId`: kotlin.String,
+    var `sourceIdentity`: kotlin.String,
+    var `sourceDisplayName`: kotlin.String?,
+    var `timestamp`: kotlin.String,
+    var `commandType`: kotlin.String,
+    var `missionUid`: kotlin.String,
+    var `content`: kotlin.String,
+    var `callsign`: kotlin.String,
+    var `serverTime`: kotlin.String?,
+    var `clientTime`: kotlin.String?,
+    var `keywords`: List<kotlin.String>,
+    var `contentHashes`: List<kotlin.String>,
+    var `updatedAtMs`: kotlin.ULong,
+    var `deletedAtMs`: kotlin.ULong?,
+    var `correlationId`: kotlin.String?,
     var `topics`: List<kotlin.String>
 ) {
-    
+
     companion object
 }
 
@@ -4559,16 +4583,16 @@ public object FfiConverterTypeEventProjectionRecord: FfiConverterRustBuffer<Even
 
 
 data class HubDirectoryPeerRecord (
-    var `identity`: kotlin.String, 
-    var `destinationHash`: kotlin.String, 
-    var `displayName`: kotlin.String?, 
-    var `announceCapabilities`: List<kotlin.String>, 
-    var `clientType`: kotlin.String?, 
-    var `registeredMode`: kotlin.String?, 
-    var `lastSeen`: kotlin.String?, 
+    var `identity`: kotlin.String,
+    var `destinationHash`: kotlin.String,
+    var `displayName`: kotlin.String?,
+    var `announceCapabilities`: List<kotlin.String>,
+    var `clientType`: kotlin.String?,
+    var `registeredMode`: kotlin.String?,
+    var `lastSeen`: kotlin.String?,
     var `status`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -4615,11 +4639,11 @@ public object FfiConverterTypeHubDirectoryPeerRecord: FfiConverterRustBuffer<Hub
 
 
 data class HubDirectorySnapshot (
-    var `effectiveConnectedMode`: kotlin.Boolean, 
-    var `items`: List<HubDirectoryPeerRecord>, 
+    var `effectiveConnectedMode`: kotlin.Boolean,
+    var `items`: List<HubDirectoryPeerRecord>,
     var `receivedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -4651,13 +4675,13 @@ public object FfiConverterTypeHubDirectorySnapshot: FfiConverterRustBuffer<HubDi
 
 
 data class HubSettingsRecord (
-    var `mode`: HubMode, 
-    var `identityHash`: kotlin.String, 
-    var `apiBaseUrl`: kotlin.String, 
-    var `apiKey`: kotlin.String, 
+    var `mode`: HubMode,
+    var `identityHash`: kotlin.String,
+    var `apiBaseUrl`: kotlin.String,
+    var `apiKey`: kotlin.String,
     var `refreshIntervalSeconds`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -4695,14 +4719,14 @@ public object FfiConverterTypeHubSettingsRecord: FfiConverterRustBuffer<HubSetti
 
 
 data class LegacyImportPayload (
-    var `settings`: AppSettingsRecord?, 
-    var `savedPeers`: List<SavedPeerRecord>, 
-    var `eams`: List<EamProjectionRecord>, 
-    var `events`: List<EventProjectionRecord>, 
-    var `messages`: List<MessageRecord>, 
+    var `settings`: AppSettingsRecord?,
+    var `savedPeers`: List<SavedPeerRecord>,
+    var `eams`: List<EamProjectionRecord>,
+    var `events`: List<EventProjectionRecord>,
+    var `messages`: List<MessageRecord>,
     var `telemetryPositions`: List<TelemetryPositionRecord>
 ) {
-    
+
     companion object
 }
 
@@ -4742,25 +4766,173 @@ public object FfiConverterTypeLegacyImportPayload: FfiConverterRustBuffer<Legacy
 
 
 
+data class LocalPropagationCounts (
+    var `totalMessages`: kotlin.UInt,
+    var `pendingMessages`: kotlin.UInt,
+    var `failedDeliveryCount`: kotlin.UInt,
+    var `pendingReplicationCount`: kotlin.UInt,
+    var `retryQueueSize`: kotlin.UInt
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalPropagationCounts: FfiConverterRustBuffer<LocalPropagationCounts> {
+    override fun read(buf: ByteBuffer): LocalPropagationCounts {
+        return LocalPropagationCounts(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalPropagationCounts) = (
+            FfiConverterUInt.allocationSize(value.`totalMessages`) +
+            FfiConverterUInt.allocationSize(value.`pendingMessages`) +
+            FfiConverterUInt.allocationSize(value.`failedDeliveryCount`) +
+            FfiConverterUInt.allocationSize(value.`pendingReplicationCount`) +
+            FfiConverterUInt.allocationSize(value.`retryQueueSize`)
+    )
+
+    override fun write(value: LocalPropagationCounts, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`totalMessages`, buf)
+            FfiConverterUInt.write(value.`pendingMessages`, buf)
+            FfiConverterUInt.write(value.`failedDeliveryCount`, buf)
+            FfiConverterUInt.write(value.`pendingReplicationCount`, buf)
+            FfiConverterUInt.write(value.`retryQueueSize`, buf)
+    }
+}
+
+
+
+data class LocalPropagationMessageRecord (
+    var `messageIdHex`: kotlin.String,
+    var `senderIdHex`: kotlin.String,
+    var `targetHex`: kotlin.String,
+    var `createdAtMs`: kotlin.ULong,
+    var `updatedAtMs`: kotlin.ULong,
+    var `payloadBase64`: kotlin.String,
+    var `title`: kotlin.String?,
+    var `messageType`: kotlin.String,
+    var `deliveryStatus`: LocalPropagationDeliveryStatus,
+    var `replicationStatus`: LocalPropagationReplicationStatus,
+    var `retryCount`: kotlin.UInt,
+    var `lastAttemptedDeliveryAtMs`: kotlin.ULong?,
+    var `lastAttemptedReplicationAtMs`: kotlin.ULong?,
+    var `nextRetryAtMs`: kotlin.ULong?,
+    var `acknowledgementState`: kotlin.String?,
+    var `signatureMetadata`: kotlin.String?,
+    var `causalMetadata`: kotlin.String?,
+    var `fieldsBase64`: kotlin.String?,
+    var `lastError`: kotlin.String?,
+    var `replicatedNodeHex`: kotlin.String?
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalPropagationMessageRecord: FfiConverterRustBuffer<LocalPropagationMessageRecord> {
+    override fun read(buf: ByteBuffer): LocalPropagationMessageRecord {
+        return LocalPropagationMessageRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeLocalPropagationDeliveryStatus.read(buf),
+            FfiConverterTypeLocalPropagationReplicationStatus.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: LocalPropagationMessageRecord) = (
+            FfiConverterString.allocationSize(value.`messageIdHex`) +
+            FfiConverterString.allocationSize(value.`senderIdHex`) +
+            FfiConverterString.allocationSize(value.`targetHex`) +
+            FfiConverterULong.allocationSize(value.`createdAtMs`) +
+            FfiConverterULong.allocationSize(value.`updatedAtMs`) +
+            FfiConverterString.allocationSize(value.`payloadBase64`) +
+            FfiConverterOptionalString.allocationSize(value.`title`) +
+            FfiConverterString.allocationSize(value.`messageType`) +
+            FfiConverterTypeLocalPropagationDeliveryStatus.allocationSize(value.`deliveryStatus`) +
+            FfiConverterTypeLocalPropagationReplicationStatus.allocationSize(value.`replicationStatus`) +
+            FfiConverterUInt.allocationSize(value.`retryCount`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastAttemptedDeliveryAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastAttemptedReplicationAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`nextRetryAtMs`) +
+            FfiConverterOptionalString.allocationSize(value.`acknowledgementState`) +
+            FfiConverterOptionalString.allocationSize(value.`signatureMetadata`) +
+            FfiConverterOptionalString.allocationSize(value.`causalMetadata`) +
+            FfiConverterOptionalString.allocationSize(value.`fieldsBase64`) +
+            FfiConverterOptionalString.allocationSize(value.`lastError`) +
+            FfiConverterOptionalString.allocationSize(value.`replicatedNodeHex`)
+    )
+
+    override fun write(value: LocalPropagationMessageRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`messageIdHex`, buf)
+            FfiConverterString.write(value.`senderIdHex`, buf)
+            FfiConverterString.write(value.`targetHex`, buf)
+            FfiConverterULong.write(value.`createdAtMs`, buf)
+            FfiConverterULong.write(value.`updatedAtMs`, buf)
+            FfiConverterString.write(value.`payloadBase64`, buf)
+            FfiConverterOptionalString.write(value.`title`, buf)
+            FfiConverterString.write(value.`messageType`, buf)
+            FfiConverterTypeLocalPropagationDeliveryStatus.write(value.`deliveryStatus`, buf)
+            FfiConverterTypeLocalPropagationReplicationStatus.write(value.`replicationStatus`, buf)
+            FfiConverterUInt.write(value.`retryCount`, buf)
+            FfiConverterOptionalULong.write(value.`lastAttemptedDeliveryAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastAttemptedReplicationAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`nextRetryAtMs`, buf)
+            FfiConverterOptionalString.write(value.`acknowledgementState`, buf)
+            FfiConverterOptionalString.write(value.`signatureMetadata`, buf)
+            FfiConverterOptionalString.write(value.`causalMetadata`, buf)
+            FfiConverterOptionalString.write(value.`fieldsBase64`, buf)
+            FfiConverterOptionalString.write(value.`lastError`, buf)
+            FfiConverterOptionalString.write(value.`replicatedNodeHex`, buf)
+    }
+}
+
+
+
 data class LxmfDeliveryUpdate (
-    var `messageIdHex`: kotlin.String, 
-    var `destinationHex`: kotlin.String, 
-    var `sourceHex`: kotlin.String?, 
-    var `correlationId`: kotlin.String?, 
-    var `commandId`: kotlin.String?, 
-    var `commandType`: kotlin.String?, 
-    var `eventUid`: kotlin.String?, 
-    var `missionUid`: kotlin.String?, 
-    var `status`: LxmfDeliveryStatus, 
-    var `method`: LxmfDeliveryMethod, 
-    var `representation`: LxmfDeliveryRepresentation, 
-    var `relayDestinationHex`: kotlin.String?, 
-    var `fallbackStage`: LxmfFallbackStage?, 
-    var `detail`: kotlin.String?, 
-    var `sentAtMs`: kotlin.ULong, 
+    var `messageIdHex`: kotlin.String,
+    var `destinationHex`: kotlin.String,
+    var `sourceHex`: kotlin.String?,
+    var `correlationId`: kotlin.String?,
+    var `commandId`: kotlin.String?,
+    var `commandType`: kotlin.String?,
+    var `eventUid`: kotlin.String?,
+    var `missionUid`: kotlin.String?,
+    var `status`: LxmfDeliveryStatus,
+    var `method`: LxmfDeliveryMethod,
+    var `representation`: LxmfDeliveryRepresentation,
+    var `relayDestinationHex`: kotlin.String?,
+    var `fallbackStage`: LxmfFallbackStage?,
+    var `detail`: kotlin.String?,
+    var `sentAtMs`: kotlin.ULong,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -4831,21 +5003,21 @@ public object FfiConverterTypeLxmfDeliveryUpdate: FfiConverterRustBuffer<LxmfDel
 
 
 data class MessageRecord (
-    var `messageIdHex`: kotlin.String, 
-    var `conversationId`: kotlin.String, 
-    var `direction`: MessageDirection, 
-    var `destinationHex`: kotlin.String, 
-    var `sourceHex`: kotlin.String?, 
-    var `title`: kotlin.String?, 
-    var `bodyUtf8`: kotlin.String, 
-    var `method`: MessageMethod, 
-    var `state`: MessageState, 
-    var `detail`: kotlin.String?, 
-    var `sentAtMs`: kotlin.ULong?, 
-    var `receivedAtMs`: kotlin.ULong?, 
+    var `messageIdHex`: kotlin.String,
+    var `conversationId`: kotlin.String,
+    var `direction`: MessageDirection,
+    var `destinationHex`: kotlin.String,
+    var `sourceHex`: kotlin.String?,
+    var `title`: kotlin.String?,
+    var `bodyUtf8`: kotlin.String,
+    var `method`: MessageMethod,
+    var `state`: MessageState,
+    var `detail`: kotlin.String?,
+    var `sentAtMs`: kotlin.ULong?,
+    var `receivedAtMs`: kotlin.ULong?,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -4907,20 +5079,20 @@ public object FfiConverterTypeMessageRecord: FfiConverterRustBuffer<MessageRecor
 
 
 data class NodeConfig (
-    var `name`: kotlin.String, 
-    var `storageDir`: kotlin.String?, 
-    var `tcpClients`: List<kotlin.String>, 
-    var `broadcast`: kotlin.Boolean, 
-    var `announceIntervalSeconds`: kotlin.UInt, 
-    var `staleAfterMinutes`: kotlin.UInt, 
-    var `announceCapabilities`: kotlin.String, 
-    var `hubMode`: HubMode, 
-    var `hubIdentityHash`: kotlin.String?, 
-    var `hubApiBaseUrl`: kotlin.String?, 
-    var `hubApiKey`: kotlin.String?, 
+    var `name`: kotlin.String,
+    var `storageDir`: kotlin.String?,
+    var `tcpClients`: List<kotlin.String>,
+    var `broadcast`: kotlin.Boolean,
+    var `announceIntervalSeconds`: kotlin.UInt,
+    var `staleAfterMinutes`: kotlin.UInt,
+    var `announceCapabilities`: kotlin.String,
+    var `hubMode`: HubMode,
+    var `hubIdentityHash`: kotlin.String?,
+    var `hubApiBaseUrl`: kotlin.String?,
+    var `hubApiKey`: kotlin.String?,
     var `hubRefreshIntervalSeconds`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -4979,13 +5151,13 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
 
 
 data class NodeStatus (
-    var `running`: kotlin.Boolean, 
-    var `name`: kotlin.String, 
-    var `identityHex`: kotlin.String, 
-    var `appDestinationHex`: kotlin.String, 
+    var `running`: kotlin.Boolean,
+    var `name`: kotlin.String,
+    var `identityHex`: kotlin.String,
+    var `appDestinationHex`: kotlin.String,
     var `lxmfDestinationHex`: kotlin.String
 ) {
-    
+
     companion object
 }
 
@@ -5023,11 +5195,11 @@ public object FfiConverterTypeNodeStatus: FfiConverterRustBuffer<NodeStatus> {
 
 
 data class OperationalNotice (
-    var `level`: LogLevel, 
-    var `message`: kotlin.String, 
+    var `level`: LogLevel,
+    var `message`: kotlin.String,
     var `atMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5059,19 +5231,19 @@ public object FfiConverterTypeOperationalNotice: FfiConverterRustBuffer<Operatio
 
 
 data class OperationalSummary (
-    var `running`: kotlin.Boolean, 
-    var `peerCountTotal`: kotlin.UInt, 
-    var `savedPeerCount`: kotlin.UInt, 
-    var `connectedPeerCount`: kotlin.UInt, 
-    var `conversationCount`: kotlin.UInt, 
-    var `messageCount`: kotlin.UInt, 
-    var `eamCount`: kotlin.UInt, 
-    var `eventCount`: kotlin.UInt, 
-    var `telemetryCount`: kotlin.UInt, 
-    var `activePropagationNodeHex`: kotlin.String?, 
+    var `running`: kotlin.Boolean,
+    var `peerCountTotal`: kotlin.UInt,
+    var `savedPeerCount`: kotlin.UInt,
+    var `connectedPeerCount`: kotlin.UInt,
+    var `conversationCount`: kotlin.UInt,
+    var `messageCount`: kotlin.UInt,
+    var `eamCount`: kotlin.UInt,
+    var `eventCount`: kotlin.UInt,
+    var `telemetryCount`: kotlin.UInt,
+    var `activePropagationNodeHex`: kotlin.String?,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5127,23 +5299,23 @@ public object FfiConverterTypeOperationalSummary: FfiConverterRustBuffer<Operati
 
 
 data class PeerChange (
-    var `destinationHex`: kotlin.String, 
-    var `identityHex`: kotlin.String?, 
-    var `lxmfDestinationHex`: kotlin.String?, 
-    var `displayName`: kotlin.String?, 
-    var `appData`: kotlin.String?, 
-    var `state`: PeerState, 
-    var `saved`: kotlin.Boolean, 
-    var `stale`: kotlin.Boolean, 
-    var `activeLink`: kotlin.Boolean, 
-    var `lastError`: kotlin.String?, 
-    var `lastResolutionError`: kotlin.String?, 
-    var `lastResolutionAttemptAtMs`: kotlin.ULong?, 
-    var `lastSeenAtMs`: kotlin.ULong, 
-    var `announceLastSeenAtMs`: kotlin.ULong?, 
+    var `destinationHex`: kotlin.String,
+    var `identityHex`: kotlin.String?,
+    var `lxmfDestinationHex`: kotlin.String?,
+    var `displayName`: kotlin.String?,
+    var `appData`: kotlin.String?,
+    var `state`: PeerState,
+    var `saved`: kotlin.Boolean,
+    var `stale`: kotlin.Boolean,
+    var `activeLink`: kotlin.Boolean,
+    var `lastError`: kotlin.String?,
+    var `lastResolutionError`: kotlin.String?,
+    var `lastResolutionAttemptAtMs`: kotlin.ULong?,
+    var `lastSeenAtMs`: kotlin.ULong,
+    var `announceLastSeenAtMs`: kotlin.ULong?,
     var `lxmfLastSeenAtMs`: kotlin.ULong?
 ) {
-    
+
     companion object
 }
 
@@ -5211,23 +5383,23 @@ public object FfiConverterTypePeerChange: FfiConverterRustBuffer<PeerChange> {
 
 
 data class PeerRecord (
-    var `destinationHex`: kotlin.String, 
-    var `identityHex`: kotlin.String?, 
-    var `lxmfDestinationHex`: kotlin.String?, 
-    var `displayName`: kotlin.String?, 
-    var `appData`: kotlin.String?, 
-    var `state`: PeerState, 
-    var `saved`: kotlin.Boolean, 
-    var `stale`: kotlin.Boolean, 
-    var `activeLink`: kotlin.Boolean, 
-    var `hubDerived`: kotlin.Boolean, 
-    var `lastResolutionError`: kotlin.String?, 
-    var `lastResolutionAttemptAtMs`: kotlin.ULong?, 
-    var `lastSeenAtMs`: kotlin.ULong, 
-    var `announceLastSeenAtMs`: kotlin.ULong?, 
+    var `destinationHex`: kotlin.String,
+    var `identityHex`: kotlin.String?,
+    var `lxmfDestinationHex`: kotlin.String?,
+    var `displayName`: kotlin.String?,
+    var `appData`: kotlin.String?,
+    var `state`: PeerState,
+    var `saved`: kotlin.Boolean,
+    var `stale`: kotlin.Boolean,
+    var `activeLink`: kotlin.Boolean,
+    var `hubDerived`: kotlin.Boolean,
+    var `lastResolutionError`: kotlin.String?,
+    var `lastResolutionAttemptAtMs`: kotlin.ULong?,
+    var `lastSeenAtMs`: kotlin.ULong,
+    var `announceLastSeenAtMs`: kotlin.ULong?,
     var `lxmfLastSeenAtMs`: kotlin.ULong?
 ) {
-    
+
     companion object
 }
 
@@ -5295,13 +5467,13 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
 
 
 data class ProjectionInvalidation (
-    var `scope`: ProjectionScope, 
-    var `key`: kotlin.String?, 
-    var `revision`: kotlin.ULong, 
-    var `updatedAtMs`: kotlin.ULong, 
+    var `scope`: ProjectionScope,
+    var `key`: kotlin.String?,
+    var `revision`: kotlin.ULong,
+    var `updatedAtMs`: kotlin.ULong,
     var `reason`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -5338,12 +5510,92 @@ public object FfiConverterTypeProjectionInvalidation: FfiConverterRustBuffer<Pro
 
 
 
+data class PropagationNodeStatus (
+    var `nodeIdHex`: kotlin.String,
+    var `connectivityState`: PropagationConnectivityState,
+    var `online`: kotlin.Boolean,
+    var `connectedPeers`: kotlin.UInt,
+    var `connectedPropagationNodes`: kotlin.UInt,
+    var `pendingMessages`: kotlin.UInt,
+    var `failedDeliveryAttempts`: kotlin.UInt,
+    var `pendingReplicationCount`: kotlin.UInt,
+    var `retryQueueSize`: kotlin.UInt,
+    var `lastSuccessfulSyncAtMs`: kotlin.ULong?,
+    var `lastFailedSyncAtMs`: kotlin.ULong?,
+    var `lastOnlineAtMs`: kotlin.ULong?,
+    var `lastOfflineAtMs`: kotlin.ULong?,
+    var `localStorageHealthy`: kotlin.Boolean
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePropagationNodeStatus: FfiConverterRustBuffer<PropagationNodeStatus> {
+    override fun read(buf: ByteBuffer): PropagationNodeStatus {
+        return PropagationNodeStatus(
+            FfiConverterString.read(buf),
+            FfiConverterTypePropagationConnectivityState.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PropagationNodeStatus) = (
+            FfiConverterString.allocationSize(value.`nodeIdHex`) +
+            FfiConverterTypePropagationConnectivityState.allocationSize(value.`connectivityState`) +
+            FfiConverterBoolean.allocationSize(value.`online`) +
+            FfiConverterUInt.allocationSize(value.`connectedPeers`) +
+            FfiConverterUInt.allocationSize(value.`connectedPropagationNodes`) +
+            FfiConverterUInt.allocationSize(value.`pendingMessages`) +
+            FfiConverterUInt.allocationSize(value.`failedDeliveryAttempts`) +
+            FfiConverterUInt.allocationSize(value.`pendingReplicationCount`) +
+            FfiConverterUInt.allocationSize(value.`retryQueueSize`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastSuccessfulSyncAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastFailedSyncAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastOnlineAtMs`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastOfflineAtMs`) +
+            FfiConverterBoolean.allocationSize(value.`localStorageHealthy`)
+    )
+
+    override fun write(value: PropagationNodeStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`nodeIdHex`, buf)
+            FfiConverterTypePropagationConnectivityState.write(value.`connectivityState`, buf)
+            FfiConverterBoolean.write(value.`online`, buf)
+            FfiConverterUInt.write(value.`connectedPeers`, buf)
+            FfiConverterUInt.write(value.`connectedPropagationNodes`, buf)
+            FfiConverterUInt.write(value.`pendingMessages`, buf)
+            FfiConverterUInt.write(value.`failedDeliveryAttempts`, buf)
+            FfiConverterUInt.write(value.`pendingReplicationCount`, buf)
+            FfiConverterUInt.write(value.`retryQueueSize`, buf)
+            FfiConverterOptionalULong.write(value.`lastSuccessfulSyncAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastFailedSyncAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastOnlineAtMs`, buf)
+            FfiConverterOptionalULong.write(value.`lastOfflineAtMs`, buf)
+            FfiConverterBoolean.write(value.`localStorageHealthy`, buf)
+    }
+}
+
+
+
 data class SavedPeerRecord (
-    var `destinationHex`: kotlin.String, 
-    var `label`: kotlin.String?, 
+    var `destinationHex`: kotlin.String,
+    var `label`: kotlin.String?,
     var `savedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5375,12 +5627,12 @@ public object FfiConverterTypeSavedPeerRecord: FfiConverterRustBuffer<SavedPeerR
 
 
 data class SendLxmfRequest (
-    var `destinationHex`: kotlin.String, 
-    var `bodyUtf8`: kotlin.String, 
-    var `title`: kotlin.String?, 
+    var `destinationHex`: kotlin.String,
+    var `bodyUtf8`: kotlin.String,
+    var `title`: kotlin.String?,
     var `sendMode`: SendMode
 ) {
-    
+
     companion object
 }
 
@@ -5415,21 +5667,21 @@ public object FfiConverterTypeSendLxmfRequest: FfiConverterRustBuffer<SendLxmfRe
 
 
 data class SosAlertRecord (
-    var `incidentId`: kotlin.String, 
-    var `sourceHex`: kotlin.String, 
-    var `conversationId`: kotlin.String, 
-    var `state`: SosMessageKind, 
-    var `active`: kotlin.Boolean, 
-    var `bodyUtf8`: kotlin.String, 
-    var `lat`: kotlin.Double?, 
-    var `lon`: kotlin.Double?, 
-    var `batteryPercent`: kotlin.Double?, 
-    var `audioId`: kotlin.String?, 
-    var `messageIdHex`: kotlin.String?, 
-    var `receivedAtMs`: kotlin.ULong, 
+    var `incidentId`: kotlin.String,
+    var `sourceHex`: kotlin.String,
+    var `conversationId`: kotlin.String,
+    var `state`: SosMessageKind,
+    var `active`: kotlin.Boolean,
+    var `bodyUtf8`: kotlin.String,
+    var `lat`: kotlin.Double?,
+    var `lon`: kotlin.Double?,
+    var `batteryPercent`: kotlin.Double?,
+    var `audioId`: kotlin.String?,
+    var `messageIdHex`: kotlin.String?,
+    var `receivedAtMs`: kotlin.ULong,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5491,15 +5743,15 @@ public object FfiConverterTypeSosAlertRecord: FfiConverterRustBuffer<SosAlertRec
 
 
 data class SosAudioRecord (
-    var `audioId`: kotlin.String, 
-    var `incidentId`: kotlin.String, 
-    var `sourceHex`: kotlin.String, 
-    var `path`: kotlin.String, 
-    var `mimeType`: kotlin.String, 
-    var `durationSeconds`: kotlin.UInt, 
+    var `audioId`: kotlin.String,
+    var `incidentId`: kotlin.String,
+    var `sourceHex`: kotlin.String,
+    var `path`: kotlin.String,
+    var `mimeType`: kotlin.String,
+    var `durationSeconds`: kotlin.UInt,
     var `createdAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5543,17 +5795,17 @@ public object FfiConverterTypeSosAudioRecord: FfiConverterRustBuffer<SosAudioRec
 
 
 data class SosDeviceTelemetryRecord (
-    var `lat`: kotlin.Double?, 
-    var `lon`: kotlin.Double?, 
-    var `alt`: kotlin.Double?, 
-    var `speed`: kotlin.Double?, 
-    var `course`: kotlin.Double?, 
-    var `accuracy`: kotlin.Double?, 
-    var `batteryPercent`: kotlin.Double?, 
-    var `batteryCharging`: kotlin.Boolean?, 
+    var `lat`: kotlin.Double?,
+    var `lon`: kotlin.Double?,
+    var `alt`: kotlin.Double?,
+    var `speed`: kotlin.Double?,
+    var `course`: kotlin.Double?,
+    var `accuracy`: kotlin.Double?,
+    var `batteryPercent`: kotlin.Double?,
+    var `batteryCharging`: kotlin.Boolean?,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5603,16 +5855,16 @@ public object FfiConverterTypeSosDeviceTelemetryRecord: FfiConverterRustBuffer<S
 
 
 data class SosLocationRecord (
-    var `incidentId`: kotlin.String, 
-    var `sourceHex`: kotlin.String, 
-    var `lat`: kotlin.Double, 
-    var `lon`: kotlin.Double, 
-    var `alt`: kotlin.Double?, 
-    var `accuracy`: kotlin.Double?, 
-    var `batteryPercent`: kotlin.Double?, 
+    var `incidentId`: kotlin.String,
+    var `sourceHex`: kotlin.String,
+    var `lat`: kotlin.Double,
+    var `lon`: kotlin.Double,
+    var `alt`: kotlin.Double?,
+    var `accuracy`: kotlin.Double?,
+    var `batteryPercent`: kotlin.Double?,
     var `recordedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5659,29 +5911,29 @@ public object FfiConverterTypeSosLocationRecord: FfiConverterRustBuffer<SosLocat
 
 
 data class SosSettingsRecord (
-    var `enabled`: kotlin.Boolean, 
-    var `messageTemplate`: kotlin.String, 
-    var `cancelMessageTemplate`: kotlin.String, 
-    var `countdownSeconds`: kotlin.UInt, 
-    var `includeLocation`: kotlin.Boolean, 
-    var `triggerShake`: kotlin.Boolean, 
-    var `triggerTapPattern`: kotlin.Boolean, 
-    var `triggerPowerButton`: kotlin.Boolean, 
-    var `shakeSensitivity`: kotlin.Double, 
-    var `audioRecording`: kotlin.Boolean, 
-    var `audioDurationSeconds`: kotlin.UInt, 
-    var `periodicUpdates`: kotlin.Boolean, 
-    var `updateIntervalSeconds`: kotlin.UInt, 
-    var `floatingButton`: kotlin.Boolean, 
-    var `silentAutoAnswer`: kotlin.Boolean, 
-    var `deactivationPinHash`: kotlin.String?, 
-    var `deactivationPinSalt`: kotlin.String?, 
-    var `floatingButtonX`: kotlin.Double, 
-    var `floatingButtonY`: kotlin.Double, 
-    var `activePillX`: kotlin.Double, 
+    var `enabled`: kotlin.Boolean,
+    var `messageTemplate`: kotlin.String,
+    var `cancelMessageTemplate`: kotlin.String,
+    var `countdownSeconds`: kotlin.UInt,
+    var `includeLocation`: kotlin.Boolean,
+    var `triggerShake`: kotlin.Boolean,
+    var `triggerTapPattern`: kotlin.Boolean,
+    var `triggerPowerButton`: kotlin.Boolean,
+    var `shakeSensitivity`: kotlin.Double,
+    var `audioRecording`: kotlin.Boolean,
+    var `audioDurationSeconds`: kotlin.UInt,
+    var `periodicUpdates`: kotlin.Boolean,
+    var `updateIntervalSeconds`: kotlin.UInt,
+    var `floatingButton`: kotlin.Boolean,
+    var `silentAutoAnswer`: kotlin.Boolean,
+    var `deactivationPinHash`: kotlin.String?,
+    var `deactivationPinSalt`: kotlin.String?,
+    var `floatingButtonX`: kotlin.Double,
+    var `floatingButtonY`: kotlin.Double,
+    var `activePillX`: kotlin.Double,
     var `activePillY`: kotlin.Double
 ) {
-    
+
     companion object
 }
 
@@ -5767,16 +6019,16 @@ public object FfiConverterTypeSosSettingsRecord: FfiConverterRustBuffer<SosSetti
 
 
 data class SosStatusRecord (
-    var `state`: SosState, 
-    var `incidentId`: kotlin.String?, 
-    var `triggerSource`: SosTriggerSource?, 
-    var `countdownDeadlineMs`: kotlin.ULong?, 
-    var `activatedAtMs`: kotlin.ULong?, 
-    var `lastSentAtMs`: kotlin.ULong?, 
-    var `lastUpdateAtMs`: kotlin.ULong?, 
+    var `state`: SosState,
+    var `incidentId`: kotlin.String?,
+    var `triggerSource`: SosTriggerSource?,
+    var `countdownDeadlineMs`: kotlin.ULong?,
+    var `activatedAtMs`: kotlin.ULong?,
+    var `lastSentAtMs`: kotlin.ULong?,
+    var `lastUpdateAtMs`: kotlin.ULong?,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5823,14 +6075,14 @@ public object FfiConverterTypeSosStatusRecord: FfiConverterRustBuffer<SosStatusR
 
 
 data class SyncStatus (
-    var `phase`: SyncPhase, 
-    var `activePropagationNodeHex`: kotlin.String?, 
-    var `requestedAtMs`: kotlin.ULong?, 
-    var `completedAtMs`: kotlin.ULong?, 
-    var `messagesReceived`: kotlin.UInt, 
+    var `phase`: SyncPhase,
+    var `activePropagationNodeHex`: kotlin.String?,
+    var `requestedAtMs`: kotlin.ULong?,
+    var `completedAtMs`: kotlin.ULong?,
+    var `messagesReceived`: kotlin.UInt,
     var `detail`: kotlin.String?
 ) {
-    
+
     companion object
 }
 
@@ -5871,16 +6123,16 @@ public object FfiConverterTypeSyncStatus: FfiConverterRustBuffer<SyncStatus> {
 
 
 data class TelemetryPositionRecord (
-    var `callsign`: kotlin.String, 
-    var `lat`: kotlin.Double, 
-    var `lon`: kotlin.Double, 
-    var `alt`: kotlin.Double?, 
-    var `course`: kotlin.Double?, 
-    var `speed`: kotlin.Double?, 
-    var `accuracy`: kotlin.Double?, 
+    var `callsign`: kotlin.String,
+    var `lat`: kotlin.Double,
+    var `lon`: kotlin.Double,
+    var `alt`: kotlin.Double?,
+    var `course`: kotlin.Double?,
+    var `speed`: kotlin.Double?,
+    var `accuracy`: kotlin.Double?,
     var `updatedAtMs`: kotlin.ULong
 ) {
-    
+
     companion object
 }
 
@@ -5927,13 +6179,13 @@ public object FfiConverterTypeTelemetryPositionRecord: FfiConverterRustBuffer<Te
 
 
 data class TelemetrySettingsRecord (
-    var `enabled`: kotlin.Boolean, 
-    var `publishIntervalSeconds`: kotlin.UInt, 
-    var `accuracyThresholdMeters`: kotlin.Double?, 
-    var `staleAfterMinutes`: kotlin.UInt, 
+    var `enabled`: kotlin.Boolean,
+    var `publishIntervalSeconds`: kotlin.UInt,
+    var `accuracyThresholdMeters`: kotlin.Double?,
+    var `staleAfterMinutes`: kotlin.UInt,
     var `expireAfterMinutes`: kotlin.UInt
 ) {
-    
+
     companion object
 }
 
@@ -5972,7 +6224,7 @@ public object FfiConverterTypeTelemetrySettingsRecord: FfiConverterRustBuffer<Te
 
 
 enum class AnnounceClass {
-    
+
     PEER_APP,
     RCH_HUB_SERVER,
     PROPAGATION_NODE,
@@ -6005,7 +6257,7 @@ public object FfiConverterTypeAnnounceClass: FfiConverterRustBuffer<AnnounceClas
 
 
 enum class ChecklistColumnType {
-    
+
     SHORT_STRING,
     LONG_STRING,
     INTEGER,
@@ -6038,7 +6290,7 @@ public object FfiConverterTypeChecklistColumnType: FfiConverterRustBuffer<Checkl
 
 
 enum class ChecklistMode {
-    
+
     ONLINE,
     OFFLINE;
     companion object
@@ -6068,7 +6320,7 @@ public object FfiConverterTypeChecklistMode: FfiConverterRustBuffer<ChecklistMod
 
 
 enum class ChecklistOriginType {
-    
+
     RCH_TEMPLATE,
     BLANK_TEMPLATE,
     CSV_IMPORT,
@@ -6100,7 +6352,7 @@ public object FfiConverterTypeChecklistOriginType: FfiConverterRustBuffer<Checkl
 
 
 enum class ChecklistSyncState {
-    
+
     LOCAL_ONLY,
     UPLOAD_PENDING,
     SYNCED;
@@ -6131,7 +6383,7 @@ public object FfiConverterTypeChecklistSyncState: FfiConverterRustBuffer<Checkli
 
 
 enum class ChecklistSystemColumnKey {
-    
+
     DUE_RELATIVE_DTG;
     companion object
 }
@@ -6160,7 +6412,7 @@ public object FfiConverterTypeChecklistSystemColumnKey: FfiConverterRustBuffer<C
 
 
 enum class ChecklistTaskStatus {
-    
+
     PENDING,
     COMPLETE,
     COMPLETE_LATE,
@@ -6192,7 +6444,7 @@ public object FfiConverterTypeChecklistTaskStatus: FfiConverterRustBuffer<Checkl
 
 
 enum class ChecklistUserTaskStatus {
-    
+
     PENDING,
     COMPLETE;
     companion object
@@ -6222,7 +6474,7 @@ public object FfiConverterTypeChecklistUserTaskStatus: FfiConverterRustBuffer<Ch
 
 
 enum class HubMode {
-    
+
     AUTONOMOUS,
     SEMI_AUTONOMOUS,
     CONNECTED;
@@ -6252,8 +6504,70 @@ public object FfiConverterTypeHubMode: FfiConverterRustBuffer<HubMode> {
 
 
 
+enum class LocalPropagationDeliveryStatus {
+
+    PENDING,
+    DELIVERED,
+    FAILED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalPropagationDeliveryStatus: FfiConverterRustBuffer<LocalPropagationDeliveryStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        LocalPropagationDeliveryStatus.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: LocalPropagationDeliveryStatus) = 4UL
+
+    override fun write(value: LocalPropagationDeliveryStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class LocalPropagationReplicationStatus {
+
+    PENDING,
+    REPLICATED,
+    FAILED;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocalPropagationReplicationStatus: FfiConverterRustBuffer<LocalPropagationReplicationStatus> {
+    override fun read(buf: ByteBuffer) = try {
+        LocalPropagationReplicationStatus.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: LocalPropagationReplicationStatus) = 4UL
+
+    override fun write(value: LocalPropagationReplicationStatus, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class LogLevel {
-    
+
     TRACE,
     DEBUG,
     INFO,
@@ -6286,7 +6600,7 @@ public object FfiConverterTypeLogLevel: FfiConverterRustBuffer<LogLevel> {
 
 
 enum class LxmfDeliveryMethod {
-    
+
     DIRECT,
     OPPORTUNISTIC,
     PROPAGATED;
@@ -6317,7 +6631,7 @@ public object FfiConverterTypeLxmfDeliveryMethod: FfiConverterRustBuffer<LxmfDel
 
 
 enum class LxmfDeliveryRepresentation {
-    
+
     PACKET,
     RESOURCE;
     companion object
@@ -6347,7 +6661,7 @@ public object FfiConverterTypeLxmfDeliveryRepresentation: FfiConverterRustBuffer
 
 
 enum class LxmfDeliveryStatus {
-    
+
     SENT,
     SENT_TO_PROPAGATION,
     ACKNOWLEDGED,
@@ -6380,7 +6694,7 @@ public object FfiConverterTypeLxmfDeliveryStatus: FfiConverterRustBuffer<LxmfDel
 
 
 enum class LxmfFallbackStage {
-    
+
     AFTER_DIRECT_RETRY_BUDGET;
     companion object
 }
@@ -6409,7 +6723,7 @@ public object FfiConverterTypeLxmfFallbackStage: FfiConverterRustBuffer<LxmfFall
 
 
 enum class MessageDirection {
-    
+
     INBOUND,
     OUTBOUND;
     companion object
@@ -6439,7 +6753,7 @@ public object FfiConverterTypeMessageDirection: FfiConverterRustBuffer<MessageDi
 
 
 enum class MessageMethod {
-    
+
     DIRECT,
     OPPORTUNISTIC,
     PROPAGATED,
@@ -6471,7 +6785,7 @@ public object FfiConverterTypeMessageMethod: FfiConverterRustBuffer<MessageMetho
 
 
 enum class MessageState {
-    
+
     QUEUED,
     PATH_REQUESTED,
     LINK_ESTABLISHING,
@@ -6511,33 +6825,33 @@ public object FfiConverterTypeMessageState: FfiConverterRustBuffer<MessageState>
 
 
 sealed class NodeException(message: String): kotlin.Exception(message) {
-        
+
         class InvalidConfig(message: String) : NodeException(message)
-        
+
         class IoException(message: String) : NodeException(message)
-        
+
         class NetworkException(message: String) : NodeException(message)
-        
+
         class ReticulumException(message: String) : NodeException(message)
-        
+
         class AlreadyRunning(message: String) : NodeException(message)
-        
+
         class NotRunning(message: String) : NodeException(message)
-        
+
         class Timeout(message: String) : NodeException(message)
-        
+
         class LxmfWireEncodeException(message: String) : NodeException(message)
-        
+
         class LxmfMessageIdParseException(message: String) : NodeException(message)
-        
+
         class LxmfPacketTooLarge(message: String) : NodeException(message)
-        
+
         class LxmfPacketBuildException(message: String) : NodeException(message)
-        
+
         class EventStreamClosed(message: String) : NodeException(message)
-        
+
         class InternalException(message: String) : NodeException(message)
-        
+
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<NodeException> {
         override fun lift(error_buf: RustBuffer.ByValue): NodeException = FfiConverterTypeNodeError.lift(error_buf)
@@ -6549,7 +6863,7 @@ sealed class NodeException(message: String): kotlin.Exception(message) {
  */
 public object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> {
     override fun read(buf: ByteBuffer): NodeException {
-        
+
             return when(buf.getInt()) {
             1 -> NodeException.InvalidConfig(FfiConverterString.read(buf))
             2 -> NodeException.IoException(FfiConverterString.read(buf))
@@ -6566,7 +6880,7 @@ public object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> 
             13 -> NodeException.InternalException(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
-        
+
     }
 
     override fun allocationSize(value: NodeException): ULong {
@@ -6635,118 +6949,118 @@ public object FfiConverterTypeNodeError : FfiConverterRustBuffer<NodeException> 
 
 
 sealed class NodeEvent {
-    
+
     data class StatusChanged(
         val `status`: NodeStatus) : NodeEvent() {
         companion object
     }
-    
+
     data class AnnounceReceived(
-        val `destinationHex`: kotlin.String, 
-        val `identityHex`: kotlin.String, 
-        val `destinationKind`: kotlin.String, 
-        val `announceClass`: AnnounceClass, 
-        val `appData`: kotlin.String, 
-        val `displayName`: kotlin.String?, 
-        val `hops`: kotlin.UByte, 
-        val `interfaceHex`: kotlin.String, 
+        val `destinationHex`: kotlin.String,
+        val `identityHex`: kotlin.String,
+        val `destinationKind`: kotlin.String,
+        val `announceClass`: AnnounceClass,
+        val `appData`: kotlin.String,
+        val `displayName`: kotlin.String?,
+        val `hops`: kotlin.UByte,
+        val `interfaceHex`: kotlin.String,
         val `receivedAtMs`: kotlin.ULong) : NodeEvent() {
         companion object
     }
-    
+
     data class PeerChanged(
         val `change`: PeerChange) : NodeEvent() {
         companion object
     }
-    
+
     data class PacketReceived(
-        val `destinationHex`: kotlin.String, 
-        val `sourceHex`: kotlin.String?, 
-        val `bytes`: List<kotlin.UByte>, 
+        val `destinationHex`: kotlin.String,
+        val `sourceHex`: kotlin.String?,
+        val `bytes`: List<kotlin.UByte>,
         val `fieldsBytes`: List<kotlin.UByte>?) : NodeEvent() {
         companion object
     }
-    
+
     data class PacketSent(
-        val `destinationHex`: kotlin.String, 
-        val `bytes`: List<kotlin.UByte>, 
+        val `destinationHex`: kotlin.String,
+        val `bytes`: List<kotlin.UByte>,
         val `outcome`: SendOutcome) : NodeEvent() {
         companion object
     }
-    
+
     data class LxmfDelivery(
         val `update`: LxmfDeliveryUpdate) : NodeEvent() {
         companion object
     }
-    
+
     data class PeerResolved(
         val `peer`: PeerRecord) : NodeEvent() {
         companion object
     }
-    
+
     data class MessageReceived(
         val `message`: MessageRecord) : NodeEvent() {
         companion object
     }
-    
+
     data class MessageUpdated(
         val `message`: MessageRecord) : NodeEvent() {
         companion object
     }
-    
+
     data class SyncUpdated(
         val `status`: SyncStatus) : NodeEvent() {
         companion object
     }
-    
+
     data class HubDirectoryUpdated(
         val `snapshot`: HubDirectorySnapshot) : NodeEvent() {
         companion object
     }
-    
+
     data class OperationalNotice(
         val `notice`: OperationalNotice) : NodeEvent() {
         companion object
     }
-    
+
     data class ProjectionInvalidated(
         val `invalidation`: ProjectionInvalidation) : NodeEvent() {
         companion object
     }
-    
+
     data class SosStatusChanged(
         val `status`: SosStatusRecord) : NodeEvent() {
         companion object
     }
-    
+
     data class SosAlertChanged(
         val `alert`: SosAlertRecord) : NodeEvent() {
         companion object
     }
-    
+
     object SosTelemetryRequested : NodeEvent()
-    
-    
+
+
     data class SosAudioRecordingRequested(
-        val `incidentId`: kotlin.String, 
+        val `incidentId`: kotlin.String,
         val `durationSeconds`: kotlin.UInt) : NodeEvent() {
         companion object
     }
-    
-    data class Log(
-        val `level`: LogLevel, 
-        val `message`: kotlin.String) : NodeEvent() {
-        companion object
-    }
-    
-    data class Error(
-        val `code`: kotlin.String, 
-        val `message`: kotlin.String) : NodeEvent() {
-        companion object
-    }
-    
 
-    
+    data class Log(
+        val `level`: LogLevel,
+        val `message`: kotlin.String) : NodeEvent() {
+        companion object
+    }
+
+    data class Error(
+        val `code`: kotlin.String,
+        val `message`: kotlin.String) : NodeEvent() {
+        companion object
+    }
+
+
+
     companion object
 }
 
@@ -7104,7 +7418,7 @@ public object FfiConverterTypeNodeEvent : FfiConverterRustBuffer<NodeEvent>{
 
 
 enum class PeerState {
-    
+
     CONNECTING,
     CONNECTED,
     DISCONNECTED;
@@ -7135,7 +7449,7 @@ public object FfiConverterTypePeerState: FfiConverterRustBuffer<PeerState> {
 
 
 enum class ProjectionScope {
-    
+
     APP_SETTINGS,
     SAVED_PEERS,
     OPERATIONAL_SUMMARY,
@@ -7176,8 +7490,39 @@ public object FfiConverterTypeProjectionScope: FfiConverterRustBuffer<Projection
 
 
 
+enum class PropagationConnectivityState {
+
+    OFFLINE,
+    DEGRADED,
+    ONLINE;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePropagationConnectivityState: FfiConverterRustBuffer<PropagationConnectivityState> {
+    override fun read(buf: ByteBuffer) = try {
+        PropagationConnectivityState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: PropagationConnectivityState) = 4UL
+
+    override fun write(value: PropagationConnectivityState, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class SendMode {
-    
+
     AUTO,
     DIRECT_ONLY,
     PROPAGATION_ONLY;
@@ -7208,7 +7553,7 @@ public object FfiConverterTypeSendMode: FfiConverterRustBuffer<SendMode> {
 
 
 enum class SendOutcome {
-    
+
     SENT_DIRECT,
     SENT_BROADCAST,
     DROPPED_MISSING_DESTINATION_IDENTITY,
@@ -7242,7 +7587,7 @@ public object FfiConverterTypeSendOutcome: FfiConverterRustBuffer<SendOutcome> {
 
 
 enum class SosMessageKind {
-    
+
     ACTIVE,
     UPDATE,
     CANCELLED;
@@ -7273,7 +7618,7 @@ public object FfiConverterTypeSosMessageKind: FfiConverterRustBuffer<SosMessageK
 
 
 enum class SosState {
-    
+
     IDLE,
     COUNTDOWN,
     SENDING,
@@ -7305,7 +7650,7 @@ public object FfiConverterTypeSosState: FfiConverterRustBuffer<SosState> {
 
 
 enum class SosTriggerSource {
-    
+
     MANUAL,
     FLOATING_BUTTON,
     SHAKE,
@@ -7340,7 +7685,7 @@ public object FfiConverterTypeSosTriggerSource: FfiConverterRustBuffer<SosTrigge
 
 
 enum class SyncPhase {
-    
+
     IDLE,
     PATH_REQUESTED,
     LINK_ESTABLISHING,
@@ -8485,6 +8830,6 @@ public object FfiConverterSequenceTypeTelemetryPositionRecord: FfiConverterRustB
 }
     )
     }
-    
+
 
 
