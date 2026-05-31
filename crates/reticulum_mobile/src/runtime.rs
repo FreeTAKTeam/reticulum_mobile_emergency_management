@@ -7296,6 +7296,10 @@ fn is_sos_status_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+fn should_serialize_lxmf_destination_send(is_accepted_result: bool, is_sos_status: bool) -> bool {
+    !is_accepted_result && !is_sos_status
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "send policy boundary intentionally keeps transport, payload, metadata, and lane selection explicit"
@@ -7374,21 +7378,17 @@ async fn send_lxmf_with_delivery_policy(
         direct_delivery_ready,
         direct_priority_hops,
     );
-    let _destination_send_lock = if !is_accepted_result
-        && !is_sos_status
-        && metadata
-            .as_ref()
-            .is_some_and(MissionSyncMetadata::is_mission_related)
-    {
-        Some(
-            state
-                .mission_destination_locks
-                .acquire(canonical_requested_destination.as_str())
-                .await?,
-        )
-    } else {
-        None
-    };
+    let _destination_send_lock =
+        if should_serialize_lxmf_destination_send(is_accepted_result, is_sos_status) {
+            Some(
+                state
+                    .mission_destination_locks
+                    .acquire(canonical_requested_destination.as_str())
+                    .await?,
+            )
+        } else {
+            None
+        };
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay
@@ -11021,6 +11021,14 @@ mod tests {
             ..MissionSyncMetadata::default()
         };
         assert!(!is_accepted_result_metadata(Some(&command)));
+    }
+
+    #[test]
+    fn destination_send_serialization_applies_to_data_but_not_fast_lanes() {
+        assert!(should_serialize_lxmf_destination_send(false, false));
+        assert!(!should_serialize_lxmf_destination_send(true, false));
+        assert!(!should_serialize_lxmf_destination_send(false, true));
+        assert!(!should_serialize_lxmf_destination_send(true, true));
     }
 
     fn test_lxmf_report(
