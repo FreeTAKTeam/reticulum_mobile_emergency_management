@@ -7,6 +7,7 @@ export interface TcpCommunityServer {
 
 // Mirrors the known community TCP server list used by Columba.
 export const TCP_COMMUNITY_SERVERS: TcpCommunityServer[] = [
+  { name: "R3AKT Server", host: "134.122.46.48", port: 37428, isBootstrap: true },
   { name: "Beleth RNS Hub", host: "rns.beleth.net", port: 4242, isBootstrap: true },
   { name: "Quad4 TCP Node 1", host: "rns.quad4.io", port: 4242, isBootstrap: true },
   { name: "FireZen", host: "firezen.com", port: 4242, isBootstrap: true },

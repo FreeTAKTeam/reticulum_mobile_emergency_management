@@ -2515,7 +2515,6 @@ export const useNodeStore = defineStore("node", () => {
   const remAnnouncedPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => !peerIsRemoved(peer))
       .filter((peer) => hasActualRemAnnounce(peer))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
   );
