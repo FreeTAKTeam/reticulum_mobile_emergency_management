@@ -1402,6 +1402,11 @@ async fn compat_send_lxmf(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::OutboundFailed
+                        | ResourceEventKind::OutboundCancelled => {
+                            clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            return Err(sdk_transport("lxmf resource transfer failed"));
+                        }
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
@@ -1585,6 +1590,12 @@ async fn compat_send_lxmf_via_propagation(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::OutboundFailed
+                        | ResourceEventKind::OutboundCancelled => {
+                            return Err(sdk_transport(
+                                "propagated lxmf relay resource transfer failed",
+                            ));
+                        }
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
