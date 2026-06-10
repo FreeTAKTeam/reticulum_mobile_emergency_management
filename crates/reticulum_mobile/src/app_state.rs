@@ -16,8 +16,8 @@ use crate::types::{
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload,
-    LocalPropagationCounts, LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LocalPropagationCounts,
+    LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
     LocalPropagationReplicationStatus, MessageDirection, MessageRecord, NodeError,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
     SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
@@ -27,6 +27,7 @@ use crate::types::{
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
 const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct AppStateStore {
@@ -127,11 +128,6 @@ impl AppStateStore {
         connection
             .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .map_err(|_| NodeError::IoError {})?;
-        Ok(connection)
-    }
-
-    fn initialize(&self) -> Result<(), NodeError> {
-        let connection = self.connect()?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|_| NodeError::IoError {})?;
@@ -139,8 +135,24 @@ impl AppStateStore {
             .pragma_update(None, "synchronous", "NORMAL")
             .map_err(|_| NodeError::IoError {})?;
         connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(connection)
+    }
+
+    fn initialize(&self) -> Result<(), NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        transaction
             .execute_batch(
                 "
+                CREATE TABLE IF NOT EXISTS schema_versions (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL,
+                    applied_at_ms INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS app_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     json TEXT NOT NULL,
@@ -201,6 +213,22 @@ impl AppStateStore {
                 );
                 CREATE INDEX IF NOT EXISTS idx_local_propagation_pending
                     ON local_propagation_messages (
+                        replication_status,
+                        next_retry_at_ms,
+                        updated_at_ms
+                    );
+                CREATE TABLE IF NOT EXISTS propagation_queue (
+                    message_id_hex TEXT PRIMARY KEY,
+                    target_hex TEXT NOT NULL,
+                    delivery_status TEXT NOT NULL,
+                    replication_status TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL,
+                    next_retry_at_ms INTEGER,
+                    updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_propagation_queue_pending
+                    ON propagation_queue (
                         replication_status,
                         next_retry_at_ms,
                         updated_at_ms
@@ -266,7 +294,57 @@ impl AppStateStore {
                 ",
             )
             .map_err(|_| NodeError::IoError {})?;
+        self.migrate_schema_tx(&transaction)?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
+        Ok(())
+    }
+
+    fn migrate_schema_tx(&self, transaction: &Transaction<'_>) -> Result<(), NodeError> {
+        transaction
+            .execute(
+                "INSERT INTO propagation_queue (
+                    message_id_hex,
+                    target_hex,
+                    delivery_status,
+                    replication_status,
+                    retry_count,
+                    next_retry_at_ms,
+                    updated_at_ms,
+                    json
+                 )
+                 SELECT
+                    message_id_hex,
+                    target_hex,
+                    delivery_status,
+                    replication_status,
+                    retry_count,
+                    next_retry_at_ms,
+                    updated_at_ms,
+                    json
+                 FROM local_propagation_messages
+                 WHERE true
+                 ON CONFLICT(message_id_hex) DO UPDATE SET
+                    target_hex = excluded.target_hex,
+                    delivery_status = excluded.delivery_status,
+                    replication_status = excluded.replication_status,
+                    retry_count = excluded.retry_count,
+                    next_retry_at_ms = excluded.next_retry_at_ms,
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                [],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        transaction
+            .execute(
+                "INSERT INTO schema_versions (id, version, applied_at_ms)
+                 VALUES (1, ?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET
+                    version = excluded.version,
+                    applied_at_ms = excluded.applied_at_ms",
+                params![CURRENT_SCHEMA_VERSION, now_ms() as i64],
+            )
+            .map_err(|_| NodeError::IoError {})?;
         Ok(())
     }
 
@@ -1492,25 +1570,52 @@ impl AppStateStore {
         message: &LocalPropagationMessageRecord,
     ) -> Result<(), NodeError> {
         let mut record = normalize_local_propagation_message(message);
-        if let Some(existing) = self.get_local_propagation_message(record.message_id_hex.as_str())?
-        {
-            record = merge_local_propagation_message(&existing, &record);
-        }
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
             .map_err(|_| NodeError::IoError {})?;
+        if let Some(existing) =
+            self.get_local_propagation_message_tx(&transaction, record.message_id_hex.as_str())?
+        {
+            record = merge_local_propagation_message(&existing, &record);
+        }
         self.write_local_propagation_message_tx(&transaction, &record)?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn get_local_propagation_message(
         &self,
         message_id_hex: &str,
     ) -> Result<Option<LocalPropagationMessageRecord>, NodeError> {
         let connection = self.connect()?;
+        self.get_local_propagation_message_conn(&connection, message_id_hex)
+    }
+
+    #[cfg(test)]
+    fn get_local_propagation_message_conn(
+        &self,
+        connection: &Connection,
+        message_id_hex: &str,
+    ) -> Result<Option<LocalPropagationMessageRecord>, NodeError> {
         let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM local_propagation_messages WHERE message_id_hex = ?1",
+                params![message_id_hex.trim().to_ascii_lowercase()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    fn get_local_propagation_message_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        message_id_hex: &str,
+    ) -> Result<Option<LocalPropagationMessageRecord>, NodeError> {
+        let raw: Option<String> = transaction
             .query_row(
                 "SELECT json FROM local_propagation_messages WHERE message_id_hex = ?1",
                 params![message_id_hex.trim().to_ascii_lowercase()],
@@ -1555,7 +1660,13 @@ impl AppStateStore {
         node_id_hex: &str,
         attempted_at_ms: u64,
     ) -> Result<(), NodeError> {
-        let Some(mut record) = self.get_local_propagation_message(message_id_hex)? else {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let Some(mut record) =
+            self.get_local_propagation_message_tx(&transaction, message_id_hex)?
+        else {
             return Ok(());
         };
         record.replication_status = LocalPropagationReplicationStatus::Replicated {};
@@ -1564,10 +1675,6 @@ impl AppStateStore {
         record.next_retry_at_ms = None;
         record.last_error = None;
         record.replicated_node_hex = Some(node_id_hex.trim().to_ascii_lowercase());
-        let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|_| NodeError::IoError {})?;
         self.write_local_propagation_message_tx(&transaction, &record)?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(())
@@ -1579,7 +1686,13 @@ impl AppStateStore {
         attempted_at_ms: u64,
         error: &str,
     ) -> Result<(), NodeError> {
-        let Some(mut record) = self.get_local_propagation_message(message_id_hex)? else {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let Some(mut record) =
+            self.get_local_propagation_message_tx(&transaction, message_id_hex)?
+        else {
             return Ok(());
         };
         record.replication_status = LocalPropagationReplicationStatus::Failed {};
@@ -1591,10 +1704,6 @@ impl AppStateStore {
             record.retry_count,
         ));
         record.last_error = Some(error.to_string());
-        let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|_| NodeError::IoError {})?;
         self.write_local_propagation_message_tx(&transaction, &record)?;
         transaction.commit().map_err(|_| NodeError::IoError {})?;
         Ok(())
@@ -2305,6 +2414,39 @@ impl AppStateStore {
         transaction
             .execute(
                 "INSERT INTO local_propagation_messages (
+                    message_id_hex,
+                    target_hex,
+                    delivery_status,
+                    replication_status,
+                    retry_count,
+                    next_retry_at_ms,
+                    updated_at_ms,
+                    json
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(message_id_hex) DO UPDATE SET
+                    target_hex = excluded.target_hex,
+                    delivery_status = excluded.delivery_status,
+                    replication_status = excluded.replication_status,
+                    retry_count = excluded.retry_count,
+                    next_retry_at_ms = excluded.next_retry_at_ms,
+                    updated_at_ms = excluded.updated_at_ms,
+                    json = excluded.json",
+                params![
+                    record.message_id_hex,
+                    record.target_hex,
+                    local_propagation_delivery_status_name(record.delivery_status),
+                    local_propagation_replication_status_name(record.replication_status),
+                    i64::from(record.retry_count),
+                    record.next_retry_at_ms.map(|value| value as i64),
+                    record.updated_at_ms as i64,
+                    json,
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        transaction
+            .execute(
+                "INSERT INTO propagation_queue (
                     message_id_hex,
                     target_hex,
                     delivery_status,
@@ -3741,10 +3883,10 @@ mod tests {
         ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
         ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
         ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
-        ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
-        LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
-        LocalPropagationReplicationStatus, MessageState, ProjectionScope, SosAlertRecord,
-        SosLocationRecord, SosMessageKind, TelemetrySettingsRecord,
+        ChecklistUserTaskStatus, HubMode, HubSettingsRecord, LocalPropagationDeliveryStatus,
+        LocalPropagationMessageRecord, LocalPropagationReplicationStatus, MessageDirection,
+        MessageMethod, MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord,
+        SosMessageKind, TelemetrySettingsRecord,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3900,6 +4042,170 @@ mod tests {
             pending[0].replication_status,
             LocalPropagationReplicationStatus::Pending {}
         );
+    }
+
+    #[test]
+    fn app_state_initialization_records_schema_version_and_pragmas() {
+        let storage_dir = test_storage_dir("schema-version-pragmas");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let connection = store.connect().expect("connect");
+
+        let schema_version: i64 = connection
+            .query_row(
+                "SELECT version FROM schema_versions WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("schema version row");
+        let journal_mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .expect("journal mode");
+        let synchronous: i64 = connection
+            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .expect("synchronous pragma");
+        let foreign_keys: i64 = connection
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("foreign keys pragma");
+
+        assert_eq!(schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(synchronous, 1);
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn app_state_initialization_creates_propagation_queue_table() {
+        let storage_dir = test_storage_dir("propagation-queue-table");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let connection = store.connect().expect("connect");
+
+        let table_name: String = connection
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'propagation_queue'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("propagation_queue table");
+        let column_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM pragma_table_info('propagation_queue')
+                 WHERE name IN ('message_id_hex', 'target_hex', 'delivery_status', 'replication_status', 'json')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("propagation_queue columns");
+
+        assert_eq!(table_name, "propagation_queue");
+        assert_eq!(column_count, 5);
+    }
+
+    #[test]
+    fn app_state_migrates_existing_database_to_current_schema() {
+        let storage_dir = test_storage_dir("schema-migration");
+        fs::create_dir_all(&storage_dir).expect("create storage dir");
+        let db_path = storage_dir.join(DB_FILE_NAME);
+        {
+            let connection = Connection::open(&db_path).expect("open pre-migration db");
+            connection
+                .execute(
+                    "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                    [],
+                )
+                .expect("legacy metadata table");
+            connection
+                .execute(
+                    "INSERT INTO metadata (key, value) VALUES ('legacy_import_completed', '1')",
+                    [],
+                )
+                .expect("legacy metadata row");
+        }
+
+        let store = AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("migrate store");
+        let connection = store.connect().expect("connect migrated db");
+        let schema_version: i64 = connection
+            .query_row(
+                "SELECT version FROM schema_versions WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("schema version row");
+        let legacy_import_completed: String = connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'legacy_import_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy metadata preserved");
+
+        assert_eq!(schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(legacy_import_completed, "1");
+    }
+
+    #[test]
+    fn local_propagation_commit_survives_store_drop_and_reopen() {
+        let storage_dir = test_storage_dir("local-propagation-crash-after-commit");
+        let message = local_propagation_message(
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "ffffffffffffffffffffffffffffffff",
+            10,
+        );
+        {
+            let store = AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref()))
+                .expect("create store");
+            store
+                .store_local_propagation_message(&message)
+                .expect("commit local propagation message");
+        }
+
+        let restarted =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("restart");
+        let restored = restarted
+            .get_local_propagation_message(message.message_id_hex.as_str())
+            .expect("read after restart")
+            .expect("message survives committed writer drop");
+
+        assert_eq!(restored.message_id_hex, message.message_id_hex);
+        assert_eq!(restored.target_hex, "ffffffffffffffffffffffffffffffff");
+    }
+
+    #[test]
+    fn app_state_integrity_check_is_ok_after_propagation_queue_writes() {
+        let storage_dir = test_storage_dir("integrity-check");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let message = local_propagation_message(
+            "9999999999999999999999999999999999999999999999999999999999999999",
+            "11111111111111111111111111111111",
+            10,
+        );
+        store
+            .store_local_propagation_message(&message)
+            .expect("store local propagation message");
+        store
+            .mark_local_propagation_replicated(
+                message.message_id_hex.as_str(),
+                "22222222222222222222222222222222",
+                20,
+            )
+            .expect("ack local propagation message");
+
+        let connection = store.connect().expect("connect");
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .expect("integrity check");
+        let mirrored_status: String = connection
+            .query_row(
+                "SELECT replication_status FROM propagation_queue WHERE message_id_hex = ?1",
+                params![message.message_id_hex],
+                |row| row.get(0),
+            )
+            .expect("mirrored propagation queue status");
+
+        assert_eq!(integrity, "ok");
+        assert_eq!(mirrored_status, "replicated");
     }
 
     #[test]

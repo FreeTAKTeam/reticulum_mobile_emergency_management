@@ -63,8 +63,8 @@ use crate::types::{
     LocalPropagationReplicationStatus, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
     LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
     MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
-    PeerChange, PeerRecord, PeerState, PropagationConnectivityState, PropagationNodeStatus,
-    ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, PropagationConnectivityState,
+    PropagationNodeStatus, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
     SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
 };
 
@@ -5887,7 +5887,8 @@ async fn drain_local_propagation_node_once(state: &NodeRuntimeState, bus: &Event
         }
     };
     if pending.is_empty() {
-        refresh_propagation_connectivity_state(state, PropagationConnectivityState::Online {}).await;
+        refresh_propagation_connectivity_state(state, PropagationConnectivityState::Online {})
+            .await;
         return;
     }
 
@@ -5967,7 +5968,10 @@ async fn drain_local_propagation_node_once(state: &NodeRuntimeState, bus: &Event
                 );
             }
             Ok(report) => {
-                let detail = format!("relay send failed: {:?}", send_outcome_to_udl(report.outcome));
+                let detail = format!(
+                    "relay send failed: {:?}",
+                    send_outcome_to_udl(report.outcome)
+                );
                 let _ = state.app_state.mark_local_propagation_failed(
                     record.message_id_hex.as_str(),
                     attempted_at_ms,
@@ -7612,13 +7616,13 @@ async fn send_lxmf_with_delivery_policy(
             direct_delivery_ready,
         );
     } else {
-            if should_try_propagation_after_direct_failure(
-                send_mode,
-                is_accepted_result,
-                has_propagation_candidate,
-                is_saved_peer,
-                last_error.as_ref().is_some_and(is_retriable_lxmf_error),
-            ) {
+        if should_try_propagation_after_direct_failure(
+            send_mode,
+            is_accepted_result,
+            has_propagation_candidate,
+            is_saved_peer,
+            last_error.as_ref().is_some_and(is_retriable_lxmf_error),
+        ) {
             mark_peer_direct_delivery_unhealthy(
                 state,
                 requested_destination_hex,
@@ -9518,6 +9522,14 @@ pub async fn run_node(
                                 hex::encode(event.hash.as_slice()),
                             );
                         }
+                        ResourceEventKind::OutboundFailed
+                        | ResourceEventKind::OutboundCancelled => {
+                            warn!(
+                                "[lxmf][events] resource outbound failed link_id={} hash={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                            );
+                        }
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -9677,6 +9689,7 @@ pub async fn run_node(
                                 }
                             }
                             LinkEvent::Data(_) => {}
+                            LinkEvent::PeerIdentified(_) => {}
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
