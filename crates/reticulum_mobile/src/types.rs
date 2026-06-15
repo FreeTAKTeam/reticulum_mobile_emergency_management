@@ -688,6 +688,31 @@ pub struct EamTeamSummaryRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessStatusMetricRecord {
+    pub field: String,
+    pub label: String,
+    pub score: u32,
+    pub band: String,
+    pub ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessMessageRecord {
+    pub callsign: String,
+    pub overall_score: u32,
+    pub overall_band: String,
+    pub overall_ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessSummaryRecord {
+    pub active_total: u32,
+    pub updated_at_ms: u64,
+    pub status_metrics: Vec<EamReadinessStatusMetricRecord>,
+    pub messages: Vec<EamReadinessMessageRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventProjectionRecord {
     pub uid: String,
     pub command_id: String,

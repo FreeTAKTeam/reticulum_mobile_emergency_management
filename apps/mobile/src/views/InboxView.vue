@@ -10,7 +10,6 @@ import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 import type { DiscoveredPeer } from "../types/domain";
-import { getMessageOverallScore, getOverallStatusBand } from "../utils/actionMessageStatus";
 import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 
@@ -207,7 +206,7 @@ const targetStatusLabel = computed(() => {
   if (!message) {
     return "Unknown";
   }
-  return message.overallStatus ?? getOverallStatusBand(getMessageOverallScore(message));
+  return message.overallStatus ?? messagesStore.eamReadinessForCallsign(message.callsign)?.overallBand ?? "Unknown";
 });
 const targetTeamLabel = computed(() => {
   const message = selectedTargetMessage.value;

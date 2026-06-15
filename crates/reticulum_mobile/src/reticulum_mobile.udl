@@ -384,6 +384,28 @@ dictionary EamTeamSummaryRecord {
   u64 updated_at_ms;
 };
 
+dictionary EamReadinessStatusMetricRecord {
+  string field;
+  string label;
+  u32 score;
+  string band;
+  string ring_color;
+};
+
+dictionary EamReadinessMessageRecord {
+  string callsign;
+  u32 overall_score;
+  string overall_band;
+  string overall_ring_color;
+};
+
+dictionary EamReadinessSummaryRecord {
+  u32 active_total;
+  u64 updated_at_ms;
+  sequence<EamReadinessStatusMetricRecord> status_metrics;
+  sequence<EamReadinessMessageRecord> messages;
+};
+
 dictionary EventProjectionRecord {
   string uid;
   string command_id;
@@ -808,6 +830,8 @@ interface Node {
   void delete_eam(string callsign, u64 deleted_at_ms);
   [Throws=NodeError]
   EamTeamSummaryRecord? get_eam_team_summary(string team_uid);
+  [Throws=NodeError]
+  EamReadinessSummaryRecord get_eam_readiness_summary();
   [Throws=NodeError]
   sequence<EventProjectionRecord> get_events();
   [Throws=NodeError]

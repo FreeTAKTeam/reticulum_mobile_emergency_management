@@ -867,6 +867,16 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getEamReadinessSummary(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get EAM readiness summary.",
+            "Native EAM readiness summary JSON parse failed.",
+            ReticulumNodeService::getEamReadinessSummaryJson
+        );
+    }
+
+    @PluginMethod
     public void getEvents(PluginCall call) {
         runStringServiceCall(
             call,

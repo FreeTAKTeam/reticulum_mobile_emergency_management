@@ -32,8 +32,8 @@ use crate::types::{
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
+    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord,
+    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
@@ -5327,6 +5327,11 @@ impl Node {
     ) -> Result<Option<EamTeamSummaryRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.get_eam_team_summary(&team_uid)
+    }
+
+    pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_eam_readiness_summary()
     }
 
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {

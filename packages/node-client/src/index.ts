@@ -442,6 +442,28 @@ export interface EamTeamSummaryRecord {
   updatedAt: number;
 }
 
+export interface EamReadinessStatusMetricRecord {
+  field: string;
+  label: string;
+  score: number;
+  band: string;
+  ringColor: string;
+}
+
+export interface EamReadinessMessageRecord {
+  callsign: string;
+  overallScore: number;
+  overallBand: string;
+  overallRingColor: string;
+}
+
+export interface EamReadinessSummaryRecord {
+  activeTotal: number;
+  updatedAt: number;
+  statusMetrics: EamReadinessStatusMetricRecord[];
+  messages: EamReadinessMessageRecord[];
+}
+
 export interface EventProjectionRecord {
   command_id: string;
   source: {
@@ -752,6 +774,7 @@ export interface ReticulumNodeClient {
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
+  getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
@@ -1012,6 +1035,7 @@ interface ReticulumNodePlugin {
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
+  getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
@@ -1940,6 +1964,54 @@ function toEamTeamSummaryRecord(raw: Record<string, unknown>): EamTeamSummaryRec
     yellowTotal: Number(source.yellowTotal ?? 0),
     redTotal: Number(source.redTotal ?? 0),
     updatedAt: Number(source.updatedAt ?? Date.now()),
+  };
+}
+
+function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
+  return {
+    activeTotal: 0,
+    updatedAt: 0,
+    statusMetrics: [],
+    messages: [],
+  };
+}
+
+function toEamReadinessStatusMetricRecord(raw: Record<string, unknown>): EamReadinessStatusMetricRecord {
+  return {
+    field: String(raw.field ?? ""),
+    label: String(raw.label ?? ""),
+    score: Number(raw.score ?? 0),
+    band: String(raw.band ?? "Red"),
+    ringColor: String(raw.ringColor ?? raw.ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessMessageRecord(raw: Record<string, unknown>): EamReadinessMessageRecord {
+  return {
+    callsign: String(raw.callsign ?? ""),
+    overallScore: Number(raw.overallScore ?? raw.overall_score ?? 0),
+    overallBand: String(raw.overallBand ?? raw.overall_band ?? "Unknown"),
+    overallRingColor: String(raw.overallRingColor ?? raw.overall_ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessSummaryRecord(raw: Record<string, unknown>): EamReadinessSummaryRecord {
+  const statusMetrics = Array.isArray(raw.statusMetrics)
+    ? raw.statusMetrics
+    : Array.isArray(raw.status_metrics)
+      ? raw.status_metrics
+      : [];
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  return {
+    activeTotal: Number(raw.activeTotal ?? raw.active_total ?? 0),
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at_ms ?? raw.updated_at ?? 0),
+    statusMetrics: statusMetrics
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessStatusMetricRecord),
+    messages: messages
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessMessageRecord)
+      .filter((entry) => entry.callsign.length > 0),
   };
 }
 
@@ -3448,6 +3520,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
   }
 
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> {
+    await this.ready();
+    return toEamReadinessSummaryRecord(await this.plugin.getEamReadinessSummary());
+  }
+
   async getEvents(): Promise<EventProjectionRecord[]> {
     await this.ready();
     const result = await this.plugin.getEvents();
@@ -3864,6 +3941,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
@@ -4439,6 +4517,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}

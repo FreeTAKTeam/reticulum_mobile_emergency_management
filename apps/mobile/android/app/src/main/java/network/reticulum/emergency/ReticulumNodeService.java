@@ -505,6 +505,10 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
     }
 
+    public synchronized String getEamReadinessSummaryJson() {
+        return ReticulumBridge.getEamReadinessSummaryJson();
+    }
+
     public synchronized String getEventsJson() {
         return ReticulumBridge.getEventsJson();
     }
