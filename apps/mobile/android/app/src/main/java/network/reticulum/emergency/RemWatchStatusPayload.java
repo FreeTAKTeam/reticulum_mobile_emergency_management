@@ -265,6 +265,9 @@ final class RemWatchStatusPayload {
         if ("yellow".equals(normalized)) {
             return "Yellow";
         }
+        if ("orange".equals(normalized)) {
+            return "Orange";
+        }
         if ("green".equals(normalized)) {
             return "Green";
         }
@@ -276,7 +279,7 @@ final class RemWatchStatusPayload {
         if ("red".equals(normalized) || "emergency".equals(normalized) || "error".equals(normalized)) {
             return 3;
         }
-        if ("yellow".equals(normalized) || "high".equals(normalized) || "urgent".equals(normalized)) {
+        if ("orange".equals(normalized) || "yellow".equals(normalized) || "high".equals(normalized) || "urgent".equals(normalized)) {
             return 2;
         }
         if ("green".equals(normalized) || "normal".equals(normalized)) {

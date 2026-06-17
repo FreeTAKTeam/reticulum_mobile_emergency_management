@@ -53,6 +53,22 @@ public class RemWatchStatusPayloadTest {
     }
 
     @Test
+    public void preservesOrangeReadinessBands() throws Exception {
+        final JSONObject payload = new JSONObject(RemWatchStatusPayload.build(
+            "{\"running\":true,\"name\":\"OP ALPHA-1\"}",
+            "{\"running\":true,\"eventCount\":0,\"updatedAtMs\":" + LAST_SYNC_MS + "}",
+            "{\"activeTotal\":2,\"messages\":[{\"callsign\":\"OP ALPHA-1\",\"overallBand\":\"Orange\"}],\"statusMetrics\":[{\"band\":\"Yellow\"},{\"band\":\"Orange\"}]}",
+            "{\"items\":[]}",
+            "{\"items\":[]}",
+            NOW_MS
+        ));
+
+        assertEquals("Orange", payload.getString("operator_eam"));
+        assertEquals("Orange", payload.getString("team_status"));
+        assertEquals("HIGH", payload.getString("highest_priority"));
+    }
+
+    @Test
     public void buildsErrorStatusWhenRuntimeReportsLastError() throws Exception {
         final JSONObject payload = new JSONObject(RemWatchStatusPayload.build(
             "{\"running\":false,\"name\":\"OP ALPHA-1\",\"lastError\":\"bind failed\"}",
