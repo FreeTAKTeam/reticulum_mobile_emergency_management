@@ -616,6 +616,18 @@ export interface OperationalSummary {
   updatedAtMs: number;
 }
 
+export interface WatchStatusServerSettings {
+  enabled: boolean;
+  port: number;
+}
+
+export interface WatchStatusServerState extends WatchStatusServerSettings {
+  url: string;
+  currentUrl: string;
+  running: boolean;
+  bindError?: string;
+}
+
 export interface HubDirectoryUpdatedEvent {
   effectiveConnectedMode: boolean;
   items: HubDirectoryPeerRecord[];
@@ -691,6 +703,9 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getWatchStatusServerSettings(): Promise<WatchStatusServerState>;
+  setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void>;
+  getWatchStatusServerState(): Promise<WatchStatusServerState>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;
@@ -958,6 +973,9 @@ interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getWatchStatusServerSettings(): Promise<Record<string, unknown>>;
+  setWatchStatusServerSettings(options: { enabled: boolean; port: number }): Promise<void>;
+  getWatchStatusServerState(): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;
@@ -3090,6 +3108,33 @@ function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary 
   };
 }
 
+function normalizeWatchStatusPort(value: unknown): number {
+  const parsed = Number(value ?? 29_863);
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : 29_863;
+}
+
+function toWatchStatusServerState(raw: Record<string, unknown> = {}): WatchStatusServerState {
+  const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
+  const port = normalizeWatchStatusPort(raw.port);
+  const url = String(
+    raw.url
+      ?? raw.currentUrl
+      ?? raw.current_url
+      ?? `http://localhost:${port}/info.json`,
+  );
+
+  return {
+    enabled,
+    port,
+    url,
+    currentUrl: String(raw.currentUrl ?? raw.current_url ?? url),
+    running: Boolean(raw.running),
+    bindError: String(raw.bindError ?? raw.bind_error ?? ""),
+  };
+}
+
 function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
@@ -3333,6 +3378,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async setAppSettings(settings: AppSettingsRecord): Promise<void> {
     await this.ready();
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
+  }
+
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerSettings());
+  }
+
+  async setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void> {
+    await this.ready();
+    await this.plugin.setWatchStatusServerSettings({
+      enabled: Boolean(settings.enabled),
+      port: normalizeWatchStatusPort(settings.port),
+    });
+  }
+
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerState());
   }
 
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
@@ -3905,6 +3968,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -4481,6 +4547,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
