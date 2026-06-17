@@ -442,6 +442,28 @@ export interface EamTeamSummaryRecord {
   updatedAt: number;
 }
 
+export interface EamReadinessStatusMetricRecord {
+  field: string;
+  label: string;
+  score: number;
+  band: string;
+  ringColor: string;
+}
+
+export interface EamReadinessMessageRecord {
+  callsign: string;
+  overallScore: number;
+  overallBand: string;
+  overallRingColor: string;
+}
+
+export interface EamReadinessSummaryRecord {
+  activeTotal: number;
+  updatedAt: number;
+  statusMetrics: EamReadinessStatusMetricRecord[];
+  messages: EamReadinessMessageRecord[];
+}
+
 export interface EventProjectionRecord {
   command_id: string;
   source: {
@@ -594,6 +616,18 @@ export interface OperationalSummary {
   updatedAtMs: number;
 }
 
+export interface WatchStatusServerSettings {
+  enabled: boolean;
+  port: number;
+}
+
+export interface WatchStatusServerState extends WatchStatusServerSettings {
+  url: string;
+  currentUrl: string;
+  running: boolean;
+  bindError?: string;
+}
+
 export interface HubDirectoryUpdatedEvent {
   effectiveConnectedMode: boolean;
   items: HubDirectoryPeerRecord[];
@@ -669,6 +703,9 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getWatchStatusServerSettings(): Promise<WatchStatusServerState>;
+  setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void>;
+  getWatchStatusServerState(): Promise<WatchStatusServerState>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;
@@ -752,6 +789,7 @@ export interface ReticulumNodeClient {
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
+  getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
@@ -935,6 +973,9 @@ interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getWatchStatusServerSettings(): Promise<Record<string, unknown>>;
+  setWatchStatusServerSettings(options: { enabled: boolean; port: number }): Promise<void>;
+  getWatchStatusServerState(): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;
@@ -1012,6 +1053,7 @@ interface ReticulumNodePlugin {
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
+  getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
@@ -1940,6 +1982,54 @@ function toEamTeamSummaryRecord(raw: Record<string, unknown>): EamTeamSummaryRec
     yellowTotal: Number(source.yellowTotal ?? 0),
     redTotal: Number(source.redTotal ?? 0),
     updatedAt: Number(source.updatedAt ?? Date.now()),
+  };
+}
+
+function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
+  return {
+    activeTotal: 0,
+    updatedAt: 0,
+    statusMetrics: [],
+    messages: [],
+  };
+}
+
+function toEamReadinessStatusMetricRecord(raw: Record<string, unknown>): EamReadinessStatusMetricRecord {
+  return {
+    field: String(raw.field ?? ""),
+    label: String(raw.label ?? ""),
+    score: Number(raw.score ?? 0),
+    band: String(raw.band ?? "Red"),
+    ringColor: String(raw.ringColor ?? raw.ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessMessageRecord(raw: Record<string, unknown>): EamReadinessMessageRecord {
+  return {
+    callsign: String(raw.callsign ?? ""),
+    overallScore: Number(raw.overallScore ?? raw.overall_score ?? 0),
+    overallBand: String(raw.overallBand ?? raw.overall_band ?? "Unknown"),
+    overallRingColor: String(raw.overallRingColor ?? raw.overall_ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessSummaryRecord(raw: Record<string, unknown>): EamReadinessSummaryRecord {
+  const statusMetrics = Array.isArray(raw.statusMetrics)
+    ? raw.statusMetrics
+    : Array.isArray(raw.status_metrics)
+      ? raw.status_metrics
+      : [];
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  return {
+    activeTotal: Number(raw.activeTotal ?? raw.active_total ?? 0),
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at_ms ?? raw.updated_at ?? 0),
+    statusMetrics: statusMetrics
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessStatusMetricRecord),
+    messages: messages
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessMessageRecord)
+      .filter((entry) => entry.callsign.length > 0),
   };
 }
 
@@ -3018,6 +3108,33 @@ function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary 
   };
 }
 
+function normalizeWatchStatusPort(value: unknown): number {
+  const parsed = Number(value ?? 29_863);
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : 29_863;
+}
+
+function toWatchStatusServerState(raw: Record<string, unknown> = {}): WatchStatusServerState {
+  const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
+  const port = normalizeWatchStatusPort(raw.port);
+  const url = String(
+    raw.url
+      ?? raw.currentUrl
+      ?? raw.current_url
+      ?? `http://localhost:${port}/info.json`,
+  );
+
+  return {
+    enabled,
+    port,
+    url,
+    currentUrl: String(raw.currentUrl ?? raw.current_url ?? url),
+    running: Boolean(raw.running),
+    bindError: String(raw.bindError ?? raw.bind_error ?? ""),
+  };
+}
+
 function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
@@ -3263,6 +3380,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
   }
 
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerSettings());
+  }
+
+  async setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void> {
+    await this.ready();
+    await this.plugin.setWatchStatusServerSettings({
+      enabled: Boolean(settings.enabled),
+      port: normalizeWatchStatusPort(settings.port),
+    });
+  }
+
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerState());
+  }
+
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     await this.ready();
     const result = await this.plugin.getSavedPeers();
@@ -3446,6 +3581,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
+  }
+
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> {
+    await this.ready();
+    return toEamReadinessSummaryRecord(await this.plugin.getEamReadinessSummary());
   }
 
   async getEvents(): Promise<EventProjectionRecord[]> {
@@ -3828,6 +3968,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -3864,6 +4007,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
@@ -4403,6 +4547,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -4439,6 +4586,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}

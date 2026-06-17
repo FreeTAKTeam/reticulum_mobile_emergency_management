@@ -20,6 +20,8 @@ import {
   type ReticulumNodeClient,
   type SosAudioRecord,
   type StatusChangedEvent,
+  type WatchStatusServerSettings,
+  type WatchStatusServerState,
   generateDefaultCallSign,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
@@ -113,6 +115,15 @@ const EMPTY_OPERATIONAL_SUMMARY = {
   eventCount: 0,
   telemetryCount: 0,
   updatedAtMs: 0,
+};
+
+const DEFAULT_WATCH_STATUS_SERVER: WatchStatusServerState = {
+  enabled: true,
+  port: 29_863,
+  url: "http://localhost:29863/info.json",
+  currentUrl: "http://localhost:29863/info.json",
+  running: false,
+  bindError: "",
 };
 
 interface HubRegistrationSnapshot {
@@ -532,6 +543,7 @@ export const useNodeStore = defineStore("node", () => {
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
+  const watchStatusServer = reactive<WatchStatusServerState>({ ...DEFAULT_WATCH_STATUS_SERVER });
   const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
   const telemetryDestinations = ref<string[]>([]);
   const hubRegistration = reactive<HubRegistrationSnapshot>({
@@ -550,6 +562,7 @@ export const useNodeStore = defineStore("node", () => {
   let refreshSettingsPromise: Promise<void> | null = null;
   let refreshSavedPeersPromise: Promise<void> | null = null;
   let refreshOperationalSummaryPromise: Promise<void> | null = null;
+  let refreshWatchStatusServerPromise: Promise<void> | null = null;
   let refreshOperationalSummaryTimerId: number | null = null;
   let refreshOperationalSummaryQueued = false;
   let refreshOperationalSummaryLastRunAt = 0;
@@ -1196,6 +1209,35 @@ export const useNodeStore = defineStore("node", () => {
         refreshOperationalSummaryPromise = null;
       });
     return refreshOperationalSummaryPromise;
+  }
+
+  async function refreshWatchStatusServerSettings(): Promise<void> {
+    if (!client.value) {
+      Object.assign(watchStatusServer, DEFAULT_WATCH_STATUS_SERVER);
+      return;
+    }
+    if (refreshWatchStatusServerPromise) {
+      return refreshWatchStatusServerPromise;
+    }
+    refreshWatchStatusServerPromise = (async () => {
+      Object.assign(watchStatusServer, await client.value!.getWatchStatusServerSettings());
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshWatchStatusServerPromise = null;
+      });
+    return refreshWatchStatusServerPromise;
+  }
+
+  async function updateWatchStatusServerSettings(settingsRecord: WatchStatusServerSettings): Promise<void> {
+    await init();
+    if (!client.value) {
+      return;
+    }
+    await client.value.setWatchStatusServerSettings(settingsRecord);
+    Object.assign(watchStatusServer, await client.value.getWatchStatusServerState());
   }
 
   function scheduleOperationalSummaryRefresh(delayMs = PROJECTION_REFRESH_DEBOUNCE_MS): void {
@@ -1908,6 +1950,7 @@ export const useNodeStore = defineStore("node", () => {
         refreshSettingsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
+        refreshWatchStatusServerSettings(),
       ]);
       await syncRuntimeSnapshot("client init");
       if (presenceTickerId === null) {
@@ -2979,6 +3022,7 @@ export const useNodeStore = defineStore("node", () => {
 
   return {
     settings,
+    watchStatusServer,
     status,
     syncStatus,
     operationalSummary,
@@ -3043,6 +3087,8 @@ export const useNodeStore = defineStore("node", () => {
     unsavePeer,
     setPeerLabel,
     updateSettings,
+    refreshWatchStatusServerSettings,
+    updateWatchStatusServerSettings,
     getSavedPeerList,
     importPeerList,
     parsePeerListText,

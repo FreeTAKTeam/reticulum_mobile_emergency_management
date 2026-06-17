@@ -9117,6 +9117,20 @@ pub async fn run_node(
                                 hex::encode(event.hash.as_slice()),
                             );
                         }
+                        ResourceEventKind::OutboundFailed => {
+                            info!(
+                                "[lxmf][events] resource outbound failed link_id={} hash={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                            );
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            info!(
+                                "[lxmf][events] resource outbound cancelled link_id={} hash={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                            );
+                        }
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -9276,6 +9290,7 @@ pub async fn run_node(
                                 }
                             }
                             LinkEvent::Data(_) => {}
+                            LinkEvent::PeerIdentified(_) => {}
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

@@ -1462,6 +1462,28 @@ fn eam_team_summary_json(summary: &crate::types::EamTeamSummaryRecord) -> serde_
     })
 }
 
+fn eam_readiness_summary_json(
+    summary: &crate::types::EamReadinessSummaryRecord,
+) -> serde_json::Value {
+    json!({
+        "activeTotal": summary.active_total,
+        "updatedAt": summary.updated_at_ms,
+        "statusMetrics": summary.status_metrics.iter().map(|metric| json!({
+            "field": metric.field,
+            "label": metric.label,
+            "score": metric.score,
+            "band": metric.band,
+            "ringColor": metric.ring_color
+        })).collect::<Vec<_>>(),
+        "messages": summary.messages.iter().map(|message| json!({
+            "callsign": message.callsign,
+            "overallScore": message.overall_score,
+            "overallBand": message.overall_band,
+            "overallRingColor": message.overall_ring_color
+        })).collect::<Vec<_>>()
+    })
+}
+
 fn operational_summary_json(summary: &crate::types::OperationalSummary) -> serde_json::Value {
     json!({
         "running": summary.running,
@@ -3522,6 +3544,28 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTe
     match node.get_eam_team_summary(payload.team_uid) {
         Ok(Some(summary)) => ok_json_result(&mut env, &eam_team_summary_json(&summary)),
         Ok(None) => ok_json_result(&mut env, &json!({ "summary": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamReadinessSummaryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_eam_readiness_summary() {
+        Ok(summary) => ok_json_result(&mut env, &eam_readiness_summary_json(&summary)),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()

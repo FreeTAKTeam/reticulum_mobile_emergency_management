@@ -562,6 +562,44 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getWatchStatusServerSettings(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get watch status server settings.",
+            "Native watch status server settings JSON parse failed.",
+            ReticulumNodeService::getWatchStatusServerSettingsJson
+        );
+    }
+
+    @PluginMethod
+    public void setWatchStatusServerSettings(PluginCall call) {
+        final JSObject payload = new JSObject();
+        final Boolean enabled = call.getBoolean("enabled");
+        final Integer port = call.getInt("port");
+        if (enabled != null) {
+            payload.put("enabled", enabled);
+        }
+        if (port != null) {
+            payload.put("port", port);
+        }
+        runIntServiceCall(
+            call,
+            "Failed to save watch status server settings.",
+            service -> service.setWatchStatusServerSettingsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getWatchStatusServerState(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get watch status server state.",
+            "Native watch status server state JSON parse failed.",
+            ReticulumNodeService::getWatchStatusServerStateJson
+        );
+    }
+
+    @PluginMethod
     public void getSavedPeers(PluginCall call) {
         runStringServiceCall(
             call,
@@ -863,6 +901,16 @@ public class ReticulumNodePlugin extends Plugin {
             "Failed to get EAM team summary.",
             "Native EAM team summary JSON parse failed.",
             service -> service.getEamTeamSummaryJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getEamReadinessSummary(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get EAM readiness summary.",
+            "Native EAM readiness summary JSON parse failed.",
+            ReticulumNodeService::getEamReadinessSummaryJson
         );
     }
 

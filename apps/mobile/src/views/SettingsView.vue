@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef } from "vue";
+import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
 import { useRouter } from "vue-router";
 
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
@@ -62,6 +62,8 @@ const form = reactive({
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
   hubApiKey: nodeStore.settings.hub.apiKey,
   hubRefreshIntervalSeconds: nodeStore.settings.hub.refreshIntervalSeconds,
+  watchStatusServerEnabled: nodeStore.watchStatusServer.enabled,
+  watchStatusServerPort: nodeStore.watchStatusServer.port,
 });
 
 const importText = ref("");
@@ -191,6 +193,26 @@ const telemetrySummary = computed(() => {
   return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
 
+const normalizedWatchStatusServerPort = computed(() => {
+  const parsed = Number(form.watchStatusServerPort);
+  return Number.isInteger(parsed) && parsed >= 1024 && parsed <= 65535 ? parsed : 29863;
+});
+
+const watchStatusServerSettingsChanged = computed(() =>
+  form.watchStatusServerEnabled !== nodeStore.watchStatusServer.enabled
+  || normalizedWatchStatusServerPort.value !== nodeStore.watchStatusServer.port,
+);
+
+const watchStatusServerSummary = computed(() => {
+  if (!form.watchStatusServerEnabled) {
+    return "Disabled";
+  }
+  if (nodeStore.watchStatusServer.bindError) {
+    return `Error | ${nodeStore.watchStatusServer.bindError}`;
+  }
+  return `${nodeStore.watchStatusServer.running ? "Running" : "Ready"} | ${nodeStore.watchStatusServer.currentUrl}`;
+});
+
 const persistedTcpClients = computed(() =>
   [
     ...new Set(
@@ -232,7 +254,8 @@ const hasMainSettingsChanges = computed(() =>
   || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
   || form.hubApiKey.trim() !== nodeStore.settings.hub.apiKey
   || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
-    !== nodeStore.settings.hub.refreshIntervalSeconds,
+    !== nodeStore.settings.hub.refreshIntervalSeconds
+  || watchStatusServerSettingsChanged.value,
 );
 
 const hasUnsavedSettings = computed(
@@ -307,6 +330,17 @@ function onHubCandidateSelected(event: Event): void {
   form.hubIdentityHash = value.trim();
 }
 
+function syncWatchStatusServerForm(): void {
+  form.watchStatusServerEnabled = nodeStore.watchStatusServer.enabled;
+  form.watchStatusServerPort = nodeStore.watchStatusServer.port;
+}
+
+onMounted(() => {
+  void nodeStore.refreshWatchStatusServerSettings()
+    .then(syncWatchStatusServerForm)
+    .catch(() => undefined);
+});
+
 async function applySettings(): Promise<void> {
   if (!hasUnsavedSettings.value || savingSettings.value) {
     return;
@@ -346,6 +380,12 @@ async function applySettings(): Promise<void> {
         refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
       },
     });
+    if (watchStatusServerSettingsChanged.value) {
+      await nodeStore.updateWatchStatusServerSettings({
+        enabled: form.watchStatusServerEnabled,
+        port: normalizedWatchStatusServerPort.value,
+      });
+    }
     await sosCardRef.value?.saveSettings();
   } catch (error: unknown) {
     runtimeFeedback.value = error instanceof Error ? error.message : String(error);
@@ -361,6 +401,7 @@ async function applySettings(): Promise<void> {
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
   form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  syncWatchStatusServerForm();
   runtimeFeedback.value =
     nodeStore.settings.displayName !== previousDisplayName
       ? "Settings saved. Restart the node to announce the updated call sign."
@@ -657,6 +698,49 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <label>
             Telemetry status
             <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M4 17h10" />
+              <circle cx="18" cy="17" r="2" />
+            </svg>
+          </span>
+          <h2>Watch Status Server</h2>
+          <p>{{ watchStatusServerSummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.watchStatusServerEnabled" type="checkbox" />
+            Enable watch status server
+          </label>
+          <label>
+            Port
+            <input v-model.number="form.watchStatusServerPort" type="number" min="1024" max="65535" />
+          </label>
+          <label>
+            Endpoint URL
+            <input :value="nodeStore.watchStatusServer.currentUrl" class="readonly-input" type="text" readonly />
+          </label>
+          <label>
+            Bind status
+            <input
+              :value="nodeStore.watchStatusServer.bindError || (nodeStore.watchStatusServer.running ? 'Listening' : 'Idle')"
+              class="readonly-input"
+              type="text"
+              readonly
+            />
           </label>
         </div>
       </div>

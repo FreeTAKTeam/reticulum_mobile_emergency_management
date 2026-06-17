@@ -3,13 +3,11 @@ import { computed, nextTick, ref, shallowRef, watch } from "vue";
 
 import StatusPill from "./StatusPill.vue";
 
+import { useMessagesStore } from "../stores/messagesStore";
 import type { ActionMessage } from "../types/domain";
 import {
   ACTION_MESSAGE_STATUS_CONFIG,
   type ActionMessageStatusField,
-  getMessageOverallScore,
-  getOverallRingColor,
-  getOverallStatusBand,
 } from "../utils/actionMessageStatus";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 
@@ -25,13 +23,15 @@ const emit = defineEmits<{
   cycle: [callsign: string, field: keyof ActionMessage];
 }>();
 
+const messagesStore = useMessagesStore();
 const isExpanded = shallowRef(false);
 const itemElement = ref<HTMLElement | null>(null);
 
 const formattedTeam = computed(() => formatR3aktTeamColor(props.message.groupName));
-const overallScore = computed(() => getMessageOverallScore(props.message));
-const overallColor = computed(() => getOverallRingColor(overallScore.value));
-const overallBand = computed(() => getOverallStatusBand(overallScore.value));
+const readiness = computed(() => messagesStore.eamReadinessForCallsign(props.message.callsign));
+const overallScore = computed(() => readiness.value?.overallScore ?? 0);
+const overallColor = computed(() => readiness.value?.overallRingColor ?? "#ff3648");
+const overallBand = computed(() => readiness.value?.overallBand ?? "Unknown");
 const ringOffset = computed(() => 276.46 - ((276.46 * overallScore.value) / 100));
 const toggleLabel = computed(() => (isExpanded.value ? "Hide statuses" : "Show statuses"));
 const overallTitle = computed(() => `Overall readiness ${overallScore.value}% (${overallBand.value})`);
