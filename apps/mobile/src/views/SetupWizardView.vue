@@ -63,10 +63,24 @@ onMounted(() => {
               </div>
             </div>
             <div class="mission-row">
+              <span class="row-icon">OK</span>
+              <div>
+                <strong>Permissions</strong>
+                <small>Grant Android permissions required by selected features.</small>
+              </div>
+            </div>
+            <div class="mission-row">
               <span class="row-icon">NET</span>
               <div>
                 <strong>Network</strong>
                 <small>Configure TCP interfaces for Reticulum access.</small>
+              </div>
+            </div>
+            <div class="mission-row">
+              <span class="row-icon">RF</span>
+              <div>
+                <strong>LoRa</strong>
+                <small>Enable RNode Bluetooth LoRa after Bluetooth permission.</small>
               </div>
             </div>
             <div class="mission-row">
@@ -81,13 +95,6 @@ onMounted(() => {
               <div>
                 <strong>SOS</strong>
                 <small>Enable emergency messaging and floating SOS access.</small>
-              </div>
-            </div>
-            <div class="mission-row">
-              <span class="row-icon">OK</span>
-              <div>
-                <strong>Permissions</strong>
-                <small>Grant Android permissions required by features.</small>
               </div>
             </div>
           </div>
@@ -292,10 +299,6 @@ onMounted(() => {
               <dd>{{ wizard.normalizedDisplayName.value || "Unset" }}</dd>
             </div>
           </dl>
-          <div class="radar-panel">
-            <span></span>
-            <p>Permission required next</p>
-          </div>
         </section>
 
         <section v-else-if="wizard.activeStep.value.id === 'permissions'" class="wizard-section">
@@ -711,7 +714,6 @@ button {
 .review-grid dd,
 .preview-panel,
 .feedback,
-.radar-panel p,
 .sos-preview span {
   color: #9cb3d6;
   font-family: var(--font-body);
@@ -825,8 +827,7 @@ button {
 }
 
 .preview-panel,
-.selected-count,
-.radar-panel {
+.selected-count {
   background:
     linear-gradient(180deg, rgb(6 24 54 / 78%), rgb(4 15 34 / 88%));
   border: 1px solid rgb(74 133 207 / 36%);
@@ -1046,26 +1047,6 @@ button {
   margin: 0;
 }
 
-.radar-panel {
-  align-items: center;
-  display: flex;
-  gap: 0.7rem;
-}
-
-.radar-panel span {
-  background:
-    radial-gradient(circle, rgb(100 190 255 / 52%) 0 12%, transparent 14% 100%),
-    repeating-radial-gradient(circle, rgb(100 190 255 / 25%) 0 1px, transparent 2px 14px);
-  border: 1px solid rgb(100 190 255 / 42%);
-  border-radius: 999px;
-  height: 3.4rem;
-  width: 3.4rem;
-}
-
-.radar-panel p {
-  margin: 0;
-}
-
 .permission-card {
   display: flex;
   gap: 0.7rem;
@@ -1245,7 +1226,6 @@ button:disabled {
   .review-grid dd,
   .preview-panel,
   .feedback,
-  .radar-panel p,
   .sos-preview span {
     font-size: 0.86rem;
   }

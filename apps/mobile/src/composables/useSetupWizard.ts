@@ -44,10 +44,10 @@ export interface SetupWizardStep {
 const SETUP_STEPS: SetupWizardStep[] = [
   { id: "welcome", label: "Welcome", title: "Welcome to R.E.M." },
   { id: "callsign", label: "Call Sign", title: "Set your call sign" },
+  { id: "permissions", label: "Permits", title: "Android permissions" },
   { id: "tcp", label: "TCP", title: "Choose TCP interfaces" },
   { id: "rnode", label: "LoRa", title: "Configure RNode LoRa" },
   { id: "telemetry", label: "Telemetry", title: "Telemetry sharing" },
-  { id: "permissions", label: "Permits", title: "Android permissions" },
   { id: "sos", label: "SOS", title: "SOS emergency access" },
   { id: "review", label: "Review", title: "Review setup" },
 ];
