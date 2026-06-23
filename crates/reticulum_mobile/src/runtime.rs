@@ -39,6 +39,15 @@ use reticulum::transport::iface::tcp_client::TcpClient;
 use reticulum::transport::packet::{Packet, PacketDataBuffer, PacketType, PropagationType};
 use reticulum::transport::resource::ResourceEventKind;
 use rmpv::Value as MsgPackValue;
+#[cfg(target_os = "android")]
+use rns_transport::iface::lora::LoraConfig;
+#[cfg(target_os = "android")]
+use rns_transport::iface::rnode_ble::{
+    NativeRnodeBleKissInterface, NativeRnodeBleSettings, RnodeBleKissConfig,
+    RNODE_BLE_READ_FRAME_TIMEOUT,
+};
+#[cfg(target_os = "android")]
+use rns_transport::iface::{IfaceRole, InterfaceMode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -62,8 +71,8 @@ use crate::types::{
     LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
     MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange,
-    PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
+    PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest,
+    SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
     TelemetryPositionRecord,
 };
 
@@ -8295,6 +8304,127 @@ fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
     )
 }
 
+#[cfg(target_os = "android")]
+fn normalize_rnode_region(region: &str) -> &'static str {
+    if region.trim().eq_ignore_ascii_case("EU868") {
+        "EU868"
+    } else {
+        "US915"
+    }
+}
+
+#[cfg(target_os = "android")]
+fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
+    let mut config = LoraConfig::for_region(normalize_rnode_region(&settings.region))
+        .unwrap_or_else(LoraConfig::us915_default);
+    match settings.profile.trim() {
+        "REM-MF-URBAN-v1" => {
+            config.bandwidth_hz = 250_000;
+            config.spreading_factor = 9;
+            config.coding_rate = 5;
+        }
+        "REM-LM-EXTREME-v1" => {
+            config.bandwidth_hz = 125_000;
+            config.spreading_factor = 11;
+            config.coding_rate = 8;
+        }
+        "REM-LF-RURAL-v1" | _ => {
+            config.bandwidth_hz = 250_000;
+            config.spreading_factor = 11;
+            config.coding_rate = 5;
+        }
+    }
+    config.validate()?;
+    Ok(config)
+}
+
+#[cfg(target_os = "android")]
+fn spawn_rnode_ble_interface(
+    transport: Arc<Transport>,
+    bus: EventBus,
+    settings: RnodeSettingsRecord,
+) {
+    if !settings.enabled {
+        return;
+    }
+    let peripheral_id = settings.peripheral_id.trim().to_string();
+    if peripheral_id.is_empty() {
+        bus.emit(NodeEvent::Error {
+            code: "InvalidConfig".to_string(),
+            message: "RNode Bluetooth is enabled but no paired device is selected.".to_string(),
+        });
+        return;
+    }
+
+    let lora_config = match rnode_lora_config(&settings) {
+        Ok(config) => config,
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("RNode LoRa profile is invalid: {error}"),
+            });
+            return;
+        }
+    };
+    let label = if settings.display_name.trim().is_empty() {
+        format!("rnode-ble:{peripheral_id}")
+    } else {
+        format!("rnode-ble:{}", settings.display_name.trim())
+    };
+    let kiss_config = RnodeBleKissConfig {
+        mtu: usize::from(lora_config.max_payload_bytes),
+        max_write_len: 20,
+        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
+        initial_frames: lora_config.probe_frames(),
+        deferred_frames: lora_config.radio_config_frames(),
+        shutdown_frames: lora_config.shutdown_frames(),
+        ..RnodeBleKissConfig::default()
+    };
+    let adapter = NativeRnodeBleKissInterface::new(
+        label.clone(),
+        NativeRnodeBleSettings::for_peripheral(peripheral_id.clone()),
+        kiss_config,
+    )
+    .with_rnode_validation(lora_config, Duration::from_millis(5_000))
+    .with_detection_fallback_timeout(Duration::from_millis(2_000));
+
+    tokio::spawn(async move {
+        let iface = transport.iface_manager().lock().await.spawn_as_with_mode(
+            adapter,
+            NativeRnodeBleKissInterface::spawn,
+            IfaceRole::Unicast,
+            InterfaceMode::Full,
+        );
+        info!(
+            "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
+            label, peripheral_id, settings.region, settings.profile, iface
+        );
+        emit_operational_notice(
+            &bus,
+            LogLevel::Info {},
+            format!(
+                "RNode Bluetooth LoRa interface enabled: {} ({}, {})",
+                label, settings.region, settings.profile
+            ),
+        );
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn spawn_rnode_ble_interface(
+    _transport: Arc<Transport>,
+    bus: EventBus,
+    settings: RnodeSettingsRecord,
+) {
+    if !settings.enabled {
+        return;
+    }
+    bus.emit(NodeEvent::Error {
+        code: "InvalidConfig".to_string(),
+        message: "RNode Bluetooth LoRa is only available on Android builds.".to_string(),
+    });
+}
+
 async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
     tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, TcpStream::connect(connect_addr))
         .await
@@ -8492,6 +8622,7 @@ pub async fn run_node(
             tcp_endpoint_registry.clone(),
         );
     }
+    spawn_rnode_ble_interface(transport.clone(), bus.clone(), config.rnode.clone());
 
     let _legacy_app_destination_hex = app_destination
         .lock()

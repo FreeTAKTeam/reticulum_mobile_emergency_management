@@ -285,6 +285,17 @@ export interface HubSettings {
   refreshIntervalSeconds: number;
 }
 
+export type RnodeRegion = "US915" | "EU868";
+export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
+
+export interface RnodeSettings {
+  enabled: boolean;
+  peripheralId: string;
+  displayName: string;
+  region: RnodeRegion;
+  profile: RnodeProfileId;
+}
+
 export interface NodeUiSettings {
   displayName: string;
   clientMode: "auto" | "capacitor";
@@ -301,6 +312,7 @@ export interface NodeUiSettings {
     expireAfterMinutes: number;
   };
   hub: HubSettings;
+  rnode: RnodeSettings;
   checklists: {
     defaultTaskDueStepMinutes: number;
   };

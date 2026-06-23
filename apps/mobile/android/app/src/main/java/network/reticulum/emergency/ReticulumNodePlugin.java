@@ -1,33 +1,66 @@
 package network.reticulum.emergency;
 
+import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.ParcelUuid;
+import android.content.pm.PackageManager;
 import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONException;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-@CapacitorPlugin(name = "ReticulumNode")
+@CapacitorPlugin(
+    name = "ReticulumNode",
+    permissions = {
+        @Permission(
+            strings = { Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT },
+            alias = ReticulumNodePlugin.RNODE_BLUETOOTH_ALIAS
+        )
+    }
+)
 public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
+    static final String RNODE_BLUETOOTH_ALIAS = "rnodeBluetooth";
+    private static final String RNODE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
+    private static final long DEFAULT_RNODE_SCAN_TIMEOUT_MS = 8_000L;
 
     private volatile ReticulumNodeService boundService;
     private volatile boolean serviceBound = false;
@@ -194,6 +227,133 @@ public class ReticulumNodePlugin extends Plugin {
             "Native status JSON parse failed.",
             ReticulumNodeService::getStatusJson
         );
+    }
+
+    @PluginMethod
+    public void checkRnodeBluetoothPermissions(PluginCall call) {
+        resolveRnodeBluetoothPermission(call);
+    }
+
+    @PluginMethod
+    public void requestRnodeBluetoothPermissions(PluginCall call) {
+        if (hasRnodeBluetoothPermission()) {
+            resolveRnodeBluetoothPermission(call);
+            return;
+        }
+        requestPermissionForAlias(RNODE_BLUETOOTH_ALIAS, call, "completeRnodeBluetoothPermissionRequest");
+    }
+
+    @PermissionCallback
+    private void completeRnodeBluetoothPermissionRequest(PluginCall call) {
+        resolveRnodeBluetoothPermission(call);
+    }
+
+    @PluginMethod
+    public void scanRnodeBleDevices(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            call.reject("Bluetooth is not enabled.");
+            return;
+        }
+        final BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
+        if (scanner == null) {
+            call.reject("Bluetooth LE scanning is unavailable.");
+            return;
+        }
+
+        final long timeoutMs = Math.max(1_000L, call.getLong("timeoutMs", DEFAULT_RNODE_SCAN_TIMEOUT_MS));
+        final Map<String, JSObject> discovered = new LinkedHashMap<>();
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final ScanCallback callback = new ScanCallback() {
+            @Override
+            public void onScanResult(int callbackType, ScanResult result) {
+                addRnodeScanResult(discovered, result);
+            }
+
+            @Override
+            public void onBatchScanResults(List<ScanResult> results) {
+                for (ScanResult result : results) {
+                    addRnodeScanResult(discovered, result);
+                }
+            }
+
+            @Override
+            public void onScanFailed(int errorCode) {
+                if (!finished.compareAndSet(false, true)) {
+                    return;
+                }
+                call.reject("RNode Bluetooth scan failed: " + errorCode);
+            }
+        };
+
+        final List<ScanFilter> filters = new ArrayList<>();
+        filters.add(
+            new ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid.fromString(RNODE_UART_SERVICE_UUID))
+                .build()
+        );
+        final ScanSettings settings = new ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build();
+        scanner.startScan(filters, settings, callback);
+        handler.postDelayed(() -> {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            scanner.stopScan(callback);
+            final JSArray items = new JSArray();
+            for (JSObject item : discovered.values()) {
+                items.put(item);
+            }
+            final JSObject payload = new JSObject();
+            payload.put("items", items);
+            call.resolve(payload);
+        }, timeoutMs);
+    }
+
+    @PluginMethod
+    public void pairRnodeBleDevice(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final String id = call.getString("id", call.getString("address", ""));
+        if (id == null || id.trim().isEmpty()) {
+            call.reject("id is required.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null) {
+            call.reject("Bluetooth is unavailable.");
+            return;
+        }
+        try {
+            final BluetoothDevice device = adapter.getRemoteDevice(id.trim());
+            final JSObject payload = new JSObject();
+            payload.put("id", device.getAddress());
+            payload.put("address", device.getAddress());
+            payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                payload.put("bondState", "bonded");
+                call.resolve(payload);
+                return;
+            }
+            final boolean bondingStarted = device.createBond();
+            if (!bondingStarted) {
+                call.reject("Android did not start Bluetooth pairing for this RNode.");
+                return;
+            }
+            payload.put("bondingStarted", true);
+            payload.put("bondState", bondStateLabel(device.getBondState()));
+            call.resolve(payload);
+        } catch (IllegalArgumentException ex) {
+            call.reject("Invalid Bluetooth device id.", ex);
+        }
     }
 
     @PluginMethod
@@ -1217,6 +1377,68 @@ public class ReticulumNodePlugin extends Plugin {
                 call.reject(fallbackMessage, ex);
             }
         });
+    }
+
+    private BluetoothAdapter bluetoothAdapter() {
+        final BluetoothManager manager = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+        return manager == null ? null : manager.getAdapter();
+    }
+
+    private boolean hasRnodeBluetoothPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return true;
+        }
+        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_SCAN)
+                == PackageManager.PERMISSION_GRANTED
+            && ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void resolveRnodeBluetoothPermission(PluginCall call) {
+        final JSObject payload = new JSObject();
+        final PermissionState state = hasRnodeBluetoothPermission()
+            ? PermissionState.GRANTED
+            : getPermissionState(RNODE_BLUETOOTH_ALIAS);
+        payload.put("bluetooth", state.toString().toLowerCase());
+        call.resolve(payload);
+    }
+
+    private void addRnodeScanResult(Map<String, JSObject> discovered, ScanResult result) {
+        if (result == null || result.getDevice() == null) {
+            return;
+        }
+        final BluetoothDevice device = result.getDevice();
+        final String address = device.getAddress();
+        if (address == null || address.isEmpty()) {
+            return;
+        }
+        final JSObject item = new JSObject();
+        item.put("id", address);
+        item.put("address", address);
+        item.put("rssi", result.getRssi());
+        item.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+        item.put("bondState", bondStateLabel(device.getBondState()));
+        String name = null;
+        if (result.getScanRecord() != null) {
+            name = result.getScanRecord().getDeviceName();
+        }
+        if (name == null || name.trim().isEmpty()) {
+            name = device.getName();
+        }
+        item.put("name", name == null ? "" : name);
+        discovered.put(address, item);
+    }
+
+    private String bondStateLabel(int state) {
+        switch (state) {
+            case BluetoothDevice.BOND_BONDED:
+                return "bonded";
+            case BluetoothDevice.BOND_BONDING:
+                return "bonding";
+            case BluetoothDevice.BOND_NONE:
+            default:
+                return "none";
+        }
     }
 
     private interface ServiceIntOperation {

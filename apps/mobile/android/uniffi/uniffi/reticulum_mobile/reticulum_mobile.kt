@@ -3327,7 +3327,8 @@ data class AppSettingsRecord (
     var `announceIntervalSeconds`: kotlin.UInt,
     var `telemetry`: TelemetrySettingsRecord,
     var `hub`: HubSettingsRecord,
-    var `checklists`: ChecklistSettingsRecord
+    var `checklists`: ChecklistSettingsRecord,
+    var `rnode`: RnodeSettingsRecord
 ) {
 
     companion object
@@ -3348,6 +3349,7 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterTypeTelemetrySettingsRecord.read(buf),
             FfiConverterTypeHubSettingsRecord.read(buf),
             FfiConverterTypeChecklistSettingsRecord.read(buf),
+            FfiConverterTypeRnodeSettingsRecord.read(buf),
         )
     }
 
@@ -3360,7 +3362,8 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterUInt.allocationSize(value.`announceIntervalSeconds`) +
             FfiConverterTypeTelemetrySettingsRecord.allocationSize(value.`telemetry`) +
             FfiConverterTypeHubSettingsRecord.allocationSize(value.`hub`) +
-            FfiConverterTypeChecklistSettingsRecord.allocationSize(value.`checklists`)
+            FfiConverterTypeChecklistSettingsRecord.allocationSize(value.`checklists`) +
+            FfiConverterTypeRnodeSettingsRecord.allocationSize(value.`rnode`)
     )
 
     override fun write(value: AppSettingsRecord, buf: ByteBuffer) {
@@ -3373,6 +3376,7 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterTypeTelemetrySettingsRecord.write(value.`telemetry`, buf)
             FfiConverterTypeHubSettingsRecord.write(value.`hub`, buf)
             FfiConverterTypeChecklistSettingsRecord.write(value.`checklists`, buf)
+            FfiConverterTypeRnodeSettingsRecord.write(value.`rnode`, buf)
     }
 }
 
@@ -5066,7 +5070,8 @@ data class NodeConfig (
     var `hubIdentityHash`: kotlin.String?,
     var `hubApiBaseUrl`: kotlin.String?,
     var `hubApiKey`: kotlin.String?,
-    var `hubRefreshIntervalSeconds`: kotlin.UInt
+    var `hubRefreshIntervalSeconds`: kotlin.UInt,
+    var `rnode`: RnodeSettingsRecord
 ) {
 
     companion object
@@ -5090,6 +5095,7 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterTypeRnodeSettingsRecord.read(buf),
         )
     }
 
@@ -5105,7 +5111,8 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.allocationSize(value.`hubIdentityHash`) +
             FfiConverterOptionalString.allocationSize(value.`hubApiBaseUrl`) +
             FfiConverterOptionalString.allocationSize(value.`hubApiKey`) +
-            FfiConverterUInt.allocationSize(value.`hubRefreshIntervalSeconds`)
+            FfiConverterUInt.allocationSize(value.`hubRefreshIntervalSeconds`) +
+            FfiConverterTypeRnodeSettingsRecord.allocationSize(value.`rnode`)
     )
 
     override fun write(value: NodeConfig, buf: ByteBuffer) {
@@ -5121,6 +5128,7 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.write(value.`hubApiBaseUrl`, buf)
             FfiConverterOptionalString.write(value.`hubApiKey`, buf)
             FfiConverterUInt.write(value.`hubRefreshIntervalSeconds`, buf)
+            FfiConverterTypeRnodeSettingsRecord.write(value.`rnode`, buf)
     }
 }
 
@@ -5481,6 +5489,50 @@ public object FfiConverterTypeProjectionInvalidation: FfiConverterRustBuffer<Pro
             FfiConverterULong.write(value.`revision`, buf)
             FfiConverterULong.write(value.`updatedAtMs`, buf)
             FfiConverterOptionalString.write(value.`reason`, buf)
+    }
+}
+
+
+
+data class RnodeSettingsRecord (
+    var `enabled`: kotlin.Boolean,
+    var `peripheralId`: kotlin.String,
+    var `displayName`: kotlin.String,
+    var `region`: kotlin.String,
+    var `profile`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRnodeSettingsRecord: FfiConverterRustBuffer<RnodeSettingsRecord> {
+    override fun read(buf: ByteBuffer): RnodeSettingsRecord {
+        return RnodeSettingsRecord(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RnodeSettingsRecord) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterString.allocationSize(value.`peripheralId`) +
+            FfiConverterString.allocationSize(value.`displayName`) +
+            FfiConverterString.allocationSize(value.`region`) +
+            FfiConverterString.allocationSize(value.`profile`)
+    )
+
+    override fun write(value: RnodeSettingsRecord, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterString.write(value.`peripheralId`, buf)
+            FfiConverterString.write(value.`displayName`, buf)
+            FfiConverterString.write(value.`region`, buf)
+            FfiConverterString.write(value.`profile`, buf)
     }
 }
 

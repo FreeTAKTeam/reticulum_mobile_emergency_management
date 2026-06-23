@@ -2,6 +2,8 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
+export type RnodeRegion = "US915" | "EU868";
+export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
@@ -59,6 +61,31 @@ export type SosTriggerSource =
   | "Remote";
 export type SosMessageKind = "Active" | "Update" | "Cancelled";
 
+export interface RnodeSettingsRecord {
+  enabled: boolean;
+  peripheralId: string;
+  displayName: string;
+  region: RnodeRegion;
+  profile: RnodeProfileId;
+}
+
+export interface RnodeBleDeviceRecord {
+  id: string;
+  address: string;
+  name: string;
+  rssi: number;
+  paired: boolean;
+  bondState?: string;
+}
+
+export interface RnodeBlePairResult {
+  id: string;
+  address: string;
+  paired: boolean;
+  bondingStarted: boolean;
+  bondState: string;
+}
+
 export interface NodeConfig {
   name: string;
   storageDir?: string;
@@ -72,6 +99,7 @@ export interface NodeConfig {
   hubApiBaseUrl?: string;
   hubApiKey?: string;
   hubRefreshIntervalSeconds: number;
+  rnode: RnodeSettingsRecord;
 }
 
 export interface NodeStatus {
@@ -390,6 +418,7 @@ export interface AppSettingsRecord {
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
   checklists: ChecklistSettingsRecord;
+  rnode: RnodeSettingsRecord;
 }
 
 export interface SavedPeerRecord {
@@ -681,6 +710,10 @@ export interface ReticulumNodeClient {
   stop(): Promise<void>;
   restart(config: NodeConfig): Promise<void>;
   getStatus(): Promise<NodeStatus>;
+  checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
+  pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
   announceNow(): Promise<void>;
@@ -864,6 +897,13 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Autonomous",
   hubRefreshIntervalSeconds: 3600,
+  rnode: {
+    enabled: false,
+    peripheralId: "",
+    displayName: "",
+    region: "US915",
+    profile: "REM-LF-RURAL-v1",
+  },
 };
 
 export const DEFAULT_SOS_SETTINGS: SosSettingsRecord = {
@@ -938,6 +978,10 @@ interface ReticulumNodePlugin {
   stopNode(): Promise<void>;
   restartNode(options: { config: Record<string, unknown> }): Promise<void>;
   getStatus(): Promise<Record<string, unknown>>;
+  checkRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  requestRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  scanRnodeBleDevices(options?: { timeoutMs?: number }): Promise<{ items?: RnodeBleDeviceRecord[] }>;
+  pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
   announceNow(): Promise<void>;
@@ -1801,6 +1845,35 @@ function normalizeHubMode(value: unknown): HubMode {
   }
 }
 
+function normalizeRnodeRegion(value: unknown): RnodeRegion {
+  return String(value ?? "").trim().toUpperCase() === "EU868" ? "EU868" : "US915";
+}
+
+function normalizeRnodeProfile(value: unknown): RnodeProfileId {
+  switch (String(value ?? "").trim()) {
+    case "REM-MF-URBAN-v1":
+      return "REM-MF-URBAN-v1";
+    case "REM-LM-EXTREME-v1":
+      return "REM-LM-EXTREME-v1";
+    case "REM-LF-RURAL-v1":
+    default:
+      return "REM-LF-RURAL-v1";
+  }
+}
+
+function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    enabled: Boolean(raw.enabled),
+    peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
+    displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
+    region: normalizeRnodeRegion(raw.region),
+    profile: normalizeRnodeProfile(raw.profile),
+  };
+}
+
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
   if (!raw || Object.keys(raw).length === 0) {
     return null;
@@ -1816,6 +1889,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
   const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
   const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
+  const rnode = normalizeRnodeSettings(raw.rnode);
   return {
     displayName: String(raw.displayName ?? ""),
     autoConnectSaved: Boolean(raw.autoConnectSaved),
@@ -1842,6 +1916,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
         ? Math.max(1, defaultTaskDueStepMinutes)
         : 30,
     },
+    rnode,
   };
 }
 
@@ -3149,6 +3224,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     hubApiBaseUrl: config.hubApiBaseUrl,
     hubApiKey: config.hubApiKey,
     hubRefreshIntervalSeconds: config.hubRefreshIntervalSeconds,
+    rnode: config.rnode,
   };
 }
 
@@ -3242,6 +3318,36 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const status = await this.plugin.getStatus();
     return toNodeStatus(status);
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.checkRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.requestRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.scanRnodeBleDevices({ timeoutMs });
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    await this.ready();
+    const result = await this.plugin.pairRnodeBleDevice({ id });
+    return {
+      id: String(result.id ?? id),
+      address: String(result.address ?? result.id ?? id),
+      paired: Boolean(result.paired),
+      bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
+      bondState: String(result.bondState ?? result.bond_state ?? "none"),
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -3818,6 +3924,28 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { ...this.status };
   }
 
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
+  }
+
   async connectPeer(destinationHex: string): Promise<void> {
     const normalized = normalizeHex(destinationHex);
     this.emitter.emit("peerChanged", {
@@ -4373,6 +4501,28 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async getStatus(): Promise<NodeStatus> {
     return { ...this.status };
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {

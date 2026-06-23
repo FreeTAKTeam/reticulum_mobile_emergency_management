@@ -39,3 +39,6 @@ x25519-dalek = "2.0.1"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+rns-transport = { package = "reticulum-rs-transport", path = "../../../LXMF-rs/crates/libs/rns-transport", features = ["rnode-ble"] }
