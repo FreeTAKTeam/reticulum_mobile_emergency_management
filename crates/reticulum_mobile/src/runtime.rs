@@ -9131,6 +9131,18 @@ pub async fn run_node(
                                 hex::encode(event.hash.as_slice()),
                             );
                         }
+                        ResourceEventKind::InboundFailed(failure) => {
+                            warn!(
+                                "[lxmf][events] resource inbound failed link_id={} hash={} reason={} received_parts={} total_parts={} received_bytes={} total_bytes={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                                failure.reason,
+                                failure.progress.received_parts,
+                                failure.progress.total_parts,
+                                failure.progress.received_bytes,
+                                failure.progress.total_bytes,
+                            );
+                        }
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
