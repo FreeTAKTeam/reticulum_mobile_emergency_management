@@ -38,13 +38,16 @@ use reticulum::transport::identity::PrivateIdentity;
 use reticulum::transport::iface::tcp_client::TcpClient;
 use reticulum::transport::packet::{Packet, PacketDataBuffer, PacketType, PropagationType};
 use reticulum::transport::resource::ResourceEventKind;
+use rmpv::Value as MsgPackValue;
+#[cfg(target_os = "android")]
 use rns_transport::iface::lora::LoraConfig;
+#[cfg(target_os = "android")]
 use rns_transport::iface::rnode_ble::{
     NativeRnodeBleKissInterface, NativeRnodeBleSettings, RnodeBleKissConfig,
     RNODE_BLE_READ_FRAME_TIMEOUT,
 };
+#[cfg(target_os = "android")]
 use rns_transport::iface::{IfaceRole, InterfaceMode};
-use rmpv::Value as MsgPackValue;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -8301,6 +8304,7 @@ fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
     )
 }
 
+#[cfg(target_os = "android")]
 fn normalize_rnode_region(region: &str) -> &'static str {
     if region.trim().eq_ignore_ascii_case("EU868") {
         "EU868"
@@ -8309,6 +8313,7 @@ fn normalize_rnode_region(region: &str) -> &'static str {
     }
 }
 
+#[cfg(target_os = "android")]
 fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
     let mut config = LoraConfig::for_region(normalize_rnode_region(&settings.region))
         .unwrap_or_else(LoraConfig::us915_default);
@@ -8333,6 +8338,7 @@ fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, Strin
     Ok(config)
 }
 
+#[cfg(target_os = "android")]
 fn spawn_rnode_ble_interface(
     transport: Arc<Transport>,
     bus: EventBus,
@@ -8401,6 +8407,21 @@ fn spawn_rnode_ble_interface(
                 label, settings.region, settings.profile
             ),
         );
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn spawn_rnode_ble_interface(
+    _transport: Arc<Transport>,
+    bus: EventBus,
+    settings: RnodeSettingsRecord,
+) {
+    if !settings.enabled {
+        return;
+    }
+    bus.emit(NodeEvent::Error {
+        code: "InvalidConfig".to_string(),
+        message: "RNode Bluetooth LoRa is only available on Android builds.".to_string(),
     });
 }
 
