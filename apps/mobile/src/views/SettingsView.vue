@@ -370,12 +370,27 @@ async function scanRnodeDevices(): Promise<void> {
 }
 
 async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
-  form.rnodeEnabled = true;
-  form.rnodePeripheralId = device.id || device.address;
-  form.rnodeDisplayName = device.name || device.address;
+  const deviceId = device.id || device.address;
   if (!device.paired) {
-    await pairRnodeBleDevice(device.id || device.address).catch(() => undefined);
+    try {
+      const pairResult = await pairRnodeBleDevice(deviceId);
+      if (!pairResult.paired && !pairResult.bondingStarted) {
+        rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
+        return;
+      }
+      rnodeScanFeedback.value = pairResult.paired
+        ? "RNode is already paired."
+        : "Bluetooth pairing started. Confirm the Android pairing prompt before restarting the node.";
+    } catch (error: unknown) {
+      rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+      return;
+    }
+  } else {
+    rnodeScanFeedback.value = "";
   }
+  form.rnodeEnabled = true;
+  form.rnodePeripheralId = deviceId;
+  form.rnodeDisplayName = device.name || device.address;
 }
 
 function onHubCandidateSelected(event: Event): void {

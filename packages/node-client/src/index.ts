@@ -78,6 +78,14 @@ export interface RnodeBleDeviceRecord {
   bondState?: string;
 }
 
+export interface RnodeBlePairResult {
+  id: string;
+  address: string;
+  paired: boolean;
+  bondingStarted: boolean;
+  bondState: string;
+}
+
 export interface NodeConfig {
   name: string;
   storageDir?: string;
@@ -705,7 +713,7 @@ export interface ReticulumNodeClient {
   checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
   requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
   scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
-  pairRnodeBleDevice(id: string): Promise<void>;
+  pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
   announceNow(): Promise<void>;
@@ -3330,9 +3338,16 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return Array.isArray(result.items) ? result.items : [];
   }
 
-  async pairRnodeBleDevice(id: string): Promise<void> {
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
     await this.ready();
-    await this.plugin.pairRnodeBleDevice({ id });
+    const result = await this.plugin.pairRnodeBleDevice({ id });
+    return {
+      id: String(result.id ?? id),
+      address: String(result.address ?? result.id ?? id),
+      paired: Boolean(result.paired),
+      bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
+      bondState: String(result.bondState ?? result.bond_state ?? "none"),
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -3921,7 +3936,15 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return [];
   }
 
-  async pairRnodeBleDevice(_id: string): Promise<void> {}
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
+  }
 
   async connectPeer(destinationHex: string): Promise<void> {
     const normalized = normalizeHex(destinationHex);
@@ -4492,7 +4515,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return [];
   }
 
-  async pairRnodeBleDevice(_id: string): Promise<void> {}
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
+  }
 
   async connectPeer(destinationHex: string): Promise<void> {
     const normalized = normalizeHex(destinationHex);

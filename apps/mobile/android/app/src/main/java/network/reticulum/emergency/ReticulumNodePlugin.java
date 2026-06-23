@@ -343,7 +343,12 @@ public class ReticulumNodePlugin extends Plugin {
                 call.resolve(payload);
                 return;
             }
-            payload.put("bondingStarted", device.createBond());
+            final boolean bondingStarted = device.createBond();
+            if (!bondingStarted) {
+                call.reject("Android did not start Bluetooth pairing for this RNode.");
+                return;
+            }
+            payload.put("bondingStarted", true);
             payload.put("bondState", bondStateLabel(device.getBondState()));
             call.resolve(payload);
         } catch (IllegalArgumentException ex) {

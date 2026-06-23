@@ -1,7 +1,7 @@
 import { Capacitor } from "@capacitor/core";
-import { createReticulumNodeClient, type RnodeBleDeviceRecord } from "@reticulum/node-client";
+import { createReticulumNodeClient, type RnodeBleDeviceRecord, type RnodeBlePairResult } from "@reticulum/node-client";
 
-export type { RnodeBleDeviceRecord };
+export type { RnodeBleDeviceRecord, RnodeBlePairResult };
 
 export async function scanRnodeBleDevices(timeoutMs = 8000): Promise<RnodeBleDeviceRecord[]> {
   if (!Capacitor.isNativePlatform()) {
@@ -10,9 +10,15 @@ export async function scanRnodeBleDevices(timeoutMs = 8000): Promise<RnodeBleDev
   return createReticulumNodeClient().scanRnodeBleDevices(timeoutMs);
 }
 
-export async function pairRnodeBleDevice(id: string): Promise<void> {
+export async function pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
   if (!Capacitor.isNativePlatform()) {
-    return;
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
   }
-  await createReticulumNodeClient().pairRnodeBleDevice(id);
+  return createReticulumNodeClient().pairRnodeBleDevice(id);
 }

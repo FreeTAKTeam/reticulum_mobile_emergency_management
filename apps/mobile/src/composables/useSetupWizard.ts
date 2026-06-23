@@ -229,12 +229,27 @@ export function useSetupWizard() {
   }
 
   async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
-    draft.rnode.enabled = true;
-    draft.rnode.peripheralId = device.id || device.address;
-    draft.rnode.displayName = device.name || device.address;
+    const deviceId = device.id || device.address;
     if (!device.paired) {
-      await pairRnodeBleDevice(device.id || device.address).catch(() => undefined);
+      try {
+        const pairResult = await pairRnodeBleDevice(deviceId);
+        if (!pairResult.paired && !pairResult.bondingStarted) {
+          feedback.value = "Android did not start Bluetooth pairing for this RNode.";
+          return;
+        }
+        feedback.value = pairResult.paired
+          ? "RNode is already paired."
+          : "Bluetooth pairing started. Confirm the Android pairing prompt before finishing setup.";
+      } catch (error: unknown) {
+        feedback.value = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    } else {
+      feedback.value = "";
     }
+    draft.rnode.enabled = true;
+    draft.rnode.peripheralId = deviceId;
+    draft.rnode.displayName = device.name || device.address;
   }
 
   function profileSummary(profile = draft.rnode.profile): string {
