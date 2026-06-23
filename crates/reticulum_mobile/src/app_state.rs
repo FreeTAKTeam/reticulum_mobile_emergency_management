@@ -3628,6 +3628,7 @@ mod tests {
             checklists: ChecklistSettingsRecord {
                 default_task_due_step_minutes,
             },
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 

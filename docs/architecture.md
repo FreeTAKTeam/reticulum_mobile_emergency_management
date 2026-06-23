@@ -447,6 +447,22 @@ Rollback gate:
 - The default build uses the SDK-backed path.
 - `cargo test -p reticulum_mobile --features legacy-lxmf-runtime` keeps the previous direct send implementation available for one release cycle.
 
+### RNode Bluetooth LoRa Interface
+
+REM can run an Android-paired RNode as an additional Reticulum LoRa interface over Bluetooth LE.
+
+Ownership split:
+- Rust owns the active transport interface. `runtime.rs` spawns the LXMF-rs `NativeRnodeBleKissInterface` beside configured TCP client interfaces when `AppSettingsRecord.rnode.enabled` is true.
+- Android owns platform permission and discovery UX. `ReticulumNodePlugin` requests Bluetooth permissions, scans BLE peripherals advertising the RNode Nordic UART service, and returns device id/name/RSSI/bond state to Vue.
+- TypeScript owns only setup/settings drafts and persists the selected RNode identifier, display name, region, and profile.
+
+REM profile mapping:
+- `REM-MF-URBAN-v1`: `bandwidth = 250000`, `spreadingfactor = 9`, `codingrate = 5`
+- `REM-LF-RURAL-v1`: `bandwidth = 250000`, `spreadingfactor = 11`, `codingrate = 5`
+- `REM-LM-EXTREME-v1`: `bandwidth = 125000`, `spreadingfactor = 11`, `codingrate = 8`
+
+Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM defaults to `US915` with `REM-LF-RURAL-v1`; setup may infer `EU868` from location or timezone before saving.
+
 ## Mobile Runtime Ownership Status
 
 The mobile runtime is now moving toward a Rust-authoritative projection model on device:

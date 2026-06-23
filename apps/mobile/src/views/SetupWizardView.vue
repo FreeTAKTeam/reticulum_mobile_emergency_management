@@ -177,6 +177,79 @@ onMounted(() => {
           </div>
         </section>
 
+        <section v-else-if="wizard.activeStep.value.id === 'rnode'" class="wizard-section">
+          <div class="section-heading">
+            <p class="eyebrow">RNode Bluetooth LoRa</p>
+            <h1>LoRa Interface</h1>
+            <p>Pair an RNode over Bluetooth LE and choose the shared REM radio profile.</p>
+          </div>
+          <label class="toggle-card">
+            <input v-model="wizard.draft.rnode.enabled" type="checkbox" />
+            <span class="toggle-visual" aria-hidden="true"></span>
+            <span>
+              <strong>Enable RNode LoRa</strong>
+              <small>Runs alongside configured TCP interfaces.</small>
+            </span>
+          </label>
+          <div class="custom-row">
+            <input
+              v-model="wizard.draft.rnode.peripheralId"
+              type="text"
+              placeholder="RNode Bluetooth device id"
+            />
+            <button
+              type="button"
+              class="icon-action"
+              :disabled="wizard.rnodeScanning.value"
+              aria-label="Scan for RNode Bluetooth devices"
+              @click="wizard.scanRnodeDevices"
+            >
+              {{ wizard.rnodeScanning.value ? "..." : "+" }}
+            </button>
+          </div>
+          <div class="server-list" v-if="wizard.rnodeDevices.value.length > 0">
+            <button
+              v-for="device in wizard.rnodeDevices.value"
+              :key="device.id"
+              type="button"
+              class="server-option device-option"
+              @click="wizard.selectRnodeDevice(device)"
+            >
+              <span class="server-copy">
+                <strong>{{ device.name || device.address }}</strong>
+                <span>{{ device.address }} | RSSI {{ device.rssi }} | {{ device.paired ? "Paired" : "Not paired" }}</span>
+              </span>
+              <span class="bootstrap-badge">RNode</span>
+            </button>
+          </div>
+          <label class="field-block">
+            <span>Region</span>
+            <select v-model="wizard.draft.rnode.region">
+              <option value="US915">US915</option>
+              <option value="EU868">EU868</option>
+            </select>
+          </label>
+          <button type="button" class="secondary-action inline-action" @click="wizard.inferRnodeRegion">
+            Infer region
+          </button>
+          <label class="field-block">
+            <span>REM LoRa profile</span>
+            <select v-model="wizard.draft.rnode.profile">
+              <option
+                v-for="profile in wizard.rnodeProfiles"
+                :key="profile.id"
+                :value="profile.id"
+              >
+                {{ profile.id }} - {{ profile.label }}
+              </option>
+            </select>
+          </label>
+          <div class="status-strip">
+            <span>{{ wizard.profileSummary() }}</span>
+            <strong>{{ wizard.draft.rnode.enabled ? "Enabled" : "Disabled" }}</strong>
+          </div>
+        </section>
+
         <section v-else-if="wizard.activeStep.value.id === 'telemetry'" class="wizard-section">
           <div class="section-heading">
             <p class="eyebrow">Position sharing</p>
@@ -260,6 +333,20 @@ onMounted(() => {
                 Request
               </button>
             </div>
+            <div class="permission-card" :class="wizard.permissions.bluetooth">
+              <div>
+                <strong>Bluetooth</strong>
+                <span>Required for RNode LoRa</span>
+                <small>{{ wizard.permissionLabel(wizard.permissions.bluetooth) }}</small>
+              </div>
+              <button
+                type="button"
+                :disabled="wizard.permissions.bluetooth === 'granted' || wizard.permissions.bluetooth === 'unavailable'"
+                @click="wizard.requestBluetooth"
+              >
+                Request
+              </button>
+            </div>
           </div>
           <div class="status-strip">
             <span>Denied permissions do not block setup.</span>
@@ -328,6 +415,14 @@ onMounted(() => {
               <dd>{{ wizard.draft.telemetryEnabled ? "Enabled" : "Disabled" }}</dd>
             </div>
             <div>
+              <dt>RNode LoRa</dt>
+              <dd>{{ wizard.draft.rnode.enabled ? wizard.draft.rnode.profile : "Disabled" }}</dd>
+            </div>
+            <div>
+              <dt>RNode Device</dt>
+              <dd>{{ wizard.draft.rnode.peripheralId || "Not selected" }}</dd>
+            </div>
+            <div>
               <dt>Telemetry Interval</dt>
               <dd>{{ wizard.normalizedTelemetryPublishIntervalSeconds.value }}s</dd>
             </div>
@@ -338,6 +433,10 @@ onMounted(() => {
             <div>
               <dt>Notifications</dt>
               <dd>{{ wizard.permissionLabel(wizard.permissions.notifications) }}</dd>
+            </div>
+            <div>
+              <dt>Bluetooth</dt>
+              <dd>{{ wizard.permissionLabel(wizard.permissions.bluetooth) }}</dd>
             </div>
             <div>
               <dt>SOS</dt>
@@ -689,6 +788,7 @@ button {
 }
 
 .field-block input,
+.field-block select,
 .custom-row input {
   background: rgb(2 7 16 / 84%);
   border: 1px solid rgb(74 133 207 / 58%);
@@ -701,6 +801,7 @@ button {
 }
 
 .field-block input:focus,
+.field-block select:focus,
 .custom-row input:focus {
   border-color: #64beff;
   box-shadow: 0 0 0 2px rgb(100 190 255 / 18%);
@@ -767,9 +868,20 @@ button {
   background: rgb(5 20 44 / 70%);
   border: 1px solid rgb(74 133 207 / 34%);
   border-radius: 14px;
+  color: inherit;
   gap: 0.58rem;
   grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 0.58rem 0.66rem;
+  text-align: left;
+  width: 100%;
+}
+
+.device-option {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.inline-action {
+  justify-self: start;
 }
 
 .server-option input {

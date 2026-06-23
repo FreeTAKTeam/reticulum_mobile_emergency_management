@@ -363,6 +363,28 @@ pub struct NodeConfig {
     pub hub_api_base_url: Option<String>,
     pub hub_api_key: Option<String>,
     pub hub_refresh_interval_seconds: u32,
+    pub rnode: RnodeSettingsRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RnodeSettingsRecord {
+    pub enabled: bool,
+    pub peripheral_id: String,
+    pub display_name: String,
+    pub region: String,
+    pub profile: String,
+}
+
+impl Default for RnodeSettingsRecord {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            peripheral_id: String::new(),
+            display_name: String::new(),
+            region: "US915".to_string(),
+            profile: "REM-LF-RURAL-v1".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -631,6 +653,8 @@ pub struct AppSettingsRecord {
     pub hub: HubSettingsRecord,
     #[serde(default)]
     pub checklists: ChecklistSettingsRecord,
+    #[serde(default)]
+    pub rnode: RnodeSettingsRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

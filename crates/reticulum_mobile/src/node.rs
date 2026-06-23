@@ -109,6 +109,7 @@ struct NodeConfigFingerprint {
     hub_api_base_url: Option<String>,
     hub_api_key: Option<String>,
     hub_refresh_interval_seconds: u32,
+    rnode: crate::types::RnodeSettingsRecord,
 }
 
 impl NodeConfigFingerprint {
@@ -131,6 +132,7 @@ impl NodeConfigFingerprint {
             hub_api_base_url: config.hub_api_base_url.clone(),
             hub_api_key: config.hub_api_key.clone(),
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
+            rnode: config.rnode.clone(),
         })
     }
 }
@@ -6295,6 +6297,7 @@ mod tests {
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 0,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -7344,6 +7347,7 @@ mod tests {
                 refresh_interval_seconds: 3600,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -7386,6 +7390,7 @@ mod tests {
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 3600,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -8553,6 +8558,7 @@ mod tests {
                 refresh_interval_seconds: 0,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 

@@ -13,6 +13,7 @@ legacy-lxmf-runtime = []
 
 [dependencies]
 reticulum = { package = "reticulum-rs", path = "../../../LXMF-rs/crates/libs/reticulum-rs" }
+rns-transport = { package = "reticulum-rs-transport", path = "../../../LXMF-rs/crates/libs/rns-transport", features = ["rnode-ble"] }
 base64 = "0.22"
 crossbeam-channel = "0.5"
 csv = "1.3"

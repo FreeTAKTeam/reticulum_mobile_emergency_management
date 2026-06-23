@@ -9,6 +9,12 @@ import { useTelemetryStore } from "../stores/telemetryStore";
 import { appVersion } from "../utils/appVersion";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
+import {
+  RNODE_PROFILE_SPECS,
+  normalizeRnodeSettings,
+  rnodeProfileSummary,
+} from "../utils/rnodeProfiles";
+import { scanRnodeBleDevices, pairRnodeBleDevice, type RnodeBleDeviceRecord } from "../services/rnodeBluetooth";
 
 interface KnownTcpServerOption {
   name: string;
@@ -52,6 +58,11 @@ const form = reactive({
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  rnodeEnabled: nodeStore.settings.rnode.enabled,
+  rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
+  rnodeDisplayName: nodeStore.settings.rnode.displayName,
+  rnodeRegion: nodeStore.settings.rnode.region,
+  rnodeProfile: nodeStore.settings.rnode.profile,
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
@@ -71,6 +82,9 @@ const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
+const rnodeScanFeedback = ref("");
+const rnodeScanning = ref(false);
+const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
@@ -115,8 +129,19 @@ const rchHubDirectoryDisabled = true;
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
-  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
+  const rnodeLabel = form.rnodeEnabled ? ` | RNode ${form.rnodeProfile}` : "";
+  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}${rnodeLabel}`;
 });
+
+const normalizedRnodeSettings = computed(() =>
+  normalizeRnodeSettings({
+    enabled: form.rnodeEnabled,
+    peripheralId: form.rnodePeripheralId,
+    displayName: form.rnodeDisplayName,
+    region: form.rnodeRegion,
+    profile: form.rnodeProfile,
+  }),
+);
 
 const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 
@@ -235,6 +260,7 @@ const hasMainSettingsChanges = computed(() =>
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
+  || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
   || normalizeTelemetryPublishIntervalSeconds(form.telemetryPublishIntervalSeconds)
     !== nodeStore.settings.telemetry.publishIntervalSeconds
@@ -325,6 +351,33 @@ function removeTcpEndpoint(endpoint: string): void {
   form.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
 }
 
+async function scanRnodeDevices(): Promise<void> {
+  if (rnodeScanning.value) {
+    return;
+  }
+  rnodeScanning.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodeDevices.value = await scanRnodeBleDevices();
+    if (rnodeDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No RNode BLE devices found.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodeScanning.value = false;
+  }
+}
+
+async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
+  form.rnodeEnabled = true;
+  form.rnodePeripheralId = device.id || device.address;
+  form.rnodeDisplayName = device.name || device.address;
+  if (!device.paired) {
+    await pairRnodeBleDevice(device.id || device.address).catch(() => undefined);
+  }
+}
+
 function onHubCandidateSelected(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   form.hubIdentityHash = value.trim();
@@ -357,6 +410,7 @@ async function applySettings(): Promise<void> {
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
+      rnode: normalizedRnodeSettings.value,
       telemetry: {
         enabled: form.telemetryEnabled,
         publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
@@ -397,6 +451,11 @@ async function applySettings(): Promise<void> {
   form.displayName = nodeStore.settings.displayName;
   form.announceCapabilities = nodeStore.settings.announceCapabilities;
   form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
+  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
+  form.rnodeRegion = nodeStore.settings.rnode.region;
+  form.rnodeProfile = nodeStore.settings.rnode.profile;
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
@@ -636,6 +695,66 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </article>
         </div>
         <p v-else class="section-note">No TCP endpoints configured.</p>
+
+        <p class="section-note">
+          RNode Bluetooth LoRa uses the paired Android BLE device and the shared REM radio profile.
+        </p>
+
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.rnodeEnabled" type="checkbox" />
+            Enable RNode Bluetooth LoRa
+          </label>
+          <label>
+            RNode device id
+            <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
+          </label>
+          <label>
+            RNode display name
+            <input v-model="form.rnodeDisplayName" type="text" placeholder="Optional label" />
+          </label>
+          <label>
+            Region
+            <select v-model="form.rnodeRegion">
+              <option value="US915">US915</option>
+              <option value="EU868">EU868</option>
+            </select>
+          </label>
+          <label>
+            REM LoRa profile
+            <select v-model="form.rnodeProfile">
+              <option v-for="profile in RNODE_PROFILE_SPECS" :key="profile.id" :value="profile.id">
+                {{ profile.id }} - {{ profile.label }}
+              </option>
+            </select>
+          </label>
+          <label>
+            Reticulum syntax
+            <input :value="rnodeProfileSummary(form.rnodeProfile)" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+
+        <div class="tcp-custom-row">
+          <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
+            {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+          </button>
+        </div>
+        <div v-if="rnodeDevices.length > 0" class="server-list">
+          <button
+            v-for="device in rnodeDevices"
+            :key="device.id"
+            type="button"
+            class="server-option device-option"
+            @click="selectRnodeDevice(device)"
+          >
+            <div class="server-option-body">
+              <p class="server-name">{{ device.name || device.address }}</p>
+              <p class="server-endpoint">{{ device.address }} | RSSI {{ device.rssi }} | {{ device.paired ? "Paired" : "Not paired" }}</p>
+            </div>
+            <span class="bootstrap-badge">RNode</span>
+          </button>
+        </div>
+        <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
 
         <div class="grid propagation-grid">
           <label>
@@ -1293,6 +1412,13 @@ textarea {
   grid-template-columns: auto 1fr auto;
   margin: 0;
   padding: 0.55rem 0.65rem;
+}
+
+.device-option {
+  color: inherit;
+  grid-template-columns: 1fr auto;
+  text-align: left;
+  width: 100%;
 }
 
 .server-option-body {

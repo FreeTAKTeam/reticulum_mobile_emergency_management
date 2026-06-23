@@ -76,6 +76,10 @@ import {
   normalizeTcpCommunityClients,
 } from "../utils/tcpCommunityServers";
 import {
+  DEFAULT_RNODE_SETTINGS,
+  normalizeRnodeSettings,
+} from "../utils/rnodeProfiles";
+import {
   logIndicatesReadinessError,
   nodeErrorIndicatesReadinessError,
 } from "../utils/readinessErrors";
@@ -159,6 +163,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   checklists: {
     defaultTaskDueStepMinutes: 30,
   },
+  rnode: { ...DEFAULT_RNODE_SETTINGS },
   hub: {
     mode: "Autonomous",
     identityHash: "",
@@ -377,6 +382,7 @@ function cloneDefaultSettings(): NodeUiSettings {
     telemetry: { ...DEFAULT_SETTINGS.telemetry },
     checklists: { ...DEFAULT_SETTINGS.checklists },
     hub: { ...DEFAULT_SETTINGS.hub },
+    rnode: { ...DEFAULT_SETTINGS.rnode },
   };
 }
 
@@ -405,6 +411,7 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
       apiKey: settings.hub.apiKey,
       refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
     },
+    rnode: normalizeRnodeSettings(settings.rnode),
   };
 }
 
@@ -442,6 +449,7 @@ function normalizeAppSettingsRecord(
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
+    rnode: normalizeRnodeSettings(runtimeSettings.rnode),
     hub: {
       ...DEFAULT_SETTINGS.hub,
       ...runtimeSettings.hub,
@@ -522,6 +530,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,
     hubApiKey: settings.hub.apiKey || undefined,
     hubRefreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
+    rnode: normalizeRnodeSettings(settings.rnode),
   };
 }
 
@@ -1073,9 +1082,10 @@ export const useNodeStore = defineStore("node", () => {
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
-  settings.telemetry = { ...next.telemetry };
-  settings.checklists = { ...next.checklists };
-  settings.hub = { ...next.hub };
+    settings.telemetry = { ...next.telemetry };
+    settings.checklists = { ...next.checklists };
+    settings.hub = { ...next.hub };
+    settings.rnode = normalizeRnodeSettings(next.rnode);
     applyUiSettingsProjection(toUiSettingsProjection(next));
   }
 
@@ -2334,6 +2344,12 @@ export const useNodeStore = defineStore("node", () => {
       ) {
         clearHubDirectoryState();
       }
+    }
+    if (next.rnode) {
+      settings.rnode = normalizeRnodeSettings({
+        ...settings.rnode,
+        ...next.rnode,
+      });
     }
     const nextSettings = normalizeAppSettingsRecord(
       toAppSettingsRecord(settings),

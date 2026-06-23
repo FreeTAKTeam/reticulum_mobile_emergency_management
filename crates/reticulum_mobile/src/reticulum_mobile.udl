@@ -166,6 +166,9 @@ dictionary NodeConfig {
   string? hub_api_base_url;
   string? hub_api_key;
   u32 hub_refresh_interval_seconds;
+
+  // Optional Android RNode Bluetooth LE LoRa interface.
+  RnodeSettingsRecord rnode;
 };
 
 dictionary NodeStatus {
@@ -322,6 +325,14 @@ dictionary ChecklistSettingsRecord {
   u32 default_task_due_step_minutes;
 };
 
+dictionary RnodeSettingsRecord {
+  boolean enabled;
+  string peripheral_id;
+  string display_name;
+  string region;
+  string profile;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -332,6 +343,7 @@ dictionary AppSettingsRecord {
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
   ChecklistSettingsRecord checklists;
+  RnodeSettingsRecord rnode;
 };
 
 dictionary SavedPeerRecord {
