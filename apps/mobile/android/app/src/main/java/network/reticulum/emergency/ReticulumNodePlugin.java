@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -246,6 +247,31 @@ public class ReticulumNodePlugin extends Plugin {
     @PermissionCallback
     private void completeRnodeBluetoothPermissionRequest(PluginCall call) {
         resolveRnodeBluetoothPermission(call);
+    }
+
+    @PluginMethod
+    public void listPairedRnodeBluetoothDevices(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null) {
+            call.reject("Bluetooth is unavailable.");
+            return;
+        }
+        try {
+            final Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+            final JSArray items = new JSArray();
+            for (BluetoothDevice device : bondedDevices) {
+                items.put(rnodeBluetoothDevicePayload(device, null, null));
+            }
+            final JSObject payload = new JSObject();
+            payload.put("items", items);
+            call.resolve(payload);
+        } catch (SecurityException ex) {
+            call.reject("Bluetooth permission denied.", ex);
+        }
     }
 
     @PluginMethod
@@ -1412,21 +1438,29 @@ public class ReticulumNodePlugin extends Plugin {
         if (address == null || address.isEmpty()) {
             return;
         }
-        final JSObject item = new JSObject();
-        item.put("id", address);
-        item.put("address", address);
-        item.put("rssi", result.getRssi());
-        item.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
-        item.put("bondState", bondStateLabel(device.getBondState()));
         String name = null;
         if (result.getScanRecord() != null) {
             name = result.getScanRecord().getDeviceName();
         }
+        discovered.put(address, rnodeBluetoothDevicePayload(device, result.getRssi(), name));
+    }
+
+    private JSObject rnodeBluetoothDevicePayload(BluetoothDevice device, Integer rssi, String scannedName) {
+        final JSObject item = new JSObject();
+        final String address = device.getAddress();
+        item.put("id", address);
+        item.put("address", address);
+        if (rssi != null) {
+            item.put("rssi", rssi);
+        }
+        item.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+        item.put("bondState", bondStateLabel(device.getBondState()));
+        String name = scannedName;
         if (name == null || name.trim().isEmpty()) {
             name = device.getName();
         }
         item.put("name", name == null ? "" : name);
-        discovered.put(address, item);
+        return item;
     }
 
     private String bondStateLabel(int state) {

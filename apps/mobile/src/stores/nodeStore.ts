@@ -423,6 +423,10 @@ function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettings
   return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
 }
 
+function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -1293,7 +1297,22 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     applySettingsProjection(nextSettings);
-    await client.value.setAppSettings(toAppSettingsRecord(nextSettings));
+    const requestedRecord = toAppSettingsRecord(nextSettings);
+    await client.value.setAppSettings(requestedRecord);
+    const persistedRecord = await client.value.getAppSettings();
+    if (!persistedRecord) {
+      throw new Error("Native app settings save did not return persisted settings.");
+    }
+    const persistedSettings = normalizeAppSettingsRecord(
+      persistedRecord,
+      normalizedUiSettings,
+      defaultsWithTcpFallback(),
+    );
+    const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
+    if (!settingsRecordsEqual(requestedRecord, normalizedPersistedRecord)) {
+      throw new Error("Native app settings save verification failed.");
+    }
+    applySettingsProjection(persistedSettings);
     await refreshOperationalSummaryProjection();
   }
 
@@ -2300,7 +2319,7 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function updateSettings(next: Partial<NodeUiSettings>): void {
+  async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
     if (next.displayName !== undefined) {
@@ -2359,29 +2378,31 @@ export const useNodeStore = defineStore("node", () => {
     if (uiSettingsChanged) {
       storeUiSettingsProjection(toUiSettingsProjection(settings));
     }
-    void init()
-      .then(() => persistSettingsProjection(nextSettings))
-      .then(() => {
-        if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
-          return;
-        }
-        if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-          if (settings.hub.mode === "Connected") {
-            const message =
-              "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
-            lastError.value = message;
-            appendLog("Warn", message);
-          }
-          return;
-        }
-        appendLog(
-          "Info",
-          "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
-        );
-      })
-      .catch((error: unknown) => {
-        appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
-      });
+    await init();
+    try {
+      await persistSettingsProjection(nextSettings);
+    } catch (error: unknown) {
+      appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
+      throw error;
+    }
+    if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+      if (settings.hub.mode === "Connected") {
+        const message =
+          "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
+        lastError.value = message;
+        appendLog("Warn", message);
+      }
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    appendLog(
+      "Info",
+      "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
+    );
     void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
   }
 

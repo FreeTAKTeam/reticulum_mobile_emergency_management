@@ -114,6 +114,13 @@ export interface SettingsSeed {
     apiKey: string;
     refreshIntervalSeconds: number;
   };
+  rnode: {
+    enabled: boolean;
+    peripheralId: string;
+    displayName: string;
+    region: "US915" | "EU868";
+    profile: "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
+  };
 }
 
 export interface SavedPeerSeed {
@@ -153,6 +160,13 @@ export const defaultSettings: SettingsSeed = {
     apiBaseUrl: "",
     apiKey: "",
     refreshIntervalSeconds: 3600,
+  },
+  rnode: {
+    enabled: false,
+    peripheralId: "",
+    displayName: "",
+    region: "US915",
+    profile: "REM-LF-RURAL-v1",
   },
 };
 

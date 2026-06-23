@@ -14,7 +14,12 @@ import {
   normalizeRnodeSettings,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
-import { scanRnodeBleDevices, pairRnodeBleDevice, type RnodeBleDeviceRecord } from "../services/rnodeBluetooth";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
 
 interface KnownTcpServerOption {
   name: string;
@@ -83,6 +88,8 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
 const rnodeScanFeedback = ref("");
+const rnodePairedLoading = ref(false);
+const rnodePairedDevices = ref<RnodeBleDeviceRecord[]>([]);
 const rnodeScanning = ref(false);
 const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
@@ -351,6 +358,33 @@ function removeTcpEndpoint(endpoint: string): void {
   form.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
 }
 
+function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+  const parts = [device.address];
+  if (typeof device.rssi === "number") {
+    parts.push(`RSSI ${device.rssi}`);
+  }
+  parts.push(device.paired ? "Paired" : "Not paired");
+  return parts.join(" | ");
+}
+
+async function loadPairedRnodeDevices(): Promise<void> {
+  if (rnodePairedLoading.value) {
+    return;
+  }
+  rnodePairedLoading.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+    if (rnodePairedDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No paired Bluetooth devices found on this Android phone.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodePairedLoading.value = false;
+  }
+}
+
 async function scanRnodeDevices(): Promise<void> {
   if (rnodeScanning.value) {
     return;
@@ -416,16 +450,21 @@ async function applySettings(): Promise<void> {
   const previousDisplayName = nodeStore.settings.displayName;
   const previousHubMode = nodeStore.settings.hub.mode;
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
+  const previousRnode = normalizeRnodeSettings(nodeStore.settings.rnode);
+  const nextRnode = normalizedRnodeSettings.value;
+  const rnodeChangedBeforeSave = JSON.stringify(previousRnode) !== JSON.stringify(nextRnode);
+  let rnodeApplyError = "";
+  let rnodeAppliedToRuntime = false;
   savingSettings.value = true;
   try {
-    nodeStore.updateSettings({
+    await nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
-      rnode: normalizedRnodeSettings.value,
+      rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
         publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
@@ -456,6 +495,18 @@ async function applySettings(): Promise<void> {
       });
     }
     await sosCardRef.value?.saveSettings();
+    if (rnodeChangedBeforeSave) {
+      try {
+        if (nodeStore.status.running) {
+          await nodeStore.restartNode();
+        } else {
+          await nodeStore.startNode();
+        }
+        rnodeAppliedToRuntime = true;
+      } catch (error: unknown) {
+        rnodeApplyError = error instanceof Error ? error.message : String(error);
+      }
+    }
   } catch (error: unknown) {
     runtimeFeedback.value = error instanceof Error ? error.message : String(error);
     return;
@@ -476,14 +527,17 @@ async function applySettings(): Promise<void> {
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
   form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
   syncWatchStatusServerForm();
-  runtimeFeedback.value =
-    nodeStore.settings.displayName !== previousDisplayName
+  const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
+  const hubRoutingChanged =
+    nodeStore.settings.hub.mode !== previousHubMode
+    || nodeStore.settings.hub.identityHash !== previousHubIdentityHash;
+  runtimeFeedback.value = rnodeApplyError
+    ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
+    : rnodeChangedBeforeSave && rnodeAppliedToRuntime
+      ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
-      : nodeStore.status.running
-          && (
-            nodeStore.settings.hub.mode !== previousHubMode
-            || nodeStore.settings.hub.identityHash !== previousHubIdentityHash
-          )
+      : nodeStore.status.running && hubRoutingChanged
         ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
 }
@@ -750,8 +804,26 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
 
         <div class="tcp-custom-row">
+          <button type="button" :disabled="rnodePairedLoading" @click="loadPairedRnodeDevices">
+            {{ rnodePairedLoading ? "Loading paired" : "Show paired Bluetooth" }}
+          </button>
           <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
             {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+          </button>
+        </div>
+        <div v-if="rnodePairedDevices.length > 0" class="server-list">
+          <button
+            v-for="device in rnodePairedDevices"
+            :key="`paired-${device.id}`"
+            type="button"
+            class="server-option device-option"
+            @click="selectRnodeDevice(device)"
+          >
+            <div class="server-option-body">
+              <p class="server-name">{{ device.name || device.address }}</p>
+              <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+            </div>
+            <span class="bootstrap-badge">Paired</span>
           </button>
         </div>
         <div v-if="rnodeDevices.length > 0" class="server-list">
@@ -764,7 +836,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           >
             <div class="server-option-body">
               <p class="server-name">{{ device.name || device.address }}</p>
-              <p class="server-endpoint">{{ device.address }} | RSSI {{ device.rssi }} | {{ device.paired ? "Paired" : "Not paired" }}</p>
+              <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
             </div>
             <span class="bootstrap-badge">RNode</span>
           </button>

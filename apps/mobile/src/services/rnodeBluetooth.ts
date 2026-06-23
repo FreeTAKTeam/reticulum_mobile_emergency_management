@@ -10,6 +10,13 @@ export async function scanRnodeBleDevices(timeoutMs = 8000): Promise<RnodeBleDev
   return createReticulumNodeClient().scanRnodeBleDevices(timeoutMs);
 }
 
+export async function listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+  if (!Capacitor.isNativePlatform()) {
+    return [];
+  }
+  return createReticulumNodeClient().listPairedRnodeBluetoothDevices();
+}
+
 export async function pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
   if (!Capacitor.isNativePlatform()) {
     return {
