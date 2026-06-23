@@ -1402,6 +1402,12 @@ async fn compat_send_lxmf(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "lxmf resource inbound transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
                         ResourceEventKind::OutboundFailed => {
                             clear_lxmf_output_link(&state, &remote_destination_hash).await;
                             return Err(sdk_transport("lxmf resource transfer failed"));
@@ -1593,6 +1599,12 @@ async fn compat_send_lxmf_via_propagation(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "propagated lxmf relay inbound resource transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
                         ResourceEventKind::OutboundFailed => {
                             return Err(sdk_transport(
                                 "propagated lxmf relay resource transfer failed",
