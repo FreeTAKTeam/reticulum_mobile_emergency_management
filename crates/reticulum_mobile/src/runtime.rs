@@ -4883,7 +4883,6 @@ fn sdk_peer_has_known_lxmf_route(peer: &sdkmsg::PeerRecord) -> bool {
     delivery_policy::peer_has_known_lxmf_route(peer)
 }
 
-#[cfg(test)]
 fn sdk_peer_has_observed_lxmf_delivery_route(peer: &sdkmsg::PeerRecord) -> bool {
     delivery_policy::peer_has_observed_lxmf_delivery_route(
         peer,
@@ -4914,35 +4913,11 @@ async fn saved_peer_prefers_propagation(
     {
         return false;
     }
-    let direct_available =
-        peer_direct_delivery_available(state, canonical_destination.as_str()).await;
-    if !direct_available {
-        return true;
-    }
-
     let Some(peer) = peer_for_any_destination_hex(state, canonical_destination.as_str()).await
     else {
         return true;
     };
-    let connectivity = delivery_policy::PeerConnectivityModel::from_peer(
-        &peer,
-        has_active_relay,
-        true,
-        !direct_available,
-        now_ms(),
-        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
-    );
-    if connectivity.saved
-        && connectivity.propagation_eligible
-        && !connectivity.direct_delivery_available()
-    {
-        return true;
-    }
-    if sdk_peer_has_known_lxmf_route(&peer)
-        && !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
-    {
-        return true;
-    }
+
     if saved_peer_stored_route_prefers_propagation(&peer, has_active_relay, direct_priority_hops) {
         return true;
     }
@@ -4988,6 +4963,15 @@ async fn saved_peer_has_direct_ready_route(
     peer_for_any_destination_hex(state, canonical_destination)
         .await
         .is_some_and(|peer| sdk_peer_is_direct_delivery_ready(&peer, has_active_relay))
+}
+
+async fn saved_peer_has_current_lxmf_route(
+    state: &NodeRuntimeState,
+    canonical_destination: &str,
+) -> bool {
+    peer_for_any_destination_hex(state, canonical_destination)
+        .await
+        .is_some_and(|peer| sdk_peer_has_observed_lxmf_delivery_route(&peer))
 }
 
 async fn saved_peer_matches_destination(
@@ -5063,6 +5047,7 @@ fn direct_attempt_budget_for_send(
     send_mode: SendMode,
     has_active_relay: bool,
     can_try_stored_lxmf_route: bool,
+    has_current_lxmf_route: bool,
     direct_delivery_ready: bool,
     direct_priority_hops: Option<u8>,
 ) -> usize {
@@ -5070,6 +5055,7 @@ fn direct_attempt_budget_for_send(
         send_mode,
         has_active_relay,
         can_try_stored_lxmf_route,
+        has_current_lxmf_route,
         direct_delivery_ready,
         direct_priority_hops,
         MISSION_DIRECT_PRIORITY_FREE_HOPS,
@@ -6157,6 +6143,7 @@ struct NodeRuntimeState {
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
+    tcp_endpoint_registry: TcpEndpointRegistry,
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
     pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
@@ -6350,6 +6337,9 @@ async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> Option<ManagedPeerLinkTarget> {
+    if !has_active_tcp_client_interface(state).await {
+        return None;
+    }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
     state.managed_peer_links.add_desired(target.clone()).await;
     Some(target)
@@ -6362,6 +6352,13 @@ async fn add_desired_managed_peer_link_and_schedule(
     reason: &str,
 ) {
     state.managed_peer_links.add_desired(target.clone()).await;
+    if !has_active_tcp_client_interface(state).await {
+        info!(
+            "[link][maintain] destination={} status=deferred reason={} detail=no-active-tcp-interface",
+            target.destination_hex, reason,
+        );
+        return;
+    }
     if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
         if output_link_is_active(state, &destination).await {
             clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
@@ -6431,6 +6428,9 @@ async fn ensure_managed_peer_link(
     bus: &EventBus,
     target: ManagedPeerLinkTarget,
 ) -> Result<(), NodeError> {
+    if !has_active_tcp_client_interface(state).await {
+        return Err(NodeError::NetworkError {});
+    }
     let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) else {
         return Err(NodeError::InvalidConfig {});
     };
@@ -6483,6 +6483,9 @@ async fn ensure_managed_peer_link(
 }
 
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
+    if !has_active_tcp_client_interface(state).await {
+        return;
+    }
     let targets = state.managed_peer_links.desired_targets().await;
     for target in targets {
         if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
@@ -6612,6 +6615,10 @@ async fn register_pending_lxmf_delivery(
         pending,
         buffered_ack,
     })
+}
+
+async fn has_active_tcp_client_interface(state: &NodeRuntimeState) -> bool {
+    !state.tcp_endpoint_registry.lock().await.is_empty()
 }
 
 #[expect(
@@ -7093,6 +7100,11 @@ async fn send_lxmf_with_delivery_policy(
     } else {
         false
     };
+    let has_current_lxmf_route = if can_try_stored_lxmf_route {
+        saved_peer_has_current_lxmf_route(state, canonical_requested_destination.as_str()).await
+    } else {
+        false
+    };
     #[cfg(not(test))]
     let direct_priority_hops = if matches!(send_task_class, SendTaskClass::Mission)
         && matches!(send_mode, SendMode::Auto {})
@@ -7114,6 +7126,7 @@ async fn send_lxmf_with_delivery_policy(
         send_mode,
         has_active_relay,
         can_try_stored_lxmf_route,
+        has_current_lxmf_route,
         direct_delivery_ready,
         direct_priority_hops,
     );
@@ -7261,7 +7274,7 @@ async fn send_lxmf_with_delivery_policy(
         match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
                 if !report.used_propagation_node {
-                    if is_saved_peer {
+                    if is_saved_peer && matches!(report.method, LxmfDeliveryMethod::Direct {}) {
                         register_desired_managed_peer_link(
                             state,
                             report.resolved_destination_hex.as_str(),
@@ -7718,6 +7731,12 @@ async fn emit_received_payload(
         return;
     }
 
+    info!(
+        "[lxmf][rx] non_lxmf_payload destination={} bytes={} prefix={}",
+        destination_hex,
+        payload.len(),
+        hex::encode(payload.iter().take(16).copied().collect::<Vec<_>>()),
+    );
     sdk.record_packet_received(
         &destination_hex,
         None,
@@ -8388,11 +8407,12 @@ fn spawn_rnode_ble_interface(
     };
     let adapter = NativeRnodeBleKissInterface::new(
         label.clone(),
-        NativeRnodeBleSettings::for_peripheral(peripheral_id.clone()),
+        NativeRnodeBleSettings::for_peripheral(peripheral_id.clone())
+            .with_peripheral_alias(settings.display_name.trim()),
         kiss_config,
     )
-    .with_rnode_validation(lora_config, Duration::from_millis(5_000))
-    .with_detection_fallback_timeout(Duration::from_millis(2_000));
+    .with_rnode_validation(lora_config, Duration::from_millis(15_000))
+    .with_detection_fallback_timeout(Duration::from_millis(5_000));
 
     tokio::spawn(async move {
         let iface = transport.iface_manager().lock().await.spawn_as_with_mode(
@@ -8702,6 +8722,7 @@ pub async fn run_node(
         peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
+        tcp_endpoint_registry: tcp_endpoint_registry.clone(),
         connected_peers: connected_peers.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
@@ -9181,6 +9202,11 @@ pub async fn run_node(
                 match rx.recv().await {
                     Ok(event) => {
                         let destination_hex = address_hash_to_hex(&event.destination);
+                        info!(
+                            "[lxmf][rx] data_event destination={} bytes={}",
+                            destination_hex,
+                            event.data.as_slice().len(),
+                        );
                         emit_received_payload(
                             &state,
                             &bus,
@@ -12956,23 +12982,30 @@ mod tests {
     #[test]
     fn connected_auto_send_keeps_direct_retry_budget_even_with_relay() {
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, None),
-            0
-        );
-        assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, false, None),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(1)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, true, Some(11)),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, false, true, false, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, true, Some(1)),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::DirectOnly {}, true, true, false, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, false, true, false, false, Some(11)),
+            LXMF_DIRECT_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(
+                SendMode::DirectOnly {},
+                true,
+                true,
+                false,
+                false,
+                Some(11)
+            ),
             LXMF_DIRECT_ATTEMPTS
         );
     }
@@ -13103,7 +13136,7 @@ mod tests {
             true,
             Some(11),
         ));
-        assert!(saved_peer_stored_route_prefers_propagation(
+        assert!(!saved_peer_stored_route_prefers_propagation(
             &stale_peer,
             true,
             Some(1),

@@ -41,4 +41,9 @@ x25519-dalek = "2.0.1"
 uniffi = { version = "0.28", features = ["build"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+btleplug = "0.12"
+jni19 = { package = "jni", version = "0.19" }
 rns-transport = { package = "reticulum-rs-transport", path = "../../../LXMF-rs/crates/libs/rns-transport", features = ["rnode-ble"] }
+
+[patch.crates-io]
+btleplug = { path = "vendor/btleplug-0.12.0" }

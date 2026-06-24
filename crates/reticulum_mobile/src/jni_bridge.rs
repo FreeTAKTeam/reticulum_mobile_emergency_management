@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -29,6 +31,21 @@ use crate::types::{
 
 const RESULT_OK: jint = 0;
 const RESULT_ERR: jint = 1;
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(vm: jni19::JavaVM, _reserved: *mut c_void) -> jint {
+    match vm.get_env() {
+        Ok(env) => match btleplug::platform::init(&env) {
+            Ok(()) => log::info!("btleplug Android BLE backend initialized"),
+            Err(error) => {
+                log::error!("btleplug Android BLE backend initialization failed: {error}")
+            }
+        },
+        Err(error) => log::error!("btleplug Android BLE backend missing JNI env: {error}"),
+    }
+    jni19::sys::JNI_VERSION_1_6
+}
 
 #[derive(Default)]
 struct BridgeState {
@@ -597,7 +614,12 @@ fn parse_log_level(value: Option<&str>) -> LogLevel {
 }
 
 fn normalize_rnode_region(value: Option<String>) -> String {
-    match value.unwrap_or_default().trim().to_ascii_uppercase().as_str() {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
         "EU868" => "EU868".to_string(),
         _ => "US915".to_string(),
     }

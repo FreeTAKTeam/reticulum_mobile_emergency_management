@@ -102,7 +102,7 @@ fn delivery_representation_from_lxmf(method: LxmfRepresentation) -> LxmfDelivery
 fn transport_method_for_send_mode(
     send_mode: SendMode,
     has_cached_direct_link: bool,
-    has_delivery_ratchet: bool,
+    _has_delivery_ratchet: bool,
 ) -> TransportMethod {
     match send_mode {
         SendMode::PropagationOnly {} => TransportMethod::Propagated,
@@ -110,10 +110,8 @@ fn transport_method_for_send_mode(
         SendMode::Auto {} => {
             if has_cached_direct_link {
                 TransportMethod::Direct
-            } else if has_delivery_ratchet {
-                TransportMethod::Opportunistic
             } else {
-                TransportMethod::Direct
+                TransportMethod::Opportunistic
             }
         }
     }
@@ -1303,7 +1301,22 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let outcome = state.transport.send_packet_with_outcome(packet).await;
+        let trace = state
+            .transport
+            .send_packet_broadcast_with_trace(packet)
+            .await;
+        let outcome = trace.outcome;
+        info!(
+            "[lxmf][events][sdk] opportunistic send outcome requested_destination={} resolved_destination={} message_id={} outcome={:?} broadcast={} matched={} sent={} failed={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            message_id_hex,
+            outcome,
+            trace.broadcast,
+            trace.dispatch.matched_ifaces,
+            trace.dispatch.sent_ifaces,
+            trace.dispatch.failed_ifaces,
+        );
         return Ok(CompatSendReport {
             outcome,
             message_id_hex,
@@ -2833,6 +2846,26 @@ mod tests {
                 Some(1)
             ),
             "mission-corr-1:propagation"
+        );
+    }
+
+    #[test]
+    fn auto_send_uses_opportunistic_packets_without_active_direct_link() {
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, false),
+            TransportMethod::Opportunistic,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, true),
+            TransportMethod::Opportunistic,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, true, false),
+            TransportMethod::Direct,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::DirectOnly {}, false, false),
+            TransportMethod::Direct,
         );
     }
 

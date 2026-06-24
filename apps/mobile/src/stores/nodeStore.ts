@@ -80,7 +80,10 @@ import {
   normalizeRnodeSettings,
 } from "../utils/rnodeProfiles";
 import {
+  hasConfiguredNonTcpInterface,
   logIndicatesReadinessError,
+  logIndicatesTcpInterfaceReadinessError,
+  nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
 } from "../utils/readinessErrors";
 
@@ -668,6 +671,16 @@ export const useNodeStore = defineStore("node", () => {
     if (wasReady) {
       appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
     }
+  }
+
+  function tcpInterfaceFailureCanFallBackToConfiguredInterface(message: string): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && logIndicatesTcpInterfaceReadinessError(message);
+  }
+
+  function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && nodeErrorIndicatesTcpInterfaceReadinessError(event);
   }
 
   function errorMessage(error: unknown): string {
@@ -1801,7 +1814,11 @@ export const useNodeStore = defineStore("node", () => {
         status.value = normalizeNodeStatus(event.status);
         const statusError = asTrimmedString(status.value.lastError);
         if (statusError && logIndicatesReadinessError(statusError)) {
-          setReadinessError(statusError);
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(statusError)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(statusError);
+          }
         } else if (event.status.running && !statusError) {
           clearReadinessError();
         }
@@ -1872,13 +1889,21 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
         if (logIndicatesReadinessError(event.message)) {
-          setReadinessError(event.message);
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(event.message)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(event.message);
+          }
         }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
         if (nodeErrorIndicatesReadinessError(event)) {
-          setReadinessError(lastError.value);
+          if (nodeErrorCanFallBackToConfiguredInterface(event)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(lastError.value);
+          }
         }
         appendNodeControlEntry("Error", lastError.value);
       }),
