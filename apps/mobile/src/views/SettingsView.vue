@@ -20,6 +20,7 @@ import {
   pairRnodeBleDevice,
   type RnodeBleDeviceRecord,
 } from "../services/rnodeBluetooth";
+import { requestRnodeBluetoothPermission } from "../services/setupPermissions";
 
 interface KnownTcpServerOption {
   name: string;
@@ -371,6 +372,9 @@ async function loadPairedRnodeDevices(): Promise<void> {
   if (rnodePairedLoading.value) {
     return;
   }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
   rnodePairedLoading.value = true;
   rnodeScanFeedback.value = "";
   try {
@@ -389,6 +393,9 @@ async function scanRnodeDevices(): Promise<void> {
   if (rnodeScanning.value) {
     return;
   }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
   rnodeScanning.value = true;
   rnodeScanFeedback.value = "";
   try {
@@ -401,6 +408,15 @@ async function scanRnodeDevices(): Promise<void> {
   } finally {
     rnodeScanning.value = false;
   }
+}
+
+async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+  const permission = await requestRnodeBluetoothPermission();
+  if (permission === "granted") {
+    return true;
+  }
+  rnodeScanFeedback.value = "Bluetooth permission is required for RNode device selection.";
+  return false;
 }
 
 async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {

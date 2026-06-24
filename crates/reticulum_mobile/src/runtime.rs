@@ -8471,6 +8471,16 @@ async fn any_tcp_endpoint_reachable(endpoints: &[String]) -> bool {
     false
 }
 
+async fn unregister_tcp_client_endpoint(
+    tcp_endpoint_registry: &TcpEndpointRegistry,
+    endpoint: &str,
+) {
+    tcp_endpoint_registry
+        .lock()
+        .await
+        .retain(|_, registered_endpoint| registered_endpoint != endpoint);
+}
+
 fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
     if let Ok(guard) = status.lock() {
         bus.emit(NodeEvent::StatusChanged {
@@ -8500,10 +8510,13 @@ fn spawn_tcp_client_interface_manager(
                 active.store(true, Ordering::Release);
                 let active_for_task = active.clone();
                 let task_addr = connect_addr.clone();
+                let registry_for_task = tcp_endpoint_registry.clone();
                 let iface = transport.iface_manager().lock().await.spawn(
                     TcpClient::new_from_stream(connect_addr.clone(), stream),
                     move |context| async move {
                         TcpClient::spawn(context).await;
+                        unregister_tcp_client_endpoint(&registry_for_task, task_addr.as_str())
+                            .await;
                         active_for_task.store(false, Ordering::Release);
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
@@ -10384,6 +10397,33 @@ mod tests {
         ]);
 
         assert_eq!(endpoints, vec!["rns.beleth.net:4242".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tcp_endpoint_registry_removes_stopped_endpoint_entries() {
+        let registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::from([
+            (
+                AddressHash::new_from_slice(&[1u8; 16]),
+                "rns.beleth.net:4242".to_string(),
+            ),
+            (
+                AddressHash::new_from_slice(&[2u8; 16]),
+                "rns.beleth.net:4242".to_string(),
+            ),
+            (
+                AddressHash::new_from_slice(&[3u8; 16]),
+                "dfw.us.g00n.cloud:6969".to_string(),
+            ),
+        ])));
+
+        unregister_tcp_client_endpoint(&registry, "rns.beleth.net:4242").await;
+
+        let guard = registry.lock().await;
+        assert_eq!(guard.len(), 1);
+        assert_eq!(
+            guard.get(&AddressHash::new_from_slice(&[3u8; 16])),
+            Some(&"dfw.us.g00n.cloud:6969".to_string()),
+        );
     }
 
     #[test]
