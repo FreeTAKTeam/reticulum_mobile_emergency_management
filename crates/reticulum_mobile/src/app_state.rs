@@ -16,6 +16,7 @@ use crate::types::{
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
+    EamReadinessMessageRecord, EamReadinessStatusMetricRecord, EamReadinessSummaryRecord,
     EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, LocalPropagationCounts,
     LocalPropagationDeliveryStatus, LocalPropagationMessageRecord,
     LocalPropagationReplicationStatus, MessageDirection, MessageRecord, NodeError,
@@ -28,6 +29,155 @@ const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
 const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CURRENT_SCHEMA_VERSION: i64 = 1;
+const EAM_STATUS_FIELDS: [(&str, &str); 6] = [
+    ("securityStatus", "Security"),
+    ("capabilityStatus", "Capability"),
+    ("preparednessStatus", "Preparedness"),
+    ("medicalStatus", "Medical"),
+    ("mobilityStatus", "Mobility"),
+    ("commsStatus", "Comms"),
+];
+
+fn eam_status_score(status: &str) -> u32 {
+    match status {
+        "Green" => 100,
+        "Yellow" => 50,
+        "Red" => 25,
+        _ => 0,
+    }
+}
+
+fn clamp_score(value: f64) -> u32 {
+    value.round().clamp(0.0, 100.0) as u32
+}
+
+fn readiness_band(score: u32) -> &'static str {
+    if score >= 75 {
+        "Green"
+    } else if score >= 50 {
+        "Yellow"
+    } else if score >= 25 {
+        "Orange"
+    } else {
+        "Red"
+    }
+}
+
+fn blend_hex_color(start: &str, end: &str, ratio: f64) -> String {
+    let safe_ratio = ratio.clamp(0.0, 1.0);
+    let start = parse_hex_color(start).unwrap_or([0, 0, 0]);
+    let end = parse_hex_color(end).unwrap_or(start);
+    let mixed = [0, 1, 2].map(|index| {
+        let start_value = f64::from(start[index]);
+        let end_value = f64::from(end[index]);
+        (start_value + ((end_value - start_value) * safe_ratio)).round() as u8
+    });
+    format!("#{:02x}{:02x}{:02x}", mixed[0], mixed[1], mixed[2])
+}
+
+fn parse_hex_color(value: &str) -> Option<[u8; 3]> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 {
+        return None;
+    }
+    Some([
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ])
+}
+
+fn readiness_ring_color(score: u32) -> String {
+    let safe_score = score.min(100);
+    if safe_score >= 75 {
+        blend_hex_color("#16ce79", "#3df58f", f64::from(safe_score - 75) / 25.0)
+    } else if safe_score >= 50 {
+        blend_hex_color("#f5cc19", "#16ce79", f64::from(safe_score - 50) / 25.0)
+    } else if safe_score >= 25 {
+        blend_hex_color("#ff9f1c", "#f5cc19", f64::from(safe_score - 25) / 25.0)
+    } else {
+        blend_hex_color("#ff3648", "#ff9f1c", f64::from(safe_score) / 25.0)
+    }
+}
+
+fn eam_status_value<'a>(record: &'a EamProjectionRecord, field: &str) -> &'a str {
+    match field {
+        "securityStatus" => record.security_status.as_str(),
+        "capabilityStatus" => record.capability_status.as_str(),
+        "preparednessStatus" => record.preparedness_status.as_str(),
+        "medicalStatus" => record.medical_status.as_str(),
+        "mobilityStatus" => record.mobility_status.as_str(),
+        "commsStatus" => record.comms_status.as_str(),
+        _ => "",
+    }
+}
+
+fn readiness_metric(field: &str, label: &str, score: u32) -> EamReadinessStatusMetricRecord {
+    EamReadinessStatusMetricRecord {
+        field: field.to_string(),
+        label: label.to_string(),
+        score,
+        band: readiness_band(score).to_string(),
+        ring_color: readiness_ring_color(score),
+    }
+}
+
+fn eam_overall_readiness_score(record: &EamProjectionRecord) -> u32 {
+    let total: u32 = EAM_STATUS_FIELDS
+        .iter()
+        .map(|(field, _)| eam_status_score(eam_status_value(record, field)))
+        .sum();
+    clamp_score(f64::from(total) / EAM_STATUS_FIELDS.len() as f64)
+}
+
+fn build_eam_readiness_summary(records: Vec<EamProjectionRecord>) -> EamReadinessSummaryRecord {
+    let updated_at_ms = records
+        .iter()
+        .map(|record| record.updated_at_ms)
+        .max()
+        .unwrap_or(0);
+    let active_records: Vec<EamProjectionRecord> = records
+        .into_iter()
+        .filter(|record| record.deleted_at_ms.is_none())
+        .collect();
+    let active_total = active_records.len() as u32;
+
+    let status_metrics = EAM_STATUS_FIELDS
+        .iter()
+        .map(|(field, label)| {
+            let score = if active_records.is_empty() {
+                0
+            } else {
+                let total: u32 = active_records
+                    .iter()
+                    .map(|record| eam_status_score(eam_status_value(record, field)))
+                    .sum();
+                clamp_score(f64::from(total) / active_records.len() as f64)
+            };
+            readiness_metric(field, label, score)
+        })
+        .collect();
+
+    let messages = active_records
+        .iter()
+        .map(|record| {
+            let score = eam_overall_readiness_score(record);
+            EamReadinessMessageRecord {
+                callsign: record.callsign.clone(),
+                overall_score: score,
+                overall_band: readiness_band(score).to_string(),
+                overall_ring_color: readiness_ring_color(score),
+            }
+        })
+        .collect();
+
+    EamReadinessSummaryRecord {
+        active_total,
+        updated_at_ms,
+        status_metrics,
+        messages,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppStateStore {
@@ -819,6 +969,10 @@ impl AppStateStore {
             None
         };
         Ok(Some(summary))
+    }
+
+    pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
+        Ok(build_eam_readiness_summary(self.get_eams()?))
     }
 
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
@@ -3901,6 +4055,136 @@ mod tests {
         path
     }
 
+    fn readiness_eam(
+        callsign: &str,
+        statuses: [&str; 6],
+        updated_at_ms: u64,
+        deleted_at_ms: Option<u64>,
+    ) -> EamProjectionRecord {
+        EamProjectionRecord {
+            callsign: callsign.to_string(),
+            group_name: "Yellow".to_string(),
+            security_status: statuses[0].to_string(),
+            capability_status: statuses[1].to_string(),
+            preparedness_status: statuses[2].to_string(),
+            medical_status: statuses[3].to_string(),
+            mobility_status: statuses[4].to_string(),
+            comms_status: statuses[5].to_string(),
+            notes: None,
+            updated_at_ms,
+            deleted_at_ms,
+            eam_uid: None,
+            team_member_uid: None,
+            team_uid: Some("team-yellow".to_string()),
+            reported_at: None,
+            reported_by: None,
+            overall_status: None,
+            confidence: None,
+            ttl_seconds: None,
+            source: None,
+            sync_state: None,
+            sync_error: None,
+            draft_created_at_ms: None,
+            last_synced_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn eam_readiness_score_bands_and_colors_match_dashboard_contract() {
+        assert_eq!(eam_status_score("Green"), 100);
+        assert_eq!(eam_status_score("Yellow"), 50);
+        assert_eq!(eam_status_score("Red"), 25);
+        assert_eq!(eam_status_score("Unknown"), 0);
+        assert_eq!(eam_status_score("Offline"), 0);
+
+        assert_eq!(readiness_band(75), "Green");
+        assert_eq!(readiness_band(74), "Yellow");
+        assert_eq!(readiness_band(50), "Yellow");
+        assert_eq!(readiness_band(49), "Orange");
+        assert_eq!(readiness_band(25), "Orange");
+        assert_eq!(readiness_band(24), "Red");
+
+        assert_eq!(readiness_ring_color(0), "#ff3648");
+        assert_eq!(readiness_ring_color(25), "#ff9f1c");
+        assert_eq!(readiness_ring_color(50), "#f5cc19");
+        assert_eq!(readiness_ring_color(75), "#16ce79");
+        assert_eq!(readiness_ring_color(100), "#3df58f");
+    }
+
+    #[test]
+    fn eam_readiness_summary_derives_per_message_scores_in_rust() {
+        let record = readiness_eam(
+            "Atlas",
+            ["Green", "Yellow", "Red", "Unknown", "Green", "Yellow"],
+            100,
+            None,
+        );
+
+        let summary = build_eam_readiness_summary(vec![record]);
+
+        assert_eq!(summary.active_total, 1);
+        assert_eq!(summary.messages.len(), 1);
+        assert_eq!(summary.messages[0].callsign, "Atlas");
+        assert_eq!(summary.messages[0].overall_score, 54);
+        assert_eq!(summary.messages[0].overall_band, "Yellow");
+        assert!(!summary.messages[0].overall_ring_color.is_empty());
+    }
+
+    #[test]
+    fn eam_readiness_summary_aggregates_active_records_and_excludes_deleted() {
+        let green = readiness_eam(
+            "Green-1",
+            ["Green", "Green", "Green", "Green", "Green", "Green"],
+            100,
+            None,
+        );
+        let mixed = readiness_eam(
+            "Mixed-1",
+            ["Red", "Yellow", "Unknown", "Green", "Yellow", "Red"],
+            200,
+            None,
+        );
+        let deleted = readiness_eam(
+            "Deleted-1",
+            ["Red", "Red", "Red", "Red", "Red", "Red"],
+            300,
+            Some(300),
+        );
+
+        let summary = build_eam_readiness_summary(vec![green, mixed, deleted]);
+
+        assert_eq!(summary.active_total, 2);
+        assert_eq!(summary.updated_at_ms, 300);
+        assert_eq!(summary.messages.len(), 2);
+        assert!(summary
+            .messages
+            .iter()
+            .all(|message| message.callsign != "Deleted-1"));
+        assert_eq!(summary.status_metrics[0].field, "securityStatus");
+        assert_eq!(summary.status_metrics[0].score, 63);
+        assert_eq!(summary.status_metrics[1].field, "capabilityStatus");
+        assert_eq!(summary.status_metrics[1].score, 75);
+        assert_eq!(summary.status_metrics[2].field, "preparednessStatus");
+        assert_eq!(summary.status_metrics[2].score, 50);
+        assert_eq!(summary.status_metrics[5].field, "commsStatus");
+        assert_eq!(summary.status_metrics[5].score, 63);
+    }
+
+    #[test]
+    fn eam_readiness_summary_returns_neutral_metrics_when_empty() {
+        let summary = build_eam_readiness_summary(Vec::new());
+
+        assert_eq!(summary.active_total, 0);
+        assert_eq!(summary.updated_at_ms, 0);
+        assert!(summary.messages.is_empty());
+        assert_eq!(summary.status_metrics.len(), 6);
+        for metric in summary.status_metrics {
+            assert_eq!(metric.score, 0);
+            assert_eq!(metric.band, "Red");
+            assert_eq!(metric.ring_color, "#ff3648");
+        }
+    }
+
     fn app_settings_with_due_step(default_task_due_step_minutes: u32) -> AppSettingsRecord {
         AppSettingsRecord {
             display_name: "Test Operator".to_string(),
@@ -3926,6 +4210,7 @@ mod tests {
             checklists: ChecklistSettingsRecord {
                 default_task_due_step_minutes,
             },
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 

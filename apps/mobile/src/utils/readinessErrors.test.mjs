@@ -12,7 +12,9 @@ const transpiled = ts.transpileModule(source, {
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
+  hasConfiguredNonTcpInterface,
   logIndicatesReadinessError,
+  nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
 } = await import(moduleUrl);
 
@@ -120,5 +122,39 @@ test("unreachable Reticulum TCP startup data path marks the node not ready", () 
       message: "transport startup failed: no reachable Reticulum TCP interface endpoints=rns.beleth.net:4242",
     }),
     true,
+  );
+});
+
+test("unreachable Reticulum TCP startup data path is classified as a TCP interface readiness error", () => {
+  assert.equal(
+    nodeErrorIndicatesTcpInterfaceReadinessError({
+      code: "NetworkError",
+      message: "transport startup failed: no reachable Reticulum TCP interface endpoints=rns.beleth.net:4242",
+    }),
+    true,
+  );
+});
+
+test("enabled RNode with selected peripheral is a configured non-TCP interface", () => {
+  assert.equal(
+    hasConfiguredNonTcpInterface({
+      rnode: {
+        enabled: true,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    }),
+    true,
+  );
+});
+
+test("disabled RNode is not a configured non-TCP interface", () => {
+  assert.equal(
+    hasConfiguredNonTcpInterface({
+      rnode: {
+        enabled: false,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    }),
+    false,
   );
 });

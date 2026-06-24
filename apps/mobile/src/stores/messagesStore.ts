@@ -1,6 +1,8 @@
 import {
   createReticulumNodeClient,
   type EamProjectionRecord,
+  type EamReadinessMessageRecord,
+  type EamReadinessSummaryRecord,
   type EamTeamSummaryRecord,
   type ProjectionInvalidationEvent,
   type ReticulumNodeClient,
@@ -27,6 +29,15 @@ type TeamStatusBuckets = Partial<Record<EamWireStatus, number>>;
 type ProjectionClientCache = typeof globalThis & {
   __reticulumMessagesProjectionClient?: ReticulumNodeClient;
 };
+
+function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
+  return {
+    activeTotal: 0,
+    updatedAt: 0,
+    statusMetrics: [],
+    messages: [],
+  };
+}
 
 function nowMs(): number {
   return Date.now();
@@ -289,6 +300,7 @@ export const useMessagesStore = defineStore("messages", () => {
   const nodeStore = useNodeStore();
   const byCallsign = ref<StoredMessages>({});
   const teamSummary = ref<EamTeamSummary | null>(null);
+  const eamReadinessSummary = ref<EamReadinessSummaryRecord>(emptyEamReadinessSummary());
   const initialized = ref(false);
   const replicationInitialized = ref(false);
   const notificationsPrimed = ref(false);
@@ -377,9 +389,13 @@ export const useMessagesStore = defineStore("messages", () => {
       do {
         refreshQueued = false;
         const client = getProjectionClient(nodeStore.settings.clientMode);
-        const records = await client.getEams();
+        const [records, readinessSummary] = await Promise.all([
+          client.getEams(),
+          client.getEamReadinessSummary(),
+        ]);
         const nextMessages = toStoredMessages(records);
         byCallsign.value = nextMessages;
+        eamReadinessSummary.value = readinessSummary;
         await notifyForInboundMessages(nextMessages);
       } while (refreshQueued);
     })();
@@ -589,6 +605,13 @@ export const useMessagesStore = defineStore("messages", () => {
       .filter((message) => !message.deletedAt)
       .sort((left, right) => right.updatedAt - left.updatedAt),
   );
+  const eamReadinessByCallsign = computed(() => {
+    const out: Record<string, EamReadinessMessageRecord> = {};
+    for (const readiness of eamReadinessSummary.value.messages) {
+      out[keyFor(readiness.callsign)] = readiness;
+    }
+    return out;
+  });
 
   const activeCount = computed(() => messages.value.length);
   const draftCount = computed(() => messages.value.filter((message) => message.syncState === "draft").length);
@@ -597,10 +620,17 @@ export const useMessagesStore = defineStore("messages", () => {
     messages.value.reduce((total, message) => total + countRedStatuses(message), 0),
   );
 
+  function eamReadinessForCallsign(callsign: string): EamReadinessMessageRecord | undefined {
+    return eamReadinessByCallsign.value[keyFor(callsign)];
+  }
+
   return {
     byCallsign,
     teamSummary,
+    eamReadinessSummary,
     messages,
+    eamReadinessByCallsign,
+    eamReadinessForCallsign,
     activeCount,
     draftCount,
     syncingCount,

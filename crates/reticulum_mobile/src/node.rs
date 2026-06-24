@@ -32,11 +32,11 @@ use crate::types::{
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
+    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord,
+    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
-    PropagationConnectivityState, PropagationNodeStatus, ProjectionInvalidation, ProjectionScope,
+    ProjectionInvalidation, ProjectionScope, PropagationConnectivityState, PropagationNodeStatus,
     SavedPeerRecord, SendLxmfRequest, SendMode, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord,
@@ -111,6 +111,7 @@ struct NodeConfigFingerprint {
     hub_api_base_url: Option<String>,
     hub_api_key: Option<String>,
     hub_refresh_interval_seconds: u32,
+    rnode: crate::types::RnodeSettingsRecord,
 }
 
 impl NodeConfigFingerprint {
@@ -133,6 +134,7 @@ impl NodeConfigFingerprint {
             hub_api_base_url: config.hub_api_base_url.clone(),
             hub_api_key: config.hub_api_key.clone(),
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
+            rnode: config.rnode.clone(),
         })
     }
 }
@@ -5388,6 +5390,11 @@ impl Node {
         inner.app_state.get_eam_team_summary(&team_uid)
     }
 
+    pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_eam_readiness_summary()
+    }
+
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.get_events()
@@ -6349,6 +6356,7 @@ mod tests {
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 0,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -7398,6 +7406,7 @@ mod tests {
                 refresh_interval_seconds: 3600,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -7440,6 +7449,7 @@ mod tests {
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 3600,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -8607,6 +8617,7 @@ mod tests {
                 refresh_interval_seconds: 0,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 

@@ -57,6 +57,7 @@ public final class ReticulumBridge {
     public static native int upsertEamJson(String payloadJson);
     public static native int deleteEamJson(String payloadJson);
     public static native String getEamTeamSummaryJson(String payloadJson);
+    public static native String getEamReadinessSummaryJson();
     public static native String getEventsJson();
     public static native int upsertEventJson(String payloadJson);
     public static native int deleteEventJson(String payloadJson);

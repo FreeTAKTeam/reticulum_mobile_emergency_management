@@ -12,12 +12,6 @@ import { useEventsStore } from "../stores/eventsStore";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
-import {
-  ACTION_MESSAGE_STATUS_CONFIG,
-  getOverallRingColor,
-  getStatusScore,
-  type ActionMessageStatusField,
-} from "../utils/actionMessageStatus";
 
 const checklistsStore = useChecklistsStore();
 const { dashboardSummary } = storeToRefs(checklistsStore);
@@ -62,31 +56,14 @@ async function requestSync(): Promise<void> {
   }
 }
 
-function averageScoreFor(field: ActionMessageStatusField): number {
-  const messages = messagesStore.messages;
-  const totalMessages = messages.length;
-  if (totalMessages === 0) {
-    return 0;
-  }
-
-  const weightedTotal = messages.reduce((sum, message) => {
-    return sum + getStatusScore(message[field]);
-  }, 0);
-
-  return Math.round(weightedTotal / totalMessages);
-}
-
 const ringMetrics = computed(() =>
-  ACTION_MESSAGE_STATUS_CONFIG.map((status) => {
-    const pct = averageScoreFor(status.field);
-    return {
-      key: status.field,
-      label: status.label,
-      color: getOverallRingColor(pct),
-      pct,
-      href: "/messages",
-    };
-  }),
+  messagesStore.eamReadinessSummary.statusMetrics.map((metric) => ({
+    key: metric.field,
+    label: metric.label,
+    color: metric.ringColor,
+    pct: metric.score,
+    href: "/messages",
+  })),
 );
 
 const checklistSummaryMetrics = computed(() => [

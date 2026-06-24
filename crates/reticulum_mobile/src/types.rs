@@ -384,6 +384,28 @@ pub struct NodeConfig {
     pub hub_api_base_url: Option<String>,
     pub hub_api_key: Option<String>,
     pub hub_refresh_interval_seconds: u32,
+    pub rnode: RnodeSettingsRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RnodeSettingsRecord {
+    pub enabled: bool,
+    pub peripheral_id: String,
+    pub display_name: String,
+    pub region: String,
+    pub profile: String,
+}
+
+impl Default for RnodeSettingsRecord {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            peripheral_id: String::new(),
+            display_name: String::new(),
+            region: "US915".to_string(),
+            profile: "REM-LF-RURAL-v1".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -703,6 +725,8 @@ pub struct AppSettingsRecord {
     pub hub: HubSettingsRecord,
     #[serde(default)]
     pub checklists: ChecklistSettingsRecord,
+    #[serde(default)]
+    pub rnode: RnodeSettingsRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -757,6 +781,31 @@ pub struct EamTeamSummaryRecord {
     pub yellow_total: u32,
     pub red_total: u32,
     pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessStatusMetricRecord {
+    pub field: String,
+    pub label: String,
+    pub score: u32,
+    pub band: String,
+    pub ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessMessageRecord {
+    pub callsign: String,
+    pub overall_score: u32,
+    pub overall_band: String,
+    pub overall_ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessSummaryRecord {
+    pub active_total: u32,
+    pub updated_at_ms: u64,
+    pub status_metrics: Vec<EamReadinessStatusMetricRecord>,
+    pub messages: Vec<EamReadinessMessageRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

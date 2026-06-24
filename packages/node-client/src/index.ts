@@ -2,6 +2,8 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
+export type RnodeRegion = "US915" | "EU868";
+export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
@@ -59,6 +61,31 @@ export type SosTriggerSource =
   | "Remote";
 export type SosMessageKind = "Active" | "Update" | "Cancelled";
 
+export interface RnodeSettingsRecord {
+  enabled: boolean;
+  peripheralId: string;
+  displayName: string;
+  region: RnodeRegion;
+  profile: RnodeProfileId;
+}
+
+export interface RnodeBleDeviceRecord {
+  id: string;
+  address: string;
+  name: string;
+  rssi?: number;
+  paired: boolean;
+  bondState?: string;
+}
+
+export interface RnodeBlePairResult {
+  id: string;
+  address: string;
+  paired: boolean;
+  bondingStarted: boolean;
+  bondState: string;
+}
+
 export interface NodeConfig {
   name: string;
   storageDir?: string;
@@ -72,6 +99,7 @@ export interface NodeConfig {
   hubApiBaseUrl?: string;
   hubApiKey?: string;
   hubRefreshIntervalSeconds: number;
+  rnode: RnodeSettingsRecord;
 }
 
 export interface NodeStatus {
@@ -409,6 +437,7 @@ export interface AppSettingsRecord {
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
   checklists: ChecklistSettingsRecord;
+  rnode: RnodeSettingsRecord;
 }
 
 export interface SavedPeerRecord {
@@ -459,6 +488,28 @@ export interface EamTeamSummaryRecord {
   yellowTotal: number;
   redTotal: number;
   updatedAt: number;
+}
+
+export interface EamReadinessStatusMetricRecord {
+  field: string;
+  label: string;
+  score: number;
+  band: string;
+  ringColor: string;
+}
+
+export interface EamReadinessMessageRecord {
+  callsign: string;
+  overallScore: number;
+  overallBand: string;
+  overallRingColor: string;
+}
+
+export interface EamReadinessSummaryRecord {
+  activeTotal: number;
+  updatedAt: number;
+  statusMetrics: EamReadinessStatusMetricRecord[];
+  messages: EamReadinessMessageRecord[];
 }
 
 export interface EventProjectionRecord {
@@ -613,6 +664,18 @@ export interface OperationalSummary {
   updatedAtMs: number;
 }
 
+export interface WatchStatusServerSettings {
+  enabled: boolean;
+  port: number;
+}
+
+export interface WatchStatusServerState extends WatchStatusServerSettings {
+  url: string;
+  currentUrl: string;
+  running: boolean;
+  bindError?: string;
+}
+
 export interface HubDirectoryUpdatedEvent {
   effectiveConnectedMode: boolean;
   items: HubDirectoryPeerRecord[];
@@ -666,6 +729,11 @@ export interface ReticulumNodeClient {
   stop(): Promise<void>;
   restart(config: NodeConfig): Promise<void>;
   getStatus(): Promise<NodeStatus>;
+  checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]>;
+  scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
+  pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
   announceNow(): Promise<void>;
@@ -689,6 +757,9 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getWatchStatusServerSettings(): Promise<WatchStatusServerState>;
+  setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void>;
+  getWatchStatusServerState(): Promise<WatchStatusServerState>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;
@@ -772,6 +843,7 @@ export interface ReticulumNodeClient {
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
+  getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
@@ -846,6 +918,13 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Autonomous",
   hubRefreshIntervalSeconds: 3600,
+  rnode: {
+    enabled: false,
+    peripheralId: "",
+    displayName: "",
+    region: "US915",
+    profile: "REM-LF-RURAL-v1",
+  },
 };
 
 export const DEFAULT_SOS_SETTINGS: SosSettingsRecord = {
@@ -920,6 +999,11 @@ interface ReticulumNodePlugin {
   stopNode(): Promise<void>;
   restartNode(options: { config: Record<string, unknown> }): Promise<void>;
   getStatus(): Promise<Record<string, unknown>>;
+  checkRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  requestRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  listPairedRnodeBluetoothDevices(): Promise<{ items?: RnodeBleDeviceRecord[] }>;
+  scanRnodeBleDevices(options?: { timeoutMs?: number }): Promise<{ items?: RnodeBleDeviceRecord[] }>;
+  pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
   announceNow(): Promise<void>;
@@ -956,6 +1040,9 @@ interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getWatchStatusServerSettings(): Promise<Record<string, unknown>>;
+  setWatchStatusServerSettings(options: { enabled: boolean; port: number }): Promise<void>;
+  getWatchStatusServerState(): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;
@@ -1033,6 +1120,7 @@ interface ReticulumNodePlugin {
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
+  getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
@@ -1821,6 +1909,35 @@ function normalizeHubMode(value: unknown): HubMode {
   }
 }
 
+function normalizeRnodeRegion(value: unknown): RnodeRegion {
+  return String(value ?? "").trim().toUpperCase() === "EU868" ? "EU868" : "US915";
+}
+
+function normalizeRnodeProfile(value: unknown): RnodeProfileId {
+  switch (String(value ?? "").trim()) {
+    case "REM-MF-URBAN-v1":
+      return "REM-MF-URBAN-v1";
+    case "REM-LM-EXTREME-v1":
+      return "REM-LM-EXTREME-v1";
+    case "REM-LF-RURAL-v1":
+    default:
+      return "REM-LF-RURAL-v1";
+  }
+}
+
+function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    enabled: Boolean(raw.enabled),
+    peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
+    displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
+    region: normalizeRnodeRegion(raw.region),
+    profile: normalizeRnodeProfile(raw.profile),
+  };
+}
+
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
   if (!raw || Object.keys(raw).length === 0) {
     return null;
@@ -1836,6 +1953,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
   const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
   const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
+  const rnode = normalizeRnodeSettings(raw.rnode);
   return {
     displayName: String(raw.displayName ?? ""),
     autoConnectSaved: Boolean(raw.autoConnectSaved),
@@ -1862,6 +1980,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
         ? Math.max(1, defaultTaskDueStepMinutes)
         : 30,
     },
+    rnode,
   };
 }
 
@@ -2002,6 +2121,54 @@ function toEamTeamSummaryRecord(raw: Record<string, unknown>): EamTeamSummaryRec
     yellowTotal: Number(source.yellowTotal ?? 0),
     redTotal: Number(source.redTotal ?? 0),
     updatedAt: Number(source.updatedAt ?? Date.now()),
+  };
+}
+
+function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
+  return {
+    activeTotal: 0,
+    updatedAt: 0,
+    statusMetrics: [],
+    messages: [],
+  };
+}
+
+function toEamReadinessStatusMetricRecord(raw: Record<string, unknown>): EamReadinessStatusMetricRecord {
+  return {
+    field: String(raw.field ?? ""),
+    label: String(raw.label ?? ""),
+    score: Number(raw.score ?? 0),
+    band: String(raw.band ?? "Red"),
+    ringColor: String(raw.ringColor ?? raw.ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessMessageRecord(raw: Record<string, unknown>): EamReadinessMessageRecord {
+  return {
+    callsign: String(raw.callsign ?? ""),
+    overallScore: Number(raw.overallScore ?? raw.overall_score ?? 0),
+    overallBand: String(raw.overallBand ?? raw.overall_band ?? "Unknown"),
+    overallRingColor: String(raw.overallRingColor ?? raw.overall_ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessSummaryRecord(raw: Record<string, unknown>): EamReadinessSummaryRecord {
+  const statusMetrics = Array.isArray(raw.statusMetrics)
+    ? raw.statusMetrics
+    : Array.isArray(raw.status_metrics)
+      ? raw.status_metrics
+      : [];
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  return {
+    activeTotal: Number(raw.activeTotal ?? raw.active_total ?? 0),
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at_ms ?? raw.updated_at ?? 0),
+    statusMetrics: statusMetrics
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessStatusMetricRecord),
+    messages: messages
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessMessageRecord)
+      .filter((entry) => entry.callsign.length > 0),
   };
 }
 
@@ -3080,6 +3247,33 @@ function toOperationalSummary(raw: Record<string, unknown>): OperationalSummary 
   };
 }
 
+function normalizeWatchStatusPort(value: unknown): number {
+  const parsed = Number(value ?? 29_863);
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : 29_863;
+}
+
+function toWatchStatusServerState(raw: Record<string, unknown> = {}): WatchStatusServerState {
+  const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
+  const port = normalizeWatchStatusPort(raw.port);
+  const url = String(
+    raw.url
+      ?? raw.currentUrl
+      ?? raw.current_url
+      ?? `http://localhost:${port}/info.json`,
+  );
+
+  return {
+    enabled,
+    port,
+    url,
+    currentUrl: String(raw.currentUrl ?? raw.current_url ?? url),
+    running: Boolean(raw.running),
+    bindError: String(raw.bindError ?? raw.bind_error ?? ""),
+  };
+}
+
 function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
@@ -3094,6 +3288,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     hubApiBaseUrl: config.hubApiBaseUrl,
     hubApiKey: config.hubApiKey,
     hubRefreshIntervalSeconds: config.hubRefreshIntervalSeconds,
+    rnode: config.rnode,
   };
 }
 
@@ -3187,6 +3382,42 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const status = await this.plugin.getStatus();
     return toNodeStatus(status);
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.checkRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.requestRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPairedRnodeBluetoothDevices();
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.scanRnodeBleDevices({ timeoutMs });
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    await this.ready();
+    const result = await this.plugin.pairRnodeBleDevice({ id });
+    return {
+      id: String(result.id ?? id),
+      address: String(result.address ?? result.id ?? id),
+      paired: Boolean(result.paired),
+      bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
+      bondState: String(result.bondState ?? result.bond_state ?? "none"),
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -3328,6 +3559,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async setAppSettings(settings: AppSettingsRecord): Promise<void> {
     await this.ready();
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
+  }
+
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerSettings());
+  }
+
+  async setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void> {
+    await this.ready();
+    await this.plugin.setWatchStatusServerSettings({
+      enabled: Boolean(settings.enabled),
+      port: normalizeWatchStatusPort(settings.port),
+    });
+  }
+
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerState());
   }
 
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
@@ -3513,6 +3762,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
+  }
+
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> {
+    await this.ready();
+    return toEamReadinessSummaryRecord(await this.plugin.getEamReadinessSummary());
   }
 
   async getEvents(): Promise<EventProjectionRecord[]> {
@@ -3746,6 +4000,32 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { ...this.status };
   }
 
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
+  }
+
   async connectPeer(destinationHex: string): Promise<void> {
     const normalized = normalizeHex(destinationHex);
     this.emitter.emit("peerChanged", {
@@ -3904,6 +4184,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -3940,6 +4223,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
@@ -4327,6 +4611,32 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return { ...this.status };
   }
 
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
+  }
+
   async connectPeer(destinationHex: string): Promise<void> {
     const normalized = normalizeHex(destinationHex);
     this.emitter.emit("peerChanged", {
@@ -4507,6 +4817,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -4543,6 +4856,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}

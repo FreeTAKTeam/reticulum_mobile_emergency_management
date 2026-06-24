@@ -60,6 +60,8 @@ public final class ReticulumNodeService extends Service {
     private static final String PREF_DESIRED_RUNNING = "desiredRunning";
     private static final String PREF_LAST_CONFIG = "lastConfig";
     private static final String PREF_LAST_BOOT_COUNT = "lastBootCount";
+    private static final String PREF_WATCH_STATUS_SERVER_ENABLED = "watchStatusServerEnabled";
+    private static final String PREF_WATCH_STATUS_SERVER_PORT = "watchStatusServerPort";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     private static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
     private static final String RUNTIME_CHANNEL_ID = "mesh-runtime";
@@ -130,6 +132,7 @@ public final class ReticulumNodeService extends Service {
     private String latestSosStatusJson = "";
     private String latestRuntimeErrorJson = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
+    private RemWatchStatusServer watchStatusServer;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenChecklistKeys = new HashSet<>();
@@ -145,11 +148,13 @@ public final class ReticulumNodeService extends Service {
         initializeBridgeStorage(storageDir);
         createNotificationChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
+        watchStatusServer = new RemWatchStatusServer();
         getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
         latestSosStatusJson = safeSosStatusJson();
         applyCurrentSosPlatformSettings();
+        applyWatchStatusServerSettings();
     }
 
     @Override
@@ -182,6 +187,9 @@ public final class ReticulumNodeService extends Service {
     @Override
     public void onDestroy() {
         stopPoller();
+        if (watchStatusServer != null) {
+            watchStatusServer.stop();
+        }
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
         }
@@ -421,6 +429,42 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.setAppSettingsJson(payloadJson);
     }
 
+    public synchronized String getWatchStatusServerSettingsJson() {
+        try {
+            return currentWatchStatusServerStateJson().toString();
+        } catch (JSONException ex) {
+            return "{}";
+        }
+    }
+
+    public synchronized int setWatchStatusServerSettingsJson(String payloadJson) {
+        try {
+            final JSONObject payload = new JSONObject(nonEmptyJson(payloadJson, "{}"));
+            final RemWatchStatusServerSettings current = readWatchStatusServerSettings();
+            final boolean enabled = payload.has("enabled") ? payload.optBoolean("enabled", current.enabled) : current.enabled;
+            final int requestedPort = payload.has("port") ? payload.optInt("port", current.port) : current.port;
+            final RemWatchStatusServerSettings next = RemWatchStatusServerSettings.normalize(enabled, requestedPort);
+            preferences
+                .edit()
+                .putBoolean(PREF_WATCH_STATUS_SERVER_ENABLED, next.enabled)
+                .putInt(PREF_WATCH_STATUS_SERVER_PORT, next.port)
+                .apply();
+            applyWatchStatusServerSettings();
+            return 0;
+        } catch (JSONException ex) {
+            Logger.error(TAG, "Failed to parse watch status server settings", ex);
+            return -1;
+        }
+    }
+
+    public synchronized String getWatchStatusServerStateJson() {
+        try {
+            return currentWatchStatusServerStateJson().toString();
+        } catch (JSONException ex) {
+            return "{}";
+        }
+    }
+
     public synchronized String getSavedPeersJson() {
         return ReticulumBridge.getSavedPeersJson();
     }
@@ -507,6 +551,10 @@ public final class ReticulumNodeService extends Service {
 
     public synchronized String getEamTeamSummaryJson(String payloadJson) {
         return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
+    }
+
+    public synchronized String getEamReadinessSummaryJson() {
+        return ReticulumBridge.getEamReadinessSummaryJson();
     }
 
     public synchronized String getEventsJson() {
@@ -999,6 +1047,98 @@ public final class ReticulumNodeService extends Service {
     private void applyCurrentSosPlatformSettings() {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.applySettingsJson(nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}"));
+        }
+    }
+
+    private RemWatchStatusServerSettings readWatchStatusServerSettings() {
+        if (preferences == null) {
+            return RemWatchStatusServerSettings.defaults();
+        }
+        return RemWatchStatusServerSettings.normalize(
+            preferences.getBoolean(
+                PREF_WATCH_STATUS_SERVER_ENABLED,
+                RemWatchStatusServerSettings.DEFAULT_ENABLED
+            ),
+            preferences.getInt(
+                PREF_WATCH_STATUS_SERVER_PORT,
+                RemWatchStatusServerSettings.DEFAULT_PORT
+            )
+        );
+    }
+
+    private void applyWatchStatusServerSettings() {
+        if (watchStatusServer == null) {
+            return;
+        }
+        watchStatusServer.apply(readWatchStatusServerSettings(), this::buildWatchStatusJson);
+    }
+
+    private JSONObject currentWatchStatusServerStateJson() throws JSONException {
+        if (watchStatusServer == null) {
+            return readWatchStatusServerSettings().toJson(false, "");
+        }
+        return watchStatusServer.stateJson();
+    }
+
+    private String buildWatchStatusJson() {
+        try {
+            return RemWatchStatusPayload.build(
+                safeStatusJson(),
+                safeOperationalSummaryJson(),
+                safeEamReadinessSummaryJson(),
+                safeEventsJson(),
+                safeTelemetryPositionsJson(),
+                System.currentTimeMillis()
+            );
+        } catch (Exception ex) {
+            Logger.error(TAG, "Failed to build watch status payload", ex);
+            try {
+                final JSONObject fallbackStatus = new JSONObject();
+                fallbackStatus.put("running", false);
+                fallbackStatus.put("lastError", ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                return RemWatchStatusPayload.build(
+                    fallbackStatus.toString(),
+                    "{}",
+                    "{}",
+                    "{\"items\":[]}",
+                    "{\"items\":[]}",
+                    System.currentTimeMillis()
+                );
+            } catch (JSONException jsonException) {
+                return "{\"type\":\"rem.watch.status\",\"version\":1,\"connection_state\":\"ERROR\",\"operator_name\":\"REM\",\"operator_status\":\"ERROR\",\"operator_eam\":\"UNKNOWN\",\"team\":\"REM\",\"team_status\":\"UNKNOWN\",\"last_sync_epoch_ms\":0,\"last_sync_age_seconds\":0,\"active_events\":0,\"highest_priority\":\"ERROR\",\"alert_state\":\"ERROR\"}";
+            }
+        }
+    }
+
+    private String safeOperationalSummaryJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
+        } catch (Exception ex) {
+            return "{}";
+        }
+    }
+
+    private String safeEamReadinessSummaryJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getEamReadinessSummaryJson(), "{}");
+        } catch (Exception ex) {
+            return "{}";
+        }
+    }
+
+    private String safeEventsJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
+        } catch (Exception ex) {
+            return "{\"items\":[]}";
+        }
+    }
+
+    private String safeTelemetryPositionsJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getTelemetryPositionsJson(), "{\"items\":[]}");
+        } catch (Exception ex) {
+            return "{\"items\":[]}";
         }
     }
 

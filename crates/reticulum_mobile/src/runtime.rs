@@ -40,6 +40,15 @@ use reticulum::transport::iface::tcp_client::TcpClient;
 use reticulum::transport::packet::{Packet, PacketDataBuffer, PacketType, PropagationType};
 use reticulum::transport::resource::ResourceEventKind;
 use rmpv::Value as MsgPackValue;
+#[cfg(target_os = "android")]
+use rns_transport::iface::lora::LoraConfig;
+#[cfg(target_os = "android")]
+use rns_transport::iface::rnode_ble::{
+    NativeRnodeBleKissInterface, NativeRnodeBleSettings, RnodeBleKissConfig,
+    RNODE_BLE_READ_FRAME_TIMEOUT,
+};
+#[cfg(target_os = "android")]
+use rns_transport::iface::{IfaceRole, InterfaceMode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::net::TcpStream;
@@ -64,8 +73,9 @@ use crate::types::{
     LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
     MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
     PeerChange, PeerRecord, PeerState, ProjectionScope, PropagationConnectivityState,
-    PropagationNodeStatus, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
-    SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    PropagationNodeStatus, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
+    TelemetryPositionRecord,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -4917,7 +4927,6 @@ fn sdk_peer_has_known_lxmf_route(peer: &sdkmsg::PeerRecord) -> bool {
     delivery_policy::peer_has_known_lxmf_route(peer)
 }
 
-#[cfg(test)]
 fn sdk_peer_has_observed_lxmf_delivery_route(peer: &sdkmsg::PeerRecord) -> bool {
     delivery_policy::peer_has_observed_lxmf_delivery_route(
         peer,
@@ -4948,35 +4957,11 @@ async fn saved_peer_prefers_propagation(
     {
         return false;
     }
-    let direct_available =
-        peer_direct_delivery_available(state, canonical_destination.as_str()).await;
-    if !direct_available {
-        return true;
-    }
-
     let Some(peer) = peer_for_any_destination_hex(state, canonical_destination.as_str()).await
     else {
         return true;
     };
-    let connectivity = delivery_policy::PeerConnectivityModel::from_peer(
-        &peer,
-        has_active_relay,
-        true,
-        !direct_available,
-        now_ms(),
-        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
-    );
-    if connectivity.saved
-        && connectivity.propagation_eligible
-        && !connectivity.direct_delivery_available()
-    {
-        return true;
-    }
-    if sdk_peer_has_known_lxmf_route(&peer)
-        && !sdk_peer_is_direct_delivery_ready(&peer, has_active_relay)
-    {
-        return true;
-    }
+
     if saved_peer_stored_route_prefers_propagation(&peer, has_active_relay, direct_priority_hops) {
         return true;
     }
@@ -5022,6 +5007,15 @@ async fn saved_peer_has_direct_ready_route(
     peer_for_any_destination_hex(state, canonical_destination)
         .await
         .is_some_and(|peer| sdk_peer_is_direct_delivery_ready(&peer, has_active_relay))
+}
+
+async fn saved_peer_has_current_lxmf_route(
+    state: &NodeRuntimeState,
+    canonical_destination: &str,
+) -> bool {
+    peer_for_any_destination_hex(state, canonical_destination)
+        .await
+        .is_some_and(|peer| sdk_peer_has_observed_lxmf_delivery_route(&peer))
 }
 
 async fn saved_peer_matches_destination(
@@ -5097,6 +5091,7 @@ fn direct_attempt_budget_for_send(
     send_mode: SendMode,
     has_active_relay: bool,
     can_try_stored_lxmf_route: bool,
+    has_current_lxmf_route: bool,
     direct_delivery_ready: bool,
     direct_priority_hops: Option<u8>,
 ) -> usize {
@@ -5104,6 +5099,7 @@ fn direct_attempt_budget_for_send(
         send_mode,
         has_active_relay,
         can_try_stored_lxmf_route,
+        has_current_lxmf_route,
         direct_delivery_ready,
         direct_priority_hops,
         MISSION_DIRECT_PRIORITY_FREE_HOPS,
@@ -6289,12 +6285,18 @@ async fn delete_conversation_records(
     }
 
     let delete_keys = conversation_delete_keys(conversation_id, &peers);
-    let delete_key_refs = delete_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    let projection_changed = state.projection_journal.remove_conversation_messages(
+        delete_keys.iter().map(String::as_str),
+        Some("conversation-deleted"),
+    );
     state
         .messaging
         .lock()
         .await
-        .delete_conversation_messages(delete_key_refs);
+        .delete_conversation_messages(delete_keys.iter().map(String::as_str));
+    if projection_changed {
+        state.projection_journal.flush_now().await;
+    }
     Ok(())
 }
 
@@ -6420,6 +6422,7 @@ struct NodeRuntimeState {
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
+    tcp_endpoint_registry: TcpEndpointRegistry,
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
     pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
@@ -6615,6 +6618,9 @@ async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> Option<ManagedPeerLinkTarget> {
+    if !has_active_tcp_client_interface(state).await {
+        return None;
+    }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
     state.managed_peer_links.add_desired(target.clone()).await;
     Some(target)
@@ -6627,6 +6633,13 @@ async fn add_desired_managed_peer_link_and_schedule(
     reason: &str,
 ) {
     state.managed_peer_links.add_desired(target.clone()).await;
+    if !has_active_tcp_client_interface(state).await {
+        info!(
+            "[link][maintain] destination={} status=deferred reason={} detail=no-active-tcp-interface",
+            target.destination_hex, reason,
+        );
+        return;
+    }
     if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
         if output_link_is_active(state, &destination).await {
             clear_peer_direct_delivery_unhealthy(state, target.destination_hex.as_str(), None)
@@ -6696,6 +6709,9 @@ async fn ensure_managed_peer_link(
     bus: &EventBus,
     target: ManagedPeerLinkTarget,
 ) -> Result<(), NodeError> {
+    if !has_active_tcp_client_interface(state).await {
+        return Err(NodeError::NetworkError {});
+    }
     let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) else {
         return Err(NodeError::InvalidConfig {});
     };
@@ -6748,6 +6764,9 @@ async fn ensure_managed_peer_link(
 }
 
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
+    if !has_active_tcp_client_interface(state).await {
+        return;
+    }
     let targets = state.managed_peer_links.desired_targets().await;
     for target in targets {
         if let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) {
@@ -6877,6 +6896,10 @@ async fn register_pending_lxmf_delivery(
         pending,
         buffered_ack,
     })
+}
+
+async fn has_active_tcp_client_interface(state: &NodeRuntimeState) -> bool {
+    !state.tcp_endpoint_registry.lock().await.is_empty()
 }
 
 #[expect(
@@ -7300,6 +7323,10 @@ fn is_sos_status_metadata(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+fn should_serialize_lxmf_destination_send(is_accepted_result: bool, is_sos_status: bool) -> bool {
+    !is_accepted_result && !is_sos_status
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "send policy boundary intentionally keeps transport, payload, metadata, and lane selection explicit"
@@ -7354,6 +7381,11 @@ async fn send_lxmf_with_delivery_policy(
     } else {
         false
     };
+    let has_current_lxmf_route = if can_try_stored_lxmf_route {
+        saved_peer_has_current_lxmf_route(state, canonical_requested_destination.as_str()).await
+    } else {
+        false
+    };
     #[cfg(not(test))]
     let direct_priority_hops = if matches!(send_task_class, SendTaskClass::Mission)
         && matches!(send_mode, SendMode::Auto {})
@@ -7375,24 +7407,21 @@ async fn send_lxmf_with_delivery_policy(
         send_mode,
         has_active_relay,
         can_try_stored_lxmf_route,
+        has_current_lxmf_route,
         direct_delivery_ready,
         direct_priority_hops,
     );
-    let _destination_send_lock = if !is_accepted_result
-        && !is_sos_status
-        && metadata
-            .as_ref()
-            .is_some_and(MissionSyncMetadata::is_mission_related)
-    {
-        Some(
-            state
-                .mission_destination_locks
-                .acquire(canonical_requested_destination.as_str())
-                .await?,
-        )
-    } else {
-        None
-    };
+    let _destination_send_lock =
+        if should_serialize_lxmf_destination_send(is_accepted_result, is_sos_status) {
+            Some(
+                state
+                    .mission_destination_locks
+                    .acquire(canonical_requested_destination.as_str())
+                    .await?,
+            )
+        } else {
+            None
+        };
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay
@@ -7537,7 +7566,7 @@ async fn send_lxmf_with_delivery_policy(
         match send_result {
             Ok(report) if lxmf_send_succeeded(report.outcome) => {
                 if !report.used_propagation_node {
-                    if is_saved_peer {
+                    if is_saved_peer && matches!(report.method, LxmfDeliveryMethod::Direct {}) {
                         register_desired_managed_peer_link(
                             state,
                             report.resolved_destination_hex.as_str(),
@@ -8071,6 +8100,12 @@ async fn emit_received_payload(
         return;
     }
 
+    info!(
+        "[lxmf][rx] non_lxmf_payload destination={} bytes={} prefix={}",
+        destination_hex,
+        payload.len(),
+        hex::encode(payload.iter().take(16).copied().collect::<Vec<_>>()),
+    );
     sdk.record_packet_received(
         &destination_hex,
         None,
@@ -8663,6 +8698,128 @@ fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
     )
 }
 
+#[cfg(target_os = "android")]
+fn normalize_rnode_region(region: &str) -> &'static str {
+    if region.trim().eq_ignore_ascii_case("EU868") {
+        "EU868"
+    } else {
+        "US915"
+    }
+}
+
+#[cfg(target_os = "android")]
+fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
+    let mut config = LoraConfig::for_region(normalize_rnode_region(&settings.region))
+        .unwrap_or_else(LoraConfig::us915_default);
+    match settings.profile.trim() {
+        "REM-MF-URBAN-v1" => {
+            config.bandwidth_hz = 250_000;
+            config.spreading_factor = 9;
+            config.coding_rate = 5;
+        }
+        "REM-LM-EXTREME-v1" => {
+            config.bandwidth_hz = 125_000;
+            config.spreading_factor = 11;
+            config.coding_rate = 8;
+        }
+        "REM-LF-RURAL-v1" | _ => {
+            config.bandwidth_hz = 250_000;
+            config.spreading_factor = 11;
+            config.coding_rate = 5;
+        }
+    }
+    config.validate()?;
+    Ok(config)
+}
+
+#[cfg(target_os = "android")]
+fn spawn_rnode_ble_interface(
+    transport: Arc<Transport>,
+    bus: EventBus,
+    settings: RnodeSettingsRecord,
+) {
+    if !settings.enabled {
+        return;
+    }
+    let peripheral_id = settings.peripheral_id.trim().to_string();
+    if peripheral_id.is_empty() {
+        bus.emit(NodeEvent::Error {
+            code: "InvalidConfig".to_string(),
+            message: "RNode Bluetooth is enabled but no paired device is selected.".to_string(),
+        });
+        return;
+    }
+
+    let lora_config = match rnode_lora_config(&settings) {
+        Ok(config) => config,
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("RNode LoRa profile is invalid: {error}"),
+            });
+            return;
+        }
+    };
+    let label = if settings.display_name.trim().is_empty() {
+        format!("rnode-ble:{peripheral_id}")
+    } else {
+        format!("rnode-ble:{}", settings.display_name.trim())
+    };
+    let kiss_config = RnodeBleKissConfig {
+        mtu: usize::from(lora_config.max_payload_bytes),
+        max_write_len: 20,
+        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
+        initial_frames: lora_config.probe_frames(),
+        deferred_frames: lora_config.radio_config_frames(),
+        shutdown_frames: lora_config.shutdown_frames(),
+        ..RnodeBleKissConfig::default()
+    };
+    let adapter = NativeRnodeBleKissInterface::new(
+        label.clone(),
+        NativeRnodeBleSettings::for_peripheral(peripheral_id.clone())
+            .with_peripheral_alias(settings.display_name.trim()),
+        kiss_config,
+    )
+    .with_rnode_validation(lora_config, Duration::from_millis(15_000))
+    .with_detection_fallback_timeout(Duration::from_millis(5_000));
+
+    tokio::spawn(async move {
+        let iface = transport.iface_manager().lock().await.spawn_as_with_mode(
+            adapter,
+            NativeRnodeBleKissInterface::spawn,
+            IfaceRole::Unicast,
+            InterfaceMode::Full,
+        );
+        info!(
+            "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
+            label, peripheral_id, settings.region, settings.profile, iface
+        );
+        emit_operational_notice(
+            &bus,
+            LogLevel::Info {},
+            format!(
+                "RNode Bluetooth LoRa interface enabled: {} ({}, {})",
+                label, settings.region, settings.profile
+            ),
+        );
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn spawn_rnode_ble_interface(
+    _transport: Arc<Transport>,
+    bus: EventBus,
+    settings: RnodeSettingsRecord,
+) {
+    if !settings.enabled {
+        return;
+    }
+    bus.emit(NodeEvent::Error {
+        code: "InvalidConfig".to_string(),
+        message: "RNode Bluetooth LoRa is only available on Android builds.".to_string(),
+    });
+}
+
 async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
     tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, TcpStream::connect(connect_addr))
         .await
@@ -8681,6 +8838,16 @@ async fn any_tcp_endpoint_reachable(endpoints: &[String]) -> bool {
         }
     }
     false
+}
+
+async fn unregister_tcp_client_endpoint(
+    tcp_endpoint_registry: &TcpEndpointRegistry,
+    endpoint: &str,
+) {
+    tcp_endpoint_registry
+        .lock()
+        .await
+        .retain(|_, registered_endpoint| registered_endpoint != endpoint);
 }
 
 fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
@@ -8712,10 +8879,13 @@ fn spawn_tcp_client_interface_manager(
                 active.store(true, Ordering::Release);
                 let active_for_task = active.clone();
                 let task_addr = connect_addr.clone();
+                let registry_for_task = tcp_endpoint_registry.clone();
                 let iface = transport.iface_manager().lock().await.spawn(
                     TcpClient::new_from_stream(connect_addr.clone(), stream),
                     move |context| async move {
                         TcpClient::spawn(context).await;
+                        unregister_tcp_client_endpoint(&registry_for_task, task_addr.as_str())
+                            .await;
                         active_for_task.store(false, Ordering::Release);
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
@@ -8866,6 +9036,7 @@ pub async fn run_node(
             tcp_endpoint_registry.clone(),
         );
     }
+    spawn_rnode_ble_interface(transport.clone(), bus.clone(), config.rnode.clone());
 
     let _legacy_app_destination_hex = app_destination
         .lock()
@@ -8948,6 +9119,7 @@ pub async fn run_node(
         peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
+        tcp_endpoint_registry: tcp_endpoint_registry.clone(),
         connected_peers: connected_peers.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
@@ -9449,6 +9621,11 @@ pub async fn run_node(
                 match rx.recv().await {
                     Ok(event) => {
                         let destination_hex = address_hash_to_hex(&event.destination);
+                        info!(
+                            "[lxmf][rx] data_event destination={} bytes={}",
+                            destination_hex,
+                            event.data.as_slice().len(),
+                        );
                         emit_received_payload(
                             &state,
                             &bus,
@@ -9522,12 +9699,30 @@ pub async fn run_node(
                                 hex::encode(event.hash.as_slice()),
                             );
                         }
-                        ResourceEventKind::OutboundFailed
-                        | ResourceEventKind::OutboundCancelled => {
-                            warn!(
+                        ResourceEventKind::OutboundFailed => {
+                            info!(
                                 "[lxmf][events] resource outbound failed link_id={} hash={}",
                                 address_hash_to_hex(&event.link_id),
                                 hex::encode(event.hash.as_slice()),
+                            );
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            info!(
+                                "[lxmf][events] resource outbound cancelled link_id={} hash={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                            );
+                        }
+                        ResourceEventKind::InboundFailed(failure) => {
+                            warn!(
+                                "[lxmf][events] resource inbound failed link_id={} hash={} reason={} received_parts={} total_parts={} received_bytes={} total_bytes={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                                failure.reason,
+                                failure.progress.received_parts,
+                                failure.progress.total_parts,
+                                failure.progress.received_bytes,
+                                failure.progress.total_bytes,
                             );
                         }
                     },
@@ -10615,6 +10810,33 @@ mod tests {
         assert_eq!(endpoints, vec!["rns.beleth.net:4242".to_string()]);
     }
 
+    #[tokio::test]
+    async fn tcp_endpoint_registry_removes_stopped_endpoint_entries() {
+        let registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::from([
+            (
+                AddressHash::new_from_slice(&[1u8; 16]),
+                "rns.beleth.net:4242".to_string(),
+            ),
+            (
+                AddressHash::new_from_slice(&[2u8; 16]),
+                "rns.beleth.net:4242".to_string(),
+            ),
+            (
+                AddressHash::new_from_slice(&[3u8; 16]),
+                "dfw.us.g00n.cloud:6969".to_string(),
+            ),
+        ])));
+
+        unregister_tcp_client_endpoint(&registry, "rns.beleth.net:4242").await;
+
+        let guard = registry.lock().await;
+        assert_eq!(guard.len(), 1);
+        assert_eq!(
+            guard.get(&AddressHash::new_from_slice(&[3u8; 16])),
+            Some(&"dfw.us.g00n.cloud:6969".to_string()),
+        );
+    }
+
     #[test]
     fn tcp_data_path_unavailable_message_is_readiness_classified() {
         let message = tcp_data_path_unavailable_message(&["rns.beleth.net:4242".to_string()]);
@@ -11034,6 +11256,14 @@ mod tests {
             ..MissionSyncMetadata::default()
         };
         assert!(!is_accepted_result_metadata(Some(&command)));
+    }
+
+    #[test]
+    fn destination_send_serialization_applies_to_data_but_not_fast_lanes() {
+        assert!(should_serialize_lxmf_destination_send(false, false));
+        assert!(!should_serialize_lxmf_destination_send(true, false));
+        assert!(!should_serialize_lxmf_destination_send(false, true));
+        assert!(!should_serialize_lxmf_destination_send(true, true));
     }
 
     fn test_lxmf_report(
@@ -13227,23 +13457,30 @@ mod tests {
     #[test]
     fn connected_auto_send_keeps_direct_retry_budget_even_with_relay() {
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, None),
-            0
-        );
-        assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, false, None),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, true, Some(1)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, true, Some(11)),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::Auto {}, false, true, false, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, true, true, false, true, Some(1)),
             LXMF_DIRECT_ATTEMPTS
         );
         assert_eq!(
-            direct_attempt_budget_for_send(SendMode::DirectOnly {}, true, true, false, Some(11)),
+            direct_attempt_budget_for_send(SendMode::Auto {}, false, true, false, false, Some(11)),
+            LXMF_DIRECT_ATTEMPTS
+        );
+        assert_eq!(
+            direct_attempt_budget_for_send(
+                SendMode::DirectOnly {},
+                true,
+                true,
+                false,
+                false,
+                Some(11)
+            ),
             LXMF_DIRECT_ATTEMPTS
         );
     }
@@ -13374,7 +13611,7 @@ mod tests {
             true,
             Some(11),
         ));
-        assert!(saved_peer_stored_route_prefers_propagation(
+        assert!(!saved_peer_stored_route_prefers_propagation(
             &stale_peer,
             true,
             Some(1),

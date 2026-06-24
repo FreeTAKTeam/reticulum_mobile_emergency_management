@@ -46,6 +46,7 @@ export function toTcpEndpoint(server: TcpCommunityServer): string {
 export function normalizeTcpCommunityClients(
   value: unknown,
   fallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+  allowEmpty = false,
 ): string[] {
   const placeholderEndpoint = "rmap.world:4242";
   const candidateEntries = Array.isArray(value)
@@ -58,5 +59,8 @@ export function normalizeTcpCommunityClients(
       ),
     ),
   ];
-  return uniqueEntries.length > 0 ? uniqueEntries : [...fallback];
+  if (uniqueEntries.length > 0) {
+    return uniqueEntries;
+  }
+  return allowEmpty ? [] : [...fallback];
 }

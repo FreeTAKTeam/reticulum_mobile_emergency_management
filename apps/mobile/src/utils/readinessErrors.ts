@@ -11,6 +11,10 @@ const GLOBAL_READINESS_ERROR_LOG_PATTERNS = [
   /\b(?:transport|node)\b.*\b(?:startup|start)\b.*\bfailed\b/i,
 ];
 
+const TCP_INTERFACE_READINESS_ERROR_LOG_PATTERNS = [
+  /\bno reachable Reticulum TCP interface\b/i,
+];
+
 const DELIVERY_ERROR_LOG_PATTERNS = [
   /\bLXMF send failed after\b/i,
   /\ball available direct\/propagation attempts\b/i,
@@ -37,11 +41,26 @@ export function logIndicatesPropagationRelayError(message: string): boolean {
   return PROPAGATION_RELAY_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+export function hasConfiguredNonTcpInterface(
+  settings: { rnode?: { enabled?: unknown; peripheralId?: unknown } | null } | null | undefined,
+): boolean {
+  const rnode = settings?.rnode;
+  return Boolean(rnode?.enabled) && String(rnode?.peripheralId ?? "").trim().length > 0;
+}
+
+export function logIndicatesTcpInterfaceReadinessError(message: string): boolean {
+  return TCP_INTERFACE_READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 export function logIndicatesReadinessError(message: string): boolean {
   if (DELIVERY_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message))) {
     return false;
   }
   return GLOBAL_READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+export function nodeErrorIndicatesTcpInterfaceReadinessError(event: NodeErrorEvent): boolean {
+  return logIndicatesTcpInterfaceReadinessError(`${event.code}: ${event.message}`);
 }
 
 export function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean {

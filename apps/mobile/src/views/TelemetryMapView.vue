@@ -16,11 +16,6 @@ import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
-import {
-  getMessageOverallScore,
-  getOverallRingColor,
-  getOverallStatusBand,
-} from "../utils/actionMessageStatus";
 
 const messagesStore = useMessagesStore();
 const messagingStore = useMessagingStore();
@@ -289,9 +284,10 @@ function eamPieHtml(message: ActionMessage | undefined): string {
   if (!message) {
     return "";
   }
-  const score = getMessageOverallScore(message);
-  const color = getOverallRingColor(score);
-  const band = getOverallStatusBand(score);
+  const readiness = messagesStore.eamReadinessForCallsign(message.callsign);
+  const score = readiness?.overallScore ?? 0;
+  const color = readiness?.overallRingColor ?? "#ff3648";
+  const band = readiness?.overallBand ?? "Unknown";
   return `
     <div
       class="popup-eam-pie"

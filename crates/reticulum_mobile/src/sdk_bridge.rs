@@ -108,12 +108,10 @@ fn transport_method_for_send_mode(
         SendMode::PropagationOnly {} => TransportMethod::Propagated,
         SendMode::DirectOnly {} => TransportMethod::Direct,
         SendMode::Auto {} => {
-            if has_cached_direct_link {
+            if has_cached_direct_link || has_delivery_ratchet {
                 TransportMethod::Direct
-            } else if has_delivery_ratchet {
-                TransportMethod::Opportunistic
             } else {
-                TransportMethod::Direct
+                TransportMethod::Opportunistic
             }
         }
     }
@@ -1303,7 +1301,19 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let outcome = state.transport.send_packet_with_outcome(packet).await;
+        let trace = state.transport.send_packet_with_trace(packet).await;
+        let outcome = trace.outcome;
+        info!(
+            "[lxmf][events][sdk] opportunistic send outcome requested_destination={} resolved_destination={} message_id={} outcome={:?} broadcast={} matched={} sent={} failed={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            message_id_hex,
+            outcome,
+            trace.broadcast,
+            trace.dispatch.matched_ifaces,
+            trace.dispatch.sent_ifaces,
+            trace.dispatch.failed_ifaces,
+        );
         return Ok(CompatSendReport {
             outcome,
             message_id_hex,
@@ -1402,10 +1412,19 @@ async fn compat_send_lxmf(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
-                        ResourceEventKind::OutboundFailed
-                        | ResourceEventKind::OutboundCancelled => {
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "lxmf resource inbound transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
+                        ResourceEventKind::OutboundFailed => {
                             clear_lxmf_output_link(&state, &remote_destination_hash).await;
                             return Err(sdk_transport("lxmf resource transfer failed"));
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            return Err(sdk_transport("lxmf resource transfer cancelled"));
                         }
                     }
                 }
@@ -1590,10 +1609,20 @@ async fn compat_send_lxmf_via_propagation(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
-                        ResourceEventKind::OutboundFailed
-                        | ResourceEventKind::OutboundCancelled => {
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "propagated lxmf relay inbound resource transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
+                        ResourceEventKind::OutboundFailed => {
                             return Err(sdk_transport(
                                 "propagated lxmf relay resource transfer failed",
+                            ));
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            return Err(sdk_transport(
+                                "propagated lxmf relay resource transfer cancelled",
                             ));
                         }
                     }
@@ -2814,6 +2843,26 @@ mod tests {
                 Some(1)
             ),
             "mission-corr-1:propagation"
+        );
+    }
+
+    #[test]
+    fn auto_send_uses_opportunistic_packets_only_without_route_or_link() {
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, false),
+            TransportMethod::Opportunistic,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, true),
+            TransportMethod::Direct,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, true, false),
+            TransportMethod::Direct,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::DirectOnly {}, false, false),
+            TransportMethod::Direct,
         );
     }
 
