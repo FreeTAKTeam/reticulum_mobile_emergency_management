@@ -14,7 +14,12 @@ import {
   normalizeRnodeSettings,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
-import { scanRnodeBleDevices, pairRnodeBleDevice, type RnodeBleDeviceRecord } from "../services/rnodeBluetooth";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
 import { telemetryService } from "../services/telemetry";
 import {
   checkSetupPermissions,
@@ -95,6 +100,8 @@ export function useSetupWizard() {
   const customTcpEndpoint = shallowRef("");
   const feedback = shallowRef("");
   const saving = shallowRef(false);
+  const rnodePairedLoading = shallowRef(false);
+  const rnodePairedDevices = shallowRef<RnodeBleDeviceRecord[]>([]);
   const rnodeScanning = shallowRef(false);
   const rnodeDevices = shallowRef<RnodeBleDeviceRecord[]>([]);
   const permissions = reactive<SetupPermissionSnapshot>({
@@ -115,7 +122,9 @@ export function useSetupWizard() {
   const steps = SETUP_STEPS;
   const activeStep = computed(() => steps[activeIndex.value]);
   const normalizedDisplayName = computed(() => normalizeDisplayName(draft.displayName) ?? "");
-  const normalizedTcpClients = computed(() => normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS));
+  const normalizedTcpClients = computed(() =>
+    normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
+  );
   const normalizedTelemetryPublishIntervalSeconds = computed(() =>
     normalizeWizardTelemetryPublishIntervalSeconds(draft.telemetryPublishIntervalSeconds),
   );
@@ -203,15 +212,52 @@ export function useSetupWizard() {
     }
   }
 
+  function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+    const parts = [device.address];
+    if (typeof device.rssi === "number") {
+      parts.push(`RSSI ${device.rssi}`);
+    }
+    parts.push(device.paired ? "Paired" : "Not paired");
+    return parts.join(" | ");
+  }
+
+  async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+    if (permissions.bluetooth !== "granted") {
+      permissions.bluetooth = await requestRnodeBluetoothPermission();
+    }
+    if (permissions.bluetooth === "granted") {
+      return true;
+    }
+    feedback.value = "Bluetooth permission is required for RNode device selection.";
+    return false;
+  }
+
+  async function loadPairedRnodeDevices(): Promise<void> {
+    if (rnodePairedLoading.value) {
+      return;
+    }
+    if (!(await ensureBluetoothPermissionForRnode())) {
+      return;
+    }
+    rnodePairedLoading.value = true;
+    feedback.value = "";
+    try {
+      rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+      if (rnodePairedDevices.value.length === 0) {
+        feedback.value = "No paired Bluetooth devices found on this Android phone.";
+      }
+    } catch (error: unknown) {
+      feedback.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      rnodePairedLoading.value = false;
+    }
+  }
+
   async function scanRnodeDevices(): Promise<void> {
     if (rnodeScanning.value) {
       return;
     }
-    if (permissions.bluetooth !== "granted") {
-      permissions.bluetooth = await requestRnodeBluetoothPermission();
-    }
-    if (permissions.bluetooth !== "granted") {
-      feedback.value = "Bluetooth permission is required to scan for RNode devices.";
+    if (!(await ensureBluetoothPermissionForRnode())) {
       return;
     }
     rnodeScanning.value = true;
@@ -278,7 +324,7 @@ export function useSetupWizard() {
     saving.value = true;
     feedback.value = "";
     try {
-      nodeStore.updateSettings({
+      await nodeStore.updateSettings({
         displayName: normalizedDisplayName.value,
         tcpClients: normalizedTcpClients.value,
         telemetry: {
@@ -321,6 +367,9 @@ export function useSetupWizard() {
     permissionLabel,
     profileSummary,
     refreshPermissions,
+    rnodeDeviceDetail,
+    rnodePairedDevices,
+    rnodePairedLoading,
     rnodeDevices,
     rnodeProfiles: RNODE_PROFILE_SPECS,
     rnodeScanning,
@@ -337,6 +386,7 @@ export function useSetupWizard() {
     requestNotifications,
     requestBluetooth,
     inferRnodeRegion,
+    loadPairedRnodeDevices,
     scanRnodeDevices,
     selectRnodeDevice,
     setTcpEndpoint,

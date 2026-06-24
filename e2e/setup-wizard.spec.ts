@@ -60,6 +60,10 @@ test("operators complete first-run setup and persist core choices", async ({ pag
 
   await expect(page.getByRole("heading", { name: "LoRa Interface" })).toBeVisible();
   await expect(page.getByText("Step 5 of 8")).toBeVisible();
+  await page.getByLabel("Enable RNode LoRa").check();
+  await page.getByPlaceholder("RNode Bluetooth device id").fill("AA:BB:CC:DD:EE:FF");
+  await page.getByLabel("Region").selectOption("EU868");
+  await page.getByLabel("REM LoRa profile").selectOption("REM-MF-URBAN-v1");
   await page.getByRole("button", { name: "Next" }).click();
 
   await expect(page.getByRole("heading", { name: "Telemetry" })).toBeVisible();
@@ -94,6 +98,13 @@ test("operators complete first-run setup and persist core choices", async ({ pag
 
   expect(storedSettings.displayName).toBe("Atlas-9");
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+  expect(storedSettings.rnode).toEqual({
+    enabled: true,
+    peripheralId: "AA:BB:CC:DD:EE:FF",
+    displayName: "",
+    region: "EU868",
+    profile: "REM-MF-URBAN-v1",
+  });
   expect(storedSettings.telemetry.enabled).toBe(true);
   expect(storedSettings.telemetry.publishIntervalSeconds).toBe(420);
   expect(status.running).toBe(true);

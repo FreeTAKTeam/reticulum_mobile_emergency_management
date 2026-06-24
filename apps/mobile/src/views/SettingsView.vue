@@ -14,7 +14,13 @@ import {
   normalizeRnodeSettings,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
-import { scanRnodeBleDevices, pairRnodeBleDevice, type RnodeBleDeviceRecord } from "../services/rnodeBluetooth";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
+import { requestRnodeBluetoothPermission } from "../services/setupPermissions";
 
 interface KnownTcpServerOption {
   name: string;
@@ -83,6 +89,8 @@ const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
 const rnodeScanFeedback = ref("");
+const rnodePairedLoading = ref(false);
+const rnodePairedDevices = ref<RnodeBleDeviceRecord[]>([]);
 const rnodeScanning = ref(false);
 const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
@@ -351,8 +359,41 @@ function removeTcpEndpoint(endpoint: string): void {
   form.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
 }
 
+function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+  const parts = [device.address];
+  if (typeof device.rssi === "number") {
+    parts.push(`RSSI ${device.rssi}`);
+  }
+  parts.push(device.paired ? "Paired" : "Not paired");
+  return parts.join(" | ");
+}
+
+async function loadPairedRnodeDevices(): Promise<void> {
+  if (rnodePairedLoading.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodePairedLoading.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+    if (rnodePairedDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No paired Bluetooth devices found on this Android phone.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodePairedLoading.value = false;
+  }
+}
+
 async function scanRnodeDevices(): Promise<void> {
   if (rnodeScanning.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
     return;
   }
   rnodeScanning.value = true;
@@ -367,6 +408,15 @@ async function scanRnodeDevices(): Promise<void> {
   } finally {
     rnodeScanning.value = false;
   }
+}
+
+async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+  const permission = await requestRnodeBluetoothPermission();
+  if (permission === "granted") {
+    return true;
+  }
+  rnodeScanFeedback.value = "Bluetooth permission is required for RNode device selection.";
+  return false;
 }
 
 async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
@@ -416,16 +466,21 @@ async function applySettings(): Promise<void> {
   const previousDisplayName = nodeStore.settings.displayName;
   const previousHubMode = nodeStore.settings.hub.mode;
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
+  const previousRnode = normalizeRnodeSettings(nodeStore.settings.rnode);
+  const nextRnode = normalizedRnodeSettings.value;
+  const rnodeChangedBeforeSave = JSON.stringify(previousRnode) !== JSON.stringify(nextRnode);
+  let rnodeApplyError = "";
+  let rnodeAppliedToRuntime = false;
   savingSettings.value = true;
   try {
-    nodeStore.updateSettings({
+    await nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
-      rnode: normalizedRnodeSettings.value,
+      rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
         publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
@@ -456,6 +511,18 @@ async function applySettings(): Promise<void> {
       });
     }
     await sosCardRef.value?.saveSettings();
+    if (rnodeChangedBeforeSave) {
+      try {
+        if (nodeStore.status.running) {
+          await nodeStore.restartNode();
+        } else {
+          await nodeStore.startNode();
+        }
+        rnodeAppliedToRuntime = true;
+      } catch (error: unknown) {
+        rnodeApplyError = error instanceof Error ? error.message : String(error);
+      }
+    }
   } catch (error: unknown) {
     runtimeFeedback.value = error instanceof Error ? error.message : String(error);
     return;
@@ -476,14 +543,17 @@ async function applySettings(): Promise<void> {
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
   form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
   syncWatchStatusServerForm();
-  runtimeFeedback.value =
-    nodeStore.settings.displayName !== previousDisplayName
+  const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
+  const hubRoutingChanged =
+    nodeStore.settings.hub.mode !== previousHubMode
+    || nodeStore.settings.hub.identityHash !== previousHubIdentityHash;
+  runtimeFeedback.value = rnodeApplyError
+    ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
+    : rnodeChangedBeforeSave && rnodeAppliedToRuntime
+      ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
-      : nodeStore.status.running
-          && (
-            nodeStore.settings.hub.mode !== previousHubMode
-            || nodeStore.settings.hub.identityHash !== previousHubIdentityHash
-          )
+      : nodeStore.status.running && hubRoutingChanged
         ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
 }
@@ -663,113 +733,136 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
         </div>
 
-        <p class="section-note">
-          TCP interfaces: choose from known community servers (Columba list) or add custom
-          host:port endpoints.
-        </p>
+        <section class="config-section" aria-labelledby="tcp-interfaces-heading">
+          <div class="config-section-header">
+            <h3 id="tcp-interfaces-heading">TCP Interfaces</h3>
+            <p>Known community servers and custom host:port endpoints.</p>
+          </div>
 
-        <div class="server-list">
-          <label
-            v-for="server in knownTcpServers"
-            :key="server.endpoint"
-            class="server-option"
-          >
+          <div class="server-list">
+            <label
+              v-for="server in knownTcpServers"
+              :key="server.endpoint"
+              class="server-option"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedTcpEndpointSet.has(server.endpoint)"
+                @change="
+                  toggleKnownTcpEndpoint(
+                    server.endpoint,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              <div class="server-option-body">
+                <p class="server-name">{{ server.name }}</p>
+                <p class="server-endpoint">{{ server.endpoint }}</p>
+              </div>
+              <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
             <input
-              type="checkbox"
-              :checked="selectedTcpEndpointSet.has(server.endpoint)"
-              @change="
-                toggleKnownTcpEndpoint(
-                  server.endpoint,
-                  ($event.target as HTMLInputElement).checked,
-                )
-              "
+              v-model="customTcpEndpoint"
+              type="text"
+              placeholder="Add custom endpoint (host:port)"
             />
-            <div class="server-option-body">
-              <p class="server-name">{{ server.name }}</p>
-              <p class="server-endpoint">{{ server.endpoint }}</p>
-            </div>
-            <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
-          </label>
-        </div>
+            <button type="button" @click="addCustomTcpEndpoint">Add</button>
+          </div>
 
-        <div class="tcp-custom-row">
-          <input
-            v-model="customTcpEndpoint"
-            type="text"
-            placeholder="Add custom endpoint (host:port)"
-          />
-          <button type="button" @click="addCustomTcpEndpoint">Add</button>
-        </div>
+          <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
+            <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
+              <span>{{ endpoint }}</span>
+              <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
+                Remove
+              </button>
+            </article>
+          </div>
+          <p v-else class="section-note">No TCP endpoints configured.</p>
+        </section>
 
-        <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
-          <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
-            <span>{{ endpoint }}</span>
-            <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
-              Remove
+        <section class="config-section" aria-labelledby="lora-interface-heading">
+          <div class="config-section-header">
+            <h3 id="lora-interface-heading">LoRa / RNode</h3>
+            <p>Paired Android Bluetooth device and REM radio profile.</p>
+          </div>
+
+          <div class="grid">
+            <label class="checkbox">
+              <input v-model="form.rnodeEnabled" type="checkbox" />
+              Enable RNode Bluetooth LoRa
+            </label>
+            <label>
+              RNode device id
+              <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
+            </label>
+            <label>
+              RNode display name
+              <input v-model="form.rnodeDisplayName" type="text" placeholder="Optional label" />
+            </label>
+            <label>
+              Region
+              <select v-model="form.rnodeRegion">
+                <option value="US915">US915</option>
+                <option value="EU868">EU868</option>
+              </select>
+            </label>
+            <label>
+              REM LoRa profile
+              <select v-model="form.rnodeProfile">
+                <option v-for="profile in RNODE_PROFILE_SPECS" :key="profile.id" :value="profile.id">
+                  {{ profile.id }} - {{ profile.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              Reticulum syntax
+              <input :value="rnodeProfileSummary(form.rnodeProfile)" class="readonly-input" type="text" readonly />
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
+            <button type="button" :disabled="rnodePairedLoading" @click="loadPairedRnodeDevices">
+              {{ rnodePairedLoading ? "Loading paired" : "Show paired Bluetooth" }}
             </button>
-          </article>
-        </div>
-        <p v-else class="section-note">No TCP endpoints configured.</p>
-
-        <p class="section-note">
-          RNode Bluetooth LoRa uses the paired Android BLE device and the shared REM radio profile.
-        </p>
-
-        <div class="grid">
-          <label class="checkbox">
-            <input v-model="form.rnodeEnabled" type="checkbox" />
-            Enable RNode Bluetooth LoRa
-          </label>
-          <label>
-            RNode device id
-            <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
-          </label>
-          <label>
-            RNode display name
-            <input v-model="form.rnodeDisplayName" type="text" placeholder="Optional label" />
-          </label>
-          <label>
-            Region
-            <select v-model="form.rnodeRegion">
-              <option value="US915">US915</option>
-              <option value="EU868">EU868</option>
-            </select>
-          </label>
-          <label>
-            REM LoRa profile
-            <select v-model="form.rnodeProfile">
-              <option v-for="profile in RNODE_PROFILE_SPECS" :key="profile.id" :value="profile.id">
-                {{ profile.id }} - {{ profile.label }}
-              </option>
-            </select>
-          </label>
-          <label>
-            Reticulum syntax
-            <input :value="rnodeProfileSummary(form.rnodeProfile)" class="readonly-input" type="text" readonly />
-          </label>
-        </div>
-
-        <div class="tcp-custom-row">
-          <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
-            {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
-          </button>
-        </div>
-        <div v-if="rnodeDevices.length > 0" class="server-list">
-          <button
-            v-for="device in rnodeDevices"
-            :key="device.id"
-            type="button"
-            class="server-option device-option"
-            @click="selectRnodeDevice(device)"
-          >
-            <div class="server-option-body">
-              <p class="server-name">{{ device.name || device.address }}</p>
-              <p class="server-endpoint">{{ device.address }} | RSSI {{ device.rssi }} | {{ device.paired ? "Paired" : "Not paired" }}</p>
-            </div>
-            <span class="bootstrap-badge">RNode</span>
-          </button>
-        </div>
-        <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
+            <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
+              {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+            </button>
+          </div>
+          <div v-if="rnodePairedDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodePairedDevices"
+              :key="`paired-${device.id}`"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">Paired</span>
+            </button>
+          </div>
+          <div v-if="rnodeDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodeDevices"
+              :key="device.id"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">RNode</span>
+            </button>
+          </div>
+          <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
+        </section>
 
         <div class="grid propagation-grid">
           <label>
@@ -1356,6 +1449,35 @@ h1 {
   color: #90aad4;
   font-family: var(--font-body);
   margin: 0.65rem 0 0.8rem;
+}
+
+.config-section {
+  border-top: 1px solid rgb(80 125 190 / 36%);
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+}
+
+.config-section-header {
+  border-left: 3px solid rgb(93 213 255 / 72%);
+  display: grid;
+  gap: 0.18rem;
+  padding-left: 0.62rem;
+}
+
+.config-section-header h3 {
+  color: #d9efff;
+  font-family: var(--font-headline);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.config-section-header p {
+  color: #90aad4;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  margin: 0;
 }
 
 .grid {

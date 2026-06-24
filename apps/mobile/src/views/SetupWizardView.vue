@@ -207,11 +207,34 @@ onMounted(() => {
             <button
               type="button"
               class="icon-action"
-              :disabled="wizard.rnodeScanning.value"
-              aria-label="Scan for RNode Bluetooth devices"
-              @click="wizard.scanRnodeDevices"
+              :disabled="wizard.rnodePairedLoading.value"
+              aria-label="Show paired Bluetooth devices"
+              @click="wizard.loadPairedRnodeDevices"
             >
-              {{ wizard.rnodeScanning.value ? "..." : "+" }}
+              {{ wizard.rnodePairedLoading.value ? "..." : "BT" }}
+            </button>
+          </div>
+          <button
+            type="button"
+            class="secondary-action inline-action"
+            :disabled="wizard.rnodeScanning.value"
+            @click="wizard.scanRnodeDevices"
+          >
+            {{ wizard.rnodeScanning.value ? "Scanning" : "Scan RNode BLE" }}
+          </button>
+          <div class="server-list" v-if="wizard.rnodePairedDevices.value.length > 0">
+            <button
+              v-for="device in wizard.rnodePairedDevices.value"
+              :key="`paired-${device.id}`"
+              type="button"
+              class="server-option device-option"
+              @click="wizard.selectRnodeDevice(device)"
+            >
+              <span class="server-copy">
+                <strong>{{ device.name || device.address }}</strong>
+                <span>{{ wizard.rnodeDeviceDetail(device) }}</span>
+              </span>
+              <span class="bootstrap-badge">Paired</span>
             </button>
           </div>
           <div class="server-list" v-if="wizard.rnodeDevices.value.length > 0">
@@ -224,7 +247,7 @@ onMounted(() => {
             >
               <span class="server-copy">
                 <strong>{{ device.name || device.address }}</strong>
-                <span>{{ device.address }} | RSSI {{ device.rssi }} | {{ device.paired ? "Paired" : "Not paired" }}</span>
+                <span>{{ wizard.rnodeDeviceDetail(device) }}</span>
               </span>
               <span class="bootstrap-badge">RNode</span>
             </button>

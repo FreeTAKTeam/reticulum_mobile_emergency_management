@@ -73,7 +73,7 @@ export interface RnodeBleDeviceRecord {
   id: string;
   address: string;
   name: string;
-  rssi: number;
+  rssi?: number;
   paired: boolean;
   bondState?: string;
 }
@@ -712,6 +712,7 @@ export interface ReticulumNodeClient {
   getStatus(): Promise<NodeStatus>;
   checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
   requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]>;
   scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
   pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   connectPeer(destinationHex: string): Promise<void>;
@@ -980,6 +981,7 @@ interface ReticulumNodePlugin {
   getStatus(): Promise<Record<string, unknown>>;
   checkRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
   requestRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  listPairedRnodeBluetoothDevices(): Promise<{ items?: RnodeBleDeviceRecord[] }>;
   scanRnodeBleDevices(options?: { timeoutMs?: number }): Promise<{ items?: RnodeBleDeviceRecord[] }>;
   pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
@@ -3332,6 +3334,12 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return { bluetooth: String(result.bluetooth ?? "unavailable") };
   }
 
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPairedRnodeBluetoothDevices();
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
   async scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
     await this.ready();
     const result = await this.plugin.scanRnodeBleDevices({ timeoutMs });
@@ -3932,6 +3940,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { bluetooth: "unavailable" };
   }
 
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
   async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
     return [];
   }
@@ -4509,6 +4521,10 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
     return { bluetooth: "unavailable" };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
   }
 
   async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {

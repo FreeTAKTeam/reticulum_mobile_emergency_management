@@ -80,7 +80,10 @@ import {
   normalizeRnodeSettings,
 } from "../utils/rnodeProfiles";
 import {
+  hasConfiguredNonTcpInterface,
   logIndicatesReadinessError,
+  logIndicatesTcpInterfaceReadinessError,
+  nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
 } from "../utils/readinessErrors";
 
@@ -423,6 +426,10 @@ function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettings
   return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
 }
 
+function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -435,6 +442,7 @@ function normalizeAppSettingsRecord(
   runtimeSettings: AppSettingsRecord,
   uiSettings: NodeUiPreferences,
   tcpFallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+  allowEmptyTcpClients = false,
 ): NodeUiSettings {
   return {
     ...cloneDefaultSettings(),
@@ -446,6 +454,7 @@ function normalizeAppSettingsRecord(
     tcpClients: normalizeTcpCommunityClients(
       runtimeSettings.tcpClients,
       tcpFallback,
+      allowEmptyTcpClients,
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
@@ -517,7 +526,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
-    tcpClients: normalizeTcpCommunityClients(settings.tcpClients),
+    tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
@@ -664,6 +673,16 @@ export const useNodeStore = defineStore("node", () => {
     if (wasReady) {
       appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
     }
+  }
+
+  function tcpInterfaceFailureCanFallBackToConfiguredInterface(message: string): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && logIndicatesTcpInterfaceReadinessError(message);
+  }
+
+  function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && nodeErrorIndicatesTcpInterfaceReadinessError(event);
   }
 
   function errorMessage(error: unknown): string {
@@ -1163,6 +1182,7 @@ export const useNodeStore = defineStore("node", () => {
           record,
           loadUiSettingsProjection(DEFAULT_SETTINGS),
           defaultsWithTcpFallback(),
+          true,
         );
         applySettingsProjection(normalizedSettings);
         const normalizedRecord = toAppSettingsRecord(normalizedSettings);
@@ -1293,7 +1313,23 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     applySettingsProjection(nextSettings);
-    await client.value.setAppSettings(toAppSettingsRecord(nextSettings));
+    const requestedRecord = toAppSettingsRecord(nextSettings);
+    await client.value.setAppSettings(requestedRecord);
+    const persistedRecord = await client.value.getAppSettings();
+    if (!persistedRecord) {
+      throw new Error("Native app settings save did not return persisted settings.");
+    }
+    const persistedSettings = normalizeAppSettingsRecord(
+      persistedRecord,
+      normalizedUiSettings,
+      defaultsWithTcpFallback(),
+      true,
+    );
+    const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
+    if (!settingsRecordsEqual(requestedRecord, normalizedPersistedRecord)) {
+      throw new Error("Native app settings save verification failed.");
+    }
+    applySettingsProjection(persistedSettings);
     await refreshOperationalSummaryProjection();
   }
 
@@ -1782,7 +1818,11 @@ export const useNodeStore = defineStore("node", () => {
         status.value = normalizeNodeStatus(event.status);
         const statusError = asTrimmedString(status.value.lastError);
         if (statusError && logIndicatesReadinessError(statusError)) {
-          setReadinessError(statusError);
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(statusError)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(statusError);
+          }
         } else if (event.status.running && !statusError) {
           clearReadinessError();
         }
@@ -1853,13 +1893,21 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
         if (logIndicatesReadinessError(event.message)) {
-          setReadinessError(event.message);
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(event.message)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(event.message);
+          }
         }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
         if (nodeErrorIndicatesReadinessError(event)) {
-          setReadinessError(lastError.value);
+          if (nodeErrorCanFallBackToConfiguredInterface(event)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(lastError.value);
+          }
         }
         appendNodeControlEntry("Error", lastError.value);
       }),
@@ -2200,6 +2248,7 @@ export const useNodeStore = defineStore("node", () => {
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     await init();
     await persistSettingsProjection(nextSettings);
@@ -2300,7 +2349,7 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function updateSettings(next: Partial<NodeUiSettings>): void {
+  async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
     if (next.displayName !== undefined) {
@@ -2315,7 +2364,7 @@ export const useNodeStore = defineStore("node", () => {
       settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
     }
     if (next.tcpClients !== undefined) {
-      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback());
+      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback(), true);
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
@@ -2355,33 +2404,36 @@ export const useNodeStore = defineStore("node", () => {
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     if (uiSettingsChanged) {
       storeUiSettingsProjection(toUiSettingsProjection(settings));
     }
-    void init()
-      .then(() => persistSettingsProjection(nextSettings))
-      .then(() => {
-        if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
-          return;
-        }
-        if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-          if (settings.hub.mode === "Connected") {
-            const message =
-              "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
-            lastError.value = message;
-            appendLog("Warn", message);
-          }
-          return;
-        }
-        appendLog(
-          "Info",
-          "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
-        );
-      })
-      .catch((error: unknown) => {
-        appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
-      });
+    await init();
+    try {
+      await persistSettingsProjection(nextSettings);
+    } catch (error: unknown) {
+      appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
+      throw error;
+    }
+    if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+      if (settings.hub.mode === "Connected") {
+        const message =
+          "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
+        lastError.value = message;
+        appendLog("Warn", message);
+      }
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    appendLog(
+      "Info",
+      "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
+    );
     void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
   }
 

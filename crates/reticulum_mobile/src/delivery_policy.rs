@@ -100,6 +100,7 @@ pub(crate) struct PeerConnectivityModel {
 }
 
 impl PeerConnectivityModel {
+    #[cfg(test)]
     pub(crate) fn from_peer<P: PeerDeliveryState + ?Sized>(
         peer: &P,
         has_active_relay: bool,
@@ -208,7 +209,7 @@ pub(crate) fn saved_route_prefers_propagation<P: PeerDeliveryState + ?Sized>(
         return false;
     }
     if !direct_delivery_available {
-        return true;
+        return direct_priority_hops.is_some_and(|hops| hops > direct_priority_free_hops);
     }
     peer_has_known_lxmf_route(peer) && !peer_is_direct_delivery_ready(peer)
         || direct_priority_hops.is_some_and(|hops| hops > direct_priority_free_hops)
@@ -220,17 +221,18 @@ pub(crate) fn direct_attempt_budget_for_send(
     send_mode: types::SendMode,
     has_active_relay: bool,
     can_try_stored_lxmf_route: bool,
+    has_current_lxmf_route: bool,
     direct_delivery_ready: bool,
     direct_priority_hops: Option<u8>,
     direct_priority_free_hops: u8,
     lxmf_direct_attempts: usize,
 ) -> usize {
-    let _ = direct_priority_hops;
-    let _ = direct_priority_free_hops;
     if matches!(send_mode, types::SendMode::Auto {})
         && has_active_relay
         && can_try_stored_lxmf_route
+        && !has_current_lxmf_route
         && !direct_delivery_ready
+        && direct_priority_hops.is_some_and(|hops| hops > direct_priority_free_hops)
     {
         return 0;
     }
@@ -240,7 +242,11 @@ pub(crate) fn direct_attempt_budget_for_send(
 
 #[cfg(test)]
 mod tests {
-    use super::{PeerConnectivityModel, PeerDeliveryState};
+    use super::{
+        direct_attempt_budget_for_send, saved_route_prefers_propagation, PeerConnectivityModel,
+        PeerDeliveryState,
+    };
+    use crate::types;
 
     struct TestPeer {
         destination_hex: &'static str,
@@ -337,5 +343,71 @@ mod tests {
         assert!(!model.direct_delivery_available());
         assert!(model.stored_propagation_available());
         assert!(model.current_or_stored_route_available());
+    }
+
+    #[test]
+    fn current_saved_lxmf_route_does_not_prefer_propagation_without_priority_hops() {
+        let peer = TestPeer {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            lxmf_destination_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            active_link: false,
+            connected_state: false,
+            saved: true,
+            stale: false,
+            announce_last_seen_at_ms: Some(1_000),
+            lxmf_last_seen_at_ms: Some(1_050),
+        };
+
+        assert!(!saved_route_prefers_propagation(
+            &peer, true, false, None, 2
+        ));
+    }
+
+    #[test]
+    fn auto_send_keeps_direct_budget_for_current_saved_lxmf_route() {
+        assert_eq!(
+            direct_attempt_budget_for_send(
+                types::SendMode::Auto {},
+                true,
+                true,
+                true,
+                false,
+                None,
+                2,
+                3
+            ),
+            3,
+        );
+    }
+
+    #[test]
+    fn saved_route_without_priority_keeps_direct_lane_when_current_route_is_stale() {
+        let peer = TestPeer {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            lxmf_destination_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            active_link: false,
+            connected_state: false,
+            saved: true,
+            stale: true,
+            announce_last_seen_at_ms: None,
+            lxmf_last_seen_at_ms: None,
+        };
+
+        assert!(!saved_route_prefers_propagation(
+            &peer, true, false, None, 2
+        ));
+        assert_eq!(
+            direct_attempt_budget_for_send(
+                types::SendMode::Auto {},
+                true,
+                true,
+                false,
+                false,
+                None,
+                2,
+                3,
+            ),
+            3,
+        );
     }
 }
