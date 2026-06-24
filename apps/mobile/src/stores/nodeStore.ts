@@ -442,6 +442,7 @@ function normalizeAppSettingsRecord(
   runtimeSettings: AppSettingsRecord,
   uiSettings: NodeUiPreferences,
   tcpFallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+  allowEmptyTcpClients = false,
 ): NodeUiSettings {
   return {
     ...cloneDefaultSettings(),
@@ -453,6 +454,7 @@ function normalizeAppSettingsRecord(
     tcpClients: normalizeTcpCommunityClients(
       runtimeSettings.tcpClients,
       tcpFallback,
+      allowEmptyTcpClients,
     ),
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
@@ -524,7 +526,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
-    tcpClients: normalizeTcpCommunityClients(settings.tcpClients),
+    tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
     broadcast: settings.broadcast,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
@@ -1180,6 +1182,7 @@ export const useNodeStore = defineStore("node", () => {
           record,
           loadUiSettingsProjection(DEFAULT_SETTINGS),
           defaultsWithTcpFallback(),
+          true,
         );
         applySettingsProjection(normalizedSettings);
         const normalizedRecord = toAppSettingsRecord(normalizedSettings);
@@ -1320,6 +1323,7 @@ export const useNodeStore = defineStore("node", () => {
       persistedRecord,
       normalizedUiSettings,
       defaultsWithTcpFallback(),
+      true,
     );
     const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
     if (!settingsRecordsEqual(requestedRecord, normalizedPersistedRecord)) {
@@ -2244,6 +2248,7 @@ export const useNodeStore = defineStore("node", () => {
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     await init();
     await persistSettingsProjection(nextSettings);
@@ -2359,7 +2364,7 @@ export const useNodeStore = defineStore("node", () => {
       settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
     }
     if (next.tcpClients !== undefined) {
-      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback());
+      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback(), true);
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
@@ -2399,6 +2404,7 @@ export const useNodeStore = defineStore("node", () => {
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     if (uiSettingsChanged) {
       storeUiSettingsProjection(toUiSettingsProjection(settings));

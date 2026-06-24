@@ -122,7 +122,9 @@ export function useSetupWizard() {
   const steps = SETUP_STEPS;
   const activeStep = computed(() => steps[activeIndex.value]);
   const normalizedDisplayName = computed(() => normalizeDisplayName(draft.displayName) ?? "");
-  const normalizedTcpClients = computed(() => normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS));
+  const normalizedTcpClients = computed(() =>
+    normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
+  );
   const normalizedTelemetryPublishIntervalSeconds = computed(() =>
     normalizeWizardTelemetryPublishIntervalSeconds(draft.telemetryPublishIntervalSeconds),
   );
