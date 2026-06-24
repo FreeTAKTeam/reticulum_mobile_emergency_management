@@ -1303,7 +1303,7 @@ async fn compat_send_lxmf(
         );
         let trace = state
             .transport
-            .send_packet_broadcast_with_trace(packet)
+            .send_prepared_packet_broadcast_with_trace(packet)
             .await;
         let outcome = trace.outcome;
         info!(
