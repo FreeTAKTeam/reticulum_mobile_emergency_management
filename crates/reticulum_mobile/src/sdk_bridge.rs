@@ -102,13 +102,13 @@ fn delivery_representation_from_lxmf(method: LxmfRepresentation) -> LxmfDelivery
 fn transport_method_for_send_mode(
     send_mode: SendMode,
     has_cached_direct_link: bool,
-    _has_delivery_ratchet: bool,
+    has_delivery_ratchet: bool,
 ) -> TransportMethod {
     match send_mode {
         SendMode::PropagationOnly {} => TransportMethod::Propagated,
         SendMode::DirectOnly {} => TransportMethod::Direct,
         SendMode::Auto {} => {
-            if has_cached_direct_link {
+            if has_cached_direct_link || has_delivery_ratchet {
                 TransportMethod::Direct
             } else {
                 TransportMethod::Opportunistic
@@ -1303,7 +1303,7 @@ async fn compat_send_lxmf(
         );
         let trace = state
             .transport
-            .send_prepared_packet_broadcast_with_trace(packet)
+            .send_packet_with_trace(packet)
             .await;
         let outcome = trace.outcome;
         info!(
@@ -2850,14 +2850,14 @@ mod tests {
     }
 
     #[test]
-    fn auto_send_uses_opportunistic_packets_without_active_direct_link() {
+    fn auto_send_uses_opportunistic_packets_only_without_route_or_link() {
         assert_eq!(
             transport_method_for_send_mode(SendMode::Auto {}, false, false),
             TransportMethod::Opportunistic,
         );
         assert_eq!(
             transport_method_for_send_mode(SendMode::Auto {}, false, true),
-            TransportMethod::Opportunistic,
+            TransportMethod::Direct,
         );
         assert_eq!(
             transport_method_for_send_mode(SendMode::Auto {}, true, false),
