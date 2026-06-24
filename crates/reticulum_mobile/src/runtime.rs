@@ -6023,12 +6023,18 @@ async fn delete_conversation_records(
     }
 
     let delete_keys = conversation_delete_keys(conversation_id, &peers);
-    let delete_key_refs = delete_keys.iter().map(String::as_str).collect::<Vec<_>>();
+    let projection_changed = state.projection_journal.remove_conversation_messages(
+        delete_keys.iter().map(String::as_str),
+        Some("conversation-deleted"),
+    );
     state
         .messaging
         .lock()
         .await
-        .delete_conversation_messages(delete_key_refs);
+        .delete_conversation_messages(delete_keys.iter().map(String::as_str));
+    if projection_changed {
+        state.projection_journal.flush_now().await;
+    }
     Ok(())
 }
 
