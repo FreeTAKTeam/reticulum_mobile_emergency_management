@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -17,20 +18,23 @@ use lxmf_sdk::{
     StartRequest,
 };
 use rand_core::OsRng;
-use reticulum::destination::link::{Link, LinkEvent, LinkStatus};
-use reticulum::destination::{DestinationDesc, DestinationName, SingleOutputDestination};
-use reticulum::hash::AddressHash;
-use reticulum::identity::PrivateIdentity;
-use reticulum::packet::LXMF_MAX_PAYLOAD;
-use reticulum::packet::{
+use reticulum::runtime::{ReceivedData, SendPacketOutcome as RnsSendOutcome, Transport};
+use reticulum::transport::destination::link::{Link, LinkEvent, LinkStatus};
+use reticulum::transport::destination::{
+    DestinationDesc, DestinationName, SingleInputDestination, SingleOutputDestination,
+};
+use reticulum::transport::hash::{address_hash, AddressHash};
+use reticulum::transport::identity::{DecryptIdentity, PrivateIdentity};
+use reticulum::transport::packet::LXMF_MAX_PAYLOAD;
+use reticulum::transport::packet::{
     ContextFlag, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
     PacketDataBuffer, PacketType, PropagationType,
 };
-use reticulum::resource::ResourceEventKind;
-use reticulum::transport::{SendPacketOutcome as RnsSendOutcome, Transport};
+use reticulum::transport::resource::{ResourceEvent, ResourceEventKind};
 use serde_json::{json, Value as JsonValue};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
+use x25519_dalek::PublicKey;
 
 use crate::mission_sync::MissionSyncMetadata;
 use crate::runtime::{lxmf_private_identity, LxmfSendReport};
@@ -41,6 +45,13 @@ use crate::types::{
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
 const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+const ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(8);
+const PROPAGATION_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+const PROPAGATION_FETCH_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
+const PROPAGATION_FETCH_BATCH_SIZE: usize = 1;
+const PROPAGATION_PURGE_BATCH_SIZE: usize = 8;
+const PROPAGATION_FETCH_TRANSFER_LIMIT_KB: u64 = 10_240;
+const PROPAGATION_STAMP_BYTES: [u8; 32] = [0u8; 32];
 const COMPAT_EVENT_RETENTION_LIMIT: usize = 2_048;
 const COMPAT_DELIVERY_RETENTION_LIMIT: usize = 1_024;
 const COMPAT_SEND_REPORT_RETENTION_LIMIT: usize = 512;
@@ -97,18 +108,48 @@ fn transport_method_for_send_mode(
         SendMode::PropagationOnly {} => TransportMethod::Propagated,
         SendMode::DirectOnly {} => TransportMethod::Direct,
         SendMode::Auto {} => {
-            if has_cached_direct_link {
+            if has_cached_direct_link || has_delivery_ratchet {
                 TransportMethod::Direct
-            } else if has_delivery_ratchet {
-                TransportMethod::Opportunistic
             } else {
-                TransportMethod::Direct
+                TransportMethod::Opportunistic
             }
         }
     }
 }
 
-fn lxmf_identity(identity: &reticulum::identity::Identity) -> lxmf::identity::Identity {
+fn metadata_is_accepted_result(metadata: Option<&MissionSyncMetadata>) -> bool {
+    metadata.is_some_and(|metadata| {
+        metadata.result_present && metadata.result_status.as_deref() == Some("accepted")
+    })
+}
+
+#[cfg(test)]
+fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String {
+    idempotency_key_for_send_attempt(base_key, send_mode, None)
+}
+
+fn idempotency_key_for_send_attempt(
+    base_key: &str,
+    send_mode: SendMode,
+    direct_attempt: Option<usize>,
+) -> String {
+    if let Some(attempt) = direct_attempt {
+        return match send_mode {
+            SendMode::PropagationOnly {} => format!("{base_key}:propagation"),
+            SendMode::DirectOnly {} | SendMode::Auto {} => {
+                format!("{base_key}:direct-attempt-{attempt}")
+            }
+        };
+    }
+
+    match send_mode {
+        SendMode::PropagationOnly {} => format!("{base_key}:propagation"),
+        SendMode::DirectOnly {} => format!("{base_key}:direct"),
+        SendMode::Auto {} => base_key.to_string(),
+    }
+}
+
+fn lxmf_identity(identity: &reticulum::transport::identity::Identity) -> lxmf::identity::Identity {
     lxmf::identity::Identity::new_from_slices(
         identity.public_key_bytes(),
         identity.verifying_key_bytes(),
@@ -249,12 +290,16 @@ const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_LINK_CONNECT_ATTEMPTS: usize = 3;
+const ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS: usize = 1;
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
 const EXT_FIELDS_BASE64: &str = "reticulum.fields_base64";
 const EXT_RAW_BYTES_BASE64: &str = "reticulum.raw_bytes_base64";
 const EXT_SEND_MODE: &str = "reticulum.send_mode";
 const EXT_USE_PROPAGATION_NODE: &str = "reticulum.use_propagation_node";
+const EXT_ACCEPTED_RESULT_ACK: &str = "reticulum.accepted_result_ack";
 const EVENT_PACKET_RECEIVED: &str = "reticulum.packet_received";
 const EVENT_ANNOUNCE_RECEIVED: &str = "reticulum.announce_received";
 const EVENT_PEER_CHANGED: &str = "reticulum.peer_changed";
@@ -265,7 +310,7 @@ const EVENT_DELIVERY_UPDATED: &str = "reticulum.delivery_updated";
 pub(crate) struct SdkTransportState {
     pub(crate) identity: PrivateIdentity,
     pub(crate) transport: Arc<Transport>,
-    pub(crate) lxmf_destination: Arc<TokioMutex<reticulum::destination::SingleInputDestination>>,
+    pub(crate) lxmf_destination: Arc<TokioMutex<SingleInputDestination>>,
     pub(crate) known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     pub(crate) out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
     pub(crate) active_propagation_node_hex: Arc<TokioMutex<Option<String>>>,
@@ -516,6 +561,10 @@ impl CompatBackend {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery events preserve separate routing and mission correlation fields"
+    )]
     fn record_delivery_update(
         &self,
         message_id_hex: &str,
@@ -684,6 +733,18 @@ struct CompatSendReport {
     receipt_hash_hex: Option<String>,
 }
 
+pub(crate) struct PropagationFetchResult {
+    pub(crate) destination_hex: String,
+    pub(crate) available_count: usize,
+    pub(crate) fetched_count: usize,
+    pub(crate) fetched_entry_count: usize,
+    pub(crate) extracted_payload_count: usize,
+    pub(crate) imported_wires: Vec<Vec<u8>>,
+    pub(crate) failed_count: usize,
+    pub(crate) malformed_count: usize,
+    pub(crate) decrypt_failed_count: usize,
+}
+
 pub(crate) struct RuntimeLxmfSdk {
     client: Arc<Client<CompatBackend>>,
 }
@@ -731,6 +792,32 @@ impl RuntimeLxmfSdk {
         metadata: Option<MissionSyncMetadata>,
         send_mode: SendMode,
     ) -> Result<LxmfSendReport, NodeError> {
+        self.send_lxmf_with_direct_attempt(
+            destination,
+            content,
+            title,
+            fields_bytes,
+            metadata,
+            send_mode,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "send boundary keeps payload, metadata, mode, and retry identity explicit"
+    )]
+    pub(crate) async fn send_lxmf_with_direct_attempt(
+        &self,
+        destination: AddressHash,
+        content: &[u8],
+        title: Option<String>,
+        fields_bytes: Option<Vec<u8>>,
+        metadata: Option<MissionSyncMetadata>,
+        send_mode: SendMode,
+        direct_attempt: Option<usize>,
+    ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .client
             .backend()
@@ -771,6 +858,9 @@ impl RuntimeLxmfSdk {
         if matches!(send_mode, SendMode::PropagationOnly {}) {
             request = request.with_extension(EXT_USE_PROPAGATION_NODE, json!(true));
         }
+        if metadata_is_accepted_result(metadata.as_ref()) {
+            request = request.with_extension(EXT_ACCEPTED_RESULT_ACK, json!(true));
+        }
         if let Some(correlation_id) = metadata
             .as_ref()
             .and_then(|value| value.correlation_id.clone())
@@ -781,7 +871,11 @@ impl RuntimeLxmfSdk {
             .as_ref()
             .and_then(|value| value.tracking_key().map(ToOwned::to_owned))
         {
-            request = request.with_idempotency_key(idempotency_key);
+            request = request.with_idempotency_key(idempotency_key_for_send_attempt(
+                &idempotency_key,
+                send_mode,
+                direct_attempt,
+            ));
         }
 
         let client = self.client.clone();
@@ -826,6 +920,25 @@ impl RuntimeLxmfSdk {
             fallback_stage: report.fallback_stage,
             receipt_hash_hex: report.receipt_hash_hex,
         })
+    }
+
+    pub(crate) async fn fetch_propagated_lxmf_from_relay(
+        &self,
+        relay_hex: &str,
+        limit: Option<u32>,
+        direct_iface_hex: Option<&str>,
+    ) -> Result<PropagationFetchResult, NodeError> {
+        let state = self
+            .client
+            .backend()
+            .transport
+            .as_ref()
+            .ok_or(NodeError::InternalError {})?;
+        let relay_hex = relay_hex.trim();
+        if relay_hex.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        compat_fetch_propagated_lxmf(state, relay_hex, limit, direct_iface_hex).await
     }
 
     pub(crate) fn record_packet_received(
@@ -882,6 +995,10 @@ impl RuntimeLxmfSdk {
         self.client.backend().record_hub_directory_updated(snapshot);
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_sent(
         &self,
         message_id_hex: &str,
@@ -906,6 +1023,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps source and mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_acknowledged(
         &self,
         message_id_hex: &str,
@@ -932,6 +1053,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_failed(
         &self,
         message_id_hex: &str,
@@ -957,6 +1082,10 @@ impl RuntimeLxmfSdk {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "delivery event wrapper keeps mission correlation fields explicit"
+    )]
     pub(crate) fn record_delivery_timed_out(
         &self,
         message_id_hex: &str,
@@ -1031,6 +1160,26 @@ async fn compat_send_lxmf(
             _ => SendMode::Auto {},
         }
     };
+    let is_accepted_result_ack = req
+        .extensions
+        .get(EXT_ACCEPTED_RESULT_ACK)
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let link_connect_timeout = if is_accepted_result_ack {
+        ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT
+    } else {
+        DEFAULT_LINK_CONNECT_TIMEOUT
+    };
+    let link_connect_attempts = if is_accepted_result_ack {
+        ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS
+    } else {
+        DEFAULT_LINK_CONNECT_ATTEMPTS
+    };
+    let resource_transfer_timeout = if is_accepted_result_ack {
+        ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT
+    } else {
+        RESOURCE_TRANSFER_TIMEOUT
+    };
 
     let remote_desc = resolve_lxmf_destination_desc(&state, destination)
         .await
@@ -1091,11 +1240,15 @@ async fn compat_send_lxmf(
     } else {
         false
     };
-    let desired_method = transport_method_for_send_mode(
-        send_mode,
-        has_cached_direct_link,
-        has_delivery_ratchet(&state, &remote_desc.address_hash),
-    );
+    let desired_method = if is_accepted_result_ack {
+        TransportMethod::Opportunistic
+    } else {
+        transport_method_for_send_mode(
+            send_mode,
+            has_cached_direct_link,
+            has_delivery_ratchet(&state, &remote_desc.address_hash),
+        )
+    };
     let DeliveryDecision {
         method,
         representation,
@@ -1148,7 +1301,19 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let outcome = state.transport.send_packet_with_outcome(packet).await;
+        let trace = state.transport.send_packet_with_trace(packet).await;
+        let outcome = trace.outcome;
+        info!(
+            "[lxmf][events][sdk] opportunistic send outcome requested_destination={} resolved_destination={} message_id={} outcome={:?} broadcast={} matched={} sent={} failed={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            message_id_hex,
+            outcome,
+            trace.broadcast,
+            trace.dispatch.matched_ifaces,
+            trace.dispatch.sent_ifaces,
+            trace.dispatch.failed_ifaces,
+        );
         return Ok(CompatSendReport {
             outcome,
             message_id_hex,
@@ -1162,17 +1327,31 @@ async fn compat_send_lxmf(
         });
     }
 
-    let link = ensure_lxmf_output_link(&state, remote_desc)
-        .await
-        .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
+    let remote_destination_hash = remote_desc.address_hash;
+    let link = ensure_lxmf_output_link(
+        &state,
+        remote_desc,
+        Some(requested_destination_hex.as_str()),
+        Some(resolved_destination_hex.as_str()),
+        link_connect_timeout,
+        link_connect_attempts,
+    )
+    .await
+    .map_err(|_| sdk_transport("failed to activate lxmf link"))?;
     let link_id = *link.lock().await.id();
     if matches!(representation, LxmfRepresentation::Resource) {
         let mut resource_events = state.transport.resource_events();
-        let resource_hash = state
+        let resource_hash = match state
             .transport
             .send_resource(&link_id, wire.clone(), None)
             .await
-            .map_err(|_| sdk_transport("failed to start lxmf resource transfer"))?;
+        {
+            Ok(hash) => hash,
+            Err(_) => {
+                clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                return Err(sdk_transport("failed to start lxmf resource transfer"));
+            }
+        };
         let resource_hash_hex = hex::encode(resource_hash.as_slice());
         info!(
             "[lxmf][events][sdk] path=direct representation=resource requested_destination={} resolved_destination={} message_id={} resource_hash={} wire_bytes={} max_wire_bytes={}",
@@ -1183,9 +1362,10 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let deadline = tokio::time::Instant::now() + RESOURCE_TRANSFER_TIMEOUT;
+        let deadline = tokio::time::Instant::now() + resource_transfer_timeout;
         loop {
             if tokio::time::Instant::now() >= deadline {
+                clear_lxmf_output_link(&state, &remote_destination_hash).await;
                 return Err(sdk_transport("lxmf resource transfer timed out"));
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -1216,6 +1396,9 @@ async fn compat_send_lxmf(
                                 message_id_hex,
                                 resource_hash_hex,
                             );
+                            if is_accepted_result_ack {
+                                clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            }
                             return Ok(CompatSendReport {
                                 outcome: RnsSendOutcome::SentDirect,
                                 message_id_hex,
@@ -1229,13 +1412,31 @@ async fn compat_send_lxmf(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "lxmf resource inbound transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
+                        ResourceEventKind::OutboundFailed => {
+                            clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            return Err(sdk_transport("lxmf resource transfer failed"));
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                            return Err(sdk_transport("lxmf resource transfer cancelled"));
+                        }
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    clear_lxmf_output_link(&state, &remote_destination_hash).await;
                     return Err(sdk_transport("resource event stream closed"));
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                Err(_) => return Err(sdk_transport("lxmf resource transfer timed out")),
+                Err(_) => {
+                    clear_lxmf_output_link(&state, &remote_destination_hash).await;
+                    return Err(sdk_transport("lxmf resource transfer timed out"));
+                }
             }
         }
     }
@@ -1254,6 +1455,12 @@ async fn compat_send_lxmf(
         .map_err(|_| sdk_internal("failed to create transport packet"))?;
     let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
     let outcome = state.transport.send_packet_with_outcome(packet).await;
+    if !matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    ) {
+        clear_lxmf_output_link(&state, &remote_destination_hash).await;
+    }
 
     Ok(CompatSendReport {
         outcome,
@@ -1268,6 +1475,10 @@ async fn compat_send_lxmf(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "propagation send boundary keeps resolved routing and delivery metadata explicit"
+)]
 async fn compat_send_lxmf_via_propagation(
     state: &SdkTransportState,
     remote_desc: &DestinationDesc,
@@ -1294,18 +1505,21 @@ async fn compat_send_lxmf_via_propagation(
         .map_err(|_| sdk_transport("failed to resolve propagation relay"))?;
     let propagated_payload = LxmfWireMessage::unpack(wire)
         .map_err(|_| sdk_internal("failed to unpack lxmf wire message"))?
-        .pack_propagation_with_rng(
+        .pack_propagation_with_options_and_rng(
             &lxmf_identity(&remote_desc.identity),
             crate::runtime::now_ms() as f64 / 1000.0,
+            Some(PROPAGATION_STAMP_BYTES.as_slice()),
             OsRng,
         )
+        .map(|(payload, _transient_id)| payload)
         .map_err(|_| sdk_internal("failed to encode propagated lxmf payload"))?;
     let relay_destination_hex = relay_desc.address_hash.to_hex_string();
 
     info!(
-        "[lxmf][events][sdk] path=propagation requested_destination={} resolved_destination={} relay_destination={} message_id={} wire_bytes={} propagated_bytes={} max_wire_bytes={}",
+        "[lxmf][events][sdk] path=propagation requested_destination={} resolved_destination={} recipient_identity={} relay_destination={} message_id={} wire_bytes={} propagated_bytes={} max_wire_bytes={}",
         requested_destination_hex,
         resolved_destination_hex,
+        remote_desc.identity.address_hash.to_hex_string(),
         relay_destination_hex,
         message_id_hex,
         wire.len(),
@@ -1314,9 +1528,16 @@ async fn compat_send_lxmf_via_propagation(
     );
 
     if propagated_payload.len() > LXMF_MAX_PAYLOAD {
-        let link = ensure_lxmf_output_link(state, relay_desc)
-            .await
-            .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
+        let link = ensure_lxmf_output_link(
+            state,
+            relay_desc,
+            Some(requested_destination_hex),
+            Some(resolved_destination_hex),
+            DEFAULT_LINK_CONNECT_TIMEOUT,
+            DEFAULT_LINK_CONNECT_ATTEMPTS,
+        )
+        .await
+        .map_err(|_| sdk_transport("failed to activate propagation relay link"))?;
         let link_id = *link.lock().await.id();
         let mut resource_events = state.transport.resource_events();
         let resource_hash = state
@@ -1388,6 +1609,22 @@ async fn compat_send_lxmf_via_propagation(
                             });
                         }
                         ResourceEventKind::Complete(_) => {}
+                        ResourceEventKind::InboundFailed(failure) => {
+                            return Err(sdk_transport(format!(
+                                "propagated lxmf relay inbound resource transfer failed: {}",
+                                failure.reason
+                            )));
+                        }
+                        ResourceEventKind::OutboundFailed => {
+                            return Err(sdk_transport(
+                                "propagated lxmf relay resource transfer failed",
+                            ));
+                        }
+                        ResourceEventKind::OutboundCancelled => {
+                            return Err(sdk_transport(
+                                "propagated lxmf relay resource transfer cancelled",
+                            ));
+                        }
                     }
                 }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
@@ -1454,6 +1691,862 @@ async fn compat_send_lxmf_via_propagation(
         fallback_stage,
         receipt_hash_hex: None,
     })
+}
+
+async fn compat_fetch_propagated_lxmf(
+    state: &SdkTransportState,
+    relay_hex: &str,
+    limit: Option<u32>,
+    direct_iface_hex: Option<&str>,
+) -> Result<PropagationFetchResult, NodeError> {
+    let relay_hash = parse_address_hash(relay_hex)?;
+    let relay_desc = resolve_propagation_destination_desc(state, relay_hash).await?;
+    let direct_iface = direct_iface_hex.and_then(|value| parse_address_hash(value).ok());
+    let (destination_hex, destination_hash, local_identity) = {
+        let destination = state.lxmf_destination.lock().await;
+        (
+            destination.desc.address_hash.to_hex_string(),
+            destination.desc.address_hash,
+            destination.identity.clone(),
+        )
+    };
+
+    let available_value = propagation_remote_control_request(
+        state,
+        relay_desc,
+        "/get",
+        rmpv::Value::Array(vec![rmpv::Value::Nil, rmpv::Value::Nil]),
+        PROPAGATION_CONTROL_TIMEOUT,
+        direct_iface,
+        1,
+    )
+    .await?;
+    let mut transient_ids = rmpv_binary_array(&available_value)?;
+    let available_count = transient_ids.len();
+    apply_fetch_limit(&mut transient_ids, limit);
+    info!(
+        "[sync] propagation sync available relay={} destination={} available={} requested={}",
+        relay_hex,
+        destination_hex,
+        available_count,
+        transient_ids.len()
+    );
+    if transient_ids.is_empty() {
+        clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+        return Ok(PropagationFetchResult {
+            destination_hex,
+            available_count,
+            fetched_count: 0,
+            fetched_entry_count: 0,
+            extracted_payload_count: 0,
+            imported_wires: Vec::new(),
+            failed_count: 0,
+            malformed_count: 0,
+            decrypt_failed_count: 0,
+        });
+    }
+
+    let mut payloads = Vec::<(Option<Vec<u8>>, Vec<u8>)>::new();
+    let mut fetched_entry_count = 0usize;
+    let mut malformed_count = 0usize;
+    let mut failed_count = 0usize;
+    let mut decrypt_failed_count = 0usize;
+    let mut last_fetch_error: Option<NodeError> = None;
+    let mut fetch_queue = propagation_fetch_batches(transient_ids.as_slice())
+        .into_iter()
+        .enumerate()
+        .collect::<VecDeque<_>>();
+    while let Some((batch_index, batch)) = fetch_queue.pop_front() {
+        let batch_len = batch.len();
+        let fetch_ids =
+            rmpv::Value::Array(batch.clone().into_iter().map(rmpv::Value::Binary).collect());
+        let fetched_value = match propagation_remote_control_request(
+            state,
+            relay_desc,
+            "/get",
+            rmpv::Value::Array(vec![
+                fetch_ids,
+                rmpv::Value::Nil,
+                rmpv::Value::from(PROPAGATION_FETCH_TRANSFER_LIMIT_KB),
+            ]),
+            PROPAGATION_FETCH_CONTROL_TIMEOUT,
+            direct_iface,
+            1,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                if batch_len > 1 {
+                    info!(
+                        "[sync] propagation sync fetch batch split relay={} destination={} batch={} size={} reason={}",
+                        relay_hex, destination_hex, batch_index, batch_len, err
+                    );
+                    for transient_id in batch.into_iter().rev() {
+                        fetch_queue.push_front((batch_index, vec![transient_id]));
+                    }
+                    continue;
+                }
+                failed_count = failed_count.saturating_add(batch_len);
+                info!(
+                    "[sync] propagation sync fetch batch failed relay={} destination={} batch={} reason={}",
+                    relay_hex, destination_hex, batch_index, err
+                );
+                last_fetch_error = Some(err);
+                continue;
+            }
+        };
+        match rmpv_propagation_payload_array(&fetched_value) {
+            Ok(batch_payloads) => {
+                fetched_entry_count = fetched_entry_count.saturating_add(batch_len);
+                if batch_payloads.len() == batch_len {
+                    payloads.extend(
+                        batch
+                            .into_iter()
+                            .zip(batch_payloads)
+                            .map(|(transient_id, payload)| (Some(transient_id), payload)),
+                    );
+                } else {
+                    payloads.extend(batch_payloads.into_iter().map(|payload| (None, payload)));
+                }
+            }
+            Err(err) => {
+                if batch_len > 1 {
+                    info!(
+                        "[sync] propagation sync malformed fetch batch split relay={} destination={} batch={} size={} shape={}",
+                        relay_hex,
+                        destination_hex,
+                        batch_index,
+                        batch_len,
+                        rmpv_shape(&fetched_value)
+                    );
+                    for transient_id in batch.into_iter().rev() {
+                        fetch_queue.push_front((batch_index, vec![transient_id]));
+                    }
+                    continue;
+                }
+                failed_count = failed_count.saturating_add(batch_len);
+                malformed_count = malformed_count.saturating_add(batch_len);
+                info!(
+                    "[sync] propagation sync malformed fetch response relay={} destination={} batch={} shape={}",
+                    relay_hex,
+                    destination_hex,
+                    batch_index,
+                    rmpv_shape(&fetched_value)
+                );
+                last_fetch_error = Some(err);
+            }
+        }
+    }
+    clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+    if payloads.is_empty() {
+        if let Some(err) = last_fetch_error {
+            return Err(err);
+        }
+    }
+    let extracted_payload_count = payloads.len();
+    let fetched_count = fetched_entry_count;
+    let mut imported_wires = Vec::with_capacity(extracted_payload_count);
+    let mut fetched_transient_ids_to_purge = Vec::<Vec<u8>>::new();
+    for (index, (transient_id, payload)) in payloads.into_iter().enumerate() {
+        match decrypt_local_propagated_wire(&local_identity, &destination_hash, payload.as_slice())
+        {
+            Ok(wire) => {
+                if let Some(transient_id) = transient_id {
+                    fetched_transient_ids_to_purge.push(transient_id);
+                }
+                imported_wires.push(wire);
+            }
+            Err(err) => {
+                failed_count = failed_count.saturating_add(1);
+                decrypt_failed_count = decrypt_failed_count.saturating_add(1);
+                let transient_destination_hex = payload
+                    .get(..16)
+                    .map(hex::encode)
+                    .unwrap_or_else(|| "-".to_string());
+                let retained = queue_fetched_transient_id_for_purge(
+                    &mut fetched_transient_ids_to_purge,
+                    transient_id,
+                );
+                info!(
+                    "[sync] propagated payload import failed relay={} destination={} local_identity={} transient_destination={} index={} reason={} retained={}",
+                    relay_hex,
+                    destination_hex,
+                    local_identity.address_hash().to_hex_string(),
+                    transient_destination_hex,
+                    index,
+                    err,
+                    retained
+                );
+            }
+        }
+    }
+    fetched_transient_ids_to_purge.sort();
+    fetched_transient_ids_to_purge.dedup();
+    if !fetched_transient_ids_to_purge.is_empty() {
+        let purge_count = fetched_transient_ids_to_purge.len();
+        let mut purged_count = 0usize;
+        let mut purge_failed_count = 0usize;
+        for batch in propagation_purge_batches(&fetched_transient_ids_to_purge) {
+            let batch_count = batch.len();
+            let haves = rmpv::Value::Array(batch.into_iter().map(rmpv::Value::Binary).collect());
+            match propagation_remote_control_fire_and_forget(
+                state,
+                relay_desc,
+                "/get",
+                rmpv::Value::Array(vec![rmpv::Value::Nil, haves]),
+                direct_iface,
+            )
+            .await
+            {
+                Ok(_) => {
+                    purged_count = purged_count.saturating_add(batch_count);
+                }
+                Err(err) => {
+                    purge_failed_count = purge_failed_count.saturating_add(batch_count);
+                    info!(
+                        "[sync] propagation sync purge batch failed relay={} destination={} purged={} reason={}",
+                        relay_hex, destination_hex, batch_count, err
+                    );
+                }
+            }
+        }
+        if purged_count > 0 {
+            info!(
+                "[sync] propagation sync queued purge for fetched entries relay={} destination={} purged={} failed={}",
+                relay_hex, destination_hex, purged_count, purge_failed_count
+            );
+        } else if purge_failed_count > 0 {
+            info!(
+                "[sync] propagation sync purge failed relay={} destination={} purged={} reason=all_batches_failed",
+                relay_hex, destination_hex, purge_count
+            );
+        }
+    }
+
+    Ok(PropagationFetchResult {
+        destination_hex,
+        available_count,
+        fetched_count,
+        fetched_entry_count,
+        extracted_payload_count,
+        imported_wires,
+        failed_count,
+        malformed_count,
+        decrypt_failed_count,
+    })
+}
+
+async fn propagation_remote_control_request(
+    state: &SdkTransportState,
+    relay_desc: DestinationDesc,
+    path: &str,
+    data: rmpv::Value,
+    timeout: Duration,
+    direct_iface: Option<AddressHash>,
+    max_attempts: usize,
+) -> Result<rmpv::Value, NodeError> {
+    let mut last_error = None;
+    for attempt in 0..max_attempts.max(1) {
+        let relay_destination_hex = relay_desc.address_hash.to_hex_string();
+        let link = ensure_lxmf_output_link(
+            state,
+            relay_desc,
+            Some(path),
+            Some(relay_destination_hex.as_str()),
+            DEFAULT_LINK_CONNECT_TIMEOUT,
+            DEFAULT_LINK_CONNECT_ATTEMPTS,
+        )
+        .await?;
+        let link_id = *link.lock().await.id();
+        let identify_payload = build_link_identify_payload(&state.identity, &link_id);
+        if let Err(err) = send_link_context_packet(
+            &state.transport,
+            &link,
+            PacketContext::LinkIdentify,
+            identify_payload.as_slice(),
+            direct_iface,
+        )
+        .await
+        {
+            clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+            info!(
+                "[sync] propagation control identify failed relay={} path={} attempt={} reason={}",
+                relay_desc.address_hash.to_hex_string(),
+                path,
+                attempt + 1,
+                err
+            );
+            last_error = Some(err);
+            continue;
+        }
+
+        let mut data_rx = state.transport.received_data_events();
+        let mut resource_rx = state.transport.resource_events();
+        let request_payload = build_link_request_payload(path, data.clone())?;
+        let request_id = match send_link_context_packet(
+            &state.transport,
+            &link,
+            PacketContext::Request,
+            request_payload.as_slice(),
+            direct_iface,
+        )
+        .await
+        {
+            Ok(Some(request_id)) => request_id,
+            Ok(None) => return Err(NodeError::InternalError {}),
+            Err(err) => {
+                clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+                info!(
+                    "[sync] propagation control request failed relay={} path={} attempt={} reason={}",
+                    relay_desc.address_hash.to_hex_string(),
+                    path,
+                    attempt + 1,
+                    err
+                );
+                last_error = Some(err);
+                continue;
+            }
+        };
+
+        match wait_for_link_request_response(
+            &mut data_rx,
+            &mut resource_rx,
+            relay_desc.address_hash,
+            link_id,
+            request_id,
+            timeout,
+        )
+        .await
+        {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+                debug!(
+                    "[sync] propagation control response unavailable relay={} path={} attempt={} reason={}",
+                    relay_desc.address_hash.to_hex_string(),
+                    path,
+                    attempt + 1,
+                    err
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or(NodeError::Timeout {}))
+}
+
+async fn propagation_remote_control_fire_and_forget(
+    state: &SdkTransportState,
+    relay_desc: DestinationDesc,
+    path: &str,
+    data: rmpv::Value,
+    direct_iface: Option<AddressHash>,
+) -> Result<(), NodeError> {
+    let relay_destination_hex = relay_desc.address_hash.to_hex_string();
+    let link = ensure_lxmf_output_link(
+        state,
+        relay_desc,
+        Some(path),
+        Some(relay_destination_hex.as_str()),
+        DEFAULT_LINK_CONNECT_TIMEOUT,
+        DEFAULT_LINK_CONNECT_ATTEMPTS,
+    )
+    .await?;
+    let link_id = *link.lock().await.id();
+    let identify_payload = build_link_identify_payload(&state.identity, &link_id);
+    if let Err(err) = send_link_context_packet(
+        &state.transport,
+        &link,
+        PacketContext::LinkIdentify,
+        identify_payload.as_slice(),
+        direct_iface,
+    )
+    .await
+    {
+        clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+        info!(
+            "[sync] propagation control identify failed relay={} path={} reason={}",
+            relay_desc.address_hash.to_hex_string(),
+            path,
+            err
+        );
+        return Err(err);
+    }
+
+    let request_payload = build_link_request_payload(path, data)?;
+    match send_link_context_packet(
+        &state.transport,
+        &link,
+        PacketContext::Request,
+        request_payload.as_slice(),
+        direct_iface,
+    )
+    .await
+    {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(NodeError::InternalError {}),
+        Err(err) => {
+            clear_lxmf_output_link(state, &relay_desc.address_hash).await;
+            info!(
+                "[sync] propagation control request failed relay={} path={} reason={}",
+                relay_desc.address_hash.to_hex_string(),
+                path,
+                err
+            );
+            Err(err)
+        }
+    }
+}
+
+fn build_link_identify_payload(identity: &PrivateIdentity, link_id: &AddressHash) -> Vec<u8> {
+    let identity_value = identity.as_identity();
+    let mut public_key = Vec::with_capacity(64);
+    public_key.extend_from_slice(identity_value.public_key.as_bytes());
+    public_key.extend_from_slice(identity_value.verifying_key.as_bytes());
+
+    let mut signed_data = Vec::with_capacity(16 + public_key.len());
+    signed_data.extend_from_slice(link_id.as_slice());
+    signed_data.extend_from_slice(public_key.as_slice());
+    let signature = identity.sign(signed_data.as_slice());
+
+    let mut payload = Vec::with_capacity(public_key.len() + signature.to_bytes().len());
+    payload.extend_from_slice(public_key.as_slice());
+    payload.extend_from_slice(signature.to_bytes().as_slice());
+    payload
+}
+
+fn build_link_request_payload(path: &str, data: rmpv::Value) -> Result<Vec<u8>, NodeError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let path_hash = address_hash(path.as_bytes());
+    rmp_serde::to_vec(&rmpv::Value::Array(vec![
+        rmpv::Value::F64(timestamp),
+        rmpv::Value::Binary(path_hash.to_vec()),
+        data,
+    ]))
+    .map_err(|_| NodeError::InternalError {})
+}
+
+async fn send_link_context_packet(
+    transport: &Arc<Transport>,
+    link: &Arc<TokioMutex<Link>>,
+    context: PacketContext,
+    payload: &[u8],
+    direct_iface: Option<AddressHash>,
+) -> Result<Option<[u8; 16]>, NodeError> {
+    let packet = {
+        let guard = link.lock().await;
+        if guard.status() != LinkStatus::Active {
+            return Err(NodeError::Timeout {});
+        }
+
+        let mut packet_data = PacketDataBuffer::new();
+        let cipher_len = {
+            let ciphertext = guard
+                .encrypt(payload, packet_data.accuire_buf_max())
+                .map_err(|_| NodeError::InternalError {})?;
+            ciphertext.len()
+        };
+        packet_data.resize(cipher_len);
+
+        Packet {
+            header: Header {
+                ifac_flag: IfacFlag::Open,
+                header_type: HeaderType::Type1,
+                context_flag: ContextFlag::Unset,
+                propagation_type: PropagationType::Broadcast,
+                destination_type: DestinationType::Link,
+                packet_type: PacketType::Data,
+                hops: 0,
+            },
+            ifac: None,
+            destination: *guard.id(),
+            transport: None,
+            context,
+            data: packet_data,
+        }
+    };
+
+    let request_id = if context == PacketContext::Request {
+        let hash = packet.hash().to_bytes();
+        let mut request_id = [0u8; 16];
+        request_id.copy_from_slice(&hash[..16]);
+        Some(request_id)
+    } else {
+        None
+    };
+
+    if let Some(iface) = direct_iface {
+        transport.send_direct(iface, packet).await;
+        return Ok(request_id);
+    }
+
+    let outcome = transport.send_packet_with_outcome(packet).await;
+    if !matches!(
+        outcome,
+        RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+    ) {
+        return Err(NodeError::NetworkError {});
+    }
+    Ok(request_id)
+}
+
+async fn wait_for_link_request_response(
+    data_rx: &mut tokio::sync::broadcast::Receiver<ReceivedData>,
+    resource_rx: &mut tokio::sync::broadcast::Receiver<ResourceEvent>,
+    expected_destination: AddressHash,
+    expected_link_id: AddressHash,
+    request_id: [u8; 16],
+    timeout: Duration,
+) -> Result<rmpv::Value, NodeError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(NodeError::Timeout {});
+        }
+        let remaining = deadline.saturating_duration_since(now);
+
+        tokio::select! {
+            _ = tokio::time::sleep(remaining) => {
+                return Err(NodeError::Timeout {});
+            }
+            result = data_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        if !link_response_destination_matches(
+                            event.destination,
+                            expected_destination,
+                            expected_link_id,
+                        ) {
+                            continue;
+                        }
+                        if let Some((response_id, payload)) =
+                            parse_link_response_frame(event.data.as_slice())
+                        {
+                            if response_id == request_id {
+                                return Ok(payload);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(NodeError::InternalError {});
+                    }
+                }
+            }
+            result = resource_rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let ResourceEventKind::Complete(complete) = event.kind else {
+                            continue;
+                        };
+                        if event.link_id != expected_link_id {
+                            continue;
+                        }
+                        if let Some((response_id, payload)) =
+                            parse_link_response_frame(complete.data.as_slice())
+                        {
+                            if response_id == request_id {
+                                return Ok(payload);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(NodeError::InternalError {});
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn link_response_destination_matches(
+    actual: AddressHash,
+    expected_destination: AddressHash,
+    expected_link_id: AddressHash,
+) -> bool {
+    actual == expected_link_id || actual == expected_destination
+}
+
+fn parse_link_response_frame(bytes: &[u8]) -> Option<([u8; 16], rmpv::Value)> {
+    let value = rmp_serde::from_slice::<rmpv::Value>(bytes).ok()?;
+    let rmpv::Value::Array(entries) = value else {
+        return None;
+    };
+    if entries.len() != 2 {
+        return None;
+    }
+    let request_bytes = value_to_bytes(entries.first()?)?;
+    if request_bytes.len() != 16 {
+        return None;
+    }
+    let mut request_id = [0u8; 16];
+    request_id.copy_from_slice(request_bytes.as_slice());
+    Some((request_id, entries.get(1)?.clone()))
+}
+
+fn value_to_bytes(value: &rmpv::Value) -> Option<Vec<u8>> {
+    match value {
+        rmpv::Value::Binary(bytes) => Some(bytes.clone()),
+        rmpv::Value::String(text) => {
+            let value = text.as_str()?;
+            if let Ok(decoded) = hex::decode(value) {
+                return Some(decoded);
+            }
+            Some(value.as_bytes().to_vec())
+        }
+        _ => None,
+    }
+}
+
+fn rmpv_propagation_envelope_payloads(value: &rmpv::Value) -> Option<Vec<Vec<u8>>> {
+    let rmpv::Value::Array(entries) = value else {
+        return None;
+    };
+    if entries.len() < 2 {
+        return None;
+    }
+    let timestamp_like = matches!(
+        entries.first(),
+        Some(rmpv::Value::F32(_)) | Some(rmpv::Value::F64(_)) | Some(rmpv::Value::Integer(_))
+    );
+    if !timestamp_like {
+        return None;
+    }
+    let rmpv::Value::Array(payloads) = &entries[1] else {
+        return None;
+    };
+    let decoded = payloads
+        .iter()
+        .map(value_to_bytes)
+        .collect::<Option<Vec<_>>>()?;
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+fn propagation_payloads_from_bytes(bytes: &[u8]) -> Vec<Vec<u8>> {
+    if let Ok(value) = rmp_serde::from_slice::<rmpv::Value>(bytes) {
+        if let Some(payloads) = rmpv_propagation_envelope_payloads(&value) {
+            return payloads;
+        }
+    }
+    vec![bytes.to_vec()]
+}
+
+fn propagation_payloads_from_fetch_entry(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
+    match value {
+        rmpv::Value::Binary(bytes) => Ok(propagation_payloads_from_bytes(bytes)),
+        rmpv::Value::String(text) => {
+            let value = text.as_str().ok_or(NodeError::InternalError {})?;
+            let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
+            Ok(propagation_payloads_from_bytes(bytes.as_slice()))
+        }
+        rmpv::Value::Array(entries) => {
+            if entries.len() >= 2 {
+                if let Some(payloads) = rmpv_propagation_envelope_payloads(&entries[1]) {
+                    return Ok(payloads);
+                }
+                if let Some(bytes) = entries.get(1).and_then(value_to_bytes) {
+                    return Ok(propagation_payloads_from_bytes(bytes.as_slice()));
+                }
+            }
+            Err(NodeError::InternalError {})
+        }
+        _ => Err(NodeError::InternalError {}),
+    }
+}
+
+fn rmpv_binary_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    let rmpv::Value::Array(values) = value else {
+        return Err(NodeError::InternalError {});
+    };
+    values
+        .iter()
+        .map(|value| match value {
+            rmpv::Value::Binary(bytes) => Ok(bytes.clone()),
+            _ => Err(NodeError::InternalError {}),
+        })
+        .collect()
+}
+
+fn rmpv_propagation_payload_array(value: &rmpv::Value) -> Result<Vec<Vec<u8>>, NodeError> {
+    if let Some(payloads) = rmpv_propagation_envelope_payloads(value) {
+        return Ok(payloads);
+    }
+    let rmpv::Value::Array(values) = value else {
+        return Err(NodeError::InternalError {});
+    };
+    let mut payloads = Vec::new();
+    for value in values {
+        payloads.extend(propagation_payloads_from_fetch_entry(value)?);
+    }
+    Ok(payloads)
+}
+
+fn rmpv_shape(value: &rmpv::Value) -> String {
+    match value {
+        rmpv::Value::Nil => "nil".to_string(),
+        rmpv::Value::Boolean(_) => "bool".to_string(),
+        rmpv::Value::Integer(_) => "int".to_string(),
+        rmpv::Value::F32(_) | rmpv::Value::F64(_) => "float".to_string(),
+        rmpv::Value::String(_) => "string".to_string(),
+        rmpv::Value::Binary(bytes) => format!("bin({})", bytes.len()),
+        rmpv::Value::Array(values) => {
+            let preview = values
+                .iter()
+                .take(4)
+                .map(rmpv_shape)
+                .collect::<Vec<_>>()
+                .join(",");
+            if values.len() > 4 {
+                format!("array({})[{preview},...]", values.len())
+            } else {
+                format!("array({})[{preview}]", values.len())
+            }
+        }
+        rmpv::Value::Map(values) => format!("map({})", values.len()),
+        rmpv::Value::Ext(_, bytes) => format!("ext({})", bytes.len()),
+    }
+}
+
+fn apply_fetch_limit(transient_ids: &mut Vec<Vec<u8>>, limit: Option<u32>) {
+    if let Some(limit) = limit {
+        transient_ids.truncate(limit as usize);
+    }
+}
+
+fn propagation_fetch_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
+    transient_ids
+        .chunks(PROPAGATION_FETCH_BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+fn propagation_purge_batches(transient_ids: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
+    transient_ids
+        .chunks(PROPAGATION_PURGE_BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect()
+}
+
+fn queue_fetched_transient_id_for_purge(
+    purge_queue: &mut Vec<Vec<u8>>,
+    transient_id: Option<Vec<u8>>,
+) -> bool {
+    if let Some(transient_id) = transient_id {
+        purge_queue.push(transient_id);
+        false
+    } else {
+        true
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PropagationPayloadDecryptError {
+    PayloadTooShort { len: usize },
+    DestinationMismatch { expected: String, actual: String },
+    DecryptFailed,
+}
+
+impl fmt::Display for PropagationPayloadDecryptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PayloadTooShort { len } => {
+                write!(f, "payload too short for propagation transient len={}", len)
+            }
+            Self::DestinationMismatch { expected, actual } => write!(
+                f,
+                "destination prefix mismatch expected={} actual={}",
+                expected, actual
+            ),
+            Self::DecryptFailed => write!(f, "propagation transient decrypt failed"),
+        }
+    }
+}
+
+fn decrypt_local_propagated_wire(
+    identity: &PrivateIdentity,
+    destination_hash: &AddressHash,
+    transient_payload: &[u8],
+) -> Result<Vec<u8>, PropagationPayloadDecryptError> {
+    if transient_payload.len() <= 16 + 32 {
+        return Err(PropagationPayloadDecryptError::PayloadTooShort {
+            len: transient_payload.len(),
+        });
+    }
+    if &transient_payload[..16] != destination_hash.as_slice() {
+        return Err(PropagationPayloadDecryptError::DestinationMismatch {
+            expected: destination_hash.to_hex_string(),
+            actual: hex::encode(&transient_payload[..16]),
+        });
+    }
+
+    for strip_stamp in [false, true] {
+        let payload = if strip_stamp {
+            if transient_payload.len() <= 16 + 32 + 32 {
+                continue;
+            }
+            &transient_payload[..transient_payload.len() - 32]
+        } else {
+            transient_payload
+        };
+
+        let ciphertext = &payload[16..];
+        if let Ok(decrypted) =
+            decrypt_propagation_ciphertext(identity, destination_hash, ciphertext)
+        {
+            let mut wire = Vec::with_capacity(16 + decrypted.len());
+            wire.extend_from_slice(destination_hash.as_slice());
+            wire.extend_from_slice(decrypted.as_slice());
+            return Ok(wire);
+        }
+    }
+
+    Err(PropagationPayloadDecryptError::DecryptFailed)
+}
+
+fn decrypt_propagation_ciphertext(
+    identity: &PrivateIdentity,
+    destination_hash: &AddressHash,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, PropagationPayloadDecryptError> {
+    if ciphertext.len() <= 32 {
+        return Err(PropagationPayloadDecryptError::DecryptFailed);
+    }
+    let Ok(ephemeral_key) = <[u8; 32]>::try_from(&ciphertext[..32]) else {
+        return Err(PropagationPayloadDecryptError::DecryptFailed);
+    };
+    let public_key = PublicKey::from(ephemeral_key);
+    let token = &ciphertext[32..];
+
+    let mut salts = Vec::with_capacity(2);
+    salts.push(identity.address_hash().as_slice());
+    if destination_hash.as_slice() != identity.address_hash().as_slice() {
+        salts.push(destination_hash.as_slice());
+    }
+
+    for salt in salts {
+        let derived_key = identity.derive_key(&public_key, Some(salt));
+        let mut plaintext = vec![0u8; token.len()];
+        let Ok(decrypted_len) = identity
+            .decrypt(OsRng, token, &derived_key, &mut plaintext)
+            .map(|decrypted| decrypted.len())
+        else {
+            continue;
+        };
+        plaintext.truncate(decrypted_len);
+        return Ok(plaintext);
+    }
+
+    Err(PropagationPayloadDecryptError::DecryptFailed)
 }
 
 fn normalize_hex_32(s: &str) -> Option<String> {
@@ -1537,11 +2630,14 @@ async fn resolve_propagation_destination_desc(
 async fn ensure_lxmf_output_link(
     state: &SdkTransportState,
     desc: DestinationDesc,
+    requested_destination_hex: Option<&str>,
+    resolved_destination_hex: Option<&str>,
+    connect_timeout: Duration,
+    max_attempts: usize,
 ) -> Result<Arc<TokioMutex<Link>>, NodeError> {
-    const MAX_ATTEMPTS: usize = 3;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
 
-    for attempt in 0..MAX_ATTEMPTS {
+    for attempt in 0..max_attempts.max(1) {
         state
             .transport
             .request_path(&desc.address_hash, None, None)
@@ -1558,22 +2654,32 @@ async fn ensure_lxmf_output_link(
             }
         };
 
-        match wait_for_link_active(&state.transport, &link).await {
+        match wait_for_link_active(&state.transport, &link, connect_timeout).await {
             Ok(()) => return Ok(link),
             Err(err) => {
                 let stale = state.out_links.lock().await.remove(&desc.address_hash);
                 if let Some(stale) = stale {
                     stale.lock().await.close();
                 }
-                info!(
-                    "[lxmf][events][sdk] link activation failed destination={} attempt={} reason={}",
-                    desc.address_hash.to_hex_string(),
-                    attempt + 1,
-                    err,
-                );
-                if attempt + 1 == MAX_ATTEMPTS {
+                if attempt + 1 == max_attempts.max(1) {
+                    log_lxmf_link_activation_failure(
+                        "failed",
+                        &desc,
+                        requested_destination_hex,
+                        resolved_destination_hex,
+                        attempt + 1,
+                        &err,
+                    );
                     return Err(err);
                 }
+                log_lxmf_link_activation_failure(
+                    "retry",
+                    &desc,
+                    requested_destination_hex,
+                    resolved_destination_hex,
+                    attempt + 1,
+                    &err,
+                );
                 tokio::time::sleep(RETRY_DELAY).await;
             }
         }
@@ -1582,9 +2688,47 @@ async fn ensure_lxmf_output_link(
     Err(NodeError::Timeout {})
 }
 
+fn log_lxmf_link_activation_failure(
+    status: &str,
+    desc: &DestinationDesc,
+    requested_destination_hex: Option<&str>,
+    resolved_destination_hex: Option<&str>,
+    attempt: usize,
+    err: &NodeError,
+) {
+    if let (Some(requested_destination_hex), Some(resolved_destination_hex)) =
+        (requested_destination_hex, resolved_destination_hex)
+    {
+        info!(
+            "[lxmf][events][sdk] link activation {status} requested_destination={} resolved_destination={} link_destination={} attempt={} reason={}",
+            requested_destination_hex,
+            resolved_destination_hex,
+            desc.address_hash.to_hex_string(),
+            attempt,
+            err,
+        );
+        return;
+    }
+
+    info!(
+        "[lxmf][events][sdk] link activation {status} destination={} attempt={} reason={}",
+        desc.address_hash.to_hex_string(),
+        attempt,
+        err,
+    );
+}
+
+async fn clear_lxmf_output_link(state: &SdkTransportState, destination: &AddressHash) {
+    let stale = state.out_links.lock().await.remove(destination);
+    if let Some(stale) = stale {
+        stale.lock().await.close();
+    }
+}
+
 async fn wait_for_link_active(
     transport: &Arc<Transport>,
     link: &Arc<TokioMutex<Link>>,
+    timeout: Duration,
 ) -> Result<(), NodeError> {
     if link.lock().await.status() == LinkStatus::Active {
         return Ok(());
@@ -1592,7 +2736,7 @@ async fn wait_for_link_active(
 
     let link_id = *link.lock().await.id();
     let mut events = transport.out_link_events();
-    let deadline = tokio::time::Instant::now() + DEFAULT_LINK_CONNECT_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
         if link.lock().await.status() == LinkStatus::Active {
@@ -1620,6 +2764,8 @@ async fn wait_for_link_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lxmf::message::Payload;
+    use reticulum::transport::identity::EncryptIdentity;
 
     #[test]
     fn send_request_preserves_raw_payload_and_fields_extensions() {
@@ -1657,6 +2803,66 @@ mod tests {
                 .get(EXT_FIELDS_BASE64)
                 .and_then(JsonValue::as_str),
             Some(fields_payload.as_str())
+        );
+    }
+
+    #[test]
+    fn propagation_retry_idempotency_key_does_not_reuse_direct_send() {
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::Auto {}),
+            "mission-corr-1"
+        );
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::DirectOnly {}),
+            "mission-corr-1:direct"
+        );
+        assert_eq!(
+            idempotency_key_for_send_mode("mission-corr-1", SendMode::PropagationOnly {}),
+            "mission-corr-1:propagation"
+        );
+    }
+
+    #[test]
+    fn direct_retry_idempotency_keys_are_unique_per_link_attempt() {
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::Auto {}, Some(1)),
+            "mission-corr-1:direct-attempt-1"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::Auto {}, Some(2)),
+            "mission-corr-1:direct-attempt-2"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt("mission-corr-1", SendMode::DirectOnly {}, Some(3)),
+            "mission-corr-1:direct-attempt-3"
+        );
+        assert_eq!(
+            idempotency_key_for_send_attempt(
+                "mission-corr-1",
+                SendMode::PropagationOnly {},
+                Some(1)
+            ),
+            "mission-corr-1:propagation"
+        );
+    }
+
+    #[test]
+    fn auto_send_uses_opportunistic_packets_only_without_route_or_link() {
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, false),
+            TransportMethod::Opportunistic,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, false, true),
+            TransportMethod::Direct,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::Auto {}, true, false),
+            TransportMethod::Direct,
+        );
+        assert_eq!(
+            transport_method_for_send_mode(SendMode::DirectOnly {}, false, false),
+            TransportMethod::Direct,
         );
     }
 
@@ -1842,5 +3048,350 @@ mod tests {
         assert!(state
             .send_reports
             .contains_key(&format!("msg-{}", COMPAT_SEND_REPORT_RETENTION_LIMIT + 7)));
+    }
+
+    #[test]
+    fn propagation_get_response_binary_array_parses_payloads() {
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(vec![1, 2, 3]),
+            rmpv::Value::Binary(vec![4, 5, 6]),
+        ]);
+
+        let parsed = rmpv_binary_array(&value).expect("binary array");
+
+        assert_eq!(parsed, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+        assert!(rmpv_binary_array(&rmpv::Value::Nil).is_err());
+        assert!(rmpv_binary_array(&rmpv::Value::Array(vec![rmpv::Value::Nil])).is_err());
+    }
+
+    #[test]
+    fn propagation_fetch_payload_array_accepts_binary_and_id_payload_pairs() {
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(vec![1, 2, 3]),
+            rmpv::Value::Array(vec![
+                rmpv::Value::Binary(vec![0xAA; 32]),
+                rmpv::Value::Binary(vec![4, 5, 6]),
+            ]),
+        ]);
+
+        let parsed = rmpv_propagation_payload_array(&value).expect("payload array");
+
+        assert_eq!(parsed, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+    }
+
+    #[test]
+    fn propagation_fetch_payload_array_unwraps_msgpack_envelopes() {
+        let first_transient = vec![0x11; 48];
+        let second_transient = vec![0x22; 64];
+        let third_transient = vec![0x33; 80];
+        let third_envelope = rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_002.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(third_transient.clone())]),
+        ]);
+        let first_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_000.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(first_transient.clone())]),
+        ]))
+        .expect("encode first envelope");
+        let second_envelope = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::F64(1_779_000_001.0),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(second_transient.clone())]),
+        ]))
+        .expect("encode second envelope");
+        let value = rmpv::Value::Array(vec![
+            rmpv::Value::Binary(first_envelope),
+            rmpv::Value::Array(vec![
+                rmpv::Value::Binary(vec![0xAA; 32]),
+                rmpv::Value::Binary(second_envelope),
+            ]),
+            rmpv::Value::Array(vec![rmpv::Value::Binary(vec![0xBB; 32]), third_envelope]),
+        ]);
+
+        let parsed = rmpv_propagation_payload_array(&value).expect("payload array");
+
+        assert_eq!(
+            parsed,
+            vec![first_transient, second_transient, third_transient]
+        );
+    }
+
+    #[test]
+    fn propagation_link_response_frame_rejects_malformed_payloads() {
+        let request_id = [0x11; 16];
+        let valid = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::Binary(request_id.to_vec()),
+            rmpv::Value::Binary(vec![0x22]),
+        ]))
+        .expect("encode response");
+
+        let parsed = parse_link_response_frame(valid.as_slice()).expect("valid response");
+        assert_eq!(parsed.0, request_id);
+        assert_eq!(parsed.1, rmpv::Value::Binary(vec![0x22]));
+
+        let wrong_shape = rmp_serde::to_vec(&rmpv::Value::Array(vec![rmpv::Value::Binary(
+            request_id.to_vec(),
+        )]))
+        .expect("encode malformed response");
+        assert!(parse_link_response_frame(wrong_shape.as_slice()).is_none());
+
+        let wrong_id_len = rmp_serde::to_vec(&rmpv::Value::Array(vec![
+            rmpv::Value::Binary(vec![0x11; 15]),
+            rmpv::Value::Binary(vec![0x22]),
+        ]))
+        .expect("encode malformed response");
+        assert!(parse_link_response_frame(wrong_id_len.as_slice()).is_none());
+    }
+
+    #[test]
+    fn propagation_response_destination_accepts_link_or_destination() {
+        let expected_destination = AddressHash::new([0xAA; 16]);
+        let expected_link_id = AddressHash::new([0xBB; 16]);
+
+        assert!(link_response_destination_matches(
+            expected_link_id,
+            expected_destination,
+            expected_link_id,
+        ));
+        assert!(link_response_destination_matches(
+            expected_destination,
+            expected_destination,
+            expected_link_id,
+        ));
+        assert!(!link_response_destination_matches(
+            AddressHash::new([0xCC; 16]),
+            expected_destination,
+            expected_link_id,
+        ));
+    }
+
+    #[test]
+    fn propagation_fetch_limit_truncates_transient_ids() {
+        let mut ids = vec![vec![1], vec![2], vec![3]];
+
+        apply_fetch_limit(&mut ids, Some(2));
+
+        assert_eq!(ids, vec![vec![1], vec![2]]);
+        apply_fetch_limit(&mut ids, None);
+        assert_eq!(ids, vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn propagation_fetch_batches_are_bounded() {
+        let ids = vec![vec![1], vec![2], vec![3], vec![4], vec![5]];
+
+        let batches = propagation_fetch_batches(ids.as_slice());
+
+        assert_eq!(
+            batches,
+            vec![
+                vec![vec![1]],
+                vec![vec![2]],
+                vec![vec![3]],
+                vec![vec![4]],
+                vec![vec![5]]
+            ]
+        );
+    }
+
+    #[test]
+    fn propagation_purge_batches_are_bounded() {
+        let ids = (0u8..20).map(|value| vec![value]).collect::<Vec<_>>();
+
+        let batches = propagation_purge_batches(ids.as_slice());
+
+        assert_eq!(batches.len(), 3);
+        assert!(batches
+            .iter()
+            .all(|batch| batch.len() <= PROPAGATION_PURGE_BATCH_SIZE));
+        assert_eq!(
+            batches[0],
+            (0u8..8).map(|value| vec![value]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            batches[2],
+            (16u8..20).map(|value| vec![value]).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn propagation_decrypt_failures_with_transient_ids_are_purged() {
+        let mut purge_queue = Vec::new();
+
+        let retained = queue_fetched_transient_id_for_purge(&mut purge_queue, Some(vec![0xAA]));
+
+        assert!(!retained);
+        assert_eq!(purge_queue, vec![vec![0xAA]]);
+
+        let retained = queue_fetched_transient_id_for_purge(&mut purge_queue, None);
+
+        assert!(retained);
+        assert_eq!(purge_queue, vec![vec![0xAA]]);
+    }
+
+    #[test]
+    fn propagated_payload_decrypts_only_for_local_destination() {
+        let receiver = PrivateIdentity::new_from_name("propagation-sync-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-sync-sender");
+        let other = PrivateIdentity::new_from_name("propagation-sync-other");
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(receiver.address_hash().as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_000.0,
+            Some(b"sync-content".to_vec()),
+            Some(b"sync-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let (transient, _) = wire
+            .pack_propagation_transient_with_rng(&lxmf_identity(receiver.as_identity()), OsRng)
+            .expect("pack transient");
+
+        let decrypted =
+            decrypt_local_propagated_wire(&receiver, receiver.address_hash(), transient.as_slice())
+                .expect("decrypt local propagated wire");
+
+        assert_eq!(decrypted, packed);
+        assert!(decrypt_local_propagated_wire(
+            &receiver,
+            other.address_hash(),
+            transient.as_slice()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn propagated_payload_decrypt_accepts_delivery_hash_salt() {
+        let receiver = PrivateIdentity::new_from_name("propagation-delivery-salt-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-delivery-salt-sender");
+        let delivery_hash = AddressHash::new_from_hex_string("42424242424242424242424242424242")
+            .expect("delivery hash");
+        assert_ne!(delivery_hash.as_slice(), receiver.address_hash().as_slice());
+        let payload = b"delivery-hash-salted-propagation";
+        let receiver_public = PublicKey::from(*receiver.as_identity().public_key.as_bytes());
+        let derived_key = sender.derive_key(&receiver_public, Some(delivery_hash.as_slice()));
+        let mut token_buf = vec![0u8; payload.len() + 256];
+        let token = sender
+            .encrypt(OsRng, payload, &derived_key, &mut token_buf)
+            .expect("encrypt with delivery hash salt");
+
+        let mut transient = Vec::new();
+        transient.extend_from_slice(delivery_hash.as_slice());
+        transient.extend_from_slice(sender.as_identity().public_key.as_bytes());
+        transient.extend_from_slice(token);
+
+        let decrypted =
+            decrypt_local_propagated_wire(&receiver, &delivery_hash, transient.as_slice())
+                .expect("delivery hash salt fallback should decrypt");
+
+        assert_eq!(&decrypted[16..], payload);
+    }
+
+    #[test]
+    fn propagated_payload_decrypts_lxmf_delivery_destination_hash() {
+        let receiver = PrivateIdentity::new_from_name("propagation-lxmf-delivery-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-lxmf-delivery-sender");
+        let delivery_destination = SingleOutputDestination::new(
+            *receiver.as_identity(),
+            DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+        );
+        let delivery_hash = delivery_destination.desc.address_hash;
+        assert_ne!(delivery_hash.as_slice(), receiver.address_hash().as_slice());
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(delivery_hash.as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_050.0,
+            Some(b"delivery-destination-content".to_vec()),
+            Some(b"delivery-destination-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let envelope = wire
+            .pack_propagation_with_rng(
+                &lxmf_identity(receiver.as_identity()),
+                1_779_000_050.0,
+                OsRng,
+            )
+            .expect("pack envelope");
+        let payloads = propagation_payloads_from_bytes(envelope.as_slice());
+
+        let decrypted =
+            decrypt_local_propagated_wire(&receiver, &delivery_hash, payloads[0].as_slice())
+                .expect("decrypt delivery-destination propagated wire");
+
+        assert_eq!(decrypted, packed);
+    }
+
+    #[test]
+    fn propagated_payload_decrypt_error_identifies_destination_mismatch() {
+        let receiver = PrivateIdentity::new_from_name("propagation-error-receiver");
+        let other = PrivateIdentity::new_from_name("propagation-error-other");
+        let mut payload = vec![0u8; 16 + 32 + 1];
+        payload[..16].copy_from_slice(other.address_hash().as_slice());
+
+        let err =
+            decrypt_local_propagated_wire(&receiver, receiver.address_hash(), payload.as_slice())
+                .expect_err("wrong destination should fail before decrypt");
+
+        assert!(err
+            .to_string()
+            .contains("destination prefix mismatch expected="));
+        assert!(err
+            .to_string()
+            .contains(receiver.address_hash().to_hex_string().as_str()));
+        assert!(err
+            .to_string()
+            .contains(other.address_hash().to_hex_string().as_str()));
+    }
+
+    #[test]
+    fn propagated_envelope_from_fetch_response_decrypts_for_local_destination() {
+        let receiver = PrivateIdentity::new_from_name("propagation-envelope-receiver");
+        let sender = PrivateIdentity::new_from_name("propagation-envelope-sender");
+        let mut destination = [0u8; 16];
+        destination.copy_from_slice(receiver.address_hash().as_slice());
+        let mut source = [0u8; 16];
+        source.copy_from_slice(sender.address_hash().as_slice());
+        let payload = Payload::new(
+            1_779_000_100.0,
+            Some(b"enveloped-sync-content".to_vec()),
+            Some(b"enveloped-sync-title".to_vec()),
+            None,
+            None,
+        );
+        let mut wire = LxmfWireMessage::new(destination, source, payload);
+        wire.sign(&lxmf_private_identity(&sender).expect("lxmf signer"))
+            .expect("sign wire");
+        let packed = wire.pack().expect("pack wire");
+        let envelope = wire
+            .pack_propagation_with_rng(
+                &lxmf_identity(receiver.as_identity()),
+                1_779_000_100.0,
+                OsRng,
+            )
+            .expect("pack envelope");
+        let fetched = rmpv::Value::Array(vec![rmpv::Value::Binary(envelope)]);
+        let payloads = rmpv_propagation_payload_array(&fetched).expect("payloads");
+
+        assert_eq!(payloads.len(), 1);
+        let decrypted = decrypt_local_propagated_wire(
+            &receiver,
+            receiver.address_hash(),
+            payloads[0].as_slice(),
+        )
+        .expect("decrypt local propagated wire");
+
+        assert_eq!(decrypted, packed);
     }
 }

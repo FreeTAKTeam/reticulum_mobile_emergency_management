@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef, watch } from "vue";
+import { computed, onMounted, reactive, ref, useTemplateRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import type { PluginPermissionsRecord, TrustedPluginPublisherRecord } from "@reticulum/node-client";
@@ -17,8 +17,21 @@ import {
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
+import { appVersion } from "../utils/appVersion";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
+import {
+  RNODE_PROFILE_SPECS,
+  normalizeRnodeSettings,
+  rnodeProfileSummary,
+} from "../utils/rnodeProfiles";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
+import { requestRnodeBluetoothPermission } from "../services/setupPermissions";
 
 interface KnownTcpServerOption {
   name: string;
@@ -33,7 +46,6 @@ const sosCardRef = useTemplateRef<{
   saveSettings: () => Promise<void>;
   hasUnsavedChanges: () => boolean;
 }>("sosCard");
-const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 const savingSettings = ref(false);
 
 const aboutItems = [
@@ -63,6 +75,11 @@ const form = reactive({
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  rnodeEnabled: nodeStore.settings.rnode.enabled,
+  rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
+  rnodeDisplayName: nodeStore.settings.rnode.displayName,
+  rnodeRegion: nodeStore.settings.rnode.region,
+  rnodeProfile: nodeStore.settings.rnode.profile,
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
@@ -76,6 +93,8 @@ const form = reactive({
   pluginTrustedPublishers: formatTrustedPluginPublishers(
     nodeStore.settings.pluginTrust.trustedPublishers,
   ),
+  watchStatusServerEnabled: nodeStore.watchStatusServer.enabled,
+  watchStatusServerPort: nodeStore.watchStatusServer.port,
 });
 
 const importText = ref("");
@@ -83,10 +102,26 @@ const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
+const rnodeScanFeedback = ref("");
+const rnodePairedLoading = ref(false);
+const rnodePairedDevices = ref<RnodeBleDeviceRecord[]>([]);
+const rnodeScanning = ref(false);
+const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
+
+function formatLogTimestamp(at: number): string {
+  if (!Number.isFinite(at) || at <= 0) {
+    return "--:--:--";
+  }
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
   TCP_COMMUNITY_SERVERS.map((server) => ({
@@ -116,8 +151,19 @@ const rchHubDirectoryDisabled = true;
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
-  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
+  const rnodeLabel = form.rnodeEnabled ? ` | RNode ${form.rnodeProfile}` : "";
+  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}${rnodeLabel}`;
 });
+
+const normalizedRnodeSettings = computed(() =>
+  normalizeRnodeSettings({
+    enabled: form.rnodeEnabled,
+    peripheralId: form.rnodePeripheralId,
+    displayName: form.rnodeDisplayName,
+    region: form.rnodeRegion,
+    profile: form.rnodeProfile,
+  }),
+);
 
 const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 
@@ -249,6 +295,26 @@ const telemetrySummary = computed(() => {
   return `${telemetryStatusText.value} | every ${form.telemetryPublishIntervalSeconds}s`;
 });
 
+const normalizedWatchStatusServerPort = computed(() => {
+  const parsed = Number(form.watchStatusServerPort);
+  return Number.isInteger(parsed) && parsed >= 1024 && parsed <= 65535 ? parsed : 29863;
+});
+
+const watchStatusServerSettingsChanged = computed(() =>
+  form.watchStatusServerEnabled !== nodeStore.watchStatusServer.enabled
+  || normalizedWatchStatusServerPort.value !== nodeStore.watchStatusServer.port,
+);
+
+const watchStatusServerSummary = computed(() => {
+  if (!form.watchStatusServerEnabled) {
+    return "Disabled";
+  }
+  if (nodeStore.watchStatusServer.bindError) {
+    return `Error | ${nodeStore.watchStatusServer.bindError}`;
+  }
+  return `${nodeStore.watchStatusServer.running ? "Running" : "Ready"} | ${nodeStore.watchStatusServer.currentUrl}`;
+});
+
 const persistedTcpClients = computed(() =>
   [
     ...new Set(
@@ -271,6 +337,7 @@ const hasMainSettingsChanges = computed(() =>
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
+  || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
   || normalizeTelemetryPublishIntervalSeconds(form.telemetryPublishIntervalSeconds)
     !== nodeStore.settings.telemetry.publishIntervalSeconds
@@ -292,7 +359,8 @@ const hasMainSettingsChanges = computed(() =>
   || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
     !== nodeStore.settings.hub.refreshIntervalSeconds
   || form.pluginTrustedPublishers.trim()
-    !== formatTrustedPluginPublishers(nodeStore.settings.pluginTrust.trustedPublishers).trim(),
+    !== formatTrustedPluginPublishers(nodeStore.settings.pluginTrust.trustedPublishers).trim()
+  || watchStatusServerSettingsChanged.value,
 );
 
 const hasUnsavedSettings = computed(
@@ -380,10 +448,105 @@ function removeTcpEndpoint(endpoint: string): void {
   form.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
 }
 
+function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+  const parts = [device.address];
+  if (typeof device.rssi === "number") {
+    parts.push(`RSSI ${device.rssi}`);
+  }
+  parts.push(device.paired ? "Paired" : "Not paired");
+  return parts.join(" | ");
+}
+
+async function loadPairedRnodeDevices(): Promise<void> {
+  if (rnodePairedLoading.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodePairedLoading.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+    if (rnodePairedDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No paired Bluetooth devices found on this Android phone.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodePairedLoading.value = false;
+  }
+}
+
+async function scanRnodeDevices(): Promise<void> {
+  if (rnodeScanning.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodeScanning.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodeDevices.value = await scanRnodeBleDevices();
+    if (rnodeDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No RNode BLE devices found.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodeScanning.value = false;
+  }
+}
+
+async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+  const permission = await requestRnodeBluetoothPermission();
+  if (permission === "granted") {
+    return true;
+  }
+  rnodeScanFeedback.value = "Bluetooth permission is required for RNode device selection.";
+  return false;
+}
+
+async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
+  const deviceId = device.id || device.address;
+  if (!device.paired) {
+    try {
+      const pairResult = await pairRnodeBleDevice(deviceId);
+      if (!pairResult.paired && !pairResult.bondingStarted) {
+        rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
+        return;
+      }
+      rnodeScanFeedback.value = pairResult.paired
+        ? "RNode is already paired."
+        : "Bluetooth pairing started. Confirm the Android pairing prompt before restarting the node.";
+    } catch (error: unknown) {
+      rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+      return;
+    }
+  } else {
+    rnodeScanFeedback.value = "";
+  }
+  form.rnodeEnabled = true;
+  form.rnodePeripheralId = deviceId;
+  form.rnodeDisplayName = device.name || device.address;
+}
+
 function onHubCandidateSelected(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   form.hubIdentityHash = value.trim();
 }
+
+function syncWatchStatusServerForm(): void {
+  form.watchStatusServerEnabled = nodeStore.watchStatusServer.enabled;
+  form.watchStatusServerPort = nodeStore.watchStatusServer.port;
+}
+
+onMounted(() => {
+  void nodeStore.refreshWatchStatusServerSettings()
+    .then(syncWatchStatusServerForm)
+    .catch(() => undefined);
+});
 
 async function applySettings(): Promise<void> {
   if (!hasUnsavedSettings.value || savingSettings.value) {
@@ -392,16 +555,22 @@ async function applySettings(): Promise<void> {
   const previousDisplayName = nodeStore.settings.displayName;
   const previousHubMode = nodeStore.settings.hub.mode;
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
+  const previousRnode = normalizeRnodeSettings(nodeStore.settings.rnode);
+  const nextRnode = normalizedRnodeSettings.value;
+  const rnodeChangedBeforeSave = JSON.stringify(previousRnode) !== JSON.stringify(nextRnode);
+  let rnodeApplyError = "";
+  let rnodeAppliedToRuntime = false;
   savingSettings.value = true;
   try {
     const trustedPublishers = parseTrustedPluginPublishers(form.pluginTrustedPublishers);
-    nodeStore.updateSettings({
+    await nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
+      rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
         publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
@@ -428,7 +597,25 @@ async function applySettings(): Promise<void> {
         trustedPublishers,
       },
     });
+    if (watchStatusServerSettingsChanged.value) {
+      await nodeStore.updateWatchStatusServerSettings({
+        enabled: form.watchStatusServerEnabled,
+        port: normalizedWatchStatusServerPort.value,
+      });
+    }
     await sosCardRef.value?.saveSettings();
+    if (rnodeChangedBeforeSave) {
+      try {
+        if (nodeStore.status.running) {
+          await nodeStore.restartNode();
+        } else {
+          await nodeStore.startNode();
+        }
+        rnodeAppliedToRuntime = true;
+      } catch (error: unknown) {
+        rnodeApplyError = error instanceof Error ? error.message : String(error);
+      }
+    }
   } catch (error: unknown) {
     runtimeFeedback.value = error instanceof Error ? error.message : String(error);
     return;
@@ -439,6 +626,11 @@ async function applySettings(): Promise<void> {
   form.displayName = nodeStore.settings.displayName;
   form.announceCapabilities = nodeStore.settings.announceCapabilities;
   form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
+  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
+  form.rnodeRegion = nodeStore.settings.rnode.region;
+  form.rnodeProfile = nodeStore.settings.rnode.profile;
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
   form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
@@ -446,14 +638,18 @@ async function applySettings(): Promise<void> {
   form.pluginTrustedPublishers = formatTrustedPluginPublishers(
     nodeStore.settings.pluginTrust.trustedPublishers,
   );
-  runtimeFeedback.value =
-    nodeStore.settings.displayName !== previousDisplayName
+  syncWatchStatusServerForm();
+  const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
+  const hubRoutingChanged =
+    nodeStore.settings.hub.mode !== previousHubMode
+    || nodeStore.settings.hub.identityHash !== previousHubIdentityHash;
+  runtimeFeedback.value = rnodeApplyError
+    ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
+    : rnodeChangedBeforeSave && rnodeAppliedToRuntime
+      ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
-      : nodeStore.status.running
-          && (
-            nodeStore.settings.hub.mode !== previousHubMode
-            || nodeStore.settings.hub.identityHash !== previousHubIdentityHash
-          )
+      : nodeStore.status.running && hubRoutingChanged
         ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
 }
@@ -768,53 +964,136 @@ async function refreshPluginSettings(): Promise<void> {
           </label>
         </div>
 
-        <p class="section-note">
-          TCP interfaces: choose from known community servers (Columba list) or add custom
-          host:port endpoints.
-        </p>
+        <section class="config-section" aria-labelledby="tcp-interfaces-heading">
+          <div class="config-section-header">
+            <h3 id="tcp-interfaces-heading">TCP Interfaces</h3>
+            <p>Known community servers and custom host:port endpoints.</p>
+          </div>
 
-        <div class="server-list">
-          <label
-            v-for="server in knownTcpServers"
-            :key="server.endpoint"
-            class="server-option"
-          >
+          <div class="server-list">
+            <label
+              v-for="server in knownTcpServers"
+              :key="server.endpoint"
+              class="server-option"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedTcpEndpointSet.has(server.endpoint)"
+                @change="
+                  toggleKnownTcpEndpoint(
+                    server.endpoint,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              <div class="server-option-body">
+                <p class="server-name">{{ server.name }}</p>
+                <p class="server-endpoint">{{ server.endpoint }}</p>
+              </div>
+              <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
             <input
-              type="checkbox"
-              :checked="selectedTcpEndpointSet.has(server.endpoint)"
-              @change="
-                toggleKnownTcpEndpoint(
-                  server.endpoint,
-                  ($event.target as HTMLInputElement).checked,
-                )
-              "
+              v-model="customTcpEndpoint"
+              type="text"
+              placeholder="Add custom endpoint (host:port)"
             />
-            <div class="server-option-body">
-              <p class="server-name">{{ server.name }}</p>
-              <p class="server-endpoint">{{ server.endpoint }}</p>
-            </div>
-            <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
-          </label>
-        </div>
+            <button type="button" @click="addCustomTcpEndpoint">Add</button>
+          </div>
 
-        <div class="tcp-custom-row">
-          <input
-            v-model="customTcpEndpoint"
-            type="text"
-            placeholder="Add custom endpoint (host:port)"
-          />
-          <button type="button" @click="addCustomTcpEndpoint">Add</button>
-        </div>
+          <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
+            <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
+              <span>{{ endpoint }}</span>
+              <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
+                Remove
+              </button>
+            </article>
+          </div>
+          <p v-else class="section-note">No TCP endpoints configured.</p>
+        </section>
 
-        <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
-          <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
-            <span>{{ endpoint }}</span>
-            <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
-              Remove
+        <section class="config-section" aria-labelledby="lora-interface-heading">
+          <div class="config-section-header">
+            <h3 id="lora-interface-heading">LoRa / RNode</h3>
+            <p>Paired Android Bluetooth device and REM radio profile.</p>
+          </div>
+
+          <div class="grid">
+            <label class="checkbox">
+              <input v-model="form.rnodeEnabled" type="checkbox" />
+              Enable RNode Bluetooth LoRa
+            </label>
+            <label>
+              RNode device id
+              <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
+            </label>
+            <label>
+              RNode display name
+              <input v-model="form.rnodeDisplayName" type="text" placeholder="Optional label" />
+            </label>
+            <label>
+              Region
+              <select v-model="form.rnodeRegion">
+                <option value="US915">US915</option>
+                <option value="EU868">EU868</option>
+              </select>
+            </label>
+            <label>
+              REM LoRa profile
+              <select v-model="form.rnodeProfile">
+                <option v-for="profile in RNODE_PROFILE_SPECS" :key="profile.id" :value="profile.id">
+                  {{ profile.id }} - {{ profile.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              Reticulum syntax
+              <input :value="rnodeProfileSummary(form.rnodeProfile)" class="readonly-input" type="text" readonly />
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
+            <button type="button" :disabled="rnodePairedLoading" @click="loadPairedRnodeDevices">
+              {{ rnodePairedLoading ? "Loading paired" : "Show paired Bluetooth" }}
             </button>
-          </article>
-        </div>
-        <p v-else class="section-note">No TCP endpoints configured.</p>
+            <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
+              {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+            </button>
+          </div>
+          <div v-if="rnodePairedDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodePairedDevices"
+              :key="`paired-${device.id}`"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">Paired</span>
+            </button>
+          </div>
+          <div v-if="rnodeDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodeDevices"
+              :key="device.id"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">RNode</span>
+            </button>
+          </div>
+          <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
+        </section>
 
         <div class="grid propagation-grid">
           <label>
@@ -877,6 +1156,49 @@ async function refreshPluginSettings(): Promise<void> {
           <label>
             Telemetry status
             <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M4 17h10" />
+              <circle cx="18" cy="17" r="2" />
+            </svg>
+          </span>
+          <h2>Watch Status Server</h2>
+          <p>{{ watchStatusServerSummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.watchStatusServerEnabled" type="checkbox" />
+            Enable watch status server
+          </label>
+          <label>
+            Port
+            <input v-model.number="form.watchStatusServerPort" type="number" min="1024" max="65535" />
+          </label>
+          <label>
+            Endpoint URL
+            <input :value="nodeStore.watchStatusServer.currentUrl" class="readonly-input" type="text" readonly />
+          </label>
+          <label>
+            Bind status
+            <input
+              :value="nodeStore.watchStatusServer.bindError || (nodeStore.watchStatusServer.running ? 'Listening' : 'Idle')"
+              class="readonly-input"
+              type="text"
+              readonly
+            />
           </label>
         </div>
       </div>
@@ -1185,7 +1507,9 @@ async function refreshPluginSettings(): Promise<void> {
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
         <div class="log-list">
           <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
-            {{ entry.level }} | {{ entry.message }}
+            <time :datetime="new Date(entry.at).toISOString()">{{ formatLogTimestamp(entry.at) }}</time>
+            <span>{{ entry.level }}</span>
+            <span>{{ entry.message }}</span>
           </p>
         </div>
       </div>
@@ -1453,6 +1777,35 @@ h1 {
   margin: 0.65rem 0 0.8rem;
 }
 
+.config-section {
+  border-top: 1px solid rgb(80 125 190 / 36%);
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+}
+
+.config-section-header {
+  border-left: 3px solid rgb(93 213 255 / 72%);
+  display: grid;
+  gap: 0.18rem;
+  padding-left: 0.62rem;
+}
+
+.config-section-header h3 {
+  color: #d9efff;
+  font-family: var(--font-headline);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.config-section-header p {
+  color: #90aad4;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 .grid {
   display: grid;
   gap: 0.6rem;
@@ -1522,6 +1875,13 @@ textarea {
   grid-template-columns: auto 1fr auto;
   margin: 0;
   padding: 0.55rem 0.65rem;
+}
+
+.device-option {
+  color: inherit;
+  grid-template-columns: 1fr auto;
+  text-align: left;
+  width: 100%;
 }
 
 .server-option-body {
@@ -1665,10 +2025,21 @@ button:disabled {
 }
 
 .log {
+  align-items: baseline;
   color: #88a4d0;
+  display: grid;
   font-family: var(--font-body);
+  gap: 0.4rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
   margin: 0.28rem 0 0;
   overflow-wrap: anywhere;
+}
+
+.log time,
+.log span:first-of-type {
+  color: #5de7ff;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
 }
 
 .about-list {

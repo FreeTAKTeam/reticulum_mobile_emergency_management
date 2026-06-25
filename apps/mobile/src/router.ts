@@ -1,15 +1,4 @@
 import { createRouter, createWebHistory } from "vue-router";
-import ActionMessagesView from "./views/ActionMessagesView.vue";
-import ChecklistView from "./views/ChecklistView.vue";
-import ChecklistDetailView from "./views/ChecklistDetailView.vue";
-import DashboardView from "./views/DashboardView.vue";
-import EventsView from "./views/EventsView.vue";
-import InboxView from "./views/InboxView.vue";
-import MessageStatusHelpView from "./views/MessageStatusHelpView.vue";
-import PeersDiscoveryView from "./views/PeersDiscoveryView.vue";
-import SettingsView from "./views/SettingsView.vue";
-import SetupWizardView from "./views/SetupWizardView.vue";
-import TelemetryMapView from "./views/TelemetryMapView.vue";
 
 const routes = [
   {
@@ -19,57 +8,62 @@ const routes = [
   {
     path: "/messages",
     name: "messages",
-    component: ActionMessagesView,
+    component: () => import("./views/ActionMessagesView.vue"),
   },
   {
     path: "/inbox",
     name: "inbox",
-    component: InboxView,
+    component: () => import("./views/InboxView.vue"),
   },
   {
     path: "/checklists",
     name: "checklists",
-    component: ChecklistView,
+    component: () => import("./views/ChecklistView.vue"),
   },
   {
     path: "/checklists/:checklistId",
     name: "checklist-detail",
-    component: ChecklistDetailView,
+    component: () => import("./views/ChecklistDetailView.vue"),
   },
   {
     path: "/messages/help",
     name: "message-status-help",
-    component: MessageStatusHelpView,
+    component: () => import("./views/MessageStatusHelpView.vue"),
   },
   {
     path: "/events",
     name: "events",
-    component: EventsView,
+    component: () => import("./views/EventsView.vue"),
+  },
+  {
+    path: "/events/help",
+    name: "event-mecp-help",
+    component: () => import("./views/EventMecpHelpView.vue"),
   },
   {
     path: "/dashboard",
     name: "dashboard",
-    component: DashboardView,
+    component: () => import("./views/DashboardView.vue"),
   },
   {
     path: "/settings",
     name: "settings",
-    component: SettingsView,
+    component: () => import("./views/SettingsView.vue"),
   },
   {
     path: "/setup",
     name: "setup",
-    component: SetupWizardView,
+    component: () => import("./views/SetupWizardView.vue"),
   },
   {
     path: "/peers",
     name: "peers",
-    component: PeersDiscoveryView,
+    component: () => import("./views/PeersDiscoveryView.vue"),
   },
   {
     path: "/telemetry",
     name: "telemetry",
-    component: TelemetryMapView,
+    component: () => import("./views/TelemetryMapView.vue"),
   },
 ];
 

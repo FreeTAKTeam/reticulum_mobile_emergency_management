@@ -1,0 +1,115 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - img "R.E.M. logo" [ref=e8]
+      - paragraph [ref=e9]: R.E.M.
+    - heading "Dashboard" [level=1] [ref=e10]
+    - generic [ref=e11]:
+      - generic "Saved peers and connected saved peers" [ref=e12]: 0/0
+      - generic "App is still starting. Sending stays blocked until the node is ready." [ref=e13]: Not Ready
+  - main [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e17]:
+        - button "Announce" [disabled] [ref=e18]:
+          - img [ref=e19]
+          - generic [ref=e22]: Announce
+        - button "Sync" [disabled] [ref=e23]:
+          - img [ref=e24]
+          - generic [ref=e29]: Sync
+      - generic [ref=e30]:
+        - heading "Team Status" [level=2] [ref=e31]
+        - generic [ref=e32]:
+          - link "0% Security" [ref=e33] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e34]:
+              - img [ref=e35]
+              - paragraph [ref=e38]: 0%
+            - paragraph [ref=e39]: Security
+          - link "0% Capability" [ref=e40] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e41]:
+              - img [ref=e42]
+              - paragraph [ref=e45]: 0%
+            - paragraph [ref=e46]: Capability
+          - link "0% Preparedness" [ref=e47] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e48]:
+              - img [ref=e49]
+              - paragraph [ref=e52]: 0%
+            - paragraph [ref=e53]: Preparedness
+          - link "0% Medical" [ref=e54] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e55]:
+              - img [ref=e56]
+              - paragraph [ref=e59]: 0%
+            - paragraph [ref=e60]: Medical
+          - link "0% Mobility" [ref=e61] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e62]:
+              - img [ref=e63]
+              - paragraph [ref=e66]: 0%
+            - paragraph [ref=e67]: Mobility
+          - link "0% Comms" [ref=e68] [cursor=pointer]:
+            - /url: /messages
+            - generic [ref=e69]:
+              - img [ref=e70]
+              - paragraph [ref=e73]: 0%
+            - paragraph [ref=e74]: Comms
+      - generic [ref=e75]:
+        - heading "Activity" [level=2] [ref=e76]
+        - generic [ref=e77]:
+          - link "0 EAM" [ref=e78] [cursor=pointer]:
+            - /url: /messages
+            - paragraph [ref=e79]: "0"
+            - paragraph [ref=e80]: EAM
+          - link "0 EVN" [ref=e81] [cursor=pointer]:
+            - /url: /events
+            - paragraph [ref=e82]: "0"
+            - paragraph [ref=e83]: EVN
+          - link "0 Threads" [ref=e84] [cursor=pointer]:
+            - /url: /inbox
+            - paragraph [ref=e85]: "0"
+            - paragraph [ref=e86]: Threads
+        - heading "Checklists" [level=3] [ref=e87]
+        - generic [ref=e88]:
+          - link "0 Total" [ref=e89] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e90]: "0"
+            - paragraph [ref=e91]: Total
+          - link "0 Active" [ref=e92] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e93]: "0"
+            - paragraph [ref=e94]: Active
+          - link "0 Late" [ref=e95] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e96]: "0"
+            - paragraph [ref=e97]: Late
+        - heading "Logs" [level=3] [ref=e98]
+        - generic "Logs" [ref=e99]:
+          - paragraph [ref=e100]: No logs yet.
+  - navigation "Primary navigation" [ref=e101]:
+    - link "Dashboard" [ref=e102] [cursor=pointer]:
+      - /url: /dashboard
+      - img [ref=e104]
+      - generic [ref=e109]: Dashboard
+    - link "Chat" [ref=e110] [cursor=pointer]:
+      - /url: /inbox
+      - img [ref=e112]
+      - generic [ref=e114]: Chat
+    - link "Checklists" [ref=e115] [cursor=pointer]:
+      - /url: /checklists
+      - img [ref=e117]
+      - generic [ref=e121]: Checklists
+    - link "Map" [ref=e122] [cursor=pointer]:
+      - /url: /telemetry
+      - img [ref=e124]
+      - generic [ref=e127]: Map
+    - button "More" [ref=e128] [cursor=pointer]:
+      - img [ref=e130]
+      - generic [ref=e131]: More
+  - region "R.E.M. startup" [ref=e132]:
+    - img "R.E.M. logo" [ref=e134]
+    - generic [ref=e135]:
+      - paragraph [ref=e136]: R.E.M.
+      - paragraph [ref=e137]: Reticulum Mobile Emergency Management
+      - paragraph [ref=e138]: Version 1.0.10

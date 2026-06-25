@@ -30,6 +30,7 @@ import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   normalizeTcpCommunityClients,
 } from "./tcpCommunityServers";
+import { DEFAULT_RNODE_SETTINGS, normalizeRnodeSettings } from "./rnodeProfiles";
 
 export const LEGACY_SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 export const LEGACY_SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
@@ -241,6 +242,7 @@ function normalizeRuntimeSettings(
         value.pluginTrust?.trustedPublishers,
       ),
     },
+    rnode: normalizeRnodeSettings(value.rnode ?? defaults.rnode ?? DEFAULT_RNODE_SETTINGS),
   };
 }
 

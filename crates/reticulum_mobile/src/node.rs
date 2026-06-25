@@ -1,21 +1,25 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel as cb;
-use reticulum::destination::DestinationName;
+use flate2::{write::ZlibEncoder, Compression};
+use reticulum::transport::destination::{DestinationName, SingleInputDestination};
 use rmpv::Value as MsgPackValue;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::mpsc;
 
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
+use crate::delivery_policy;
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::messaging_compat as sdkmsg;
+use crate::mission_commands::{checklist_arg_wire_key, command_wire_value};
 use crate::plugins::{
     NativePluginRuntime, PersistedPluginRegistry, PluginCatalog, PluginCatalogReport,
     PluginHostApi, PluginHostError, PluginInstaller, PluginLoadCandidate, PluginLoader,
@@ -36,10 +40,10 @@ use crate::types::{
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamSourceRecord,
-    EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
+    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord,
+    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord, PeerState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
@@ -48,8 +52,11 @@ use crate::types::{
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
+const DEFAULT_R3AKT_MISSION_UID: &str = "r3akt-default-mission";
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const LXMF_SYNC_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const COMMAND_QUEUE_CAPACITY: usize = 256;
+const PRIORITY_COMMAND_QUEUE_CAPACITY: usize = 32;
 fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return tx.try_send(command).map_err(|error| match error {
@@ -140,6 +147,7 @@ struct NodeInner {
     plugin_runtime: Option<NativePluginRuntime>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
+    priority_cmd_tx: Option<mpsc::Sender<Command>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +165,7 @@ struct NodeConfigFingerprint {
     hub_api_base_url: Option<String>,
     hub_api_key: Option<String>,
     hub_refresh_interval_seconds: u32,
+    rnode: crate::types::RnodeSettingsRecord,
 }
 
 impl NodeConfigFingerprint {
@@ -180,6 +189,7 @@ impl NodeConfigFingerprint {
             hub_api_base_url: config.hub_api_base_url.clone(),
             hub_api_key: config.hub_api_key.clone(),
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
+            rnode: config.rnode.clone(),
         })
     }
 }
@@ -422,8 +432,15 @@ struct MissionReplicationTarget {
     send_mode: SendMode,
 }
 
+#[derive(Debug, Clone)]
+struct PrioritizedMissionReplicationTarget {
+    priority: u8,
+    sequence: usize,
+    target: MissionReplicationTarget,
+}
+
 type ScheduledMissionSend = (String, Vec<u8>, Vec<u8>, SendMode);
-const CHECKLIST_INITIAL_TASK_SEND_INTERVAL: Duration = Duration::from_millis(250);
+const CHECKLIST_INITIAL_TASK_SEND_INTERVAL: Duration = Duration::from_millis(100);
 
 fn effective_hub_mode(
     configured_mode: HubMode,
@@ -458,10 +475,10 @@ fn has_capability_token(app_data: Option<&str>, capability: &str) -> bool {
     })
 }
 
-fn telemetry_destinations_from_peers(
+fn telemetry_targets_from_peers(
     peers: &[PeerRecord],
     self_destination_hex: Option<&str>,
-) -> Vec<String> {
+) -> Vec<MissionReplicationTarget> {
     let mut destinations = Vec::new();
     let mut seen = HashSet::<String>::new();
     for peer in peers {
@@ -471,14 +488,78 @@ fn telemetry_destinations_from_peers(
         if self_destination_hex == Some(destination_hex.as_str()) {
             continue;
         }
+        if !peer_is_current_replication_target(peer) {
+            continue;
+        }
         if !peer.active_link || !has_capability_token(peer.app_data.as_deref(), "telemetry") {
             continue;
         }
         if seen.insert(destination_hex.clone()) {
-            destinations.push(destination_hex);
+            destinations.push(MissionReplicationTarget {
+                app_destination_hex: destination_hex,
+                send_mode: if peer_is_direct_delivery_ready(peer) {
+                    SendMode::Auto {}
+                } else {
+                    SendMode::PropagationOnly {}
+                },
+            });
         }
     }
     destinations
+}
+
+fn telemetry_targets_from_peers_with_relay(
+    peers: &[PeerRecord],
+    self_destination_hex: Option<&str>,
+    active_propagation_node_hex: Option<&str>,
+) -> Vec<MissionReplicationTarget> {
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
+    let mut seen = HashSet::<String>::new();
+    for peer in peers {
+        let Some(destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+            continue;
+        };
+        if self_destination_hex == Some(destination_hex.as_str()) {
+            continue;
+        }
+        if !has_capability_token(peer.app_data.as_deref(), "telemetry") {
+            continue;
+        }
+        if !peer_is_current_replication_target(peer) {
+            continue;
+        }
+        if !peer.saved && !peer.active_link {
+            continue;
+        }
+
+        let relay_ready = has_active_relay && peer_can_use_propagation_fallback(peer);
+        let direct_ready = peer_is_direct_delivery_ready(peer)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
+        if !direct_ready && !relay_ready {
+            continue;
+        }
+        if seen.insert(destination_hex.clone()) {
+            let target = MissionReplicationTarget {
+                app_destination_hex: destination_hex,
+                send_mode: if direct_ready {
+                    SendMode::Auto {}
+                } else {
+                    SendMode::PropagationOnly {}
+                },
+            };
+            if matches!(target.send_mode, SendMode::Auto {}) {
+                direct_targets.push(target);
+            } else {
+                relay_targets.push(target);
+            }
+        }
+    }
+    direct_targets.extend(relay_targets);
+    direct_targets
 }
 
 fn telemetry_destinations_from_hub_snapshot(
@@ -511,23 +592,39 @@ fn telemetry_destinations_from_hub_snapshot(
 fn build_runtime_telemetry_destinations(
     status: &NodeStatus,
     peers: &[PeerRecord],
+    active_propagation_node_hex: Option<&str>,
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
-) -> Result<Vec<String>, NodeError> {
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let Some(config) = active_config else {
-        return Ok(telemetry_destinations_from_peers(
+        return Ok(telemetry_targets_from_peers_with_relay(
             peers,
             self_destination_hex.as_deref(),
+            active_propagation_node_hex,
         ));
     };
 
     match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
-        HubMode::Autonomous {} => Ok(telemetry_destinations_from_peers(
+        HubMode::Autonomous {} => Ok(telemetry_targets_from_peers_with_relay(
             peers,
             self_destination_hex.as_deref(),
+            active_propagation_node_hex,
         )),
-        HubMode::Connected {} => Ok(vec![configured_hub_destination(config)?]),
+        HubMode::Connected {} => {
+            let app_destination_hex = configured_hub_destination(config)?;
+            let Some(send_mode) = current_replication_send_mode(
+                peers,
+                app_destination_hex.as_str(),
+                active_propagation_node_hex,
+            ) else {
+                return Ok(Vec::new());
+            };
+            Ok(vec![MissionReplicationTarget {
+                app_destination_hex,
+                send_mode,
+            }])
+        }
         HubMode::SemiAutonomous {} => {
             if config
                 .hub_identity_hash
@@ -536,15 +633,28 @@ fn build_runtime_telemetry_destinations(
                 .is_some()
             {
                 if let Some(snapshot) = hub_directory_snapshot {
-                    return Ok(telemetry_destinations_from_hub_snapshot(
-                        snapshot,
-                        self_destination_hex.as_deref(),
-                    ));
+                    let targets = build_transient_replication_targets(
+                        status,
+                        peers,
+                        &telemetry_destinations_from_hub_snapshot(
+                            snapshot,
+                            self_destination_hex.as_deref(),
+                        ),
+                        active_propagation_node_hex,
+                    );
+                    return Ok(targets);
                 }
             }
-            Ok(telemetry_destinations_from_peers(
+            if active_propagation_node_hex.is_none() {
+                return Ok(telemetry_targets_from_peers(
+                    peers,
+                    self_destination_hex.as_deref(),
+                ));
+            }
+            Ok(telemetry_targets_from_peers_with_relay(
                 peers,
                 self_destination_hex.as_deref(),
+                active_propagation_node_hex,
             ))
         }
     }
@@ -650,25 +760,292 @@ fn populate_eam_defaults(status: &NodeStatus, record: &EamProjectionRecord) -> E
 }
 
 fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
-    let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
-        return false;
-    };
-    let Some(lxmf_destination_hex) = peer
-        .lxmf_destination_hex
-        .as_deref()
-        .and_then(normalize_hex_32)
-    else {
-        return false;
-    };
-    app_destination_hex != lxmf_destination_hex
+    delivery_policy::peer_has_known_lxmf_route(peer)
 }
 
 fn peer_is_directly_reachable(peer: &PeerRecord) -> bool {
-    peer.active_link || matches!(peer.state, PeerState::Connected {})
+    delivery_policy::peer_is_directly_reachable(peer)
+}
+
+fn peer_has_observed_lxmf_delivery_route(peer: &PeerRecord) -> bool {
+    delivery_policy::peer_has_observed_lxmf_delivery_route(
+        peer,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    )
+}
+
+fn peer_is_current_replication_target(peer: &PeerRecord) -> bool {
+    delivery_policy::peer_is_current_replication_target(peer)
+}
+
+fn peer_supports_mission_traffic(peer: &PeerRecord) -> bool {
+    has_capability_token(peer.app_data.as_deref(), "r3akt")
+        && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
+}
+
+fn peer_is_direct_delivery_ready(peer: &PeerRecord) -> bool {
+    peer_connectivity_model(peer, false, peer.saved).direct_delivery_available()
+}
+
+fn peer_has_current_known_lxmf_route(peer: &PeerRecord) -> bool {
+    delivery_policy::peer_has_current_known_lxmf_route(peer)
+}
+
+fn peer_connectivity_model(
+    peer: &PeerRecord,
+    has_active_relay: bool,
+    saved: bool,
+) -> delivery_policy::PeerConnectivityModel {
+    delivery_policy::PeerConnectivityModel::from_peer_with_saved(
+        peer,
+        saved,
+        has_active_relay,
+        true,
+        false,
+        now_ms(),
+        sdkmsg::DEFAULT_PEER_STALE_AFTER_MS,
+    )
+}
+
+fn peer_is_mission_direct_delivery_ready(peer: &PeerRecord, has_active_relay: bool) -> bool {
+    let connectivity = peer_connectivity_model(peer, has_active_relay, peer.saved);
+    if has_active_relay {
+        return connectivity.direct_delivery_available();
+    }
+    connectivity.direct_delivery_available() || peer_has_current_known_lxmf_route(peer)
 }
 
 fn peer_can_use_propagation_fallback(peer: &PeerRecord) -> bool {
-    !peer.stale && has_known_lxmf_route(peer)
+    delivery_policy::peer_can_use_propagation_fallback(peer)
+}
+
+fn peer_has_stored_propagation_route(peer: &PeerRecord) -> bool {
+    peer_connectivity_model(peer, true, true).stored_propagation_available()
+}
+
+fn saved_peer_can_try_stored_lxmf_route(peer: &PeerRecord, saved: bool) -> bool {
+    peer_supports_mission_traffic(peer)
+        && peer_connectivity_model(peer, true, saved).stored_propagation_available()
+}
+
+fn peer_has_usable_propagation_route(peer: &PeerRecord, has_active_relay: bool) -> bool {
+    peer_connectivity_model(peer, has_active_relay, true).propagation_eligible
+        && peer_can_use_propagation_fallback(peer)
+}
+
+fn peer_can_use_direct_when_relay_route_is_missing(
+    peer: &PeerRecord,
+    has_active_relay: bool,
+) -> bool {
+    !peer_has_usable_propagation_route(peer, has_active_relay) && peer_is_directly_reachable(peer)
+}
+
+fn direct_replication_target_priority(peer: &PeerRecord) -> u8 {
+    if peer_is_current_replication_target(peer) || peer_has_observed_lxmf_delivery_route(peer) {
+        0
+    } else {
+        1
+    }
+}
+
+fn build_prioritized_direct_target(
+    peer: &PeerRecord,
+    app_destination_hex: String,
+    sequence: usize,
+) -> PrioritizedMissionReplicationTarget {
+    PrioritizedMissionReplicationTarget {
+        priority: direct_replication_target_priority(peer),
+        sequence,
+        target: MissionReplicationTarget {
+            app_destination_hex,
+            send_mode: SendMode::Auto {},
+        },
+    }
+}
+
+fn finish_replication_targets(
+    mut direct_targets: Vec<PrioritizedMissionReplicationTarget>,
+    mut relay_targets: Vec<MissionReplicationTarget>,
+) -> Vec<MissionReplicationTarget> {
+    direct_targets.sort_by_key(|target| (target.priority, target.sequence));
+    let mut targets = direct_targets
+        .into_iter()
+        .map(|target| target.target)
+        .collect::<Vec<_>>();
+    targets.append(&mut relay_targets);
+    targets
+}
+
+fn announce_route_hops(announces: &[AnnounceRecord]) -> HashMap<String, u8> {
+    let mut route_hops = HashMap::<String, u8>::new();
+    for announce in announces {
+        let Some(destination_hex) = normalize_hex_32(announce.destination_hex.as_str()) else {
+            continue;
+        };
+        route_hops
+            .entry(destination_hex)
+            .and_modify(|hops| *hops = (*hops).min(announce.hops))
+            .or_insert(announce.hops);
+    }
+    route_hops
+}
+
+fn node_error_code(err: NodeError) -> &'static str {
+    match err {
+        NodeError::InvalidConfig {} => "InvalidConfig",
+        NodeError::IoError {} => "IoError",
+        NodeError::NetworkError {} => "NetworkError",
+        NodeError::ReticulumError {} => "ReticulumError",
+        NodeError::AlreadyRunning {} => "AlreadyRunning",
+        NodeError::NotRunning {} => "NotRunning",
+        NodeError::Timeout {} => "Timeout",
+        NodeError::LxmfWireEncodeError {} => "LxmfWireEncodeError",
+        NodeError::LxmfMessageIdParseError {} => "LxmfMessageIdParseError",
+        NodeError::LxmfPacketTooLarge {} => "LxmfPacketTooLarge",
+        NodeError::LxmfPacketBuildError {} => "LxmfPacketBuildError",
+        NodeError::EventStreamClosed {} => "EventStreamClosed",
+        NodeError::InternalError {} => "InternalError",
+    }
+}
+
+fn emit_replication_planning_error(bus: &EventBus, operation: &str, detail: &str, err: NodeError) {
+    bus.emit(NodeEvent::Error {
+        code: node_error_code(err).to_string(),
+        message: format!("{operation} replication planning skipped {detail} reason={err}"),
+    });
+}
+
+fn saved_peers_for_replication(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    operation: &str,
+) -> Vec<SavedPeerRecord> {
+    match app_state.get_saved_peers() {
+        Ok(peers) => peers,
+        Err(err) => {
+            emit_replication_planning_error(bus, operation, "saved-peers", err);
+            Vec::new()
+        }
+    }
+}
+
+fn route_hops_for_replication(
+    app_state: &AppStateStore,
+    bus: &EventBus,
+    operation: &str,
+) -> HashMap<String, u8> {
+    match app_state.list_announces() {
+        Ok(announces) => announce_route_hops(announces.as_slice()),
+        Err(err) => {
+            emit_replication_planning_error(bus, operation, "announce-route-hops", err);
+            HashMap::new()
+        }
+    }
+}
+
+fn peer_for_target<'a>(
+    peers: &'a [PeerRecord],
+    target: &MissionReplicationTarget,
+) -> Option<&'a PeerRecord> {
+    peers.iter().find(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+            == Some(target.app_destination_hex.as_str())
+    })
+}
+
+fn target_route_hops(
+    target: &MissionReplicationTarget,
+    peers: &[PeerRecord],
+    route_hops: &HashMap<String, u8>,
+) -> u8 {
+    route_hops
+        .get(target.app_destination_hex.as_str())
+        .copied()
+        .or_else(|| {
+            peer_for_target(peers, target)
+                .and_then(|peer| peer.lxmf_destination_hex.as_deref())
+                .and_then(normalize_hex_32)
+                .and_then(|destination_hex| route_hops.get(destination_hex.as_str()).copied())
+        })
+        .unwrap_or(u8::MAX)
+}
+
+fn target_liveness_priority(target: &MissionReplicationTarget, peers: &[PeerRecord]) -> u8 {
+    match peer_for_target(peers, target) {
+        Some(peer) if peer_is_directly_reachable(peer) => 0,
+        Some(peer) if peer_is_current_replication_target(peer) => 1,
+        Some(peer) if peer_has_observed_lxmf_delivery_route(peer) => 2,
+        Some(_) => 3,
+        None => 4,
+    }
+}
+
+fn prioritize_replication_targets_by_route_hops(
+    targets: &mut [MissionReplicationTarget],
+    peers: &[PeerRecord],
+    route_hops: &HashMap<String, u8>,
+) {
+    if route_hops.is_empty() {
+        return;
+    }
+
+    let sequence_by_destination = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.app_destination_hex.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    targets.sort_by_key(|target| {
+        (
+            matches!(target.send_mode, SendMode::PropagationOnly {}) as u8,
+            target_liveness_priority(target, peers),
+            target_route_hops(target, peers, route_hops),
+            sequence_by_destination
+                .get(target.app_destination_hex.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    });
+}
+
+fn target_is_saved(
+    target: &MissionReplicationTarget,
+    peers: &[PeerRecord],
+    saved_destination_set: &HashSet<String>,
+) -> bool {
+    saved_destination_set.contains(target.app_destination_hex.as_str())
+        || peer_for_target(peers, target).is_some_and(|peer| peer.saved)
+}
+
+fn prioritize_sos_replication_targets(
+    targets: &mut [MissionReplicationTarget],
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    route_hops: &HashMap<String, u8>,
+) {
+    let saved_destination_set = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<HashSet<_>>();
+    let sequence_by_destination = targets
+        .iter()
+        .enumerate()
+        .map(|(index, target)| (target.app_destination_hex.clone(), index))
+        .collect::<HashMap<_, _>>();
+
+    targets.sort_by_key(|target| {
+        (
+            matches!(target.send_mode, SendMode::PropagationOnly {}) as u8,
+            !target_is_saved(target, peers, &saved_destination_set),
+            target_route_hops(target, peers, route_hops),
+            target_liveness_priority(target, peers),
+            sequence_by_destination
+                .get(target.app_destination_hex.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    });
 }
 
 fn build_mission_replication_targets(
@@ -704,13 +1081,29 @@ fn build_mission_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = has_known_lxmf_route(peer) && peer_is_directly_reachable(peer);
+        if !peer_supports_mission_traffic(peer) {
+            continue;
+        }
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, true);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, true);
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
+        {
+            continue;
+        }
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
-            direct_targets.push(MissionReplicationTarget {
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
                 app_destination_hex,
-                send_mode: SendMode::Auto {},
-            });
+                sequence,
+            ));
+        } else if !connectivity.current_or_stored_route_available() {
+            continue;
         }
     }
 
@@ -725,11 +1118,14 @@ fn build_mission_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
-                    && peer_can_use_propagation_fallback(peer)
+                    && peer_supports_mission_traffic(peer)
+                    && peer_has_stored_propagation_route(peer)
             });
             if !relay_ready {
                 continue;
             }
+        } else {
+            continue;
         }
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
@@ -741,8 +1137,106 @@ fn build_mission_replication_targets(
         });
     }
 
-    direct_targets.extend(relay_targets);
-    direct_targets
+    finish_replication_targets(direct_targets, relay_targets)
+}
+
+fn build_sos_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+) -> Vec<MissionReplicationTarget> {
+    let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
+    let saved_destinations = saved_peers
+        .iter()
+        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .collect::<Vec<_>>();
+    let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
+    let mut seen_app_destinations = HashSet::<String>::new();
+    let mut direct_destination_set = HashSet::<String>::new();
+    let mut relay_destination_set = HashSet::<String>::new();
+
+    for peer in peers {
+        let Some(app_destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
+            continue;
+        };
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
+            continue;
+        }
+        if !seen_app_destinations.insert(app_destination_hex.clone()) {
+            continue;
+        }
+        if !peer_supports_mission_traffic(peer) {
+            continue;
+        }
+        let saved_peer = peer.saved || saved_destination_set.contains(app_destination_hex.as_str());
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, saved_peer);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, saved_peer);
+        if !saved_peer && !peer.active_link {
+            continue;
+        }
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
+        {
+            continue;
+        }
+
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
+        if direct_ready {
+            direct_destination_set.insert(app_destination_hex.clone());
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
+                app_destination_hex,
+                sequence,
+            ));
+        } else if connectivity.stored_propagation_available()
+            || (has_active_relay && peer_can_use_propagation_fallback(peer))
+        {
+            relay_destination_set.insert(app_destination_hex.clone());
+            relay_targets.push(MissionReplicationTarget {
+                app_destination_hex,
+                send_mode: SendMode::PropagationOnly {},
+            });
+        }
+    }
+
+    for app_destination_hex in saved_destinations {
+        if self_destination_hex.as_deref() == Some(app_destination_hex.as_str()) {
+            continue;
+        }
+        if direct_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
+        }
+        if relay_destination_set.contains(app_destination_hex.as_str()) {
+            continue;
+        }
+        if !has_active_relay {
+            continue;
+        }
+        let relay_ready = peers.iter().any(|peer| {
+            normalize_hex_32(peer.destination_hex.as_str()).as_deref()
+                == Some(app_destination_hex.as_str())
+                && peer_supports_mission_traffic(peer)
+                && peer_has_stored_propagation_route(peer)
+        });
+        if !relay_ready {
+            continue;
+        }
+        relay_targets.push(MissionReplicationTarget {
+            app_destination_hex,
+            send_mode: SendMode::PropagationOnly {},
+        });
+    }
+
+    finish_replication_targets(direct_targets, relay_targets)
 }
 
 fn build_event_replication_targets(
@@ -781,13 +1275,29 @@ fn build_event_replication_targets(
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
             continue;
         }
-        let direct_ready = has_known_lxmf_route(peer) && peer_is_directly_reachable(peer);
+        if !peer_supports_mission_traffic(peer) {
+            continue;
+        }
+        let saved_stored_route = saved_peer_can_try_stored_lxmf_route(peer, true);
+        let connectivity = peer_connectivity_model(peer, has_active_relay, true);
+        if !peer_is_current_replication_target(peer)
+            && !peer_has_observed_lxmf_delivery_route(peer)
+            && !saved_stored_route
+        {
+            continue;
+        }
+        let direct_ready = peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+            || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay);
         if direct_ready {
             direct_destination_set.insert(app_destination_hex.clone());
-            direct_targets.push(MissionReplicationTarget {
+            let sequence = direct_targets.len();
+            direct_targets.push(build_prioritized_direct_target(
+                peer,
                 app_destination_hex,
-                send_mode: SendMode::Auto {},
-            });
+                sequence,
+            ));
+        } else if !connectivity.current_or_stored_route_available() {
+            continue;
         }
     }
 
@@ -802,11 +1312,14 @@ fn build_event_replication_targets(
             let relay_ready = peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
-                    && peer_can_use_propagation_fallback(peer)
+                    && peer_supports_mission_traffic(peer)
+                    && peer_has_stored_propagation_route(peer)
             });
             if !relay_ready {
                 continue;
             }
+        } else {
+            continue;
         }
         relay_targets.push(MissionReplicationTarget {
             app_destination_hex,
@@ -818,8 +1331,7 @@ fn build_event_replication_targets(
         });
     }
 
-    direct_targets.extend(relay_targets);
-    direct_targets
+    finish_replication_targets(direct_targets, relay_targets)
 }
 
 fn build_transient_replication_targets(
@@ -828,7 +1340,8 @@ fn build_transient_replication_targets(
     directory_destinations: &[String],
     active_propagation_node_hex: Option<&str>,
 ) -> Vec<MissionReplicationTarget> {
-    let mut targets = Vec::new();
+    let mut direct_targets = Vec::new();
+    let mut relay_targets = Vec::new();
     let mut seen = HashSet::<String>::new();
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let has_active_relay = active_propagation_node_hex
@@ -850,19 +1363,70 @@ fn build_transient_replication_targets(
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
         });
-        let send_mode = if matched_peer.is_some_and(peer_is_directly_reachable) || !has_active_relay
+        let Some(matched_peer) = matched_peer else {
+            continue;
+        };
+        if !peer_is_current_replication_target(matched_peer)
+            || !peer_supports_mission_traffic(matched_peer)
+        {
+            continue;
+        }
+        let send_mode = if !has_active_relay
+            || ((matched_peer.saved
+                && peer_is_mission_direct_delivery_ready(matched_peer, has_active_relay))
+                || peer_can_use_direct_when_relay_route_is_missing(matched_peer, has_active_relay))
         {
             SendMode::Auto {}
-        } else {
+        } else if peer_can_use_propagation_fallback(matched_peer) {
             SendMode::PropagationOnly {}
+        } else {
+            continue;
         };
-        targets.push(MissionReplicationTarget {
+        let target = MissionReplicationTarget {
             app_destination_hex,
             send_mode,
-        });
+        };
+        if matches!(target.send_mode, SendMode::Auto {}) {
+            direct_targets.push(target);
+        } else {
+            relay_targets.push(target);
+        }
     }
 
-    targets
+    direct_targets.extend(relay_targets);
+    direct_targets
+}
+
+fn has_current_replication_peer(peers: &[PeerRecord], app_destination_hex: &str) -> bool {
+    peers.iter().any(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
+            && peer_is_current_replication_target(peer)
+    })
+}
+
+fn current_replication_send_mode(
+    peers: &[PeerRecord],
+    app_destination_hex: &str,
+    active_propagation_node_hex: Option<&str>,
+) -> Option<SendMode> {
+    let has_active_relay = active_propagation_node_hex
+        .and_then(normalize_hex_32)
+        .is_some();
+    let peer = peers.iter().find(|peer| {
+        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
+            && peer_is_current_replication_target(peer)
+            && peer_supports_mission_traffic(peer)
+    })?;
+
+    if peer_is_mission_direct_delivery_ready(peer, has_active_relay)
+        || peer_can_use_direct_when_relay_route_is_missing(peer, has_active_relay)
+    {
+        Some(SendMode::Auto {})
+    } else if peer_can_use_propagation_fallback(peer) && has_active_relay {
+        Some(SendMode::PropagationOnly {})
+    } else {
+        None
+    }
 }
 
 fn build_runtime_mission_replication_targets(
@@ -892,7 +1456,10 @@ fn build_runtime_mission_replication_targets(
         HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
             app_destination_hex: configured_hub_destination(config)?,
             send_mode: SendMode::Auto {},
-        }]),
+        }]
+        .into_iter()
+        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
+        .collect()),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -928,6 +1495,91 @@ fn build_runtime_mission_replication_targets(
     }
 }
 
+fn should_include_checklist_participant_targets(
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> bool {
+    active_config.is_none_or(|config| {
+        matches!(
+            effective_hub_mode(config.hub_mode, hub_directory_snapshot),
+            HubMode::Autonomous {}
+        )
+    })
+}
+
+fn append_checklist_participant_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    participant_rns_identities: &[String],
+    active_propagation_node_hex: Option<&str>,
+    targets: &mut Vec<MissionReplicationTarget>,
+) {
+    let self_destinations = [
+        normalize_hex_32(status.identity_hex.as_str()),
+        normalize_hex_32(status.app_destination_hex.as_str()),
+        normalize_hex_32(status.lxmf_destination_hex.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<HashSet<_>>();
+    let mut seen_destinations = targets
+        .iter()
+        .map(|target| target.app_destination_hex.clone())
+        .collect::<HashSet<_>>();
+    for participant in participant_rns_identities {
+        let Some(app_destination_hex) = normalize_hex_32(participant.as_str()) else {
+            continue;
+        };
+        if self_destinations.contains(app_destination_hex.as_str())
+            || !seen_destinations.insert(app_destination_hex.clone())
+        {
+            continue;
+        }
+        let Some(send_mode) = current_replication_send_mode(
+            peers,
+            app_destination_hex.as_str(),
+            active_propagation_node_hex,
+        ) else {
+            continue;
+        };
+        targets.push(MissionReplicationTarget {
+            send_mode,
+            app_destination_hex,
+        });
+    }
+}
+
+fn build_runtime_checklist_replication_targets(
+    status: &NodeStatus,
+    peers: &[PeerRecord],
+    saved_peers: &[SavedPeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    active_config: Option<&NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    checklist: Option<&ChecklistRecord>,
+) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let mut targets = build_runtime_mission_replication_targets(
+        status,
+        peers,
+        saved_peers,
+        active_propagation_node_hex,
+        active_config,
+        hub_directory_snapshot,
+    )?;
+    if should_include_checklist_participant_targets(active_config, hub_directory_snapshot) {
+        if let Some(checklist) = checklist {
+            append_checklist_participant_replication_targets(
+                status,
+                peers,
+                checklist.participant_rns_identities.as_slice(),
+                active_propagation_node_hex,
+                &mut targets,
+            );
+        }
+    }
+    Ok(targets)
+}
+
 fn build_runtime_event_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -955,7 +1607,10 @@ fn build_runtime_event_replication_targets(
         HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
             app_destination_hex: configured_hub_destination(config)?,
             send_mode: SendMode::Auto {},
-        }]),
+        }]
+        .into_iter()
+        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
+        .collect()),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -1037,6 +1692,40 @@ fn msgpack_string_array(values: &[String]) -> MsgPackValue {
     )
 }
 
+fn msgpack_hex_identity(value: &str) -> MsgPackValue {
+    match hex::decode(value.trim()) {
+        Ok(bytes) if bytes.len() == 16 => MsgPackValue::Binary(bytes),
+        _ => MsgPackValue::from(value),
+    }
+}
+
+fn event_keyword_wire_value(keyword: &str) -> MsgPackValue {
+    keyword
+        .strip_prefix("r3akt:event-type:")
+        .filter(|event_type| !event_type.is_empty() && event_type.len() <= 4)
+        .map(MsgPackValue::from)
+        .unwrap_or_else(|| MsgPackValue::from(keyword))
+}
+
+fn event_keywords_wire_value(values: &[String]) -> MsgPackValue {
+    MsgPackValue::Array(
+        values
+            .iter()
+            .map(|value| event_keyword_wire_value(value.as_str()))
+            .collect(),
+    )
+}
+
+fn event_timestamp_wire_value(timestamp_ms: u64) -> MsgPackValue {
+    MsgPackValue::from(timestamp_ms / 1_000)
+}
+
+fn is_default_event_topics(values: &[String], mission_uid: &str) -> bool {
+    values.len() == 2
+        && values.first().is_some_and(|value| value == mission_uid)
+        && values.get(1).is_some_and(|value| value == "Default")
+}
+
 fn current_timestamp_rfc3339() -> String {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1103,6 +1792,27 @@ fn json_value_to_msgpack(value: &JsonValue) -> Result<MsgPackValue, NodeError> {
     }
 }
 
+fn checklist_args_to_msgpack(args: &JsonMap<String, JsonValue>) -> Result<MsgPackValue, NodeError> {
+    Ok(MsgPackValue::Map(
+        args.iter()
+            .map(|(key, value)| {
+                let value = if key == "patch" {
+                    match value {
+                        JsonValue::Object(patch) => checklist_args_to_msgpack(patch)?,
+                        _ => json_value_to_msgpack(value)?,
+                    }
+                } else {
+                    json_value_to_msgpack(value)?
+                };
+                Ok((
+                    MsgPackValue::from(checklist_arg_wire_key(key.as_str())),
+                    value,
+                ))
+            })
+            .collect::<Result<Vec<_>, NodeError>>()?,
+    ))
+}
+
 fn checklist_string_arg<'a>(args: &'a JsonMap<String, JsonValue>, key: &str) -> Option<&'a str> {
     args.get(key).and_then(JsonValue::as_str).map(str::trim)
 }
@@ -1129,6 +1839,123 @@ fn sanitize_correlation_token(value: &str) -> String {
         token = token.replace("--", "-");
     }
     token.trim_matches('-').to_string()
+}
+
+fn compact_event_token(uid: &str) -> String {
+    let compact = uid
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if compact.len() >= 8 {
+        compact[..8].to_string()
+    } else {
+        sanitize_correlation_token(uid)
+            .chars()
+            .take(8)
+            .collect::<String>()
+    }
+}
+
+fn compact_u64_token(value: u64) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut remaining = value;
+    let mut chars = Vec::new();
+    while remaining > 0 {
+        let digit = (remaining % 36) as u8;
+        chars.push(match digit {
+            0..=9 => (b'0' + digit) as char,
+            _ => (b'a' + (digit - 10)) as char,
+        });
+        remaining /= 36;
+    }
+    chars.iter().rev().collect()
+}
+
+fn compact_subject_token(token: &str) -> String {
+    const MAX_SUBJECT_LEN: usize = 32;
+    let token = token.trim();
+    if token.len() <= MAX_SUBJECT_LEN {
+        return token.to_string();
+    }
+
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in token.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let prefix = token.chars().take(12).collect::<String>();
+    format!("{prefix}-{}", compact_u64_token(hash))
+}
+
+fn compact_hex_binary(value: &str) -> Option<MsgPackValue> {
+    let normalized = value
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>();
+    if normalized.len() != 32 {
+        return None;
+    }
+    hex::decode(normalized).ok().map(MsgPackValue::Binary)
+}
+
+fn event_uid_wire_value(uid: &str) -> MsgPackValue {
+    compact_hex_binary(uid.trim_start_matches("evt-")).unwrap_or_else(|| MsgPackValue::from(uid))
+}
+
+fn eam_uid_wire_value(uid: &str) -> MsgPackValue {
+    compact_hex_binary(uid.trim_start_matches("eam-")).unwrap_or_else(|| MsgPackValue::from(uid))
+}
+
+fn event_command_id_tail_wire_value(command_id: &str, uid: &str) -> Option<MsgPackValue> {
+    let prefix = format!("log-entry-{uid}-");
+    if let Some(tail) = command_id.strip_prefix(prefix.as_str()) {
+        return compact_hex_binary(tail);
+    }
+    (command_id.len() <= 48).then(|| MsgPackValue::from(command_id))
+}
+
+fn identity_wire_value(identity_hex: &str) -> MsgPackValue {
+    compact_hex_binary(identity_hex).unwrap_or_else(|| MsgPackValue::from(identity_hex))
+}
+
+fn status_wire_value(status: &str) -> &str {
+    match status.trim() {
+        "Green" => "G",
+        "Yellow" => "Y",
+        "Red" => "R",
+        "Unknown" => "U",
+        other => other,
+    }
+}
+
+fn mission_uid_wire_value(mission_uid: &str) -> MsgPackValue {
+    if mission_uid == DEFAULT_R3AKT_MISSION_UID {
+        MsgPackValue::from(0_u64)
+    } else {
+        MsgPackValue::from(mission_uid)
+    }
+}
+
+fn event_topics_wire_value(topics: &[String], mission_uid: &str) -> MsgPackValue {
+    MsgPackValue::Array(
+        topics
+            .iter()
+            .map(|topic| {
+                if topic == mission_uid {
+                    MsgPackValue::from(0_u64)
+                } else if topic == "Default" {
+                    MsgPackValue::from(1_u64)
+                } else {
+                    MsgPackValue::from(topic.as_str())
+                }
+            })
+            .collect(),
+    )
 }
 
 fn checklist_topics_from_args(args: &JsonMap<String, JsonValue>) -> Vec<String> {
@@ -1174,41 +2001,119 @@ fn checklist_subject_token(command_type: &str, args: &JsonMap<String, JsonValue>
     sanitize_correlation_token(command_type)
 }
 
-fn build_mission_command_fields(
-    command_id: &str,
-    correlation_id: &str,
-    command_type: &str,
-    args: Vec<(&str, MsgPackValue)>,
-) -> Result<Vec<u8>, NodeError> {
-    let fields = MsgPackValue::Map(vec![(
-        MsgPackValue::from(FIELD_COMMANDS),
-        MsgPackValue::Array(vec![msgpack_map(vec![
-            ("command_id", MsgPackValue::from(command_id)),
-            ("correlation_id", MsgPackValue::from(correlation_id)),
-            ("command_type", MsgPackValue::from(command_type)),
-            ("args", msgpack_map(args)),
-        ])]),
-    )]);
-    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
-}
-
 fn build_checklist_command_fields(
     status: &NodeStatus,
-    target: &MissionReplicationTarget,
+    _target: &MissionReplicationTarget,
     command_type: &str,
     args: &JsonMap<String, JsonValue>,
     command_id_override: Option<&str>,
 ) -> Result<Vec<u8>, NodeError> {
-    let timestamp = current_timestamp_rfc3339();
     let send_ts_ms = now_ms();
-    let subject = checklist_subject_token(command_type, args);
-    let command_slug = sanitize_correlation_token(command_type);
-    let destination_hint = &target.app_destination_hex[..target.app_destination_hex.len().min(8)];
-    let correlation_id = format!("{command_slug}-{subject}-{destination_hint}-{send_ts_ms}");
+    let subject = compact_subject_token(checklist_subject_token(command_type, args).as_str());
+    let command_code = command_wire_value(command_type).to_ascii_lowercase();
+    let correlation_id = command_id_override.map_or_else(
+        || {
+            format!(
+                "c:{command_code}:{subject}:{}",
+                compact_u64_token(send_ts_ms)
+            )
+        },
+        str::to_string,
+    );
     let command_id = command_id_override
         .map(str::to_string)
-        .unwrap_or_else(|| format!("cmd-{correlation_id}"));
-    let source_display_name = status.name.trim();
+        .unwrap_or_else(|| correlation_id.clone());
+    if command_type == "checklist.task.status.set" {
+        let mut command_entries = vec![
+            ("t", MsgPackValue::from(command_wire_value(command_type))),
+            (
+                "s",
+                msgpack_map(vec![(
+                    "r",
+                    msgpack_hex_identity(status.identity_hex.as_str()),
+                )]),
+            ),
+        ];
+        if let Some(checklist_uid) = checklist_key_arg(args, "checklist_uid") {
+            command_entries.push(("cl", MsgPackValue::from(checklist_uid.as_str())));
+        }
+        if let Some(task_uid) = checklist_key_arg(args, "task_uid") {
+            command_entries.push(("tsk", MsgPackValue::from(task_uid.as_str())));
+        }
+        if let Some(number) = args.get("number").and_then(JsonValue::as_u64) {
+            command_entries.push(("no", MsgPackValue::from(number)));
+        }
+        let completed = args
+            .get("user_status")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| value == "COMPLETE");
+        command_entries.push(("x", MsgPackValue::from(completed)));
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![msgpack_map(command_entries)]),
+        )]);
+        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+    }
+    if command_type == "checklist.create.online" {
+        let mut command_entries = vec![
+            ("t", MsgPackValue::from(command_wire_value(command_type))),
+            (
+                "s",
+                msgpack_map(vec![(
+                    "r",
+                    msgpack_hex_identity(status.identity_hex.as_str()),
+                )]),
+            ),
+        ];
+        for key in [
+            "checklist_uid",
+            "mission_uid",
+            "template_uid",
+            "name",
+            "description",
+            "start_time",
+            "total_tasks",
+        ] {
+            if let Some(value) = args.get(key) {
+                command_entries.push((checklist_arg_wire_key(key), json_value_to_msgpack(value)?));
+            }
+        }
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![msgpack_map(command_entries)]),
+        )]);
+        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+    }
+    if command_type == "checklist.task.row.add" {
+        let mut command_entries = vec![
+            ("t", MsgPackValue::from(command_wire_value(command_type))),
+            (
+                "s",
+                msgpack_map(vec![(
+                    "r",
+                    msgpack_hex_identity(status.identity_hex.as_str()),
+                )]),
+            ),
+        ];
+        for key in [
+            "checklist_uid",
+            "task_uid",
+            "number",
+            "due_relative_minutes",
+            "due_dtg",
+            "legacy_value",
+            "notes",
+        ] {
+            if let Some(value) = args.get(key) {
+                command_entries.push((checklist_arg_wire_key(key), json_value_to_msgpack(value)?));
+            }
+        }
+        let fields = MsgPackValue::Map(vec![(
+            MsgPackValue::from(FIELD_COMMANDS),
+            MsgPackValue::Array(vec![msgpack_map(command_entries)]),
+        )]);
+        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+    }
     let topics = checklist_topics_from_args(args)
         .into_iter()
         .map(MsgPackValue::from)
@@ -1216,28 +2121,19 @@ fn build_checklist_command_fields(
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![msgpack_map(vec![
-            ("command_id", MsgPackValue::from(command_id.as_str())),
+            ("i", MsgPackValue::from(command_id.as_str())),
+            ("c", MsgPackValue::from(correlation_id.as_str())),
+            ("t", MsgPackValue::from(command_wire_value(command_type))),
             (
-                "correlation_id",
-                MsgPackValue::from(correlation_id.as_str()),
+                "s",
+                msgpack_map(vec![(
+                    "r",
+                    msgpack_hex_identity(status.identity_hex.as_str()),
+                )]),
             ),
-            ("command_type", MsgPackValue::from(command_type)),
-            (
-                "source",
-                msgpack_map(vec![
-                    (
-                        "rns_identity",
-                        MsgPackValue::from(status.identity_hex.as_str()),
-                    ),
-                    ("display_name", MsgPackValue::from(source_display_name)),
-                ]),
-            ),
-            ("timestamp", MsgPackValue::from(timestamp.as_str())),
-            ("topics", MsgPackValue::Array(topics)),
-            (
-                "args",
-                json_value_to_msgpack(&JsonValue::Object(args.clone()))?,
-            ),
+            ("ts", MsgPackValue::from(send_ts_ms)),
+            ("to", MsgPackValue::Array(topics)),
+            ("a", checklist_args_to_msgpack(args)?),
         ])]),
     )]);
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
@@ -1256,10 +2152,18 @@ fn checklist_snapshot_content_bytes(
     snapshot_json: &str,
 ) -> Result<Vec<u8>, NodeError> {
     let snapshot_entry = checklist_snapshot_msgpack_entry(snapshot_json)?;
+    let snapshot_msgpack =
+        rmp_serde::to_vec(&snapshot_entry.1).map_err(|_| NodeError::InternalError {})?;
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder
+        .write_all(snapshot_msgpack.as_slice())
+        .map_err(|_| NodeError::InternalError {})?;
+    let compressed_snapshot = encoder.finish().map_err(|_| NodeError::InternalError {})?;
     let content = msgpack_map(vec![
-        ("type", MsgPackValue::from("rem.checklist.snapshot.v1")),
+        ("type", MsgPackValue::from("rem.checklist.snapshot.v2")),
         ("checklist_uid", MsgPackValue::from(checklist_uid)),
-        snapshot_entry,
+        ("encoding", MsgPackValue::from("zlib+msgpack")),
+        ("snapshot", MsgPackValue::Binary(compressed_snapshot)),
     ]);
     rmp_serde::to_vec(&content).map_err(|_| NodeError::InternalError {})
 }
@@ -1273,6 +2177,10 @@ fn build_checklist_replication_payload(
     build_checklist_replication_payload_with_command_id(status, target, command_type, args, None)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "delete replication planning keeps explicit runtime snapshots at the call boundary"
+)]
 fn build_checklist_delete_replication_sends(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -1280,6 +2188,7 @@ fn build_checklist_delete_replication_sends(
     active_propagation_node_hex: Option<&str>,
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+    checklist: Option<&ChecklistRecord>,
     checklist_uid: &str,
     delete_remote: bool,
 ) -> Result<Vec<ScheduledMissionSend>, NodeError> {
@@ -1287,13 +2196,14 @@ fn build_checklist_delete_replication_sends(
         return Ok(Vec::new());
     }
 
-    let replication_targets = build_runtime_mission_replication_targets(
+    let replication_targets = build_runtime_checklist_replication_targets(
         status,
         peers,
         saved_peers,
         active_propagation_node_hex,
         active_config,
         hub_directory_snapshot,
+        checklist,
     )?;
     let args = checklist_uid_args_json(checklist_uid);
     let mut scheduled_sends = Vec::new();
@@ -1314,12 +2224,19 @@ fn build_checklist_replication_payload_with_command_id(
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let fields =
         build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
-    let body = format!(
-        "Checklist {} {}",
+    let body = if matches!(
         command_type,
-        checklist_subject_token(command_type, args)
-    )
-    .into_bytes();
+        "checklist.task.status.set" | "checklist.create.online" | "checklist.task.row.add"
+    ) {
+        format!("C {}", command_wire_value(command_type)).into_bytes()
+    } else {
+        format!(
+            "C {} {}",
+            command_wire_value(command_type),
+            checklist_subject_token(command_type, args)
+        )
+        .into_bytes()
+    };
     Ok((body, fields))
 }
 
@@ -1393,7 +2310,6 @@ fn append_checklist_create_snapshot_args(
         return Err(NodeError::InternalError {});
     };
     for key in [
-        "columns",
         "participant_rns_identities",
         "created_at",
         "created_by_team_member_rns_identity",
@@ -1416,6 +2332,7 @@ fn append_checklist_create_snapshot_args(
     Ok(())
 }
 
+#[cfg(test)]
 fn checklist_task_row_add_args_from_task(
     checklist_uid: &str,
     task: &crate::types::ChecklistTaskRecord,
@@ -1453,9 +2370,6 @@ fn checklist_task_row_add_args_from_task(
     if let Some(legacy_value) = task.legacy_value.as_deref() {
         args.insert("legacy_value".to_string(), JsonValue::from(legacy_value));
     }
-    if let Ok(task_value) = serde_json::to_value(task) {
-        args.insert("task".to_string(), task_value);
-    }
     if let Some(identity) = changed_by_identity
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1468,36 +2382,45 @@ fn checklist_task_row_add_args_from_task(
     args
 }
 
+fn compact_initial_checklist_task_row_add_args_from_task(
+    checklist_uid: &str,
+    task: &crate::types::ChecklistTaskRecord,
+) -> JsonMap<String, JsonValue> {
+    let mut args = JsonMap::new();
+    args.insert("checklist_uid".to_string(), JsonValue::from(checklist_uid));
+    args.insert(
+        "task_uid".to_string(),
+        JsonValue::from(task.task_uid.as_str()),
+    );
+    args.insert("number".to_string(), JsonValue::from(task.number));
+    if let Some(legacy_value) = task.legacy_value.as_deref() {
+        args.insert("legacy_value".to_string(), JsonValue::from(legacy_value));
+    }
+    args
+}
+
 fn build_initial_checklist_task_payloads(
     status: &NodeStatus,
     target: &MissionReplicationTarget,
     checklist_uid: &str,
     tasks: &[crate::types::ChecklistTaskRecord],
-    changed_by_identity: Option<&str>,
+    _changed_by_identity: Option<&str>,
 ) -> Vec<ScheduledMissionSend> {
     tasks
         .iter()
         .filter(|task| task.deleted_at.is_none())
         .filter_map(|task| {
-            let args =
-                checklist_task_row_add_args_from_task(checklist_uid, task, changed_by_identity);
-            let command_id = format!("cmd-{checklist_uid}-row-{}", task.task_uid);
-            build_checklist_replication_payload_with_command_id(
-                status,
-                target,
-                "checklist.task.row.add",
-                &args,
-                Some(command_id.as_str()),
-            )
-            .ok()
-            .map(|(body, fields)| {
-                (
-                    target.app_destination_hex.clone(),
-                    body,
-                    fields,
-                    target.send_mode,
-                )
-            })
+            let args = compact_initial_checklist_task_row_add_args_from_task(checklist_uid, task);
+            build_checklist_replication_payload(status, target, "checklist.task.row.add", &args)
+                .ok()
+                .map(|(body, fields)| {
+                    (
+                        target.app_destination_hex.clone(),
+                        body,
+                        fields,
+                        target.send_mode,
+                    )
+                })
         })
         .collect()
 }
@@ -1581,17 +2504,6 @@ fn checklist_task_status_args_json(
         "user_status".to_string(),
         JsonValue::from(request.user_status.as_str()),
     );
-    if let Some(identity) = request
-        .changed_by_team_member_rns_identity
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.insert(
-            "changed_by_team_member_rns_identity".to_string(),
-            JsonValue::from(identity),
-        );
-    }
     args
 }
 
@@ -1698,15 +2610,10 @@ fn checklist_task_cell_args_json(
 }
 
 fn build_eam_replication_payload(
-    status: &NodeStatus,
+    _status: &NodeStatus,
     record: &EamProjectionRecord,
-    target: &MissionReplicationTarget,
+    _target: &MissionReplicationTarget,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
-    let team_member_uid = record
-        .team_member_uid
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(NodeError::InvalidConfig {})?;
     let team_uid = record
         .team_uid
         .as_deref()
@@ -1716,120 +2623,72 @@ fn build_eam_replication_payload(
         return Err(NodeError::InvalidConfig {});
     }
 
-    let send_ts_ms = now_ms();
-    let correlation_id = format!(
-        "eam-upsert-{}-{}-{send_ts_ms}",
-        record
-            .eam_uid
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(record.callsign.as_str())
-            .trim()
-            .to_ascii_lowercase(),
-        &target.app_destination_hex[..8],
-    );
-    let command_id = format!("cmd-{correlation_id}");
-    let display_name = status.name.trim();
-    let source_identity = status.identity_hex.as_str();
-    let reported_by = record
-        .reported_by
+    let subject_source = record
+        .eam_uid
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| (!display_name.is_empty()).then_some(display_name));
+        .unwrap_or(record.callsign.as_str());
+    let subject = compact_event_token(subject_source.trim_start_matches("eam-"));
+    let update_token = compact_u64_token(record.updated_at_ms);
+    let command_id = format!("m:{subject}:{update_token}");
+    let body = b"E".to_vec();
 
-    let overall_status = record
-        .overall_status
-        .clone()
-        .or_else(|| derive_eam_overall_status(record))
-        .unwrap_or_else(|| "Unknown".to_string());
-    let body = format!("EAM {} {}", record.callsign.trim(), overall_status).into_bytes();
-
-    let fields = build_mission_command_fields(
-        command_id.as_str(),
-        correlation_id.as_str(),
-        "mission.registry.eam.upsert",
-        vec![
-            ("callsign", MsgPackValue::from(record.callsign.as_str())),
-            ("team_member_uid", MsgPackValue::from(team_member_uid)),
-            ("team_uid", MsgPackValue::from(team_uid)),
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
             (
-                "security_status",
-                MsgPackValue::from(record.security_status.as_str()),
+                MsgPackValue::from("i"),
+                MsgPackValue::from(command_id.as_str()),
             ),
             (
-                "capability_status",
-                MsgPackValue::from(record.capability_status.as_str()),
+                MsgPackValue::from("t"),
+                MsgPackValue::from(command_wire_value("mission.registry.eam.upsert")),
             ),
             (
-                "preparedness_status",
-                MsgPackValue::from(record.preparedness_status.as_str()),
+                MsgPackValue::from("a"),
+                msgpack_map(
+                    vec![
+                        ("cs", MsgPackValue::from(record.callsign.trim())),
+                        ("tu", MsgPackValue::from(team_uid)),
+                        (
+                            "ss",
+                            MsgPackValue::from(status_wire_value(&record.security_status)),
+                        ),
+                        (
+                            "ca",
+                            MsgPackValue::from(status_wire_value(&record.capability_status)),
+                        ),
+                        (
+                            "pr",
+                            MsgPackValue::from(status_wire_value(&record.preparedness_status)),
+                        ),
+                        (
+                            "me",
+                            MsgPackValue::from(status_wire_value(&record.medical_status)),
+                        ),
+                        (
+                            "mo",
+                            MsgPackValue::from(status_wire_value(&record.mobility_status)),
+                        ),
+                        (
+                            "co",
+                            MsgPackValue::from(status_wire_value(&record.comms_status)),
+                        ),
+                    ]
+                    .into_iter()
+                    .chain(
+                        record
+                            .eam_uid
+                            .as_deref()
+                            .map(|value| ("u", eam_uid_wire_value(value)))
+                            .into_iter(),
+                    )
+                    .collect(),
+                ),
             ),
-            (
-                "medical_status",
-                MsgPackValue::from(record.medical_status.as_str()),
-            ),
-            (
-                "mobility_status",
-                MsgPackValue::from(record.mobility_status.as_str()),
-            ),
-            (
-                "comms_status",
-                MsgPackValue::from(record.comms_status.as_str()),
-            ),
-            (
-                "source",
-                msgpack_map(vec![
-                    ("rns_identity", MsgPackValue::from(source_identity)),
-                    (
-                        "display_name",
-                        MsgPackValue::from(reported_by.unwrap_or(display_name)),
-                    ),
-                ]),
-            ),
-        ]
-        .into_iter()
-        .chain(
-            record
-                .eam_uid
-                .as_deref()
-                .map(|value| ("eam_uid", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            record
-                .reported_by
-                .as_deref()
-                .map(|value| ("reported_by", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            record
-                .reported_at
-                .as_deref()
-                .map(|value| ("reported_at", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            record
-                .notes
-                .as_deref()
-                .map(|value| ("notes", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            record
-                .confidence
-                .map(|value| ("confidence", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            record
-                .ttl_seconds
-                .map(|value| ("ttl_seconds", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .collect(),
-    )?;
+        ])]),
+    )]);
+    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
 
     Ok((body, fields))
 }
@@ -1837,29 +2696,38 @@ fn build_eam_replication_payload(
 fn build_eam_delete_replication_payload(
     callsign: &str,
     deleted_at_ms: u64,
-    target: &MissionReplicationTarget,
+    _target: &MissionReplicationTarget,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let normalized_callsign = callsign.trim();
     if normalized_callsign.is_empty() {
         return Err(NodeError::InvalidConfig {});
     }
 
-    let correlation_id = format!(
-        "eam-delete-{}-{}-{deleted_at_ms}",
-        normalized_callsign.to_ascii_lowercase(),
-        &target.app_destination_hex[..8],
-    );
-    let command_id = format!("cmd-{correlation_id}");
-    let body = format!("EAM deleted {normalized_callsign}").into_bytes();
-    let fields = build_mission_command_fields(
-        command_id.as_str(),
-        correlation_id.as_str(),
-        "mission.registry.eam.delete",
-        vec![
-            ("callsign", MsgPackValue::from(normalized_callsign)),
-            ("deleted_at_ms", MsgPackValue::from(deleted_at_ms)),
-        ],
-    )?;
+    let subject = sanitize_correlation_token(normalized_callsign);
+    let delete_token = compact_u64_token(deleted_at_ms);
+    let command_id = format!("md:{subject}:{delete_token}");
+    let body = b"ED".to_vec();
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("i"),
+                MsgPackValue::from(command_id.as_str()),
+            ),
+            (
+                MsgPackValue::from("t"),
+                MsgPackValue::from(command_wire_value("mission.registry.eam.delete")),
+            ),
+            (
+                MsgPackValue::from("a"),
+                msgpack_map(vec![
+                    ("cs", MsgPackValue::from(normalized_callsign)),
+                    ("d", MsgPackValue::from(deleted_at_ms)),
+                ]),
+            ),
+        ])]),
+    )]);
+    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
 
     Ok((body, fields))
 }
@@ -1867,13 +2735,12 @@ fn build_eam_delete_replication_payload(
 fn build_event_replication_payload(
     status: &NodeStatus,
     record: &EventProjectionRecord,
-    target: &MissionReplicationTarget,
+    _target: &MissionReplicationTarget,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let uid = record.uid.trim();
     let command_id = record.command_id.trim();
     let mission_uid = record.mission_uid.trim();
     let content = record.content.trim();
-    let callsign = record.callsign.trim();
     let timestamp = record.timestamp.trim();
     let command_type = record.command_type.trim();
     let source_identity = record.source_identity.trim();
@@ -1881,7 +2748,6 @@ fn build_event_replication_payload(
         || command_id.is_empty()
         || mission_uid.is_empty()
         || content.is_empty()
-        || callsign.is_empty()
         || timestamp.is_empty()
         || command_type.is_empty()
         || source_identity.is_empty()
@@ -1889,18 +2755,6 @@ fn build_event_replication_payload(
         return Err(NodeError::InvalidConfig {});
     }
 
-    let send_ts_ms = now_ms();
-    let correlation_id = record
-        .correlation_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            format!(
-                "event-upsert-{uid}-{}-{send_ts_ms}",
-                &target.app_destination_hex[..8]
-            )
-        });
     let display_name = record
         .source_display_name
         .as_deref()
@@ -1908,89 +2762,101 @@ fn build_event_replication_payload(
         .unwrap_or_else(|| {
             let fallback = status.name.trim();
             if fallback.is_empty() {
-                callsign
+                record.callsign.trim()
             } else {
                 fallback
             }
         });
     let body = content.as_bytes().to_vec();
+    let mut command_entries = vec![
+        (
+            MsgPackValue::from("t"),
+            MsgPackValue::from(command_wire_value(command_type)),
+        ),
+        (
+            MsgPackValue::from("s"),
+            msgpack_map(vec![
+                ("r", identity_wire_value(source_identity)),
+                ("n", MsgPackValue::from(display_name)),
+            ]),
+        ),
+        (
+            MsgPackValue::from("ts"),
+            event_timestamp_wire_value(record.updated_at_ms),
+        ),
+        (
+            MsgPackValue::from("a"),
+            msgpack_map(
+                vec![("u", event_uid_wire_value(uid))]
+                    .into_iter()
+                    .chain(
+                        (mission_uid != DEFAULT_R3AKT_MISSION_UID)
+                            .then(|| ("m", mission_uid_wire_value(mission_uid)))
+                            .into_iter(),
+                    )
+                    .chain(
+                        event_command_id_tail_wire_value(command_id, uid)
+                            .map(|value| ("ci", value))
+                            .into_iter(),
+                    )
+                    .chain(
+                        (!record.keywords.is_empty())
+                            .then(|| ("kw", event_keywords_wire_value(record.keywords.as_slice()))),
+                    )
+                    .chain(
+                        (!record.content_hashes.is_empty()).then(|| {
+                            ("ch", msgpack_string_array(record.content_hashes.as_slice()))
+                        }),
+                    )
+                    .chain(
+                        record
+                            .deleted_at_ms
+                            .map(|value| ("d", MsgPackValue::from(value)))
+                            .into_iter(),
+                    )
+                    .collect(),
+            ),
+        ),
+    ];
+    if !is_default_event_topics(record.topics.as_slice(), mission_uid) {
+        command_entries.push((
+            MsgPackValue::from("to"),
+            event_topics_wire_value(record.topics.as_slice(), mission_uid),
+        ));
+    }
 
-    let fields =
-        MsgPackValue::Map(vec![(
-            MsgPackValue::from(FIELD_COMMANDS),
-            MsgPackValue::Array(vec![MsgPackValue::Map(vec![
-                (
-                    MsgPackValue::from("command_id"),
-                    MsgPackValue::from(command_id),
-                ),
-                (
-                    MsgPackValue::from("correlation_id"),
-                    MsgPackValue::from(correlation_id.as_str()),
-                ),
-                (
-                    MsgPackValue::from("command_type"),
-                    MsgPackValue::from(command_type),
-                ),
-                (
-                    MsgPackValue::from("source"),
-                    msgpack_map(vec![
-                        ("rns_identity", MsgPackValue::from(source_identity)),
-                        ("display_name", MsgPackValue::from(display_name)),
-                    ]),
-                ),
-                (
-                    MsgPackValue::from("timestamp"),
-                    MsgPackValue::from(timestamp),
-                ),
-                (
-                    MsgPackValue::from("args"),
-                    msgpack_map(
-                        vec![
-                            ("entry_uid", MsgPackValue::from(uid)),
-                            ("mission_uid", MsgPackValue::from(mission_uid)),
-                            ("content", MsgPackValue::from(content)),
-                            ("callsign", MsgPackValue::from(callsign)),
-                            ("source_identity", MsgPackValue::from(source_identity)),
-                            ("source_display_name", MsgPackValue::from(display_name)),
-                        ]
-                        .into_iter()
-                        .chain(
-                            record
-                                .server_time
-                                .as_deref()
-                                .filter(|value| !value.trim().is_empty())
-                                .map(|value| ("server_time", MsgPackValue::from(value)))
-                                .into_iter(),
-                        )
-                        .chain(
-                            record
-                                .client_time
-                                .as_deref()
-                                .filter(|value| !value.trim().is_empty())
-                                .map(|value| ("client_time", MsgPackValue::from(value)))
-                                .into_iter(),
-                        )
-                        .chain((!record.keywords.is_empty()).then(|| {
-                            ("keywords", msgpack_string_array(record.keywords.as_slice()))
-                        }))
-                        .chain((!record.content_hashes.is_empty()).then(|| {
-                            (
-                                "content_hashes",
-                                msgpack_string_array(record.content_hashes.as_slice()),
-                            )
-                        }))
-                        .collect(),
-                    ),
-                ),
-                (
-                    MsgPackValue::from("topics"),
-                    msgpack_string_array(record.topics.as_slice()),
-                ),
-            ])]),
-        )]);
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(command_entries)]),
+    )]);
     let fields_bytes = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
 
     Ok((body, fields_bytes))
+}
+
+fn build_event_delete_replication_payload(
+    status: &NodeStatus,
+    record: &EventProjectionRecord,
+    deleted_at_ms: u64,
+    target: &MissionReplicationTarget,
+) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
+    let uid = record.uid.trim();
+    if uid.is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+
+    let mut tombstone = record.clone();
+    let correlation_id = format!(
+        "event-delete-{}-{}-{deleted_at_ms}",
+        sanitize_correlation_token(uid),
+        &target.app_destination_hex[..8],
+    );
+    tombstone.command_id = format!("cmd-{correlation_id}");
+    tombstone.correlation_id = Some(correlation_id);
+    tombstone.command_type = "mission.registry.log_entry.upsert".to_string();
+    tombstone.deleted_at_ms = Some(deleted_at_ms);
+    tombstone.updated_at_ms = deleted_at_ms;
+    build_event_replication_payload(status, &tombstone, target)
 }
 
 fn build_telemetry_replication_payload(
@@ -2003,54 +2869,57 @@ fn build_telemetry_replication_payload(
     }
 
     let send_ts_ms = now_ms();
-    let correlation_id = format!(
-        "telemetry-upsert-{}-{}-{send_ts_ms}",
-        sanitize_correlation_token(callsign),
-        &target.app_destination_hex[..8],
-    );
-    let command_id = format!("cmd-{correlation_id}");
-    let body = format!(
-        "Telemetry {} {:.6},{:.6}",
-        callsign, position.lat, position.lon
-    )
-    .into_bytes();
-    let fields = build_mission_command_fields(
-        command_id.as_str(),
-        correlation_id.as_str(),
-        "mission.registry.telemetry.upsert",
-        vec![
-            ("callsign", MsgPackValue::from(callsign)),
-            ("lat", MsgPackValue::from(position.lat)),
-            ("lon", MsgPackValue::from(position.lon)),
-            ("updated_at_ms", MsgPackValue::from(position.updated_at_ms)),
-        ]
-        .into_iter()
-        .chain(
-            position
-                .alt
-                .map(|value| ("alt", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            position
-                .course
-                .map(|value| ("course", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            position
-                .speed
-                .map(|value| ("speed", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .chain(
-            position
-                .accuracy
-                .map(|value| ("accuracy", MsgPackValue::from(value)))
-                .into_iter(),
-        )
-        .collect(),
-    )?;
+    let send_token = compact_u64_token(send_ts_ms);
+    let command_id = format!("t:{}:{send_token}", &target.app_destination_hex[..4]);
+    let correlation_id = format!("t:{}:{send_token}", &target.app_destination_hex[..8]);
+    let body = b"T".to_vec();
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("i"),
+                MsgPackValue::from(command_id.as_str()),
+            ),
+            (
+                MsgPackValue::from("c"),
+                MsgPackValue::from(correlation_id.as_str()),
+            ),
+            (
+                MsgPackValue::from("t"),
+                MsgPackValue::from(command_wire_value("mission.registry.telemetry.upsert")),
+            ),
+            (
+                MsgPackValue::from("a"),
+                msgpack_map(
+                    vec![
+                        ("cs", MsgPackValue::from(callsign)),
+                        ("la", MsgPackValue::from(position.lat)),
+                        ("lo", MsgPackValue::from(position.lon)),
+                        ("u", MsgPackValue::from(position.updated_at_ms)),
+                    ]
+                    .into_iter()
+                    .chain(position.alt.map(|value| ("al", MsgPackValue::from(value))))
+                    .chain(
+                        position
+                            .course
+                            .map(|value| ("cr", MsgPackValue::from(value))),
+                    )
+                    .chain(
+                        position
+                            .speed
+                            .map(|value| ("sp", MsgPackValue::from(value))),
+                    )
+                    .chain(
+                        position
+                            .accuracy
+                            .map(|value| ("ac", MsgPackValue::from(value))),
+                    )
+                    .collect(),
+                ),
+            ),
+        ])]),
+    )]);
+    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
 
     Ok((body, fields))
 }
@@ -2089,6 +2958,10 @@ fn run_sos_fanout(
     status: NodeStatus,
     settings: SosSettingsRecord,
     saved_peers: Vec<SavedPeerRecord>,
+    peers: Vec<PeerRecord>,
+    active_propagation_node_hex: Option<String>,
+    _active_config: Option<NodeConfigFingerprint>,
+    _hub_directory_snapshot: Option<HubDirectorySnapshot>,
     telemetry: Option<SosDeviceTelemetryRecord>,
     incident_id: String,
     trigger_source: SosTriggerSource,
@@ -2121,11 +2994,28 @@ fn run_sos_fanout(
     }
 
     let body = compose_sos_body(&settings, kind, telemetry.as_ref());
-    for peer in saved_peers {
-        let destination_hex = peer.destination_hex.trim().to_ascii_lowercase();
-        if destination_hex.is_empty() {
-            continue;
-        }
+    let mut targets = build_sos_replication_targets(
+        &status,
+        peers.as_slice(),
+        saved_peers.as_slice(),
+        active_propagation_node_hex.as_deref(),
+    );
+    let route_hops = route_hops_for_replication(&app_state, &bus, "sos");
+    prioritize_sos_replication_targets(
+        targets.as_mut_slice(),
+        peers.as_slice(),
+        saved_peers.as_slice(),
+        &route_hops,
+    );
+    if targets.is_empty() {
+        bus.emit(NodeEvent::Log {
+            level: LogLevel::Warn {},
+            message: "sos fanout has no eligible saved or active mission-capable peer targets"
+                .to_string(),
+        });
+    }
+    for target in targets {
+        let destination_hex = target.app_destination_hex.clone();
         let command = SosCommand {
             state: kind,
             incident_id: incident_id.clone(),
@@ -2159,7 +3049,11 @@ fn run_sos_fanout(
             source_hex: Some(status.lxmf_destination_hex.clone()),
             title: Some("SOS Emergency".to_string()),
             body_utf8: body.clone(),
-            method: MessageMethod::Direct {},
+            method: if matches!(target.send_mode, SendMode::PropagationOnly {}) {
+                MessageMethod::Propagated {}
+            } else {
+                MessageMethod::Direct {}
+            },
             state: MessageState::Queued {},
             detail: Some(format!("sos:{}", crate::sos::sos_kind_label(kind))),
             sent_at_ms: Some(now),
@@ -2180,7 +3074,7 @@ fn run_sos_fanout(
                 destination_hex: destination_hex.clone(),
                 bytes: body.as_bytes().to_vec(),
                 fields_bytes: Some(fields),
-                send_mode: SendMode::Auto {},
+                send_mode: target.send_mode,
                 resp: resp_tx,
             },
         ) {
@@ -2206,6 +3100,12 @@ fn run_sos_fanout(
 
 pub struct Node {
     inner: Mutex<NodeInner>,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Node {
@@ -2247,6 +3147,7 @@ impl Node {
                 plugin_runtime: None,
                 runtime: None,
                 cmd_tx: None,
+                priority_cmd_tx: None,
             }),
         }
     }
@@ -2272,13 +3173,13 @@ impl Node {
 
         let identity = load_or_create_identity(config.storage_dir.as_deref(), &config.name)?;
 
-        let app_hash = reticulum::destination::SingleInputDestination::new(
+        let _legacy_app_hash = SingleInputDestination::new(
             identity.clone(),
             DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
         )
         .desc
         .address_hash;
-        let lxmf_hash = reticulum::destination::SingleInputDestination::new(
+        let lxmf_hash = SingleInputDestination::new(
             identity.clone(),
             DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
         )
@@ -2290,7 +3191,7 @@ impl Node {
                 running: false,
                 name: config.name.clone(),
                 identity_hex: identity.address_hash().to_hex_string(),
-                app_destination_hex: app_hash.to_hex_string(),
+                app_destination_hex: lxmf_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
             };
         }
@@ -2343,6 +3244,7 @@ impl Node {
 
         let runtime = build_node_runtime()?;
         let (cmd_tx, cmd_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let (priority_cmd_tx, priority_cmd_rx) = mpsc::channel(PRIORITY_COMMAND_QUEUE_CAPACITY);
 
         let plugin_android_abi = inner.plugin_android_abi.clone();
         runtime.spawn(run_node(
@@ -2355,10 +3257,12 @@ impl Node {
             inner.hub_directory_snapshot.clone(),
             inner.bus.clone(),
             cmd_rx,
+            priority_cmd_rx,
         ));
 
         inner.runtime = Some(runtime);
         inner.cmd_tx = Some(cmd_tx);
+        inner.priority_cmd_tx = Some(priority_cmd_tx);
         inner.active_config = Some(config_fingerprint);
         let hub_directory_snapshot = inner
             .hub_directory_snapshot
@@ -2423,6 +3327,7 @@ impl Node {
         let (
             runtime,
             cmd_tx,
+            priority_cmd_tx,
             bus,
             status,
             peers_snapshot,
@@ -2435,6 +3340,7 @@ impl Node {
             (
                 inner.runtime.take(),
                 inner.cmd_tx.take(),
+                inner.priority_cmd_tx.take(),
                 inner.bus.clone(),
                 inner.status.clone(),
                 inner.peers_snapshot.clone(),
@@ -2453,7 +3359,7 @@ impl Node {
             return Ok(());
         };
 
-        if let Some(cmd_tx) = cmd_tx {
+        if let Some(cmd_tx) = priority_cmd_tx.or(cmd_tx) {
             let (tx, rx) = cb::bounded(1);
             let _ = dispatch_command(&cmd_tx, Command::Stop { resp: tx });
             let _ = rx.recv_timeout(Duration::from_secs(5));
@@ -2978,18 +3884,25 @@ impl Node {
             },
         )?;
         resp_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(LXMF_SYNC_COMMAND_TIMEOUT)
             .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                return inner.app_state.list_announces();
+            }
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::ListAnnounces { resp: resp_tx })?;
+        dispatch_command(
+            &tx.expect("checked above"),
+            Command::ListAnnounces { resp: resp_tx },
+        )?;
         resp_rx
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or(Err(NodeError::Timeout {}))
@@ -3014,7 +3927,11 @@ impl Node {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let storage_root = inner.app_state.storage_dir();
             let install_root = storage_root.join("plugins");
-            (storage_root, install_root, inner.plugin_trust_policy.clone())
+            (
+                storage_root,
+                install_root,
+                inner.plugin_trust_policy.clone(),
+            )
         };
         let staged_root = storage_root.join("plugin-packages");
         fs_err::create_dir_all(staged_root.as_path()).map_err(|_| NodeError::IoError {})?;
@@ -3190,20 +4107,42 @@ impl Node {
     }
 
     pub fn delete_conversation(&self, conversation_id: String) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let peers = inner
-            .peers_snapshot
-            .lock()
-            .map_err(|_| NodeError::InternalError {})?
-            .clone();
-        let resolver = conversation_peer_resolver(&peers);
-        for invalidation in inner
-            .app_state
-            .delete_conversation_resolved(conversation_id.as_str(), &resolver)?
-        {
-            emit_projection_invalidation(&inner.bus, invalidation);
+        let tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            if let Some(tx) = inner.cmd_tx.clone() {
+                Some(tx)
+            } else {
+                let peers = inner
+                    .peers_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
+                let resolver = conversation_peer_resolver(&peers);
+                for invalidation in inner
+                    .app_state
+                    .delete_conversation_resolved(conversation_id.as_str(), &resolver)?
+                {
+                    emit_projection_invalidation(&inner.bus, invalidation);
+                }
+                None
+            }
+        };
+
+        if let Some(tx) = tx {
+            let (resp_tx, resp_rx) = cb::bounded(1);
+            dispatch_command(
+                &tx,
+                Command::DeleteConversation {
+                    conversation_id,
+                    resp: resp_tx,
+                },
+            )?;
+            resp_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or(Err(NodeError::Timeout {}))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
@@ -3247,12 +4186,21 @@ impl Node {
             .lock()
             .map_err(|_| NodeError::InternalError {})?
             .clone();
-        build_runtime_telemetry_destinations(
+        let sync_status = inner
+            .sync_status_snapshot
+            .lock()
+            .map_err(|_| NodeError::InternalError {})?
+            .clone();
+        Ok(build_runtime_telemetry_destinations(
             &status,
             peers.as_slice(),
+            sync_status.active_propagation_node_hex.as_deref(),
             inner.active_config.as_ref(),
             hub_directory_snapshot.as_ref(),
-        )
+        )?
+        .into_iter()
+        .map(|target| target.app_destination_hex)
+        .collect())
     }
 
     pub fn set_announce_capabilities(&self, capability_string: String) -> Result<(), NodeError> {
@@ -3324,15 +4272,32 @@ impl Node {
     }
 
     pub fn set_saved_peers(&self, peers: Vec<SavedPeerRecord>) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let invalidation = inner.app_state.set_saved_peers(&peers)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        let summary = inner.app_state.bump_projection_revision(
-            ProjectionScope::OperationalSummary {},
-            None,
-            Some("saved-peers-updated".to_string()),
-        )?;
-        emit_projection_invalidation(&inner.bus, summary);
+        let cmd_tx = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let invalidation = inner.app_state.set_saved_peers(&peers)?;
+            emit_projection_invalidation(&inner.bus, invalidation);
+            let summary = inner.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("saved-peers-updated".to_string()),
+            )?;
+            emit_projection_invalidation(&inner.bus, summary);
+            inner.cmd_tx.clone()
+        };
+
+        if let Some(tx) = cmd_tx {
+            let (resp_tx, resp_rx) = cb::bounded(1);
+            dispatch_command(
+                &tx,
+                Command::SetSavedPeers {
+                    peers,
+                    resp: resp_tx,
+                },
+            )?;
+            resp_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or(Err(NodeError::Timeout {}))?;
+        }
         Ok(())
     }
 
@@ -3554,13 +4519,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&snapshot),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_command_id(
@@ -3608,7 +4574,7 @@ impl Node {
                     code: "NotRunning".to_string(),
                     message: format!(
                         "checklist replication enqueue failed destination={} command={} reason={}",
-                        destination_hex, "checklist.create.online/checklist.task.*", err
+                        destination_hex, "checklist.create.online", err
                     ),
                 });
             }
@@ -3632,6 +4598,7 @@ impl Node {
                 }
             });
         }
+
         Ok(())
     }
 
@@ -3708,13 +4675,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_command_id(
@@ -3812,13 +4780,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 for target in replication_targets {
                     match build_checklist_replication_payload_with_snapshot(
@@ -3905,13 +4874,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_update_args_json(&request);
                 for target in replication_targets {
@@ -3968,6 +4941,7 @@ impl Node {
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
             let normalized_uid = request.checklist_uid.trim().to_string();
+            let existing_checklist = inner.app_state.get_checklist_any(normalized_uid.as_str())?;
             let invalidations = inner.app_state.delete_checklist_with_actor(
                 normalized_uid.as_str(),
                 Some(status.identity_hex.as_str()),
@@ -4000,6 +4974,7 @@ impl Node {
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    existing_checklist.as_ref(),
                     normalized_uid.as_str(),
                     request.delete_remote,
                 ) {
@@ -4086,13 +5061,14 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    Some(&checklist),
                 )?;
                 let args = checklist_uid_args_json(normalized_uid.as_str());
                 for target in replication_targets {
@@ -4180,15 +5156,31 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
-                let args = checklist_task_status_args_json(&request);
+                let mut args = checklist_task_status_args_json(&request);
+                if let Some(number) = checklist
+                    .as_ref()
+                    .and_then(|record| {
+                        record
+                            .tasks
+                            .iter()
+                            .find(|task| task.task_uid == request.task_uid && task.number > 0)
+                    })
+                    .map(|task| task.number)
+                {
+                    args.insert("number".to_string(), JsonValue::from(number));
+                }
                 for target in replication_targets {
                     match build_checklist_replication_payload(
                         &status,
@@ -4287,13 +5279,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_add_args_json(&request);
                 for target in replication_targets {
@@ -4382,13 +5378,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_delete_args_json(&request);
                 for target in replication_targets {
@@ -4477,13 +5477,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_row_style_args_json(&request);
                 for target in replication_targets {
@@ -4572,13 +5576,17 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let checklist = inner
+                    .app_state
+                    .get_checklist_any(request.checklist_uid.as_str())?;
+                let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
+                    checklist.as_ref(),
                 )?;
                 let args = checklist_task_cell_args_json(&request);
                 for target in replication_targets {
@@ -4660,20 +5668,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-upsert");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "eam-upsert");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "eam-upsert",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_eam_replication_payload(&status, &normalized_record, &target) {
                         Ok((body, fields)) => {
@@ -4746,20 +5773,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-delete");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "eam-delete");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_mission_replication_targets(
+                let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "eam-delete",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_eam_delete_replication_payload(&callsign, deleted_at_ms, &target) {
                         Ok((body, fields)) => {
@@ -4811,6 +5857,11 @@ impl Node {
         inner.app_state.get_eam_team_summary(&team_uid)
     }
 
+    pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_eam_readiness_summary()
+    }
+
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.get_events()
@@ -4845,20 +5896,39 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let saved_peers = inner.app_state.get_saved_peers()?;
+                let saved_peers =
+                    saved_peers_for_replication(&inner.app_state, &inner.bus, "event-upsert");
+                let route_hops =
+                    route_hops_for_replication(&inner.app_state, &inner.bus, "event-upsert");
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
-                let replication_targets = build_runtime_event_replication_targets(
+                let mut replication_targets = match build_runtime_event_replication_targets(
                     &status,
                     peers.as_slice(),
                     saved_peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
-                )?;
+                ) {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        emit_replication_planning_error(
+                            &inner.bus,
+                            "event-upsert",
+                            "target-selection",
+                            err,
+                        );
+                        Vec::new()
+                    }
+                };
+                prioritize_replication_targets_by_route_hops(
+                    replication_targets.as_mut_slice(),
+                    peers.as_slice(),
+                    &route_hops,
+                );
                 for target in replication_targets {
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
@@ -4903,15 +5973,119 @@ impl Node {
     }
 
     pub fn delete_event(&self, uid: String, deleted_at_ms: u64) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-        let invalidation = inner.app_state.delete_event(&uid, deleted_at_ms)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        let summary = inner.app_state.bump_projection_revision(
-            ProjectionScope::OperationalSummary {},
-            None,
-            Some("event-deleted".to_string()),
-        )?;
-        emit_projection_invalidation(&inner.bus, summary);
+        let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
+        let bus = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let status = inner
+                .status
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let existing_record = inner
+                .app_state
+                .get_events()?
+                .into_iter()
+                .find(|event| event.uid == uid);
+            let invalidation = inner.app_state.delete_event(&uid, deleted_at_ms)?;
+            emit_projection_invalidation(&inner.bus, invalidation);
+            let summary = inner.app_state.bump_projection_revision(
+                ProjectionScope::OperationalSummary {},
+                None,
+                Some("event-deleted".to_string()),
+            )?;
+            emit_projection_invalidation(&inner.bus, summary);
+
+            if inner.cmd_tx.is_some() {
+                if let Some(existing_record) = existing_record.as_ref() {
+                    let peers = inner
+                        .peers_snapshot
+                        .lock()
+                        .map_err(|_| NodeError::InternalError {})?
+                        .clone();
+                    let hub_directory_snapshot = inner
+                        .hub_directory_snapshot
+                        .lock()
+                        .map_err(|_| NodeError::InternalError {})?
+                        .clone();
+                    let saved_peers =
+                        saved_peers_for_replication(&inner.app_state, &inner.bus, "event-delete");
+                    let route_hops =
+                        route_hops_for_replication(&inner.app_state, &inner.bus, "event-delete");
+                    let sync_status = inner
+                        .sync_status_snapshot
+                        .lock()
+                        .map_err(|_| NodeError::InternalError {})?
+                        .clone();
+                    let mut replication_targets = match build_runtime_event_replication_targets(
+                        &status,
+                        peers.as_slice(),
+                        saved_peers.as_slice(),
+                        sync_status.active_propagation_node_hex.as_deref(),
+                        inner.active_config.as_ref(),
+                        hub_directory_snapshot.as_ref(),
+                    ) {
+                        Ok(targets) => targets,
+                        Err(err) => {
+                            emit_replication_planning_error(
+                                &inner.bus,
+                                "event-delete",
+                                "target-selection",
+                                err,
+                            );
+                            Vec::new()
+                        }
+                    };
+                    prioritize_replication_targets_by_route_hops(
+                        replication_targets.as_mut_slice(),
+                        peers.as_slice(),
+                        &route_hops,
+                    );
+                    for target in replication_targets {
+                        match build_event_delete_replication_payload(
+                            &status,
+                            existing_record,
+                            deleted_at_ms,
+                            &target,
+                        ) {
+                            Ok((body, fields)) => {
+                                scheduled_sends.push((
+                                    target.app_destination_hex.clone(),
+                                    body,
+                                    fields,
+                                    target.send_mode,
+                                ));
+                            }
+                            Err(err) => {
+                                inner.bus.emit(NodeEvent::Error {
+                                    code: "InvalidConfig".to_string(),
+                                    message: format!(
+                                        "event delete replication skipped destination={} uid={} reason={}",
+                                        target.app_destination_hex, uid, err
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            inner.bus.clone()
+        };
+
+        for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
+            if let Err(err) =
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+            {
+                bus.emit(NodeEvent::Error {
+                    code: "NotRunning".to_string(),
+                    message: format!(
+                        "event delete replication enqueue failed destination={} uid={} reason={}",
+                        destination_hex, uid, err
+                    ),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -4952,20 +6126,22 @@ impl Node {
                     .lock()
                     .map_err(|_| NodeError::InternalError {})?
                     .clone();
+                let sync_status = inner
+                    .sync_status_snapshot
+                    .lock()
+                    .map_err(|_| NodeError::InternalError {})?
+                    .clone();
                 let telemetry_destinations = build_runtime_telemetry_destinations(
                     &status,
                     peers.as_slice(),
+                    sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
                 )?;
-                for destination_hex in telemetry_destinations {
-                    let target = MissionReplicationTarget {
-                        app_destination_hex: destination_hex,
-                        send_mode: SendMode::Auto {},
-                    };
+                for target in telemetry_destinations {
                     match build_telemetry_replication_payload(&position, &target) {
                         Ok((body, fields)) => scheduled_sends.push((
-                            target.app_destination_hex,
+                            target.app_destination_hex.clone(),
                             body,
                             fields,
                             target.send_mode,
@@ -5129,7 +6305,20 @@ impl Node {
     }
 
     pub fn trigger_sos(&self, source: SosTriggerSource) -> Result<SosStatusRecord, NodeError> {
-        let (app_state, bus, tx, status, settings, saved_peers, telemetry_store) = {
+        let (
+            app_state,
+            bus,
+            tx,
+            status,
+            settings,
+            saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
+            telemetry_store,
+            current,
+        ) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
                 .app_state
@@ -5143,7 +6332,7 @@ impl Node {
                 .app_state
                 .get_sos_status()?
                 .unwrap_or_else(idle_status);
-            if !matches!(current.state, SosState::Idle {}) {
+            if !matches!(current.state, SosState::Idle {} | SosState::Active {}) {
                 return Ok(current);
             }
             let status = inner
@@ -5151,20 +6340,56 @@ impl Node {
                 .lock()
                 .map_err(|_| NodeError::InternalError {})?
                 .clone();
-            let values = (
+            let peers = inner
+                .peers_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let active_propagation_node_hex = inner
+                .sync_status_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .active_propagation_node_hex
+                .clone();
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
                 inner.app_state.clone(),
                 inner.bus.clone(),
-                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner
+                    .priority_cmd_tx
+                    .clone()
+                    .or_else(|| inner.cmd_tx.clone())
+                    .ok_or(NodeError::NotRunning {})?,
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
+                peers,
+                active_propagation_node_hex,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
                 inner.sos_device_telemetry.clone(),
-            );
-            values
+                current,
+            )
         };
 
-        let incident_id = new_incident_id(status.identity_hex.as_str());
-        let countdown = settings.countdown_seconds;
+        let rebroadcast_active = matches!(current.state, SosState::Active {});
+        let incident_id = if rebroadcast_active {
+            current
+                .incident_id
+                .clone()
+                .unwrap_or_else(|| new_incident_id(status.identity_hex.as_str()))
+        } else {
+            new_incident_id(status.identity_hex.as_str())
+        };
+        let countdown = if rebroadcast_active {
+            0
+        } else {
+            settings.countdown_seconds
+        };
         if countdown > 0 {
             let deadline = now_ms().saturating_add(u64::from(countdown) * 1000);
             let countdown_record = countdown_status(incident_id.clone(), source, deadline);
@@ -5182,6 +6407,10 @@ impl Node {
                     status,
                     settings,
                     saved_peers,
+                    peers,
+                    active_propagation_node_hex,
+                    active_config,
+                    hub_directory_snapshot,
                     telemetry,
                     incident_id,
                     source,
@@ -5192,6 +6421,11 @@ impl Node {
         }
 
         let telemetry = latest_sos_telemetry(&telemetry_store);
+        let kind = if rebroadcast_active {
+            SosMessageKind::Update {}
+        } else {
+            SosMessageKind::Active {}
+        };
         let active = run_sos_fanout(
             app_state,
             bus,
@@ -5199,17 +6433,34 @@ impl Node {
             status,
             settings,
             saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
             telemetry,
             incident_id,
             source,
-            SosMessageKind::Active {},
+            kind,
         )
         .unwrap_or_else(idle_status);
         Ok(active)
     }
 
     pub fn deactivate_sos(&self, pin: Option<String>) -> Result<SosStatusRecord, NodeError> {
-        let (app_state, bus, tx, status, settings, saved_peers, telemetry, current) = {
+        let (
+            app_state,
+            bus,
+            tx,
+            status,
+            settings,
+            saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
+            telemetry,
+            current,
+        ) = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
             let settings = inner
                 .app_state
@@ -5233,17 +6484,36 @@ impl Node {
                 .app_state
                 .get_sos_status()?
                 .unwrap_or_else(idle_status);
-            let values = (
+            let peers = inner
+                .peers_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            let active_propagation_node_hex = inner
+                .sync_status_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .active_propagation_node_hex
+                .clone();
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|_| NodeError::InternalError {})?
+                .clone();
+            (
                 inner.app_state.clone(),
                 inner.bus.clone(),
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
                 status,
                 settings,
                 inner.app_state.get_saved_peers()?,
+                peers,
+                active_propagation_node_hex,
+                inner.active_config.clone(),
+                hub_directory_snapshot,
                 telemetry,
                 current,
-            );
-            values
+            )
         };
         let incident_id = current
             .incident_id
@@ -5256,6 +6526,10 @@ impl Node {
             status,
             settings,
             saved_peers,
+            peers,
+            active_propagation_node_hex,
+            active_config,
+            hub_directory_snapshot,
             telemetry,
             incident_id,
             SosTriggerSource::Manual {},
@@ -5365,12 +6639,13 @@ impl EventSubscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AnnounceClass;
 
     use crate::mission_sync::parse_mission_sync_metadata;
     use crate::plugins::{PluginManifest, PluginState, PLUGIN_LXMF_FIELD_KEY};
     use crate::types::{
         ChecklistTaskRecord, EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod,
-        MessageState, TelemetrySettingsRecord,
+        MessageState, SyncPhase, TelemetrySettingsRecord,
     };
     use crate::HubMode;
     use base64::Engine;
@@ -6277,6 +7552,7 @@ schema = "schemas/bad_status.schema.json"
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 0,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -6323,6 +7599,598 @@ schema = "schemas/bad_status.schema.json"
             &idle_status(),
             "incident-a"
         ));
+    }
+
+    #[test]
+    fn trigger_sos_rebroadcasts_existing_active_incident() {
+        let storage_dir = prepare_storage_dir("sos-active-rebroadcast");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+        let existing = active_status(
+            "incident-existing".to_string(),
+            SosTriggerSource::Manual {},
+            1_700_000_000_000,
+        );
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_sos_status(&existing, "test-active")
+                .expect("persist active status");
+            inner
+                .app_state
+                .set_saved_peers(&[build_saved_peer()])
+                .expect("persist saved peer");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            )];
+            inner.cmd_tx = Some(tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("rebroadcast active sos");
+        assert!(matches!(status.state, SosState::Active {}));
+        assert_eq!(status.incident_id.as_deref(), Some("incident-existing"));
+
+        let command = rx.try_recv().expect("expected sos send command");
+        if let Command::SendBytes {
+            destination_hex,
+            bytes,
+            fields_bytes,
+            send_mode,
+            ..
+        } = command
+        {
+            assert_eq!(destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            assert!(matches!(send_mode, SendMode::Auto {}));
+            let body = String::from_utf8(bytes).expect("sos body utf8");
+            assert!(body.starts_with("SOS! I need help."));
+            let parsed =
+                crate::sos_fields::parse_sos_fields(fields_bytes.as_deref().expect("sos fields"))
+                    .expect("parsed sos fields");
+            let command = parsed.command.expect("sos command field");
+            assert_eq!(command.incident_id, "incident-existing");
+            assert!(matches!(command.state, SosMessageKind::Update {}));
+            assert!(matches!(
+                command.trigger_source,
+                SosTriggerSource::Manual {}
+            ));
+        } else {
+            panic!("expected SendBytes command");
+        }
+    }
+
+    #[test]
+    fn trigger_sos_uses_priority_command_lane_when_available() {
+        let storage_dir = prepare_storage_dir("sos-priority-command-lane");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (normal_tx, mut normal_rx) = mpsc::channel(4);
+        let (priority_tx, mut priority_rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_saved_peers(&[build_saved_peer()])
+                .expect("persist saved peer");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            )];
+            inner.cmd_tx = Some(normal_tx);
+            inner.priority_cmd_tx = Some(priority_tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("trigger sos");
+        assert!(matches!(status.state, SosState::Active {}));
+
+        let command = priority_rx
+            .try_recv()
+            .expect("expected sos send command on priority lane");
+        assert!(matches!(command, Command::SendBytes { .. }));
+        assert!(normal_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sos_targets_all_current_saved_peers_without_hub_narrowing() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::Connected {},
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                true,
+                true,
+                true,
+            ),
+        ];
+
+        let regular_targets = build_runtime_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[
+                build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+            ],
+            None,
+            Some(&config),
+            None,
+        )
+        .expect("regular mission targets");
+        assert_eq!(regular_targets.len(), 1);
+
+        let saved_peers = [
+            build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+        ];
+        let sos_targets =
+            build_sos_replication_targets(&status, peers.as_slice(), &saved_peers, None);
+
+        let destinations = sos_targets
+            .iter()
+            .map(|target| target.app_destination_hex.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(destinations.len(), 2);
+        assert!(destinations.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(destinations.contains("cccccccccccccccccccccccccccccccc"));
+        assert!(sos_targets
+            .iter()
+            .all(|target| matches!(target.send_mode, SendMode::Auto {})));
+    }
+
+    #[test]
+    fn trigger_sos_fans_out_to_all_current_saved_peers() {
+        let storage_dir = prepare_storage_dir("sos-multi-peer-fanout");
+        let storage_dir_text = storage_dir.to_string_lossy().to_string();
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut settings = default_sos_settings();
+        settings.enabled = true;
+        settings.countdown_seconds = 0;
+        settings.include_location = false;
+
+        {
+            let mut inner = node.inner.lock().expect("node lock");
+            inner
+                .app_state
+                .set_sos_settings(&settings)
+                .expect("persist sos settings");
+            inner
+                .app_state
+                .set_saved_peers(&[
+                    build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                    build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+                ])
+                .expect("persist saved peers");
+            *inner.status.lock().expect("status lock") = build_status_for_tests();
+            *inner.peers_snapshot.lock().expect("peers lock") = vec![
+                build_peer_record(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    true,
+                    true,
+                    true,
+                ),
+                build_peer_record(
+                    "cccccccccccccccccccccccccccccccc",
+                    "dddddddddddddddddddddddddddddddd",
+                    true,
+                    true,
+                    true,
+                ),
+            ];
+            inner.active_config = Some(build_config_fingerprint_for_tests(
+                HubMode::Connected {},
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ));
+            inner.cmd_tx = Some(tx);
+        }
+
+        let status = node
+            .trigger_sos(SosTriggerSource::Manual {})
+            .expect("trigger sos");
+        assert!(matches!(status.state, SosState::Active {}));
+
+        let mut destinations = HashSet::new();
+        for _ in 0..2 {
+            let command = rx.try_recv().expect("expected sos send command");
+            if let Command::SendBytes {
+                destination_hex,
+                fields_bytes,
+                send_mode,
+                ..
+            } = command
+            {
+                destinations.insert(destination_hex);
+                assert!(fields_bytes.is_some());
+                assert!(matches!(send_mode, SendMode::Auto {}));
+            } else {
+                panic!("expected SendBytes command");
+            }
+        }
+        assert_eq!(destinations.len(), 2);
+        assert!(destinations.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(destinations.contains("cccccccccccccccccccccccccccccccc"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sos_targets_use_persisted_saved_peers_when_snapshot_saved_flag_is_stale() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                true,
+                true,
+                false,
+            ),
+            build_peer_record(
+                "cccccccccccccccccccccccccccccccc",
+                "dddddddddddddddddddddddddddddddd",
+                true,
+                true,
+                false,
+            ),
+        ];
+        let saved_peers = [
+            build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            build_saved_peer_for("cccccccccccccccccccccccccccccccc"),
+        ];
+
+        let targets = build_sos_replication_targets(&status, peers.as_slice(), &saved_peers, None);
+
+        let destinations = targets
+            .iter()
+            .map(|target| target.app_destination_hex.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            destinations,
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "cccccccccccccccccccccccccccccccc"
+            ]
+        );
+        assert!(targets
+            .iter()
+            .all(|target| matches!(target.send_mode, SendMode::Auto {})));
+    }
+
+    #[test]
+    fn sos_route_priority_omits_stale_saved_route_without_relay() {
+        let status = build_status_for_tests();
+        let mut stale_saved_peer = build_peer_record(
+            "11111111111111111111111111111111",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        stale_saved_peer.stale = true;
+        stale_saved_peer.announce_last_seen_at_ms = None;
+
+        let peers = vec![
+            stale_saved_peer,
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .map(|peer| build_saved_peer_for(peer.destination_hex.as_str()))
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "11111111111111111111111111111111",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                3,
+                100,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                2,
+                90,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets =
+            build_sos_replication_targets(&status, peers.as_slice(), saved_peers.as_slice(), None);
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+            ]
+        );
+    }
+
+    #[test]
+    fn sos_targets_use_propagation_for_saved_stale_stored_route_when_relay_exists() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn sos_targets_skip_saved_stale_stored_route_without_relay() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(&status, &[peer], &[saved_peer], None);
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn sos_targets_keep_active_direct_link_on_auto() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn sos_targets_skip_unsaved_stale_stored_route() {
+        let status = build_status_for_tests();
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_sos_replication_targets(
+            &status,
+            &[peer],
+            &[],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn sos_priority_keeps_saved_low_hop_routes_before_unsaved_active_peers() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "1a9a24c8bb16e1951cb954aef32158b1",
+                "fe2a758c2bb875886a83a3bf6859d213",
+                false,
+                true,
+                true,
+            ),
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "1080d475b77274d7fdabaed81878d916",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .filter(|peer| peer.saved)
+            .map(|peer| build_saved_peer_for(peer.destination_hex.as_str()))
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                100,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                4,
+                110,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                5,
+                120,
+            ),
+            build_announce_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "app",
+                AnnounceClass::PeerApp {},
+                8,
+                130,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets =
+            build_sos_replication_targets(&status, peers.as_slice(), saved_peers.as_slice(), None);
+
+        prioritize_sos_replication_targets(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            saved_peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "a3e80acf291d9f57ee455493946b3763",
+                "a133b8b1fe137f92210a048efded46db",
+                "1a9a24c8bb16e1951cb954aef32158b1",
+            ]
+        );
     }
 
     fn msgpack_map(entries: Vec<(&str, MsgPackValue)>) -> MsgPackValue {
@@ -6375,7 +8243,7 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn checklist_upload_snapshot_uses_msgpack_content_not_command_fields() {
+    fn checklist_upload_snapshot_uses_compressed_msgpack_content_not_command_fields() {
         let status = NodeStatus {
             running: true,
             name: "Pixel".to_string(),
@@ -6422,15 +8290,18 @@ schema = "schemas/bad_status.schema.json"
         assert!(content_entries
             .iter()
             .any(|(key, value)| key.as_str() == Some("type")
-                && value.as_str() == Some("rem.checklist.snapshot.v1")));
+                && value.as_str() == Some("rem.checklist.snapshot.v2")));
+        assert!(content_entries.iter().any(|(key, value)| {
+            key.as_str() == Some("encoding") && value.as_str() == Some("zlib+msgpack")
+        }));
         assert!(content_entries
             .iter()
             .any(|(key, value)| key.as_str() == Some("snapshot")
-                && matches!(value, MsgPackValue::Map(_))));
+                && matches!(value, MsgPackValue::Binary(_))));
     }
 
     #[test]
-    fn checklist_create_args_include_schema_but_not_full_task_snapshot() {
+    fn compact_checklist_create_payload_stays_packet_sized() {
         let checklist = ChecklistRecord {
             uid: "chk-hydrate".to_string(),
             mission_uid: Some("mission-alpha".to_string()),
@@ -6519,13 +8390,7 @@ schema = "schemas/bad_status.schema.json"
             create_args.get("checklist_uid").and_then(JsonValue::as_str),
             Some("chk-hydrate")
         );
-        assert_eq!(
-            create_args
-                .get("columns")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
+        assert!(create_args.get("columns").is_none());
         assert_eq!(
             create_args.get("total_tasks").and_then(JsonValue::as_u64),
             Some(1)
@@ -6540,27 +8405,27 @@ schema = "schemas/bad_status.schema.json"
         assert!(create_args.get("counts").is_none());
         assert!(create_args.get("progress_percent").is_none());
 
-        let task_args = checklist_task_row_add_args_from_task(
-            "chk-hydrate",
-            &checklist.tasks[0],
-            Some("peer-a"),
+        let status = build_status_for_tests();
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let (create_body, create_fields) = build_checklist_replication_payload_with_command_id(
+            &status,
+            &target,
+            "checklist.create.online",
+            &create_args,
+            Some("cmd-chk-hydrate"),
+        )
+        .expect("create payload");
+        assert!(
+            create_body.len() + create_fields.len() <= 400,
+            "initial create should stay packet-sized, body={} fields={} total={}",
+            create_body.len(),
+            create_fields.len(),
+            create_body.len() + create_fields.len()
         );
-        assert_eq!(
-            task_args.get("task_uid").and_then(JsonValue::as_str),
-            Some("task-1")
-        );
-        assert_eq!(
-            task_args
-                .get("task")
-                .and_then(JsonValue::as_object)
-                .and_then(|task| task.get("cells"))
-                .and_then(JsonValue::as_array)
-                .and_then(|cells| cells.first())
-                .and_then(JsonValue::as_object)
-                .and_then(|cell| cell.get("value"))
-                .and_then(JsonValue::as_str),
-            Some("Water")
-        );
+        assert_eq!(String::from_utf8_lossy(create_body.as_slice()), "C C1");
     }
 
     #[test]
@@ -6620,8 +8485,41 @@ schema = "schemas/bad_status.schema.json"
         node_a
             .request_peer_identity(node_b_lxmf_destination_hex.clone())
             .expect("resolve node b");
+        let node_a_lxmf_destination_hex = node_a.get_status().lxmf_destination_hex;
+        node_b
+            .request_peer_identity(node_a_lxmf_destination_hex.clone())
+            .expect("resolve node a");
+        tokio::time::sleep(Duration::from_millis(250)).await;
 
         (relay, node_a, node_b)
+    }
+
+    #[tokio::test]
+    async fn request_lxmf_sync_without_selected_relay_waits_then_fails_status() {
+        let _guard = test_lock().lock().await;
+        let relay = TcpRelayHandle::start().await;
+        let storage = prepare_storage_dir("sync_no_active_relay");
+        let node = Node::new();
+        node.start(build_config(
+            "sync-no-active-relay",
+            storage.as_path(),
+            relay.address().as_str(),
+        ))
+        .expect("start node");
+
+        let result = node.request_lxmf_sync(Some(1));
+
+        assert!(matches!(result, Err(NodeError::InvalidConfig {})));
+        let status = node.get_lxmf_sync_status().expect("sync status");
+        assert!(matches!(status.phase, SyncPhase::Failed {}));
+        assert_eq!(status.messages_received, 0);
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("no active propagation relay selected after 0s")
+        );
+
+        stop_node(node).await;
+        relay.shutdown().await;
     }
 
     async fn stop_node(node: Node) {
@@ -6660,6 +8558,27 @@ schema = "schemas/bad_status.schema.json"
         }
     }
 
+    fn wait_for_operational_ack(
+        subscription: &Arc<EventSubscription>,
+        command_id: &str,
+        command_type: &str,
+    ) -> crate::types::LxmfDeliveryUpdate {
+        match wait_for_event(subscription, TEST_TIMEOUT, |event| {
+            matches!(
+                event,
+                NodeEvent::LxmfDelivery { update }
+                    if matches!(update.status, crate::types::LxmfDeliveryStatus::Acknowledged {})
+                        && update.command_id.as_deref() == Some(command_id)
+                        && update.command_type.as_deref() == Some(command_type)
+            )
+        })
+        .expect("sender received operational acknowledgement")
+        {
+            NodeEvent::LxmfDelivery { update } => update,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
     fn build_app_settings() -> AppSettingsRecord {
         AppSettingsRecord {
             display_name: "Atlas-1".to_string(),
@@ -6684,12 +8603,17 @@ schema = "schemas/bad_status.schema.json"
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
             plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
     fn build_saved_peer() -> SavedPeerRecord {
+        build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    }
+
+    fn build_saved_peer_for(destination_hex: &str) -> SavedPeerRecord {
         SavedPeerRecord {
-            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            destination_hex: destination_hex.to_string(),
             label: Some("POCO".to_string()),
             saved_at_ms: 1_700_000_000_000,
         }
@@ -6723,6 +8647,7 @@ schema = "schemas/bad_status.schema.json"
             hub_api_base_url: None,
             hub_api_key: None,
             hub_refresh_interval_seconds: 3600,
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -6756,6 +8681,26 @@ schema = "schemas/bad_status.schema.json"
         }
     }
 
+    fn build_announce_record(
+        destination_hex: &str,
+        destination_kind: &str,
+        announce_class: AnnounceClass,
+        hops: u8,
+        received_at_ms: u64,
+    ) -> AnnounceRecord {
+        AnnounceRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: format!("identity-{destination_hex}"),
+            destination_kind: destination_kind.to_string(),
+            announce_class,
+            app_data: "R3AKT,EMergencyMessages,Telemetry".to_string(),
+            display_name: Some(format!("peer-{destination_hex}")),
+            hops,
+            interface_hex: "dddddddddddddddddddddddddddddddd".to_string(),
+            received_at_ms,
+        }
+    }
+
     #[test]
     fn effective_hub_mode_uses_server_connected_override() {
         let snapshot = HubDirectorySnapshot {
@@ -6775,12 +8720,19 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn semi_autonomous_replication_targets_use_hub_directory_peers() {
+    fn semi_autonomous_replication_targets_use_current_hub_directory_peers() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(
             HubMode::SemiAutonomous {},
             Some("56565656565656565656565656565656"),
         );
+        let peers = vec![build_peer_record(
+            "abababababababababababababababab",
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            false,
+            true,
+            true,
+        )];
         let snapshot = HubDirectorySnapshot {
             effective_connected_mode: false,
             items: vec![crate::types::HubDirectoryPeerRecord {
@@ -6798,7 +8750,7 @@ schema = "schemas/bad_status.schema.json"
 
         let targets = build_runtime_mission_replication_targets(
             &status,
-            &[],
+            peers.as_slice(),
             &[],
             None,
             Some(&config),
@@ -6815,20 +8767,82 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn connected_telemetry_destinations_route_only_to_hub() {
+    fn semi_autonomous_replication_targets_use_propagation_for_unsaved_directory_peers() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::SemiAutonomous {},
+            Some("56565656565656565656565656565656"),
+        );
+        let peers = vec![build_peer_record(
+            "abababababababababababababababab",
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            false,
+            true,
+            true,
+        )];
+        let snapshot = HubDirectorySnapshot {
+            effective_connected_mode: false,
+            items: vec![crate::types::HubDirectoryPeerRecord {
+                identity: "78787878787878787878787878787878".to_string(),
+                destination_hash: "abababababababababababababababab".to_string(),
+                display_name: Some("S8".to_string()),
+                announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+                client_type: Some("rem".to_string()),
+                registered_mode: Some("semi_autonomous".to_string()),
+                last_seen: Some("2026-04-02T12:43:28Z".to_string()),
+                status: Some("active".to_string()),
+            }],
+            received_at_ms: 456,
+        };
+
+        let targets = build_runtime_mission_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[],
+            Some("99999999999999999999999999999999"),
+            Some(&config),
+            Some(&snapshot),
+        )
+        .expect("semi-autonomous targets");
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "abababababababababababababababab"
+        );
+        assert!(matches!(targets[0].send_mode, SendMode::PropagationOnly {}));
+    }
+
+    #[test]
+    fn connected_telemetry_destinations_route_only_to_current_hub() {
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(
             HubMode::Connected {},
             Some("56565656565656565656565656565656"),
         );
+        let peers = vec![build_peer_record(
+            "56565656565656565656565656565656",
+            "abababababababababababababababab",
+            true,
+            true,
+            true,
+        )];
 
-        let destinations = build_runtime_telemetry_destinations(&status, &[], Some(&config), None)
-            .expect("connected telemetry destinations");
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            None,
+            Some(&config),
+            None,
+        )
+        .expect("connected telemetry destinations");
 
+        assert_eq!(destinations.len(), 1);
         assert_eq!(
-            destinations,
-            vec!["56565656565656565656565656565656".to_string()]
+            destinations[0].app_destination_hex,
+            "56565656565656565656565656565656"
         );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
     }
 
     #[test]
@@ -6836,7 +8850,7 @@ schema = "schemas/bad_status.schema.json"
         let status = build_status_for_tests();
         let config = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
 
-        let err = build_runtime_telemetry_destinations(&status, &[], Some(&config), None)
+        let err = build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
             .expect_err("connected telemetry should require a hub");
 
         assert!(matches!(err, NodeError::InvalidConfig {}));
@@ -6850,7 +8864,7 @@ schema = "schemas/bad_status.schema.json"
             Some("56565656565656565656565656565656"),
         );
         let peers = vec![build_peer_record(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "abababababababababababababababab",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             true,
@@ -6886,15 +8900,67 @@ schema = "schemas/bad_status.schema.json"
         let destinations = build_runtime_telemetry_destinations(
             &status,
             peers.as_slice(),
+            None,
             Some(&config),
             Some(&snapshot),
         )
         .expect("semi-autonomous telemetry destinations");
 
+        assert_eq!(destinations.len(), 1);
         assert_eq!(
-            destinations,
-            vec!["abababababababababababababababab".to_string()]
+            destinations[0].app_destination_hex,
+            "abababababababababababababababab"
         );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_peers() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::SemiAutonomous {},
+            Some("56565656565656565656565656565656"),
+        );
+        let peers = vec![build_peer_record(
+            "abababababababababababababababab",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            true,
+            true,
+        )];
+        let snapshot = HubDirectorySnapshot {
+            effective_connected_mode: false,
+            items: vec![crate::types::HubDirectoryPeerRecord {
+                identity: "78787878787878787878787878787878".to_string(),
+                destination_hash: "abababababababababababababababab".to_string(),
+                display_name: Some("S8".to_string()),
+                announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+                client_type: Some("rem".to_string()),
+                registered_mode: Some("semi_autonomous".to_string()),
+                last_seen: Some("2026-04-02T12:43:28Z".to_string()),
+                status: Some("active".to_string()),
+            }],
+            received_at_ms: 123,
+        };
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            Some(&snapshot),
+        )
+        .expect("semi-autonomous telemetry destinations");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "abababababababababababababababab"
+        );
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     #[test]
@@ -6918,14 +8984,234 @@ schema = "schemas/bad_status.schema.json"
             ),
         ];
 
-        let destinations =
-            build_runtime_telemetry_destinations(&status, peers.as_slice(), Some(&config), None)
-                .expect("semi-autonomous fallback telemetry destinations");
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            None,
+            Some(&config),
+            None,
+        )
+        .expect("semi-autonomous fallback telemetry destinations");
 
+        assert_eq!(destinations.len(), 1);
         assert_eq!(
-            destinations,
-            vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_keep_direct_peer_before_lxmf_announce_is_current() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.lxmf_last_seen_at_ms = None;
+        let peers = vec![peer];
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            peers.as_slice(),
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_use_direct_for_saved_peers_when_relay_is_active() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_include_direct_and_propagation_fanout() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "efefefefefefefefefefefefefefefef",
+            true,
+            false,
+            false,
+        );
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[direct_peer, relay_peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 2);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert_eq!(
+            destinations[1].app_destination_hex,
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        );
+        assert!(matches!(
+            destinations[1].send_mode,
+            SendMode::PropagationOnly {}
+        ));
+    }
+
+    #[test]
+    fn telemetry_targets_skip_stale_peers_without_relay() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut stale_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        stale_peer.stale = true;
+
+        let destinations =
+            build_runtime_telemetry_destinations(&status, &[stale_peer], None, Some(&config), None)
+                .expect("telemetry fallback targets");
+
+        assert!(destinations.is_empty());
+    }
+
+    #[test]
+    fn telemetry_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn telemetry_targets_skip_unsaved_discovered_peers_when_relay_is_active() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            false,
+            false,
+        );
+        peer.lxmf_last_seen_at_ms = None;
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert!(destinations.is_empty());
+    }
+
+    #[test]
+    fn telemetry_targets_use_relay_for_fresh_route_without_active_link_when_relay_exists() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(HubMode::Autonomous {}, None);
+        let peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            false,
+        );
+
+        let destinations = build_runtime_telemetry_destinations(
+            &status,
+            &[peer],
+            Some("56565656565656565656565656565656"),
+            Some(&config),
+            None,
+        )
+        .expect("telemetry fallback targets");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     fn build_eam() -> EamProjectionRecord {
@@ -6985,10 +9271,251 @@ schema = "schemas/bad_status.schema.json"
         );
         assert_eq!(metadata.eam_uid.as_deref(), record.eam_uid.as_deref());
         assert_eq!(metadata.team_uid.as_deref(), record.team_uid.as_deref());
-        assert_eq!(
-            metadata.team_member_uid.as_deref(),
-            record.team_member_uid.as_deref()
+        assert!(metadata.team_member_uid.is_none());
+    }
+
+    #[test]
+    fn eam_replication_payload_uses_compact_envelope_like_events() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod,
+        };
+        use reticulum::transport::identity::PrivateIdentity;
+
+        let status = NodeStatus {
+            running: true,
+            name: "Pixelcorvo".to_string(),
+            identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
+            app_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+            lxmf_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+        };
+        let mut record = build_eam();
+        record.eam_uid = Some("eam-6ef80799-29b1-4de5-b711-3896b9a55161".to_string());
+        record.team_member_uid = Some("fb4c70e20cfac047b899ca2f3671b50a".to_string());
+        record.team_uid = Some("blue-team".to_string());
+        record.notes = None;
+        let target = MissionReplicationTarget {
+            app_destination_hex: "e3f1c3f63adef0c0d771ddff8b0eeed5".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+
+        let (body, fields) =
+            build_eam_replication_payload(&status, &record, &target).expect("eam payload");
+        let field_text = String::from_utf8_lossy(&fields);
+        let field_value: MsgPackValue = rmp_serde::from_slice(fields.as_slice()).expect("fields");
+        let field_entries = field_value.as_map().expect("field map");
+        let commands = field_entries
+            .iter()
+            .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
+            .and_then(|(_, value)| value.as_array())
+            .expect("command field");
+        let command = commands
+            .first()
+            .and_then(MsgPackValue::as_map)
+            .expect("command map");
+        let command_args = command
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("a"))
+            .and_then(|(_, value)| value.as_map())
+            .expect("command args");
+        let has_command_source = command.iter().any(|(key, _)| key.as_str() == Some("s"));
+        let has_arg = |name: &str| {
+            command_args
+                .iter()
+                .any(|(key, _)| key.as_str() == Some(name))
+        };
+
+        assert!(
+            fields.len() <= 120,
+            "compact EAM fields should stay small, fields bytes={}",
+            fields.len()
         );
+        assert!(
+            !has_command_source,
+            "compact EAM fields should derive source from the LXMF message source"
+        );
+        assert!(
+            has_arg("cs"),
+            "compact EAM fields should keep the stable callsign used by deletes"
+        );
+        for omitted in ["tm", "no"] {
+            assert!(
+                !has_arg(omitted),
+                "compact EAM fields should omit derivable or unsupported arg {omitted}"
+            );
+        }
+        for verbose in [
+            "command_type",
+            "security_status",
+            "capability_status",
+            "preparedness_status",
+            "team_member_uid",
+            "team_uid",
+            "callsign",
+            "e3f1",
+        ] {
+            assert!(
+                !field_text.contains(verbose),
+                "compact EAM fields should not contain verbose token {verbose}"
+            );
+        }
+
+        let source = hex::decode(status.lxmf_destination_hex.as_str()).expect("source hex");
+        let target_hex = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(target_hex.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(fields.as_slice()).expect("fields msgpack"));
+        let identity = PrivateIdentity::new_from_name("eam-replication-budget");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+        let receiver = PrivateIdentity::new_from_name("eam-replication-budget-rx");
+        let receiver = crate::runtime::lxmf_private_identity(&receiver).expect("receiver");
+        let propagation_stamp = [0_u8; 32];
+        let (propagated, _) = lxmf::message::WireMessage::unpack(wire.as_slice())
+            .expect("wire unpack")
+            .pack_propagation_with_options_and_rng(
+                receiver.as_identity(),
+                2.0,
+                Some(propagation_stamp.as_slice()),
+                rand_core::OsRng,
+            )
+            .expect("propagation pack");
+        assert!(
+            propagated.len() <= 360,
+            "compact EAM stamped propagation should have budget headroom, bytes={}",
+            propagated.len()
+        );
+
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(decision.representation, LxmfMessageMethod::Packet);
+
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("mission metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.eam.upsert")
+        );
+        assert_eq!(metadata.eam_uid.as_deref(), record.eam_uid.as_deref());
+        assert_eq!(metadata.team_uid.as_deref(), record.team_uid.as_deref());
+        assert!(metadata.team_member_uid.is_none());
+        assert_eq!(metadata.command_id.as_deref(), Some("m:6ef80799:loyw3v50"));
+    }
+
+    #[test]
+    fn eam_delete_payload_uses_compact_stable_command_ids_like_events() {
+        let target = MissionReplicationTarget {
+            app_destination_hex: "e3f1c3f63adef0c0d771ddff8b0eeed5".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+
+        let (_body, fields) =
+            build_eam_delete_replication_payload("NoemiPix", 1_779_756_701_317, &target)
+                .expect("eam delete payload");
+        let field_text = String::from_utf8_lossy(&fields);
+
+        assert!(
+            !field_text.contains("e3f1"),
+            "delete payload should not carry a destination-specific command suffix"
+        );
+        assert!(field_text.contains("md:noemipix:mplx6rnp"));
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("delete metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.eam.delete")
+        );
+    }
+
+    #[test]
+    fn event_replication_payload_uses_compact_mecp_envelope_with_compatible_metadata() {
+        let status = NodeStatus {
+            running: true,
+            name: "Pixel".to_string(),
+            identity_hex: "11111111111111111111111111111111".to_string(),
+            app_destination_hex: "22222222222222222222222222222222".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let record = EventProjectionRecord {
+            uid: "evt-a9f9c462-c439-425a-879d-6d13f13a3b86".to_string(),
+            command_id:
+                "log-entry-evt-a9f9c462-c439-425a-879d-6d13f13a3b86-a25c9832-4ff1-4d6d-bd70-290b7add090c"
+                    .to_string(),
+            source_identity: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
+            source_display_name: Some("Pixel".to_string()),
+            timestamp: "2026-05-16T21:26:30.243Z".to_string(),
+            command_type: "mission.registry.log_entry.upsert".to_string(),
+            mission_uid: "r3akt-default-mission".to_string(),
+            content: "MECP/2/P01 stranded near bridge".to_string(),
+            callsign: "Pixel".to_string(),
+            server_time: Some("2026-05-16T21:26:30.243Z".to_string()),
+            client_time: Some("2026-05-16T21:26:30.243Z".to_string()),
+            keywords: vec!["r3akt:event-type:P".to_string()],
+            content_hashes: vec!["hash-1".to_string()],
+            updated_at_ms: 1_778_966_790_243,
+            deleted_at_ms: None,
+            correlation_id: Some("event-upsert-legacy".to_string()),
+            topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        };
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+
+        let (body, fields) =
+            build_event_replication_payload(&status, &record, &target).expect("event payload");
+
+        assert_eq!(body.as_slice(), record.content.as_bytes());
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.log_entry.upsert")
+        );
+        assert_eq!(
+            metadata.command_id.as_deref(),
+            Some(record.command_id.as_str())
+        );
+        assert_eq!(metadata.event_uid.as_deref(), Some(record.uid.as_str()));
+        assert_eq!(
+            metadata.mission_uid.as_deref(),
+            Some(record.mission_uid.as_str())
+        );
+        let packed_fields =
+            rmp_serde::from_slice::<MsgPackValue>(fields.as_slice()).expect("fields msgpack");
+        let MsgPackValue::Map(field_entries) = packed_fields else {
+            panic!("fields should be a map");
+        };
+        let commands = field_entries
+            .iter()
+            .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
+            .and_then(|(_, value)| value.as_array())
+            .expect("command array");
+        let command = commands[0].as_map().expect("command map");
+        let args = command
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("a"))
+            .and_then(|(_, value)| value.as_map())
+            .expect("command args");
+        let keywords = args
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("kw"))
+            .and_then(|(_, value)| value.as_array())
+            .expect("event keywords");
+        assert_eq!(keywords[0].as_str(), Some("P"));
+        assert!(
+            !fields
+                .windows("r3akt:event-type:P".len())
+                .any(|window| window == "r3akt:event-type:P".as_bytes()),
+            "compact event fields should not carry verbose event keyword"
+        );
+        for expected in ["hash-1", "Pixel"] {
+            assert!(
+                fields
+                    .windows(expected.len())
+                    .any(|window| window == expected.as_bytes()),
+                "compact event fields should retain semantic payload value {expected}"
+            );
+        }
     }
 
     #[test]
@@ -7047,6 +9574,154 @@ schema = "schemas/bad_status.schema.json"
             correlation_id: Some("corr-1".to_string()),
             topics: vec!["mission-1".to_string()],
         }
+    }
+
+    #[test]
+    fn event_replication_payload_stays_under_direct_and_propagation_packet_budgets() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod, WireMessage as LxmfWireMessage,
+        };
+        use rand_core::OsRng;
+        use reticulum::transport::destination::{DestinationName, SingleOutputDestination};
+        use reticulum::transport::identity::PrivateIdentity;
+
+        let status = NodeStatus {
+            running: true,
+            name: "Pixelcorvo".to_string(),
+            identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
+            app_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+            lxmf_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+        };
+        let receiver = PrivateIdentity::new_from_name("event-replication-propagation-budget-peer");
+        let receiver_lxmf = SingleOutputDestination::new(
+            *receiver.as_identity(),
+            DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+        );
+        let target = MissionReplicationTarget {
+            app_destination_hex: receiver_lxmf.desc.address_hash.to_hex_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let record = EventProjectionRecord {
+            uid: "evt-a3a1c275-1d90-41a6-b7ed-f8f9cf0b8fc1".to_string(),
+            command_id: "log-entry-evt-a3a1c275-1d90-41a6-b7ed-f8f9cf0b8fc1-d5898636-72e6-4af5-b94b-120ffaed1e49".to_string(),
+            source_identity: status.identity_hex.clone(),
+            source_display_name: Some(status.name.clone()),
+            timestamp: "2026-05-25T20:57:42.166000000Z".to_string(),
+            command_type: "mission.registry.log_entry.upsert".to_string(),
+            mission_uid: "r3akt-default-mission".to_string(),
+            content: "MECP/2/P01".to_string(),
+            callsign: status.name.clone(),
+            server_time: Some("2026-05-25T20:57:42.166000000Z".to_string()),
+            client_time: Some("2026-05-25T20:57:42.166000000Z".to_string()),
+            keywords: vec!["r3akt:event-type:P".to_string()],
+            content_hashes: vec![],
+            updated_at_ms: 1_779_753_342_166,
+            deleted_at_ms: None,
+            correlation_id: Some(
+                "event-upsert-evt-a3a1c275-1d90-41a6-b7ed-f8f9cf0b8fc1-e3f1c3f6-1779753342166"
+                    .to_string(),
+            ),
+            topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        };
+        let (body, fields) =
+            build_event_replication_payload(&status, &record, &target).expect("event payload");
+        let source = hex::decode(status.lxmf_destination_hex.as_str()).expect("source hex");
+        let target_hex = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(target_hex.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(fields.as_slice()).expect("fields msgpack"));
+        let identity = PrivateIdentity::new_from_name("event-replication-budget");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+
+        assert!(fields.len() <= 200, "fields bytes={}", fields.len());
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(decision.representation, LxmfMessageMethod::Packet);
+        let propagation_stamp = [0u8; 32];
+        let (propagated, _) = LxmfWireMessage::unpack(wire.as_slice())
+            .expect("wire message")
+            .pack_propagation_with_options_and_rng(
+                &lxmf::identity::Identity::new_from_slices(
+                    receiver.as_identity().public_key_bytes(),
+                    receiver.as_identity().verifying_key_bytes(),
+                ),
+                1_779_753_342.166,
+                Some(propagation_stamp.as_slice()),
+                OsRng,
+            )
+            .expect("propagation envelope");
+        assert!(
+            propagated.len() <= 360,
+            "propagated event bytes={} relay_plaintext_budget=360 lxmf_max={}",
+            propagated.len(),
+            reticulum::transport::packet::LXMF_MAX_PAYLOAD
+        );
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("event metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.log_entry.upsert")
+        );
+        assert_eq!(
+            metadata.event_uid.as_deref(),
+            Some("evt-a3a1c275-1d90-41a6-b7ed-f8f9cf0b8fc1")
+        );
+        assert_eq!(
+            metadata.mission_uid.as_deref(),
+            Some(DEFAULT_R3AKT_MISSION_UID)
+        );
+        assert_eq!(
+            metadata.command_id.as_deref(),
+            Some(record.command_id.as_str())
+        );
+    }
+
+    #[test]
+    fn telemetry_replication_payload_stays_under_direct_packet_budget() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod,
+        };
+        use reticulum::transport::identity::PrivateIdentity;
+
+        let target = MissionReplicationTarget {
+            app_destination_hex: "e3f1c3f63adef0c0d771ddff8b0eeed5".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let position = TelemetryPositionRecord {
+            callsign: "NoemiPix".to_string(),
+            lat: 44.6488,
+            lon: -63.5752,
+            alt: Some(12.0),
+            course: Some(45.0),
+            speed: Some(3.5),
+            accuracy: Some(5.0),
+            updated_at_ms: 1_779_756_701_317,
+        };
+        let (body, fields) =
+            build_telemetry_replication_payload(&position, &target).expect("telemetry payload");
+        let source = hex::decode("fb4c70e20cfac047b899ca2f3671b50a").expect("source hex");
+        let target_hex = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(target_hex.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(fields.as_slice()).expect("fields msgpack"));
+        let identity = PrivateIdentity::new_from_name("telemetry-replication-budget");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(decision.representation, LxmfMessageMethod::Packet);
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("telemetry metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("mission.registry.telemetry.upsert")
+        );
     }
 
     fn build_message() -> MessageRecord {
@@ -7141,6 +9816,7 @@ schema = "schemas/bad_status.schema.json"
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
             plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
     }
 
@@ -7835,6 +10511,10 @@ schema = "schemas/bad_status.schema.json"
         };
         let (body, fields) =
             build_eam_replication_payload(&node_a_status, &record, &target).expect("eam payload");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("eam metadata");
+        let command_id = metadata.command_id.clone().expect("eam command id");
+        let command_type = metadata.command_type.clone().expect("eam command type");
+        let ack_subscription = node_a.subscribe_events();
 
         node_a
             .send_bytes(
@@ -7866,8 +10546,209 @@ schema = "schemas/bad_status.schema.json"
         assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
         assert_eq!(
             received.team_member_uid.as_deref(),
-            record.team_member_uid.as_deref()
+            Some(node_a_status.lxmf_destination_hex.as_str())
         );
+        let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
+        assert_eq!(
+            ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+        assert_eq!(ack.destination_hex, node_b_status.lxmf_destination_hex);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_built_event_replication_payload_acknowledges_after_persistence() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("event_payload_ack").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let mut record = build_event();
+        record.uid = "evt-operational-ack".to_string();
+        record.command_id = "cmd-event-operational-ack".to_string();
+        record.correlation_id = Some("corr-event-operational-ack".to_string());
+        record.source_identity = node_a_status.identity_hex.clone();
+        record.source_display_name = Some(node_a_status.name.clone());
+        record.callsign = node_a_status.name.clone();
+        record.content = "Operational ACK event".to_string();
+        let target = MissionReplicationTarget {
+            app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
+        };
+        let (body, fields) = build_event_replication_payload(&node_a_status, &record, &target)
+            .expect("event payload");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("event metadata");
+        let command_id = metadata.command_id.clone().expect("event command id");
+        let command_type = metadata.command_type.clone().expect("event command type");
+        let ack_subscription = node_a.subscribe_events();
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                body,
+                Some(fields),
+                SendMode::Auto {},
+            )
+            .expect("send event replication payload");
+
+        let received_deadline = Instant::now() + TEST_TIMEOUT;
+        let received = loop {
+            let received = node_b
+                .get_events()
+                .expect("get events")
+                .into_iter()
+                .find(|event| event.uid == record.uid);
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted direct event replication payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(received.content, record.content);
+        assert_eq!(received.command_id, record.command_id);
+        let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
+        assert_eq!(
+            ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+        assert_eq!(ack.destination_hex, node_b_status.lxmf_destination_hex);
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_built_checklist_replication_payloads_acknowledge_after_persistence() {
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("checklist_payload_ack").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        let target = MissionReplicationTarget {
+            app_destination_hex: node_b_status.app_destination_hex.clone(),
+            send_mode: SendMode::Auto {},
+        };
+        let create_args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-operational-ack".to_string()),
+            mission_uid: Some("mission-operational-ack".to_string()),
+            template_uid: "template-operational-ack".to_string(),
+            name: "Operational ACK checklist".to_string(),
+            description: "Created by operational ACK test".to_string(),
+            start_time: "2026-05-18T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some(node_a_status.identity_hex.clone()),
+            created_by_team_member_display_name: Some(node_a_status.name.clone()),
+        })
+        .expect("checklist create args");
+        let (create_body, create_fields) = build_checklist_replication_payload(
+            &node_a_status,
+            &target,
+            "checklist.create.online",
+            &create_args,
+        )
+        .expect("checklist create payload");
+        let create_metadata =
+            parse_mission_sync_metadata(create_fields.as_slice()).expect("create metadata");
+        let create_command_type = create_metadata
+            .command_type
+            .clone()
+            .expect("create command type");
+        assert!(
+            create_metadata.command_id.is_none(),
+            "compact create updates intentionally omit command ids"
+        );
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                create_body,
+                Some(create_fields),
+                SendMode::Auto {},
+            )
+            .expect("send checklist create payload");
+
+        let create_deadline = Instant::now() + TEST_TIMEOUT;
+        let received_checklist = loop {
+            let received = node_b
+                .get_checklist("chk-operational-ack".to_string())
+                .expect("get checklist");
+            if let Some(received) = received {
+                break received;
+            }
+            assert!(
+                Instant::now() < create_deadline,
+                "node b never persisted direct checklist create payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        assert_eq!(received_checklist.name, "Operational ACK checklist");
+        assert_eq!(create_command_type, "checklist.create.online");
+
+        let status_args = checklist_task_status_args_json(&ChecklistTaskStatusSetRequest {
+            checklist_uid: "chk-operational-ack".to_string(),
+            task_uid: "task-operational-ack".to_string(),
+            user_status: crate::types::ChecklistUserTaskStatus::Complete {},
+            changed_by_team_member_rns_identity: Some(node_a_status.identity_hex.clone()),
+        });
+        let (status_body, status_fields) = build_checklist_replication_payload(
+            &node_a_status,
+            &target,
+            "checklist.task.status.set",
+            &status_args,
+        )
+        .expect("checklist task status payload");
+        let status_metadata =
+            parse_mission_sync_metadata(status_fields.as_slice()).expect("status metadata");
+        let status_command_type = status_metadata
+            .command_type
+            .clone()
+            .expect("status command type");
+        assert!(
+            status_metadata.command_id.is_none(),
+            "compact status updates intentionally omit command ids"
+        );
+
+        node_a
+            .send_bytes(
+                node_b_status.app_destination_hex.clone(),
+                status_body,
+                Some(status_fields),
+                SendMode::Auto {},
+            )
+            .expect("send checklist task status payload");
+
+        let status_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let received = node_b
+                .get_checklist("chk-operational-ack".to_string())
+                .expect("get checklist")
+                .expect("checklist remains active");
+            let task = received
+                .tasks
+                .into_iter()
+                .find(|task| task.task_uid == "task-operational-ack");
+            if let Some(task) = task {
+                assert_eq!(
+                    task.user_status,
+                    crate::types::ChecklistUserTaskStatus::Complete {}
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < status_deadline,
+                "node b never persisted direct checklist task status payload"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        assert_eq!(status_command_type, "checklist.task.status.set");
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -7896,6 +10777,13 @@ schema = "schemas/bad_status.schema.json"
         };
         let (body, fields) =
             build_telemetry_replication_payload(&position, &target).expect("telemetry payload");
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("telemetry metadata");
+        let command_id = metadata.command_id.clone().expect("telemetry command id");
+        let command_type = metadata
+            .command_type
+            .clone()
+            .expect("telemetry command type");
+        let ack_subscription = node_a.subscribe_events();
 
         node_a
             .send_bytes(
@@ -7927,6 +10815,12 @@ schema = "schemas/bad_status.schema.json"
         assert_eq!(received.lat, position.lat);
         assert_eq!(received.lon, position.lon);
         assert_eq!(received.accuracy, position.accuracy);
+        let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
+        assert_eq!(
+            ack.source_hex.as_deref(),
+            Some(node_b_status.lxmf_destination_hex.as_str())
+        );
+        assert_eq!(ack.destination_hex, node_b_status.lxmf_destination_hex);
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -8187,7 +11081,7 @@ schema = "schemas/bad_status.schema.json"
         assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
         assert_eq!(
             received.team_member_uid.as_deref(),
-            record.team_member_uid.as_deref()
+            Some(node_a_status.lxmf_destination_hex.as_str())
         );
         assert_eq!(received.eam_uid.as_deref(), record.eam_uid.as_deref());
         assert_eq!(received.security_status, record.security_status);
@@ -8198,7 +11092,7 @@ schema = "schemas/bad_status.schema.json"
                 .source
                 .as_ref()
                 .map(|source| source.rns_identity.as_str()),
-            Some(node_a_status.identity_hex.as_str())
+            Some(node_a_status.lxmf_destination_hex.as_str())
         );
 
         stop_node(node_a).await;
@@ -8317,7 +11211,7 @@ schema = "schemas/bad_status.schema.json"
 
         assert_eq!(
             received.team_member_uid.as_deref(),
-            Some(node_a_status.app_destination_hex.as_str())
+            Some(node_a_status.lxmf_destination_hex.as_str())
         );
         assert_eq!(received.team_uid.as_deref(), Some(TEAM_UID_BLUE));
 
@@ -8583,6 +11477,130 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn delete_event_replicates_to_native_peer_projection() {
+        const EVENT_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
+        let _guard = test_lock().lock().await;
+        let (relay, node_a, node_b) = start_node_pair("event_delete_projection").await;
+
+        let node_a_status = node_a.get_status();
+        let node_b_status = node_b.get_status();
+        node_a
+            .set_saved_peers(vec![SavedPeerRecord {
+                destination_hex: node_b_status.app_destination_hex.clone(),
+                label: Some("peer-b".to_string()),
+                saved_at_ms: now_ms(),
+            }])
+            .expect("save peer b");
+        node_a
+            .connect_peer(node_b_status.app_destination_hex.clone())
+            .expect("connect peer b");
+
+        let warm_link_subscription = node_b.subscribe_events();
+        node_a
+            .send_lxmf(SendLxmfRequest {
+                destination_hex: node_b_status.lxmf_destination_hex.clone(),
+                body_utf8: "warm event delete link".to_string(),
+                title: Some("warmup".to_string()),
+                send_mode: SendMode::Auto {},
+            })
+            .expect("warm event delete link");
+        wait_for_event(&warm_link_subscription, TEST_TIMEOUT, |event| {
+            matches!(event, NodeEvent::MessageReceived { message } if message.body_utf8 == "warm event delete link")
+        })
+        .expect("node b received event delete warmup message");
+
+        let peer_ready_deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let peer_ready = node_a
+                .list_peers()
+                .expect("list peers")
+                .into_iter()
+                .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
+                .is_some_and(|peer| peer.saved && has_known_lxmf_route(&peer));
+            if peer_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < peer_ready_deadline,
+                "peer b never became mission-ready"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let record = EventProjectionRecord {
+            uid: "evt-delete-native".to_string(),
+            command_id: "cmd-evt-delete-native".to_string(),
+            source_identity: node_a_status.identity_hex.clone(),
+            source_display_name: Some(node_a_status.name.clone()),
+            timestamp: "2026-03-25T17:05:00Z".to_string(),
+            command_type: "mission.registry.log_entry.upsert".to_string(),
+            mission_uid: "r3akt-default-mission".to_string(),
+            content: "Native deleted event".to_string(),
+            callsign: node_a_status.name.clone(),
+            server_time: Some("2026-03-25T17:05:00Z".to_string()),
+            client_time: Some("2026-03-25T17:05:00Z".to_string()),
+            keywords: vec!["r3akt:event-type:Incident".to_string()],
+            content_hashes: vec![],
+            updated_at_ms: now_ms(),
+            deleted_at_ms: None,
+            correlation_id: Some("corr-evt-delete-native".to_string()),
+            topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
+        };
+
+        node_a
+            .upsert_event(record.clone())
+            .expect("upsert local event");
+
+        let received_deadline = Instant::now() + EVENT_REPLICATION_TIMEOUT;
+        loop {
+            let received = node_b
+                .get_events()
+                .expect("get events")
+                .into_iter()
+                .find(|event| event.uid == record.uid && event.deleted_at_ms.is_none());
+            if received.is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < received_deadline,
+                "node b never persisted replicated event before delete"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let deleted_at_ms = now_ms();
+        node_a
+            .delete_event(record.uid.clone(), deleted_at_ms)
+            .expect("delete local event");
+
+        let delete_deadline = Instant::now() + EVENT_REPLICATION_TIMEOUT;
+        let deleted = loop {
+            let deleted = node_b
+                .get_events()
+                .expect("get events")
+                .into_iter()
+                .find(|event| {
+                    event.uid == record.uid && event.deleted_at_ms == Some(deleted_at_ms)
+                });
+            if let Some(deleted) = deleted {
+                break deleted;
+            }
+            assert!(
+                Instant::now() < delete_deadline,
+                "node b never persisted replicated event delete"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+
+        assert_eq!(deleted.uid, record.uid);
+        assert_eq!(deleted.deleted_at_ms, Some(deleted_at_ms));
+
+        stop_node(node_a).await;
+        stop_node(node_b).await;
+        relay.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn repeated_eam_updates_with_same_callsign_replicate_latest_projection() {
         const EAM_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
         let _guard = test_lock().lock().await;
@@ -8704,7 +11722,6 @@ schema = "schemas/bad_status.schema.json"
                 .find(|eam| {
                     eam.callsign == second_record.callsign
                         && eam.preparedness_status == second_record.preparedness_status
-                        && eam.notes == second_record.notes
                 });
             if let Some(received) = received {
                 break received;
@@ -8722,7 +11739,7 @@ schema = "schemas/bad_status.schema.json"
             received.preparedness_status,
             second_record.preparedness_status
         );
-        assert_eq!(received.notes, second_record.notes);
+        assert!(received.notes.is_none());
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -8786,7 +11803,7 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn event_replication_targets_include_connected_peer_without_active_link() {
+    fn event_replication_targets_try_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -8819,7 +11836,127 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn event_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+    fn event_replication_targets_use_relay_for_fresh_route_without_active_link_when_relay_exists() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-connected".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let peers = vec![build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            false,
+        )];
+
+        let targets = build_event_replication_targets(
+            &status,
+            peers.as_slice(),
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_try_current_app_peer_with_old_lxmf_timestamp_before_relay() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!peer_has_observed_lxmf_delivery_route(&peer));
+        assert!(!peer_is_mission_direct_delivery_ready(&peer, true));
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_use_direct_link_then_relay_for_saved_stored_routes() {
+        let status = build_status_for_tests();
+        let direct_saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("Pixel".to_string()),
+            saved_at_ms: 1,
+        };
+        let relay_saved_peer = SavedPeerRecord {
+            destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            label: Some("RelayOnly".to_string()),
+            saved_at_ms: 2,
+        };
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "11111111111111111111111111111111",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        relay_peer.stale = true;
+        relay_peer.announce_last_seen_at_ms = None;
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[relay_peer, direct_peer],
+            &[direct_saved_peer, relay_saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -8832,6 +11969,26 @@ schema = "schemas/bad_status.schema.json"
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
         };
+        let mut saved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            true,
+            false,
+            false,
+        );
+        saved_relay_peer.stale = true;
+        saved_relay_peer.announce_last_seen_at_ms = None;
+        saved_relay_peer.lxmf_last_seen_at_ms = None;
+        let mut unsaved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            false,
+            false,
+            false,
+        );
+        unsaved_relay_peer.stale = true;
+        unsaved_relay_peer.announce_last_seen_at_ms = None;
+        unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -8840,20 +11997,8 @@ schema = "schemas/bad_status.schema.json"
                 true,
                 true,
             ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                true,
-                false,
-                false,
-            ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                false,
-                false,
-                false,
-            ),
+            saved_relay_peer,
+            unsaved_relay_peer,
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
@@ -8935,7 +12080,7 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn mission_replication_targets_skip_stale_saved_peers_before_connected_peers() {
+    fn mission_replication_targets_prioritize_current_saved_peers_before_stale_stored_routes() {
         let status = NodeStatus {
             running: true,
             name: "poco".to_string(),
@@ -8963,6 +12108,7 @@ schema = "schemas/bad_status.schema.json"
         stale_peer.stale = true;
         stale_peer.last_seen_at_ms = 0;
         stale_peer.announce_last_seen_at_ms = None;
+        stale_peer.lxmf_last_seen_at_ms = None;
         let connected_peer = build_peer_record(
             connected_saved_peer.destination_hex.as_str(),
             "dddddddddddddddddddddddddddddddd",
@@ -8978,16 +12124,321 @@ schema = "schemas/bad_status.schema.json"
             Some("99999999999999999999999999999999"),
         );
 
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 2);
         assert_eq!(
             targets[0].app_destination_hex,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
-    fn eam_replication_targets_include_saved_relay_fallback_without_discovered_peers() {
+    fn eam_route_priority_puts_low_hop_live_peers_before_high_hop_saved_routes() {
+        let peers = vec![
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a133b8b1fe137f92210a048efded46db",
+                "1080d475b77274d7fdabaed81878d916",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let announces = vec![
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                11,
+                100,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                10,
+                110,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+            build_announce_record(
+                "1080d475b77274d7fdabaed81878d916",
+                "lxmf_delivery",
+                AnnounceClass::LxmfDelivery {},
+                7,
+                120,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets = vec![
+            MissionReplicationTarget {
+                app_destination_hex: "3457d5ba744e89bbae543c5ff9c679fb".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "a3e80acf291d9f57ee455493946b3763".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "0e252632c57fa999a15c4a05c0d1bae2".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "5ea3149a58998316f6c8200a006e14c2".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+            MissionReplicationTarget {
+                app_destination_hex: "a133b8b1fe137f92210a048efded46db".to_string(),
+                send_mode: SendMode::Auto {},
+            },
+        ];
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "a133b8b1fe137f92210a048efded46db",
+                "a3e80acf291d9f57ee455493946b3763",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+            ]
+        );
+    }
+
+    #[test]
+    fn event_route_priority_puts_low_hop_live_peers_before_high_hop_saved_routes() {
+        let status = build_status_for_tests();
+        let peers = vec![
+            build_peer_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "4d30bc17c71d98436558ff63da188f2a",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "182af0c5afb2ab7176406539c83676dc",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "a1c8126d7cb806e6bde086d582b6cb0d",
+                true,
+                false,
+                false,
+            ),
+            build_peer_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "34eb6bec21defd52736eaca1adff75eb",
+                true,
+                false,
+                false,
+            ),
+        ];
+        let saved_peers = peers
+            .iter()
+            .map(|peer| SavedPeerRecord {
+                destination_hex: peer.destination_hex.clone(),
+                label: peer.display_name.clone(),
+                saved_at_ms: 1_700_000_000_000,
+            })
+            .collect::<Vec<_>>();
+        let announces = vec![
+            build_announce_record(
+                "3457d5ba744e89bbae543c5ff9c679fb",
+                "app",
+                AnnounceClass::PeerApp {},
+                11,
+                100,
+            ),
+            build_announce_record(
+                "a3e80acf291d9f57ee455493946b3763",
+                "app",
+                AnnounceClass::PeerApp {},
+                10,
+                110,
+            ),
+            build_announce_record(
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                90,
+            ),
+            build_announce_record(
+                "5ea3149a58998316f6c8200a006e14c2",
+                "app",
+                AnnounceClass::PeerApp {},
+                1,
+                80,
+            ),
+        ];
+        let route_hops = announce_route_hops(announces.as_slice());
+        let mut targets = build_event_replication_targets(
+            &status,
+            peers.as_slice(),
+            saved_peers.as_slice(),
+            Some("99999999999999999999999999999999"),
+        );
+
+        prioritize_replication_targets_by_route_hops(
+            targets.as_mut_slice(),
+            peers.as_slice(),
+            &route_hops,
+        );
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.app_destination_hex.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "0e252632c57fa999a15c4a05c0d1bae2",
+                "5ea3149a58998316f6c8200a006e14c2",
+                "a3e80acf291d9f57ee455493946b3763",
+                "3457d5ba744e89bbae543c5ff9c679fb",
+            ]
+        );
+    }
+
+    #[test]
+    fn mission_replication_targets_use_propagation_for_observed_lxmf_route_without_active_link() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn mission_replication_targets_use_direct_link_then_relay_for_saved_stored_routes() {
+        let status = build_status_for_tests();
+        let direct_saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("Pixel".to_string()),
+            saved_at_ms: 1,
+        };
+        let relay_saved_peer = SavedPeerRecord {
+            destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            label: Some("RelayOnly".to_string()),
+            saved_at_ms: 2,
+        };
+        let direct_peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "11111111111111111111111111111111",
+            true,
+            true,
+            true,
+        );
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "22222222222222222222222222222222",
+            true,
+            false,
+            false,
+        );
+        relay_peer.stale = true;
+        relay_peer.announce_last_seen_at_ms = None;
+        relay_peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[direct_peer, relay_peer],
+            &[direct_saved_peer, relay_saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn eam_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9000,6 +12451,26 @@ schema = "schemas/bad_status.schema.json"
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
         };
+        let mut saved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            true,
+            false,
+            false,
+        );
+        saved_relay_peer.stale = true;
+        saved_relay_peer.announce_last_seen_at_ms = None;
+        saved_relay_peer.lxmf_last_seen_at_ms = None;
+        let mut unsaved_relay_peer = build_peer_record(
+            "cccccccccccccccccccccccccccccccc",
+            "dddddddddddddddddddddddddddddddd",
+            false,
+            false,
+            false,
+        );
+        unsaved_relay_peer.stale = true;
+        unsaved_relay_peer.announce_last_seen_at_ms = None;
+        unsaved_relay_peer.lxmf_last_seen_at_ms = None;
         let peers = vec![
             build_peer_record(
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -9008,20 +12479,8 @@ schema = "schemas/bad_status.schema.json"
                 true,
                 true,
             ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                true,
-                false,
-                false,
-            ),
-            build_peer_record(
-                "cccccccccccccccccccccccccccccccc",
-                "dddddddddddddddddddddddddddddddd",
-                false,
-                false,
-                false,
-            ),
+            saved_relay_peer,
+            unsaved_relay_peer,
             build_peer_record(
                 "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 "ffffffffffffffffffffffffffffffff",
@@ -9047,7 +12506,7 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn eam_replication_targets_include_saved_connected_peer_without_active_link() {
+    fn eam_replication_targets_include_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9122,7 +12581,46 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn eam_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+    fn eam_replication_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("saved-direct".to_string()),
+            saved_at_ms: now_ms(),
+        };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_keep_direct_peer_before_lxmf_announce_is_current() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9131,13 +12629,51 @@ schema = "schemas/bad_status.schema.json"
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
         let saved_peer = build_saved_peer();
-        let peers = vec![build_peer_record(
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn eam_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             false,
             false,
-        )];
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+        let peers = vec![peer];
 
         let targets = build_mission_replication_targets(
             &status,
@@ -9155,7 +12691,7 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn event_replication_targets_use_propagation_for_saved_peer_without_direct_reachability() {
+    fn event_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9164,13 +12700,17 @@ schema = "schemas/bad_status.schema.json"
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
         };
         let saved_peer = build_saved_peer();
-        let peers = vec![build_peer_record(
+        let mut peer = build_peer_record(
             saved_peer.destination_hex.as_str(),
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             true,
             false,
             false,
-        )];
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+        let peers = vec![peer];
 
         let targets = build_event_replication_targets(
             &status,
@@ -9188,7 +12728,101 @@ schema = "schemas/bad_status.schema.json"
     }
 
     #[test]
-    fn eam_replication_targets_keep_saved_peer_target_without_active_relay() {
+    fn event_replication_targets_use_propagation_for_stale_saved_peer_with_stored_lxmf_route() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_use_propagation_for_observed_lxmf_route_without_active_link() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn event_replication_targets_use_propagation_for_stored_route_when_observed_route_is_old() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            false,
+            false,
+        );
+        peer.stale = true;
+        peer.announce_last_seen_at_ms = None;
+        peer.lxmf_last_seen_at_ms =
+            Some(now_ms().saturating_sub(sdkmsg::DEFAULT_PEER_STALE_AFTER_MS + 1));
+
+        assert!(!peer_has_observed_lxmf_delivery_route(&peer));
+        assert!(!peer_is_direct_delivery_ready(&peer));
+        assert!(saved_peer_can_try_stored_lxmf_route(&peer, true));
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn eam_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9200,16 +12834,47 @@ schema = "schemas/bad_status.schema.json"
 
         let targets = build_mission_replication_targets(&status, &[], &[saved_peer], None);
 
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].app_destination_hex,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert!(targets.is_empty());
     }
 
     #[test]
-    fn event_replication_targets_keep_saved_peer_target_without_active_relay() {
+    fn replication_targets_skip_saved_peer_without_mission_capabilities() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.app_data = Some("Telemetry".to_string());
+
+        let mission_targets = build_mission_replication_targets(
+            &status,
+            &[peer.clone()],
+            std::slice::from_ref(&saved_peer),
+            Some("99999999999999999999999999999999"),
+        );
+        let event_targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert!(mission_targets.is_empty());
+        assert!(event_targets.is_empty());
+    }
+
+    #[test]
+    fn event_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
             running: true,
             name: "pixel".to_string(),
@@ -9221,12 +12886,166 @@ schema = "schemas/bad_status.schema.json"
 
         let targets = build_event_replication_targets(&status, &[], &[saved_peer], None);
 
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn checklist_participant_targets_use_propagation_for_current_unsaved_source_when_relay_exists()
+    {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            false,
+            false,
+        );
+        peer.lxmf_last_seen_at_ms = None;
+        let mut targets = build_mission_replication_targets(
+            &status,
+            &[peer.clone()],
+            &[],
+            Some("99999999999999999999999999999999"),
+        );
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[peer],
+            &[
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                status.identity_hex.clone(),
+                "not-a-destination".to_string(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            ],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_skip_source_without_current_peer() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut targets = Vec::new();
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[],
+            &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn checklist_participant_targets_keep_direct_return_path_when_relay_is_active_before_lxmf_route_is_known(
+    ) {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let mut peer = build_peer_record(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            false,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+        let mut targets = Vec::new();
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[peer],
+            &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
         assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0].app_destination_hex,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
         assert_eq!(targets[0].send_mode, SendMode::Auto {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_include_current_participants_when_direct_target_exists() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let direct_target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let mut relay_peer = build_peer_record(
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccccccccccccc",
+            false,
+            false,
+            false,
+        );
+        relay_peer.lxmf_last_seen_at_ms = None;
+        let mut targets = vec![direct_target];
+
+        append_checklist_participant_replication_targets(
+            &status,
+            &[relay_peer],
+            &["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()],
+            Some("99999999999999999999999999999999"),
+            &mut targets,
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
+        assert_eq!(
+            targets[1].app_destination_hex,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
+    fn checklist_participant_targets_do_not_override_connected_hub_mode() {
+        let connected = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
+
+        assert!(!should_include_checklist_participant_targets(
+            Some(&connected),
+            None
+        ));
     }
 
     #[test]
@@ -9329,6 +13148,7 @@ schema = "schemas/bad_status.schema.json"
             None,
             None,
             None,
+            None,
             "chk-001",
             false,
         )
@@ -9360,6 +13180,7 @@ schema = "schemas/bad_status.schema.json"
             None,
             None,
             None,
+            None,
             "chk-001",
             true,
         )
@@ -9369,39 +13190,158 @@ schema = "schemas/bad_status.schema.json"
         let (destination_hex, body, fields, send_mode) = &scheduled[0];
         assert_eq!(destination_hex, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert!(matches!(send_mode, SendMode::Auto {}));
+        assert_eq!(String::from_utf8_lossy(body.as_slice()), "C C4 chk-001");
+        let field_text = String::from_utf8_lossy(fields.as_slice());
+        for verbose in [
+            "command_id",
+            "correlation_id",
+            "command_type",
+            "source",
+            "timestamp",
+            "topics",
+            "checklist_uid",
+            "checklist.delete",
+        ] {
+            assert!(
+                !field_text.contains(verbose),
+                "compact checklist fields should not contain verbose token {verbose}"
+            );
+        }
+
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+        assert_eq!(metadata.command_type.as_deref(), Some("checklist.delete"));
+        assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-001"));
+    }
+
+    #[test]
+    fn checklist_task_cell_payload_uses_compact_args_with_compatible_metadata() {
+        let status = build_status_for_tests();
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let args = checklist_task_cell_args_json(&ChecklistTaskCellSetRequest {
+            checklist_uid: "chk-001".to_string(),
+            task_uid: "task-001".to_string(),
+            column_uid: "col-task".to_string(),
+            value: "  Move to alternate pickup  ".to_string(),
+            updated_by_team_member_rns_identity: Some(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            ),
+        });
+
+        let (body, fields) =
+            build_checklist_replication_payload(&status, &target, "checklist.task.cell.set", &args)
+                .expect("checklist task cell payload");
+
         assert_eq!(
             String::from_utf8_lossy(body.as_slice()),
-            "Checklist checklist.delete chk-001"
+            "C CA chk-001-task-001-col-task"
         );
+        assert!(
+            fields.len() <= 260,
+            "compact checklist task cell fields should stay small, fields bytes={}",
+            fields.len()
+        );
+        let field_text = String::from_utf8_lossy(fields.as_slice());
+        for verbose in [
+            "command_type",
+            "checklist.task.cell.set",
+            "checklist_uid",
+            "task_uid",
+            "column_uid",
+            "updated_by_team_member_rns_identity",
+        ] {
+            assert!(
+                !field_text.contains(verbose),
+                "compact checklist fields should not contain verbose token {verbose}"
+            );
+        }
 
-        let fields = rmp_serde::from_slice::<MsgPackValue>(fields.as_slice()).expect("fields");
-        let commands = fields
-            .as_map()
-            .and_then(|entries| {
-                entries
-                    .iter()
-                    .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
-                    .and_then(|(_, value)| value.as_array())
-            })
-            .expect("commands");
-        let command = commands[0].as_map().expect("command map");
-        assert_eq!(
-            command
-                .iter()
-                .find(|(key, _)| key.as_str() == Some("command_type"))
-                .and_then(|(_, value)| value.as_str()),
-            Some("checklist.delete")
-        );
-        let args = command
+        let packed_fields =
+            rmp_serde::from_slice::<MsgPackValue>(fields.as_slice()).expect("fields msgpack");
+        let MsgPackValue::Map(field_entries) = packed_fields else {
+            panic!("fields should be a map");
+        };
+        let commands = field_entries
             .iter()
-            .find(|(key, _)| key.as_str() == Some("args"))
+            .find(|(key, _)| key.as_i64() == Some(FIELD_COMMANDS))
+            .and_then(|(_, value)| value.as_array())
+            .expect("command array");
+        let command = commands[0].as_map().expect("command map");
+        let command_args = command
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("a"))
             .and_then(|(_, value)| value.as_map())
-            .expect("args");
+            .expect("command args");
+        let has_arg = |name: &str| {
+            command_args
+                .iter()
+                .any(|(key, _)| key.as_str() == Some(name))
+        };
+        for compact in ["cl", "tsk", "col", "v", "ub"] {
+            assert!(
+                has_arg(compact),
+                "compact checklist arg {compact} should be present"
+            );
+        }
+
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
         assert_eq!(
-            args.iter()
-                .find(|(key, _)| key.as_str() == Some("checklist_uid"))
-                .and_then(|(_, value)| value.as_str()),
-            Some("chk-001")
+            metadata.command_type.as_deref(),
+            Some("checklist.task.cell.set")
+        );
+        assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-001"));
+        assert_eq!(metadata.task_uid.as_deref(), Some("task-001"));
+        assert_eq!(metadata.column_uid.as_deref(), Some("col-task"));
+    }
+
+    #[test]
+    fn checklist_task_status_payload_stays_packet_sized_for_template_task_ids() {
+        let status = build_status_for_tests();
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let args = checklist_task_status_args_json(&ChecklistTaskStatusSetRequest {
+            checklist_uid: "chk-1779802362961".to_string(),
+            task_uid: "tmpl-vehicle-emergency-preparedness-task-1".to_string(),
+            user_status: crate::types::ChecklistUserTaskStatus::Complete {},
+            changed_by_team_member_rns_identity: Some(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            ),
+        });
+
+        let (body, fields) = build_checklist_replication_payload(
+            &status,
+            &target,
+            "checklist.task.status.set",
+            &args,
+        )
+        .expect("checklist task status payload");
+
+        assert!(
+            body.len() + fields.len() <= 360,
+            "task status should stay safely packet-sized, body={} fields={} total={}",
+            body.len(),
+            fields.len(),
+            body.len() + fields.len()
+        );
+        let field_text = String::from_utf8_lossy(fields.as_slice());
+        assert!(
+            !field_text.contains("changed_by_team_member_rns_identity")
+                && !field_text.contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "status attribution should use command source identity, not duplicate identity args"
+        );
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+        assert_eq!(
+            metadata.command_type.as_deref(),
+            Some("checklist.task.status.set")
+        );
+        assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-1779802362961"));
+        assert_eq!(
+            metadata.task_uid.as_deref(),
+            Some("tmpl-vehicle-emergency-preparedness-task-1")
         );
     }
 
@@ -9452,6 +13392,41 @@ schema = "schemas/bad_status.schema.json"
             Some("Bring printed route card")
         );
 
+        let compact_initial_args = compact_initial_checklist_task_row_add_args_from_task(
+            "chk-001",
+            &ChecklistTaskRecord {
+                task_uid: "tmpl-import-task-2".to_string(),
+                number: 2,
+                user_status: crate::types::ChecklistUserTaskStatus::Pending {},
+                task_status: crate::types::ChecklistTaskStatus::Pending {},
+                is_late: false,
+                updated_at: Some("2026-04-24T12:00:00Z".to_string()),
+                deleted_at: None,
+                custom_status: None,
+                due_relative_minutes: Some(30),
+                due_dtg: Some("2026-04-24T12:30:00Z".to_string()),
+                notes: Some(
+                    "Document where everyone will shelter, which room is safest, and when to leave."
+                        .to_string(),
+                ),
+                row_background_color: None,
+                line_break_enabled: false,
+                completed_at: None,
+                completed_by_team_member_rns_identity: None,
+                legacy_value: Some("Shelter room assignment".to_string()),
+                cells: Vec::new(),
+            },
+        );
+        assert_eq!(
+            compact_initial_args
+                .get("legacy_value")
+                .and_then(JsonValue::as_str),
+            Some("Shelter room assignment")
+        );
+        assert!(compact_initial_args.get("notes").is_none());
+        assert!(compact_initial_args.get("due_dtg").is_none());
+        assert!(compact_initial_args.get("due_relative_minutes").is_none());
+
         let style_args = checklist_task_row_style_args_json(&ChecklistTaskRowStyleSetRequest {
             checklist_uid: "chk-001".to_string(),
             task_uid: "task-001".to_string(),
@@ -9477,6 +13452,69 @@ schema = "schemas/bad_status.schema.json"
             cell_args.get("value").and_then(JsonValue::as_str),
             Some("  Move to alternate pickup  ")
         );
+    }
+
+    #[test]
+    fn compact_initial_checklist_row_add_stays_direct_packet_sized() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod,
+        };
+        use reticulum::transport::identity::PrivateIdentity;
+
+        let status = build_status_for_tests();
+        let target = MissionReplicationTarget {
+            app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            send_mode: SendMode::Auto {},
+        };
+        let task = ChecklistTaskRecord {
+            task_uid: "tmpl-import-task-2".to_string(),
+            number: 2,
+            user_status: crate::types::ChecklistUserTaskStatus::Pending {},
+            task_status: crate::types::ChecklistTaskStatus::Pending {},
+            is_late: false,
+            updated_at: Some("2026-04-24T12:00:00Z".to_string()),
+            deleted_at: None,
+            custom_status: None,
+            due_relative_minutes: Some(30),
+            due_dtg: Some("2026-04-24T12:30:00Z".to_string()),
+            notes: Some(
+                "Document where everyone will shelter, which room is safest, and when to leave."
+                    .to_string(),
+            ),
+            row_background_color: None,
+            line_break_enabled: false,
+            completed_at: None,
+            completed_by_team_member_rns_identity: None,
+            legacy_value: Some("Shelter room assignment".to_string()),
+            cells: Vec::new(),
+        };
+        let args = compact_initial_checklist_task_row_add_args_from_task("chk-shelter-csv", &task);
+        let (body, fields) =
+            build_checklist_replication_payload(&status, &target, "checklist.task.row.add", &args)
+                .expect("row-add payload");
+        assert_eq!(String::from_utf8_lossy(body.as_slice()), "C C7");
+        assert!(
+            body.len() + fields.len() <= 260,
+            "compact row-add should stay safely under direct packet budget, body={} fields={} total={}",
+            body.len(),
+            fields.len(),
+            body.len() + fields.len()
+        );
+
+        let source = hex::decode(status.lxmf_destination_hex.as_str()).expect("source hex");
+        let destination = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(destination.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(fields.as_slice()).expect("fields msgpack"));
+        let identity = PrivateIdentity::new_from_name("compact-initial-checklist-row-add");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(decision.representation, LxmfMessageMethod::Packet);
     }
 
     #[test]

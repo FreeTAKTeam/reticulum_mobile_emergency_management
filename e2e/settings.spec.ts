@@ -109,6 +109,40 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 
+test("operators can save manual RNode LoRa configuration", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
+  });
+
+  await runtimePanel.locator("summary").click();
+  await runtimePanel.getByLabel("Enable RNode Bluetooth LoRa").check();
+  await runtimePanel.getByLabel("RNode device id").fill("AA:BB:CC:DD:EE:FF");
+  await runtimePanel.getByLabel("RNode display name").fill("Field RNode");
+  await runtimePanel.getByLabel("Region").selectOption("EU868");
+  await runtimePanel.getByLabel("REM LoRa profile").selectOption("REM-LM-EXTREME-v1");
+
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
+  expect(storedSettings.rnode).toEqual({
+    enabled: true,
+    peripheralId: "AA:BB:CC:DD:EE:FF",
+    displayName: "Field RNode",
+    region: "EU868",
+    profile: "REM-LM-EXTREME-v1",
+  });
+});
+
 test("telemetry publish interval above 60 seconds activates save and persists", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {

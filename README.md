@@ -1,69 +1,83 @@
-# Reticulum Mobile Emergency_Management
+# Reticulum Emergency Management
 
-This app answers a simple question during an incident:
+Reticulum Emergency Management, or REM, helps a field team keep a shared picture when normal phones, internet, or command systems are unreliable.
 
-> How is everyone doing? What is happening?
+It answers two urgent questions:
 
-It is designed to be simple enough for anyone to use, even under stress.
+> How is everyone doing?
+> What is happening now?
 
-## Looks & Feel
+REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-<img width="438" height="881" alt="Dashboard" src="https://github.com/user-attachments/assets/1a5dfce2-8d41-469c-b9b5-ced8377e44ed" />
-<img width="429" height="897" alt="Chat" src="https://github.com/user-attachments/assets/63b48784-5a2f-4fb1-b924-76e7d68fb571" />
-<img width="451" height="878" alt="Positioning" src="https://github.com/user-attachments/assets/62e81b21-30a5-4d32-9051-26327f1083a7" />
+## Current UI
 
-## What This App Does
+These screenshots were captured from the current app UI.
 
-- **Shares status updates** about people or teams (who is OK, who needs help, who is missing, etc.).
-- **Works without any server**. Phones can form a peer-to-peer mesh of trusted peers and share updates directly.
-- **Exchanges encrypted Chat with Peers**. 
-- **Sends logs of Events**. Short text messages with SITREP.
-- **Shares operational Checklists**. Teams can create task lists from built-in or CSV templates, track deadlines, and collaborate on task completion.
-- **Stays compatible with RCH (Reticulum Community Hub)** if you want a directory to help discover peers, but it is not required. (in progress)
- 
-## Trust-Based Updates
+| Dashboard | Events with MECP | Chat |
+| --- | --- | --- |
+| ![REM dashboard](docs/screenshots/rem-dashboard.png) | ![REM Events MECP composer](docs/screenshots/rem-events-mecp.png) | ![REM chat](docs/screenshots/rem-chat.png) |
 
-<img width="433" height="898" alt="Status" src="https://github.com/user-attachments/assets/589ab34a-a1f5-4f90-bb2f-3ec5bb7a7520" />
+| Checklists | Map | Peers |
+| --- | --- | --- |
+| ![REM checklists](docs/screenshots/rem-checklists.png) | ![REM map](docs/screenshots/rem-map.png) | ![REM peers](docs/screenshots/rem-peers.png) |
 
-This app assumes information is updated by the people who know the facts.
+## What REM Helps You Do
 
-- Anyone in the mesh can create a status for someone and update it later.
-- Example: if Joe created a status for Aunt Emma, Mary can update it after she visits her and has newer information.
+- See a quick team health picture on the Dashboard.
+- Send and receive encrypted chat with saved peers.
+- Share Emergency Action Messages so others know the current status of a person or team.
+- Record Events as short timeline updates.
+- Use MECP event codes for clear, compact emergency messages that can be understood across languages.
+- Build and share Checklists for field tasks.
+- Watch recent locations on the Map when telemetry is enabled.
+- Discover, save, and connect to trusted peers.
+- Configure SOS emergency behavior, telemetry, peer lists, and Reticulum settings.
 
-The goal is one shared, evolving picture of the situation, not “who created the record”.
+## Events And MECP
 
-## Events / Logs
+The Events page now uses MECP, the Mesh Emergency Communication Protocol. MECP turns a plain choice like "Safety - Position - Stranded" into a compact message such as:
 
-<img width="442" height="899" alt="Events" src="https://github.com/user-attachments/assets/710f1061-e2a0-4d00-8d1e-56f3ecf44425" />
+```text
+MECP/2/P01
+```
 
-Alongside statuses, the app supports simple events and logs: short notes about conditions that affect the network or the response (for example, “power is out”, “bridge closed”, or “comms degraded”).
+That message is short, readable, and suitable for low-bandwidth mesh links. The MECP project describes it as a structured text format for emergency and everyday communication across language barriers: [xiang-dev-1/MECP](https://github.com/xiang-dev-1/MECP).
 
-## Checklists
+In REM, an operator does not need to memorize the code. The Events page shows friendly choices for severity, category, event, and optional details, then shows the exact MECP body before it is added.
 
-REM supports shared checklist work for autonomous field collaboration. A checklist can be created from a built-in template or from an uploaded CSV file. CSV templates can include arbitrary task columns and an optional `CompletedDTG` column, which is interpreted as a relative deadline from the checklist start date/time.
+## Main Pages
 
-When a checklist is shared, the Rust runtime persists it locally, sends a create command, and follows with a full checklist snapshot so peers can reconstruct the same task rows and columns. Later task updates send only the changed row, cell, or status.
+- **Dashboard**: Shows team readiness, checklist counts, and recent activity totals.
+- **Chat**: Holds one-to-one LXMF conversations with peers.
+- **Checklists**: Creates and tracks shared task lists.
+- **Map**: Shows recent peer positions and SOS locations when telemetry is available.
+- **More**: Opens Action Messages, Events, Peers, and Settings.
+- **Action Messages**: Captures the team status colors used by the Dashboard.
+- **Events**: Records short timeline updates using MECP.
+- **Peers**: Finds REM-capable peers, saves trusted peers, and connects to them.
+- **Settings**: Controls call sign, networking, telemetry, SOS, peer import/export, and node controls.
 
-## Under The Hood
-
-The network layer uses Reticulum, a secure mesh networking system. The core is implemented in Rust so it stays responsive on mobile devices. Checklist persistence, deadline calculation, and LXMF replication are Rust-owned; the mobile UI reads projected checklist state from the runtime.
-
-## Install with Obtainium
+## Install With Obtainium
 
 Use Obtainium to track releases from this repository and install updates directly:
 
 [![Add to Obtainium](https://img.shields.io/badge/Add%20to-Obtainium-3ddc84?style=for-the-badge&logo=android&logoColor=white)](https://apps.obtainium.imranr.dev/redirect.html?r=obtainium://add/https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management)
 
-## Layout (For Developers)
-- `apps/mobile`: Vue + Capacitor application shell.
-- `packages/node-client`: TypeScript wrapper around the Capacitor plugin surface.
-- `crates/reticulum_mobile`: Rust UniFFI wrapper crate.
-- `tools/codegen`: Scripts for UniFFI code generation.
+## For Maintainers
 
-## End-to-End Testing
+This repository contains:
 
-Playwright coverage runs the web build of `apps/mobile` and exercises the core operator flows in a browser.
+- `apps/mobile`: the Vue and Capacitor mobile app.
+- `packages/node-client`: the TypeScript bridge used by the app.
+- `crates/reticulum_mobile`: the Rust runtime and Reticulum/LXMF bridge.
+- `tools/codegen`: UniFFI binding generation scripts.
+- `e2e`: browser-based end-to-end tests.
 
-1. Install browser binaries once: `npx playwright install chromium`
-2. Run the suite from the repo root: `npm run test:e2e`
-3. Use `npm run test:e2e:headed` when you want an interactive browser session
+Useful checks from the repository root:
+
+```powershell
+npm --workspace apps/mobile run typecheck
+npm run web:build
+npm run test:e2e
+cargo test --manifest-path crates/reticulum_mobile/Cargo.toml
+```

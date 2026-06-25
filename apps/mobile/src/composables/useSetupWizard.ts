@@ -7,9 +7,25 @@ import { normalizeDisplayName } from "../utils/peers";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINTS, normalizeTcpCommunityClients } from "../utils/tcpCommunityServers";
 import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupWizardState";
 import {
+  DEFAULT_RNODE_SETTINGS,
+  RNODE_PROFILE_SPECS,
+  inferRnodeRegionFromCoordinates,
+  inferRnodeRegionFromTimezone,
+  normalizeRnodeSettings,
+  rnodeProfileSummary,
+} from "../utils/rnodeProfiles";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
+import { telemetryService } from "../services/telemetry";
+import {
   checkSetupPermissions,
   requestLocationPermission,
   requestNotificationPermission,
+  requestRnodeBluetoothPermission,
   type SetupPermissionSnapshot,
   type SetupPermissionState,
 } from "../services/setupPermissions";
@@ -18,6 +34,7 @@ export type SetupWizardStepId =
   | "welcome"
   | "callsign"
   | "tcp"
+  | "rnode"
   | "telemetry"
   | "permissions"
   | "sos"
@@ -32,12 +49,20 @@ export interface SetupWizardStep {
 const SETUP_STEPS: SetupWizardStep[] = [
   { id: "welcome", label: "Welcome", title: "Welcome to R.E.M." },
   { id: "callsign", label: "Call Sign", title: "Set your call sign" },
-  { id: "tcp", label: "TCP", title: "Choose TCP interfaces" },
-  { id: "telemetry", label: "Telemetry", title: "Telemetry sharing" },
   { id: "permissions", label: "Permits", title: "Android permissions" },
+  { id: "tcp", label: "TCP", title: "Choose TCP interfaces" },
+  { id: "rnode", label: "LoRa", title: "Configure RNode LoRa" },
+  { id: "telemetry", label: "Telemetry", title: "Telemetry sharing" },
   { id: "sos", label: "SOS", title: "SOS emergency access" },
   { id: "review", label: "Review", title: "Review setup" },
 ];
+
+const DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS = 360;
+
+export function normalizeWizardTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
+  const parsed = Math.trunc(Number(value));
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS;
+}
 
 export function normalizeWizardTcpEndpoint(value: string): string | undefined {
   const candidate = value.trim();
@@ -75,22 +100,34 @@ export function useSetupWizard() {
   const customTcpEndpoint = shallowRef("");
   const feedback = shallowRef("");
   const saving = shallowRef(false);
+  const rnodePairedLoading = shallowRef(false);
+  const rnodePairedDevices = shallowRef<RnodeBleDeviceRecord[]>([]);
+  const rnodeScanning = shallowRef(false);
+  const rnodeDevices = shallowRef<RnodeBleDeviceRecord[]>([]);
   const permissions = reactive<SetupPermissionSnapshot>({
     location: "prompt",
     notifications: "prompt",
+    bluetooth: "prompt",
   });
 
   const draft = reactive({
     displayName: nodeStore.settings.displayName,
     tcpClients: [...nodeStore.settings.tcpClients],
+    rnode: normalizeRnodeSettings(nodeStore.settings.rnode ?? DEFAULT_RNODE_SETTINGS),
     telemetryEnabled: nodeStore.settings.telemetry.enabled,
+    telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
     sosEnabled: sosStore.settings.enabled,
   });
 
   const steps = SETUP_STEPS;
   const activeStep = computed(() => steps[activeIndex.value]);
   const normalizedDisplayName = computed(() => normalizeDisplayName(draft.displayName) ?? "");
-  const normalizedTcpClients = computed(() => normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS));
+  const normalizedTcpClients = computed(() =>
+    normalizeTcpCommunityClients(draft.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
+  );
+  const normalizedTelemetryPublishIntervalSeconds = computed(() =>
+    normalizeWizardTelemetryPublishIntervalSeconds(draft.telemetryPublishIntervalSeconds),
+  );
   const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value));
   const sosFloatingButtonEnabled = computed(() => draft.sosEnabled || sosStore.settings.floatingButton);
 
@@ -110,6 +147,7 @@ export function useSetupWizard() {
     const snapshot = await checkSetupPermissions();
     permissions.location = snapshot.location;
     permissions.notifications = snapshot.notifications;
+    permissions.bluetooth = snapshot.bluetooth;
   }
 
   function setTcpEndpoint(endpoint: string, selected: boolean): void {
@@ -161,6 +199,109 @@ export function useSetupWizard() {
     permissions.notifications = await requestNotificationPermission();
   }
 
+  async function requestBluetooth(): Promise<void> {
+    permissions.bluetooth = await requestRnodeBluetoothPermission();
+  }
+
+  async function inferRnodeRegion(): Promise<void> {
+    try {
+      const fix = await telemetryService.getCurrentPosition();
+      draft.rnode.region = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
+    } catch {
+      draft.rnode.region = inferRnodeRegionFromTimezone();
+    }
+  }
+
+  function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+    const parts = [device.address];
+    if (typeof device.rssi === "number") {
+      parts.push(`RSSI ${device.rssi}`);
+    }
+    parts.push(device.paired ? "Paired" : "Not paired");
+    return parts.join(" | ");
+  }
+
+  async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+    if (permissions.bluetooth !== "granted") {
+      permissions.bluetooth = await requestRnodeBluetoothPermission();
+    }
+    if (permissions.bluetooth === "granted") {
+      return true;
+    }
+    feedback.value = "Bluetooth permission is required for RNode device selection.";
+    return false;
+  }
+
+  async function loadPairedRnodeDevices(): Promise<void> {
+    if (rnodePairedLoading.value) {
+      return;
+    }
+    if (!(await ensureBluetoothPermissionForRnode())) {
+      return;
+    }
+    rnodePairedLoading.value = true;
+    feedback.value = "";
+    try {
+      rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+      if (rnodePairedDevices.value.length === 0) {
+        feedback.value = "No paired Bluetooth devices found on this Android phone.";
+      }
+    } catch (error: unknown) {
+      feedback.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      rnodePairedLoading.value = false;
+    }
+  }
+
+  async function scanRnodeDevices(): Promise<void> {
+    if (rnodeScanning.value) {
+      return;
+    }
+    if (!(await ensureBluetoothPermissionForRnode())) {
+      return;
+    }
+    rnodeScanning.value = true;
+    feedback.value = "";
+    try {
+      rnodeDevices.value = await scanRnodeBleDevices();
+      if (rnodeDevices.value.length === 0) {
+        feedback.value = "No RNode BLE devices found. Pair the RNode in Android Bluetooth settings or enter its device ID manually.";
+      }
+    } catch (error: unknown) {
+      feedback.value = error instanceof Error ? error.message : String(error);
+    } finally {
+      rnodeScanning.value = false;
+    }
+  }
+
+  async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
+    const deviceId = device.id || device.address;
+    if (!device.paired) {
+      try {
+        const pairResult = await pairRnodeBleDevice(deviceId);
+        if (!pairResult.paired && !pairResult.bondingStarted) {
+          feedback.value = "Android did not start Bluetooth pairing for this RNode.";
+          return;
+        }
+        feedback.value = pairResult.paired
+          ? "RNode is already paired."
+          : "Bluetooth pairing started. Confirm the Android pairing prompt before finishing setup.";
+      } catch (error: unknown) {
+        feedback.value = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    } else {
+      feedback.value = "";
+    }
+    draft.rnode.enabled = true;
+    draft.rnode.peripheralId = deviceId;
+    draft.rnode.displayName = device.name || device.address;
+  }
+
+  function profileSummary(profile = draft.rnode.profile): string {
+    return rnodeProfileSummary(profile);
+  }
+
   function permissionLabel(value: SetupPermissionState): string {
     switch (value) {
       case "granted":
@@ -183,13 +324,15 @@ export function useSetupWizard() {
     saving.value = true;
     feedback.value = "";
     try {
-      nodeStore.updateSettings({
+      await nodeStore.updateSettings({
         displayName: normalizedDisplayName.value,
         tcpClients: normalizedTcpClients.value,
         telemetry: {
           ...nodeStore.settings.telemetry,
           enabled: draft.telemetryEnabled,
+          publishIntervalSeconds: normalizedTelemetryPublishIntervalSeconds.value,
         },
+        rnode: normalizeRnodeSettings(draft.rnode),
       });
       await sosStore.saveSettings({
         ...sosStore.settings,
@@ -217,11 +360,19 @@ export function useSetupWizard() {
     draft,
     feedback,
     normalizedDisplayName,
+    normalizedTelemetryPublishIntervalSeconds,
     normalizedTcpClients,
     open,
     permissions,
     permissionLabel,
+    profileSummary,
     refreshPermissions,
+    rnodeDeviceDetail,
+    rnodePairedDevices,
+    rnodePairedLoading,
+    rnodeDevices,
+    rnodeProfiles: RNODE_PROFILE_SPECS,
+    rnodeScanning,
     saving,
     selectedTcpEndpointSet,
     sosFloatingButtonEnabled,
@@ -233,6 +384,11 @@ export function useSetupWizard() {
     removeTcpEndpoint,
     requestLocation,
     requestNotifications,
+    requestBluetooth,
+    inferRnodeRegion,
+    loadPairedRnodeDevices,
+    scanRnodeDevices,
+    selectRnodeDevice,
     setTcpEndpoint,
   };
 }

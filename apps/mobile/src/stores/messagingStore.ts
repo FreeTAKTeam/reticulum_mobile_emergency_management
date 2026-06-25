@@ -80,25 +80,12 @@ function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
   return cache.__reticulumMessagingProjectionClient;
 }
 
-function displayNameForDestination(
-  destinationHex: string,
-  nodeStore: ReturnType<typeof useNodeStore>,
-): string {
-  const normalized = destinationHex.trim().toLowerCase();
-  const direct = nodeStore.discoveredByDestination[normalized];
-  if (direct) {
-    return direct.label ?? direct.announcedName ?? destinationHex;
-  }
-  const peer = Object.values(nodeStore.discoveredByDestination).find(
-    (candidate) =>
-      candidate.lxmfDestinationHex?.trim().toLowerCase() === normalized
-      || candidate.identityHex?.trim().toLowerCase() === normalized,
-  );
-  return peer?.label ?? peer?.announcedName ?? destinationHex;
-}
-
 function normalizeDestinationHex(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function isDestinationHash(value: string | undefined): boolean {
+  return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value.trim());
 }
 
 function peerForDestination(
@@ -116,6 +103,32 @@ function peerForDestination(
       || normalizeDestinationHex(candidate.identityHex ?? "") === normalized,
     )
     ?? null;
+}
+
+function peerDisplayName(
+  peer: ReturnType<typeof peerForDestination>,
+): string | undefined {
+  return peer?.announcedName?.trim() || peer?.label?.trim() || undefined;
+}
+
+function displayNameForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): string {
+  const normalized = normalizeDestinationHex(destinationHex);
+  const peer = peerForDestination(normalized, nodeStore);
+  const displayName = peerDisplayName(peer);
+  if (displayName) {
+    return displayName;
+  }
+  return nodeStore.savedByDestination[normalized]?.label?.trim() || destinationHex;
+}
+
+function remoteDestinationForMessage(message: MessageRecord): string {
+  if (message.direction === "Inbound") {
+    return normalizeDestinationHex(message.sourceHex ?? "") || normalizeDestinationHex(message.destinationHex);
+  }
+  return normalizeDestinationHex(message.destinationHex);
 }
 
 function knownConversationDestinations(
@@ -206,8 +219,11 @@ function mapConversationRecord(
   record: ConversationRecord,
   nodeStore: ReturnType<typeof useNodeStore>,
 ): ConversationListItem {
-  const displayName = record.peerDisplayName
-    ?? displayNameForDestination(record.peerDestinationHex, nodeStore);
+  const resolvedDisplayName = displayNameForDestination(record.peerDestinationHex, nodeStore);
+  const nativeDisplayName = record.peerDisplayName?.trim();
+  const displayName = nativeDisplayName && !isDestinationHash(nativeDisplayName)
+    ? nativeDisplayName
+    : resolvedDisplayName;
   return {
     conversationId: record.conversationId,
     destinationHex: record.peerDestinationHex,
@@ -225,6 +241,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   const selectedConversationId = ref<string>("");
   const selectedTargetMessageId = ref<string>("");
   const pendingConversation = ref<ConversationListItem | null>(null);
+  const visualMockDeletedConversationIds = ref<Set<string>>(new Set());
   const initialized = ref(false);
   const hydrated = ref(false);
   const cleanups: Array<() => void> = [];
@@ -258,18 +275,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     };
   }
 
-  function conversationSetForRefresh(conversationId: string): Set<string> {
-    const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId) {
-      return new Set();
-    }
-    return resolvedConversationIds(normalizedConversationId);
-  }
-
-  function mergeFetchedMessages(
-    requestedConversationId: string,
-    items: MessageRecord[],
-  ): void {
+  function mergeFetchedMessages(items: MessageRecord[]): void {
     const fetchedMessages = items.map((message) => cloneMessage(message));
 
     const next: StoredMessages = {};
@@ -519,7 +525,7 @@ export const useMessagingStore = defineStore("messaging", () => {
           }
         }
         const items = await client.listMessages(resolvedConversationId || undefined);
-        mergeFetchedMessages(resolvedConversationId, items);
+        mergeFetchedMessages(items);
         nextConversationId = queuedMessagesConversationId ?? "";
       } while (nextConversationId);
     })();
@@ -548,7 +554,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     const client = getProjectionClient(nodeStore.settings.clientMode);
     await refreshConversations();
     const items = await client.listMessages(undefined);
-    mergeFetchedMessages("", items);
+    mergeFetchedMessages(items);
     primeOperationalNotificationScope(
       "chat",
       items
@@ -673,7 +679,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
-      method: "Direct",
+      method: "Opportunistic",
       state: "Queued",
       detail: undefined,
       sentAtMs: now,
@@ -694,7 +700,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Direct",
+        method: "Opportunistic",
         state: "Queued",
         detail: undefined,
         sentAtMs: now,
@@ -712,7 +718,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Direct",
+        method: "Opportunistic",
         state: "Failed",
         detail: error instanceof Error ? error.message : "Send failed",
         sentAtMs: now,
@@ -742,6 +748,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
       await client.deleteConversation(normalizedConversationId);
     }
+    markVisualMockConversationDeleted(normalizedConversationId, conversationIds, knownDestinations);
 
     const nextMessages: StoredMessages = {};
     for (const message of Object.values(byMessageId.value)) {
@@ -757,6 +764,13 @@ export const useMessagingStore = defineStore("messaging", () => {
       }
     }
     byMessageId.value = nextMessages;
+    nativeConversations.value = nativeConversations.value.filter((record) => {
+      const conversationRecordId = normalizeDestinationHex(record.conversationId);
+      const peerDestination = normalizeDestinationHex(record.peerDestinationHex);
+      return !conversationIds.has(record.conversationId)
+        && !conversationIds.has(conversationRecordId)
+        && !knownDestinations.has(peerDestination);
+    });
 
     if (pendingConversation.value?.conversationId === normalizedConversationId) {
       pendingConversation.value = null;
@@ -834,6 +848,279 @@ export const useMessagingStore = defineStore("messaging", () => {
     selectedConversationId.value = nextPendingConversation.conversationId;
   }
 
+  function markVisualMockConversationDeleted(
+    conversationId: string,
+    conversationIds: Set<string>,
+    knownDestinations: Set<string>,
+  ): void {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    const next = new Set(visualMockDeletedConversationIds.value);
+    for (const id of conversationIds) {
+      next.add(normalizeDestinationHex(id));
+    }
+    for (const destination of knownDestinations) {
+      next.add(normalizeDestinationHex(destination));
+    }
+    next.add(normalizeDestinationHex(conversationId));
+    visualMockDeletedConversationIds.value = next;
+  }
+
+  function isVisualMockConversationDeleted(value: string | undefined): boolean {
+    const normalized = normalizeDestinationHex(value ?? "");
+    return Boolean(normalized && visualMockDeletedConversationIds.value.has(normalized));
+  }
+
+  function messageBelongsToDeletedVisualMockConversation(message: MessageRecord): boolean {
+    return isVisualMockConversationDeleted(message.conversationId)
+      || isVisualMockConversationDeleted(message.destinationHex)
+      || isVisualMockConversationDeleted(message.sourceHex);
+  }
+
+  function applyVisualMockChatData(): void {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    const now = Date.now();
+    const localLxmfDestination = nodeStore.status.lxmfDestinationHex || "00000000000000000000000000000001";
+    const peerRecords = [
+      {
+        destination: "a13f6e2b94cd08ff31a92765db4e10c2",
+        identityHex: "fdd5d08e476a4602bc51d0f37d72dd21",
+        lxmfDestinationHex: "3ac7e918b5f1407bb759b0f3f4d41c9a",
+        label: "Field Team Alpha",
+        announcedName: "ALPHA-1",
+        activeLink: true,
+      },
+      {
+        destination: "c974de6aa1f8417a8c2e0bb5332ac01f",
+        identityHex: "31397ec9c46d4caea5739f50821cecd7",
+        lxmfDestinationHex: "18a738f903344a11a8c56695454da331",
+        label: "North checkpoint",
+        announcedName: "NORTH-CP",
+        activeLink: false,
+      },
+      {
+        destination: "f08ad9c21be64737a5bb68fd4434e912",
+        identityHex: "e1b68f14e71d4cde8629ffbc5471459b",
+        lxmfDestinationHex: "9b8fe7dc314446438d4ceab380208f6a",
+        label: "Medical triage",
+        announcedName: "TRIAGE-2",
+        activeLink: true,
+      },
+    ];
+
+    for (const [index, peer] of peerRecords.entries()) {
+      const lastSeenAt = now - (index + 1) * 70_000;
+      nodeStore.discoveredByDestination[peer.destination] = {
+        destination: peer.destination,
+        identityHex: peer.identityHex,
+        lxmfDestinationHex: peer.lxmfDestinationHex,
+        announceLastSeenAt: lastSeenAt,
+        lxmfLastSeenAt: lastSeenAt,
+        label: peer.label,
+        announcedName: peer.announcedName,
+        appData: "R3AKT,EmergencyMessages,Telemetry,LXMF",
+        hops: index + 1,
+        interfaceHex: `mockchat000000000${index}`,
+        lastSeenAt,
+        sources: ["announce", "import"],
+        state: peer.activeLink ? "connected" : "disconnected",
+        saved: true,
+        stale: false,
+        activeLink: peer.activeLink,
+      };
+      nodeStore.savedByDestination[peer.destination] = {
+        destination: peer.destination,
+        label: peer.label,
+        savedAt: now - (index + 2) * 60 * 60_000,
+      };
+    }
+
+    const conversations: ConversationRecord[] = [
+      {
+        conversationId: peerRecords[0].lxmfDestinationHex,
+        peerDestinationHex: peerRecords[0].lxmfDestinationHex,
+        peerDisplayName: "ALPHA-1",
+        lastMessagePreview: "Copy. Two operators moving to the north entrance now.",
+        lastMessageAtMs: now - 45_000,
+        unreadCount: 0,
+        lastMessageState: "Delivered",
+      },
+      {
+        conversationId: peerRecords[2].lxmfDestinationHex,
+        peerDestinationHex: peerRecords[2].lxmfDestinationHex,
+        peerDisplayName: "TRIAGE-2",
+        lastMessagePreview: "Emergency: patient transport requested at triage tent.",
+        lastMessageAtMs: now - 4 * 60_000,
+        unreadCount: 1,
+        lastMessageState: "Received",
+      },
+      {
+        conversationId: peerRecords[1].lxmfDestinationHex,
+        peerDestinationHex: peerRecords[1].lxmfDestinationHex,
+        peerDisplayName: "NORTH-CP",
+        lastMessagePreview: "Route update queued through propagation.",
+        lastMessageAtMs: now - 18 * 60_000,
+        unreadCount: 0,
+        lastMessageState: "SentToPropagation",
+      },
+    ];
+
+    const composedMockMessages = Object.values(byMessageId.value)
+      .filter((message) => message.messageIdHex.startsWith("900000000000000000000000"))
+      .filter((message) => !messageBelongsToDeletedVisualMockConversation(message))
+      .map((message) => cloneMessage(message));
+    const messages: MessageRecord[] = [
+      {
+        messageIdHex: "10000000000000000000000000000001",
+        conversationId: peerRecords[0].lxmfDestinationHex,
+        direction: "Inbound",
+        destinationHex: peerRecords[0].lxmfDestinationHex,
+        sourceHex: peerRecords[0].lxmfDestinationHex,
+        title: "Status check",
+        bodyUtf8: "Alpha team is staged at checkpoint A. Radio relay is stable.",
+        method: "Direct",
+        state: "Received",
+        receivedAtMs: now - 9 * 60_000,
+        updatedAtMs: now - 9 * 60_000,
+      },
+      {
+        messageIdHex: "10000000000000000000000000000002",
+        conversationId: peerRecords[0].lxmfDestinationHex,
+        direction: "Outbound",
+        destinationHex: peerRecords[0].lxmfDestinationHex,
+        sourceHex: localLxmfDestination,
+        bodyUtf8: "Send two operators to the north entrance and confirm when they are in position.",
+        method: "Direct",
+        state: "Delivered",
+        sentAtMs: now - 3 * 60_000,
+        updatedAtMs: now - 2 * 60_000,
+      },
+      {
+        messageIdHex: "10000000000000000000000000000003",
+        conversationId: peerRecords[0].lxmfDestinationHex,
+        direction: "Inbound",
+        destinationHex: peerRecords[0].lxmfDestinationHex,
+        sourceHex: peerRecords[0].lxmfDestinationHex,
+        bodyUtf8: "Copy. Two operators moving to the north entrance now.",
+        method: "Direct",
+        state: "Received",
+        receivedAtMs: now - 45_000,
+        updatedAtMs: now - 45_000,
+      },
+      {
+        messageIdHex: "20000000000000000000000000000001",
+        conversationId: peerRecords[2].lxmfDestinationHex,
+        direction: "Inbound",
+        destinationHex: peerRecords[2].lxmfDestinationHex,
+        sourceHex: peerRecords[2].lxmfDestinationHex,
+        title: "Medical",
+        bodyUtf8: "Emergency: patient transport requested at triage tent.\nGPS: 46.81,-71.20",
+        method: "Direct",
+        state: "Received",
+        detail: "SOS priority message",
+        receivedAtMs: now - 4 * 60_000,
+        updatedAtMs: now - 4 * 60_000,
+      },
+      {
+        messageIdHex: "20000000000000000000000000000002",
+        conversationId: peerRecords[2].lxmfDestinationHex,
+        direction: "Outbound",
+        destinationHex: peerRecords[2].lxmfDestinationHex,
+        sourceHex: localLxmfDestination,
+        bodyUtf8: "Transport team notified. Keep the patient at the marked triage point.",
+        method: "Direct",
+        state: "SentDirect",
+        sentAtMs: now - 2 * 60_000,
+        updatedAtMs: now - 2 * 60_000,
+      },
+      {
+        messageIdHex: "30000000000000000000000000000001",
+        conversationId: peerRecords[1].lxmfDestinationHex,
+        direction: "Inbound",
+        destinationHex: peerRecords[1].lxmfDestinationHex,
+        sourceHex: peerRecords[1].lxmfDestinationHex,
+        bodyUtf8: "North checkpoint is intermittent. Propagation relay is preferred until the link is stable.",
+        method: "Propagated",
+        state: "Received",
+        receivedAtMs: now - 21 * 60_000,
+        updatedAtMs: now - 21 * 60_000,
+      },
+      {
+        messageIdHex: "30000000000000000000000000000002",
+        conversationId: peerRecords[1].lxmfDestinationHex,
+        direction: "Outbound",
+        destinationHex: peerRecords[1].lxmfDestinationHex,
+        sourceHex: localLxmfDestination,
+        title: "Route update",
+        bodyUtf8: "Route update queued through propagation. Confirm when NORTH-CP comes back online.",
+        method: "Propagated",
+        state: "SentToPropagation",
+        detail: "Using propagation relay fallback",
+        sentAtMs: now - 18 * 60_000,
+        updatedAtMs: now - 17 * 60_000,
+      },
+      ...composedMockMessages,
+    ];
+
+    const visibleConversations = conversations.filter((conversation) =>
+      !isVisualMockConversationDeleted(conversation.conversationId)
+        && !isVisualMockConversationDeleted(conversation.peerDestinationHex),
+    );
+    const visibleMessages = messages.filter((message) =>
+      !messageBelongsToDeletedVisualMockConversation(message),
+    );
+
+    nativeConversations.value = visibleConversations;
+    byMessageId.value = Object.fromEntries(visibleMessages.map((message) => [message.messageIdHex, message]));
+    pendingConversation.value = null;
+    if (
+      !selectedConversationId.value
+      || !visibleConversations.some((item) => item.conversationId === selectedConversationId.value)
+    ) {
+      selectedConversationId.value = visibleConversations[0]?.conversationId ?? "";
+    }
+    selectedTargetMessageId.value = isVisualMockConversationDeleted(peerRecords[2].lxmfDestinationHex)
+      ? ""
+      : "20000000000000000000000000000001";
+    hydrated.value = true;
+  }
+
+  function appendVisualMockOutboundMessage(destinationHex: string, bodyUtf8: string): void {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+    const normalizedDestination = normalizeDestinationHex(destinationHex);
+    const conversation = conversations.value.find((item) =>
+      normalizeDestinationHex(item.destinationHex) === normalizedDestination
+      || normalizeDestinationHex(item.conversationId) === normalizedDestination,
+    );
+    const conversationId = conversation?.conversationId ?? normalizedDestination;
+    const now = Date.now();
+    const message: MessageRecord = {
+      messageIdHex: `900000000000000000000000${now.toString(16).slice(-8)}`,
+      conversationId,
+      direction: "Outbound",
+      destinationHex: conversation?.destinationHex ?? normalizedDestination,
+      sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+      bodyUtf8,
+      method: "Opportunistic",
+      state: "Queued",
+      sentAtMs: now,
+      updatedAtMs: now,
+    };
+    upsertMessage(message);
+    const nativeConversation = nativeConversations.value.find((item) => item.conversationId === conversationId);
+    if (nativeConversation) {
+      nativeConversation.lastMessagePreview = bodyUtf8.slice(0, 80) || "(empty message)";
+      nativeConversation.lastMessageAtMs = now;
+      nativeConversation.lastMessageState = "Queued";
+    }
+  }
+
   const webMessages = computed(() =>
     Object.values(byMessageId.value)
       .filter((message) => safeMessageBody(message).length > 0)
@@ -870,21 +1157,33 @@ export const useMessagingStore = defineStore("messaging", () => {
 
     for (const message of webMessages.value.filter((candidate) => candidate.direction === "Inbound")) {
       const updatedAtMs = message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs;
+      const peerDestinationHex = remoteDestinationForMessage(message);
       const existing = byConversation.get(message.conversationId);
       if (existing && existing.updatedAtMs > updatedAtMs) {
         continue;
       }
       byConversation.set(message.conversationId, {
         conversationId: message.conversationId,
-        destinationHex: message.destinationHex,
-        displayName: displayNameForDestination(message.destinationHex, nodeStore),
+        destinationHex: peerDestinationHex,
+        displayName: displayNameForDestination(peerDestinationHex, nodeStore),
         preview: safeMessageBody(message).slice(0, 80) || "(empty message)",
         updatedAtMs,
         state: message.state,
       });
     }
 
-    return [...byConversation.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    const nextConversations = [...byConversation.values()].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    const currentPending = pendingConversation.value;
+    if (
+      currentPending
+      && !nextConversations.some((conversation) =>
+        normalizeDestinationHex(conversation.destinationHex)
+          === normalizeDestinationHex(currentPending.destinationHex),
+      )
+    ) {
+      return [currentPending, ...nextConversations];
+    }
+    return nextConversations;
   });
 
   const selectedConversation = computed(() =>
@@ -943,6 +1242,8 @@ export const useMessagingStore = defineStore("messaging", () => {
     openConversationTarget,
     hydrateStartupHistory,
     ensureConversationForDestination,
+    applyVisualMockChatData,
+    appendVisualMockOutboundMessage,
     sendMessage,
     deleteConversation,
     upsertWebMessage,

@@ -856,6 +856,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -918,6 +920,8 @@ internal interface UniffiLib : Library {
     fun uniffi_reticulum_mobile_fn_method_node_get_app_settings(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_checklist(`ptr`: Pointer,`checklistUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_reticulum_mobile_fn_method_node_get_eam_readiness_summary(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_reticulum_mobile_fn_method_node_get_eam_team_summary(`ptr`: Pointer,`teamUid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -1171,6 +1175,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_checklist(
     ): Short
+    fun uniffi_reticulum_mobile_checksum_method_node_get_eam_readiness_summary(
+    ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_eam_team_summary(
     ): Short
     fun uniffi_reticulum_mobile_checksum_method_node_get_eams(
@@ -1344,6 +1350,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_checklist() != 43153.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_reticulum_mobile_checksum_method_node_get_eam_readiness_summary() != 46786.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_reticulum_mobile_checksum_method_node_get_eam_team_summary() != 57243.toShort()) {
@@ -2186,6 +2195,8 @@ public interface NodeInterface {
 
     fun `getChecklist`(`checklistUid`: kotlin.String): ChecklistRecord?
 
+    fun `getEamReadinessSummary`(): EamReadinessSummaryRecord
+
     fun `getEamTeamSummary`(`teamUid`: kotlin.String): EamTeamSummaryRecord?
 
     fun `getEams`(): List<EamProjectionRecord>
@@ -2556,6 +2567,19 @@ open class Node: Disposable, AutoCloseable, NodeInterface {
     uniffiRustCallWithError(NodeException) { _status ->
     UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_checklist(
         it, FfiConverterString.lower(`checklistUid`),_status)
+}
+    }
+    )
+    }
+
+
+
+    @Throws(NodeException::class)override fun `getEamReadinessSummary`(): EamReadinessSummaryRecord {
+            return FfiConverterTypeEamReadinessSummaryRecord.lift(
+    callWithPointer {
+    uniffiRustCallWithError(NodeException) { _status ->
+    UniffiLib.INSTANCE.uniffi_reticulum_mobile_fn_method_node_get_eam_readiness_summary(
+        it, _status)
 }
     }
     )
@@ -3303,7 +3327,9 @@ data class AppSettingsRecord (
     var `announceIntervalSeconds`: kotlin.UInt,
     var `telemetry`: TelemetrySettingsRecord,
     var `hub`: HubSettingsRecord,
-    var `checklists`: ChecklistSettingsRecord
+    var `checklists`: ChecklistSettingsRecord,
+    var `pluginTrust`: PluginTrustSettingsRecord,
+    var `rnode`: RnodeSettingsRecord
 ) {
 
     companion object
@@ -3324,6 +3350,8 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterTypeTelemetrySettingsRecord.read(buf),
             FfiConverterTypeHubSettingsRecord.read(buf),
             FfiConverterTypeChecklistSettingsRecord.read(buf),
+            FfiConverterTypePluginTrustSettingsRecord.read(buf),
+            FfiConverterTypeRnodeSettingsRecord.read(buf),
         )
     }
 
@@ -3336,7 +3364,9 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterUInt.allocationSize(value.`announceIntervalSeconds`) +
             FfiConverterTypeTelemetrySettingsRecord.allocationSize(value.`telemetry`) +
             FfiConverterTypeHubSettingsRecord.allocationSize(value.`hub`) +
-            FfiConverterTypeChecklistSettingsRecord.allocationSize(value.`checklists`)
+            FfiConverterTypeChecklistSettingsRecord.allocationSize(value.`checklists`) +
+            FfiConverterTypePluginTrustSettingsRecord.allocationSize(value.`pluginTrust`) +
+            FfiConverterTypeRnodeSettingsRecord.allocationSize(value.`rnode`)
     )
 
     override fun write(value: AppSettingsRecord, buf: ByteBuffer) {
@@ -3349,6 +3379,8 @@ public object FfiConverterTypeAppSettingsRecord: FfiConverterRustBuffer<AppSetti
             FfiConverterTypeTelemetrySettingsRecord.write(value.`telemetry`, buf)
             FfiConverterTypeHubSettingsRecord.write(value.`hub`, buf)
             FfiConverterTypeChecklistSettingsRecord.write(value.`checklists`, buf)
+            FfiConverterTypePluginTrustSettingsRecord.write(value.`pluginTrust`, buf)
+            FfiConverterTypeRnodeSettingsRecord.write(value.`rnode`, buf)
     }
 }
 
@@ -4374,6 +4406,130 @@ public object FfiConverterTypeEamProjectionRecord: FfiConverterRustBuffer<EamPro
 
 
 
+data class EamReadinessMessageRecord (
+    var `callsign`: kotlin.String,
+    var `overallScore`: kotlin.UInt,
+    var `overallBand`: kotlin.String,
+    var `overallRingColor`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEamReadinessMessageRecord: FfiConverterRustBuffer<EamReadinessMessageRecord> {
+    override fun read(buf: ByteBuffer): EamReadinessMessageRecord {
+        return EamReadinessMessageRecord(
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EamReadinessMessageRecord) = (
+            FfiConverterString.allocationSize(value.`callsign`) +
+            FfiConverterUInt.allocationSize(value.`overallScore`) +
+            FfiConverterString.allocationSize(value.`overallBand`) +
+            FfiConverterString.allocationSize(value.`overallRingColor`)
+    )
+
+    override fun write(value: EamReadinessMessageRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`callsign`, buf)
+            FfiConverterUInt.write(value.`overallScore`, buf)
+            FfiConverterString.write(value.`overallBand`, buf)
+            FfiConverterString.write(value.`overallRingColor`, buf)
+    }
+}
+
+
+
+data class EamReadinessStatusMetricRecord (
+    var `field`: kotlin.String,
+    var `label`: kotlin.String,
+    var `score`: kotlin.UInt,
+    var `band`: kotlin.String,
+    var `ringColor`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEamReadinessStatusMetricRecord: FfiConverterRustBuffer<EamReadinessStatusMetricRecord> {
+    override fun read(buf: ByteBuffer): EamReadinessStatusMetricRecord {
+        return EamReadinessStatusMetricRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EamReadinessStatusMetricRecord) = (
+            FfiConverterString.allocationSize(value.`field`) +
+            FfiConverterString.allocationSize(value.`label`) +
+            FfiConverterUInt.allocationSize(value.`score`) +
+            FfiConverterString.allocationSize(value.`band`) +
+            FfiConverterString.allocationSize(value.`ringColor`)
+    )
+
+    override fun write(value: EamReadinessStatusMetricRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`field`, buf)
+            FfiConverterString.write(value.`label`, buf)
+            FfiConverterUInt.write(value.`score`, buf)
+            FfiConverterString.write(value.`band`, buf)
+            FfiConverterString.write(value.`ringColor`, buf)
+    }
+}
+
+
+
+data class EamReadinessSummaryRecord (
+    var `activeTotal`: kotlin.UInt,
+    var `updatedAtMs`: kotlin.ULong,
+    var `statusMetrics`: List<EamReadinessStatusMetricRecord>,
+    var `messages`: List<EamReadinessMessageRecord>
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEamReadinessSummaryRecord: FfiConverterRustBuffer<EamReadinessSummaryRecord> {
+    override fun read(buf: ByteBuffer): EamReadinessSummaryRecord {
+        return EamReadinessSummaryRecord(
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterSequenceTypeEamReadinessStatusMetricRecord.read(buf),
+            FfiConverterSequenceTypeEamReadinessMessageRecord.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EamReadinessSummaryRecord) = (
+            FfiConverterUInt.allocationSize(value.`activeTotal`) +
+            FfiConverterULong.allocationSize(value.`updatedAtMs`) +
+            FfiConverterSequenceTypeEamReadinessStatusMetricRecord.allocationSize(value.`statusMetrics`) +
+            FfiConverterSequenceTypeEamReadinessMessageRecord.allocationSize(value.`messages`)
+    )
+
+    override fun write(value: EamReadinessSummaryRecord, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`activeTotal`, buf)
+            FfiConverterULong.write(value.`updatedAtMs`, buf)
+            FfiConverterSequenceTypeEamReadinessStatusMetricRecord.write(value.`statusMetrics`, buf)
+            FfiConverterSequenceTypeEamReadinessMessageRecord.write(value.`messages`, buf)
+    }
+}
+
+
+
 data class EamSourceRecord (
     var `rnsIdentity`: kotlin.String,
     var `displayName`: kotlin.String?
@@ -4909,6 +5065,7 @@ public object FfiConverterTypeMessageRecord: FfiConverterRustBuffer<MessageRecor
 data class NodeConfig (
     var `name`: kotlin.String,
     var `storageDir`: kotlin.String?,
+    var `pluginTrustedPublishers`: List<TrustedPluginPublisherRecord>,
     var `tcpClients`: List<kotlin.String>,
     var `broadcast`: kotlin.Boolean,
     var `announceIntervalSeconds`: kotlin.UInt,
@@ -4918,7 +5075,8 @@ data class NodeConfig (
     var `hubIdentityHash`: kotlin.String?,
     var `hubApiBaseUrl`: kotlin.String?,
     var `hubApiKey`: kotlin.String?,
-    var `hubRefreshIntervalSeconds`: kotlin.UInt
+    var `hubRefreshIntervalSeconds`: kotlin.UInt,
+    var `rnode`: RnodeSettingsRecord
 ) {
 
     companion object
@@ -4932,6 +5090,7 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
         return NodeConfig(
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.read(buf),
             FfiConverterSequenceString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
@@ -4942,12 +5101,14 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterTypeRnodeSettingsRecord.read(buf),
         )
     }
 
     override fun allocationSize(value: NodeConfig) = (
             FfiConverterString.allocationSize(value.`name`) +
             FfiConverterOptionalString.allocationSize(value.`storageDir`) +
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.allocationSize(value.`pluginTrustedPublishers`) +
             FfiConverterSequenceString.allocationSize(value.`tcpClients`) +
             FfiConverterBoolean.allocationSize(value.`broadcast`) +
             FfiConverterUInt.allocationSize(value.`announceIntervalSeconds`) +
@@ -4957,12 +5118,14 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.allocationSize(value.`hubIdentityHash`) +
             FfiConverterOptionalString.allocationSize(value.`hubApiBaseUrl`) +
             FfiConverterOptionalString.allocationSize(value.`hubApiKey`) +
-            FfiConverterUInt.allocationSize(value.`hubRefreshIntervalSeconds`)
+            FfiConverterUInt.allocationSize(value.`hubRefreshIntervalSeconds`) +
+            FfiConverterTypeRnodeSettingsRecord.allocationSize(value.`rnode`)
     )
 
     override fun write(value: NodeConfig, buf: ByteBuffer) {
             FfiConverterString.write(value.`name`, buf)
             FfiConverterOptionalString.write(value.`storageDir`, buf)
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.write(value.`pluginTrustedPublishers`, buf)
             FfiConverterSequenceString.write(value.`tcpClients`, buf)
             FfiConverterBoolean.write(value.`broadcast`, buf)
             FfiConverterUInt.write(value.`announceIntervalSeconds`, buf)
@@ -4973,6 +5136,7 @@ public object FfiConverterTypeNodeConfig: FfiConverterRustBuffer<NodeConfig> {
             FfiConverterOptionalString.write(value.`hubApiBaseUrl`, buf)
             FfiConverterOptionalString.write(value.`hubApiKey`, buf)
             FfiConverterUInt.write(value.`hubRefreshIntervalSeconds`, buf)
+            FfiConverterTypeRnodeSettingsRecord.write(value.`rnode`, buf)
     }
 }
 
@@ -5294,6 +5458,34 @@ public object FfiConverterTypePeerRecord: FfiConverterRustBuffer<PeerRecord> {
 
 
 
+data class PluginTrustSettingsRecord (
+    var `trustedPublishers`: List<TrustedPluginPublisherRecord>
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePluginTrustSettingsRecord: FfiConverterRustBuffer<PluginTrustSettingsRecord> {
+    override fun read(buf: ByteBuffer): PluginTrustSettingsRecord {
+        return PluginTrustSettingsRecord(
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PluginTrustSettingsRecord) = (
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.allocationSize(value.`trustedPublishers`)
+    )
+
+    override fun write(value: PluginTrustSettingsRecord, buf: ByteBuffer) {
+            FfiConverterSequenceTypeTrustedPluginPublisherRecord.write(value.`trustedPublishers`, buf)
+    }
+}
+
+
+
 data class ProjectionInvalidation (
     var `scope`: ProjectionScope,
     var `key`: kotlin.String?,
@@ -5333,6 +5525,50 @@ public object FfiConverterTypeProjectionInvalidation: FfiConverterRustBuffer<Pro
             FfiConverterULong.write(value.`revision`, buf)
             FfiConverterULong.write(value.`updatedAtMs`, buf)
             FfiConverterOptionalString.write(value.`reason`, buf)
+    }
+}
+
+
+
+data class RnodeSettingsRecord (
+    var `enabled`: kotlin.Boolean,
+    var `peripheralId`: kotlin.String,
+    var `displayName`: kotlin.String,
+    var `region`: kotlin.String,
+    var `profile`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRnodeSettingsRecord: FfiConverterRustBuffer<RnodeSettingsRecord> {
+    override fun read(buf: ByteBuffer): RnodeSettingsRecord {
+        return RnodeSettingsRecord(
+            FfiConverterBoolean.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RnodeSettingsRecord) = (
+            FfiConverterBoolean.allocationSize(value.`enabled`) +
+            FfiConverterString.allocationSize(value.`peripheralId`) +
+            FfiConverterString.allocationSize(value.`displayName`) +
+            FfiConverterString.allocationSize(value.`region`) +
+            FfiConverterString.allocationSize(value.`profile`)
+    )
+
+    override fun write(value: RnodeSettingsRecord, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`enabled`, buf)
+            FfiConverterString.write(value.`peripheralId`, buf)
+            FfiConverterString.write(value.`displayName`, buf)
+            FfiConverterString.write(value.`region`, buf)
+            FfiConverterString.write(value.`profile`, buf)
     }
 }
 
@@ -5965,6 +6201,38 @@ public object FfiConverterTypeTelemetrySettingsRecord: FfiConverterRustBuffer<Te
             FfiConverterOptionalDouble.write(value.`accuracyThresholdMeters`, buf)
             FfiConverterUInt.write(value.`staleAfterMinutes`, buf)
             FfiConverterUInt.write(value.`expireAfterMinutes`, buf)
+    }
+}
+
+
+
+data class TrustedPluginPublisherRecord (
+    var `publisher`: kotlin.String,
+    var `publicKeyBase64`: kotlin.String
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTrustedPluginPublisherRecord: FfiConverterRustBuffer<TrustedPluginPublisherRecord> {
+    override fun read(buf: ByteBuffer): TrustedPluginPublisherRecord {
+        return TrustedPluginPublisherRecord(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TrustedPluginPublisherRecord) = (
+            FfiConverterString.allocationSize(value.`publisher`) +
+            FfiConverterString.allocationSize(value.`publicKeyBase64`)
+    )
+
+    override fun write(value: TrustedPluginPublisherRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`publisher`, buf)
+            FfiConverterString.write(value.`publicKeyBase64`, buf)
     }
 }
 
@@ -8234,6 +8502,62 @@ public object FfiConverterSequenceTypeEamProjectionRecord: FfiConverterRustBuffe
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeEamReadinessMessageRecord: FfiConverterRustBuffer<List<EamReadinessMessageRecord>> {
+    override fun read(buf: ByteBuffer): List<EamReadinessMessageRecord> {
+        val len = buf.getInt()
+        return List<EamReadinessMessageRecord>(len) {
+            FfiConverterTypeEamReadinessMessageRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<EamReadinessMessageRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeEamReadinessMessageRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<EamReadinessMessageRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeEamReadinessMessageRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeEamReadinessStatusMetricRecord: FfiConverterRustBuffer<List<EamReadinessStatusMetricRecord>> {
+    override fun read(buf: ByteBuffer): List<EamReadinessStatusMetricRecord> {
+        val len = buf.getInt()
+        return List<EamReadinessStatusMetricRecord>(len) {
+            FfiConverterTypeEamReadinessStatusMetricRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<EamReadinessStatusMetricRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeEamReadinessStatusMetricRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<EamReadinessStatusMetricRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeEamReadinessStatusMetricRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeEventProjectionRecord: FfiConverterRustBuffer<List<EventProjectionRecord>> {
     override fun read(buf: ByteBuffer): List<EventProjectionRecord> {
         val len = buf.getInt()
@@ -8476,6 +8800,34 @@ public object FfiConverterSequenceTypeTelemetryPositionRecord: FfiConverterRustB
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeTelemetryPositionRecord.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeTrustedPluginPublisherRecord: FfiConverterRustBuffer<List<TrustedPluginPublisherRecord>> {
+    override fun read(buf: ByteBuffer): List<TrustedPluginPublisherRecord> {
+        val len = buf.getInt()
+        return List<TrustedPluginPublisherRecord>(len) {
+            FfiConverterTypeTrustedPluginPublisherRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<TrustedPluginPublisherRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeTrustedPluginPublisherRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<TrustedPluginPublisherRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeTrustedPluginPublisherRecord.write(it, buf)
         }
     }
 } fun `healthcheck`(): kotlin.String {

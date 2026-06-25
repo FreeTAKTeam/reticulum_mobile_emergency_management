@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -22,14 +24,30 @@ use crate::types::{
     HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
-    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord, TrustedPluginPublisherRecord,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
+    TrustedPluginPublisherRecord,
 };
 
 const RESULT_OK: jint = 0;
 const RESULT_ERR: jint = 1;
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(vm: jni19::JavaVM, _reserved: *mut c_void) -> jint {
+    match vm.get_env() {
+        Ok(env) => match btleplug::platform::init(&env) {
+            Ok(()) => log::info!("btleplug Android BLE backend initialized"),
+            Err(error) => {
+                log::error!("btleplug Android BLE backend initialization failed: {error}")
+            }
+        },
+        Err(error) => log::error!("btleplug Android BLE backend missing JNI env: {error}"),
+    }
+    jni19::sys::JNI_VERSION_1_6
+}
 
 #[derive(Default)]
 struct BridgeState {
@@ -71,6 +89,17 @@ struct NodeConfigInput {
     hub_api_base_url: Option<String>,
     hub_api_key: Option<String>,
     hub_refresh_interval_seconds: Option<u32>,
+    rnode: Option<RnodeSettingsInput>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RnodeSettingsInput {
+    enabled: Option<bool>,
+    peripheral_id: Option<String>,
+    display_name: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +263,8 @@ struct AppSettingsInput {
     checklists: ChecklistSettingsInput,
     #[serde(default)]
     plugin_trust: PluginTrustSettingsInput,
+    #[serde(default)]
+    rnode: RnodeSettingsInput,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -677,6 +708,37 @@ fn parse_log_level(value: Option<&str>) -> LogLevel {
     }
 }
 
+fn normalize_rnode_region(value: Option<String>) -> String {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "EU868" => "EU868".to_string(),
+        _ => "US915".to_string(),
+    }
+}
+
+fn normalize_rnode_profile(value: Option<String>) -> String {
+    match value.unwrap_or_default().trim() {
+        "REM-MF-URBAN-v1" => "REM-MF-URBAN-v1".to_string(),
+        "REM-LM-EXTREME-v1" => "REM-LM-EXTREME-v1".to_string(),
+        _ => "REM-LF-RURAL-v1".to_string(),
+    }
+}
+
+fn to_rnode_settings_record(input: Option<RnodeSettingsInput>) -> RnodeSettingsRecord {
+    let input = input.unwrap_or_default();
+    RnodeSettingsRecord {
+        enabled: input.enabled.unwrap_or(false),
+        peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
+        display_name: input.display_name.unwrap_or_default().trim().to_string(),
+        region: normalize_rnode_region(input.region),
+        profile: normalize_rnode_profile(input.profile),
+    }
+}
+
 fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
     NodeConfig {
         name: input
@@ -736,6 +798,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             }
         }),
         hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
+        rnode: to_rnode_settings_record(input.rnode),
     }
 }
 
@@ -944,6 +1007,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
                 input.plugin_trust.trusted_publishers,
             ),
         },
+        rnode: to_rnode_settings_record(Some(input.rnode)),
     }
 }
 
@@ -1254,6 +1318,34 @@ fn telemetry_settings_json(settings: &TelemetrySettingsRecord) -> serde_json::Va
     })
 }
 
+fn rnode_settings_json(settings: &RnodeSettingsRecord) -> serde_json::Value {
+    json!({
+        "enabled": settings.enabled,
+        "peripheralId": settings.peripheral_id,
+        "displayName": settings.display_name,
+        "region": settings.region,
+        "profile": settings.profile
+    })
+}
+
+fn plugin_trust_settings_json(
+    settings: &crate::types::PluginTrustSettingsRecord,
+) -> serde_json::Value {
+    let trusted_publishers: Vec<serde_json::Value> = settings
+        .trusted_publishers
+        .iter()
+        .map(|publisher| {
+            json!({
+                "publisher": publisher.publisher,
+                "publicKeyBase64": publisher.public_key_base64
+            })
+        })
+        .collect();
+    json!({
+        "trustedPublishers": trusted_publishers
+    })
+}
+
 fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
     json!({
         "displayName": settings.display_name,
@@ -1266,7 +1358,9 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "hub": hub_settings_json(&settings.hub),
         "checklists": {
             "defaultTaskDueStepMinutes": settings.checklists.default_task_due_step_minutes
-        }
+        },
+        "pluginTrust": plugin_trust_settings_json(&settings.plugin_trust),
+        "rnode": rnode_settings_json(&settings.rnode)
     })
 }
 
@@ -1581,6 +1675,28 @@ fn eam_team_summary_json(summary: &crate::types::EamTeamSummaryRecord) -> serde_
         "yellowTotal": summary.yellow_total,
         "redTotal": summary.red_total,
         "updatedAt": summary.updated_at_ms
+    })
+}
+
+fn eam_readiness_summary_json(
+    summary: &crate::types::EamReadinessSummaryRecord,
+) -> serde_json::Value {
+    json!({
+        "activeTotal": summary.active_total,
+        "updatedAt": summary.updated_at_ms,
+        "statusMetrics": summary.status_metrics.iter().map(|metric| json!({
+            "field": metric.field,
+            "label": metric.label,
+            "score": metric.score,
+            "band": metric.band,
+            "ringColor": metric.ring_color
+        })).collect::<Vec<_>>(),
+        "messages": summary.messages.iter().map(|message| json!({
+            "callsign": message.callsign,
+            "overallScore": message.overall_score,
+            "overallBand": message.overall_band,
+            "overallRingColor": message.overall_ring_color
+        })).collect::<Vec<_>>()
     })
 }
 
@@ -3940,6 +4056,28 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTe
     match node.get_eam_team_summary(payload.team_uid) {
         Ok(Some(summary)) => ok_json_result(&mut env, &eam_team_summary_json(&summary)),
         Ok(None) => ok_json_result(&mut env, &json!({ "summary": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamReadinessSummaryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_eam_readiness_summary() {
+        Ok(summary) => ok_json_result(&mut env, &eam_readiness_summary_json(&summary)),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()

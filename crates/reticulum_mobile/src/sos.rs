@@ -194,6 +194,10 @@ pub(crate) fn compose_sos_body(
     body
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "SOS alert projection preserves wire identity, body, media, telemetry, and receive time fields"
+)]
 pub(crate) fn received_alert_from_sos(
     incident_id: String,
     source_hex: String,

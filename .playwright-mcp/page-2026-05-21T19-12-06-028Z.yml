@@ -1,0 +1,143 @@
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - img "R.E.M. logo" [ref=e8]
+      - paragraph [ref=e9]: R.E.M.
+    - heading "Dashboard" [level=1] [ref=e10]
+    - generic [ref=e11]:
+      - generic "Saved peers and connected saved peers" [ref=e12]: 0/0
+      - generic "App is still starting. Sending stays blocked until the node is ready." [ref=e13]: Not Ready
+  - main [ref=e14]:
+    - generic [ref=e15]:
+      - generic [ref=e17]:
+        - link "0 Announces" [ref=e18] [cursor=pointer]:
+          - /url: /peers
+          - img [ref=e19]
+          - generic [ref=e22]: 0 Announces
+        - button "Announce" [disabled] [ref=e23]:
+          - img [ref=e24]
+          - generic [ref=e27]: Announce
+        - button "Sync" [disabled] [ref=e28]
+      - region "Dashboard KPIs" [ref=e29]:
+        - link "0 Peers" [ref=e30] [cursor=pointer]:
+          - /url: /peers
+          - img [ref=e32]
+          - generic [ref=e37]:
+            - strong [ref=e38]: "0"
+            - generic [ref=e39]: Peers
+          - generic [ref=e40]: ">"
+        - link "0 Announces" [ref=e41] [cursor=pointer]:
+          - /url: /peers
+          - img [ref=e43]
+          - generic [ref=e46]:
+            - strong [ref=e47]: "0"
+            - generic [ref=e48]: Announces
+          - generic [ref=e49]: ">"
+        - link "0 Threads" [ref=e50] [cursor=pointer]:
+          - /url: /inbox
+          - img [ref=e52]
+          - generic [ref=e53]:
+            - strong [ref=e54]: "0"
+            - generic [ref=e55]: Threads
+          - generic [ref=e56]: ">"
+        - link "0 SOS" [ref=e57] [cursor=pointer]:
+          - /url: /telemetry
+          - img [ref=e59]
+          - generic [ref=e61]:
+            - strong [ref=e62]: "0"
+            - generic [ref=e63]: SOS
+          - generic [ref=e64]: ">"
+      - generic [ref=e65]:
+        - heading "Team Status" [level=2] [ref=e66]
+        - generic [ref=e67]:
+          - link "0% Security Red" [ref=e68] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e69]
+            - paragraph [ref=e72]: 0%
+            - paragraph [ref=e73]: Security
+            - paragraph [ref=e74]: Red
+          - link "0% Capability Red" [ref=e75] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e76]
+            - paragraph [ref=e79]: 0%
+            - paragraph [ref=e80]: Capability
+            - paragraph [ref=e81]: Red
+          - link "0% Preparedness Red" [ref=e82] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e83]
+            - paragraph [ref=e86]: 0%
+            - paragraph [ref=e87]: Preparedness
+            - paragraph [ref=e88]: Red
+          - link "0% Medical Red" [ref=e89] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e90]
+            - paragraph [ref=e93]: 0%
+            - paragraph [ref=e94]: Medical
+            - paragraph [ref=e95]: Red
+          - link "0% Mobility Red" [ref=e96] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e97]
+            - paragraph [ref=e100]: 0%
+            - paragraph [ref=e101]: Mobility
+            - paragraph [ref=e102]: Red
+          - link "0% Comms Red" [ref=e103] [cursor=pointer]:
+            - /url: /messages
+            - img [ref=e104]
+            - paragraph [ref=e107]: 0%
+            - paragraph [ref=e108]: Comms
+            - paragraph [ref=e109]: Red
+      - generic [ref=e110]:
+        - generic [ref=e111]:
+          - heading "Activity" [level=2] [ref=e112]
+          - link "Open Threads" [ref=e113] [cursor=pointer]:
+            - /url: /inbox
+        - generic [ref=e114]:
+          - link "0 MSG" [ref=e115] [cursor=pointer]:
+            - /url: /messages
+            - paragraph [ref=e116]: "0"
+            - paragraph [ref=e117]: MSG
+          - link "0 EVN" [ref=e118] [cursor=pointer]:
+            - /url: /events
+            - paragraph [ref=e119]: "0"
+            - paragraph [ref=e120]: EVN
+          - link "0 Threads" [ref=e121] [cursor=pointer]:
+            - /url: /inbox
+            - paragraph [ref=e122]: "0"
+            - paragraph [ref=e123]: Threads
+        - generic "Android notification activity" [ref=e124]:
+          - paragraph [ref=e125]: No Android notification activity yet.
+      - generic [ref=e126]:
+        - heading "Checklists" [level=2] [ref=e127]
+        - generic [ref=e128]:
+          - link "0 Total" [ref=e129] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e130]: "0"
+            - paragraph [ref=e131]: Total
+          - link "0 Active" [ref=e132] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e133]: "0"
+            - paragraph [ref=e134]: Active
+          - link "0 Late" [ref=e135] [cursor=pointer]:
+            - /url: /checklists
+            - paragraph [ref=e136]: "0"
+            - paragraph [ref=e137]: Late
+  - navigation "Primary navigation" [ref=e138]:
+    - link "Dashboard" [ref=e139] [cursor=pointer]:
+      - /url: /dashboard
+      - img [ref=e141]
+      - generic [ref=e146]: Dashboard
+    - link "Chat" [ref=e147] [cursor=pointer]:
+      - /url: /inbox
+      - img [ref=e149]
+      - generic [ref=e151]: Chat
+    - link "Checklists" [ref=e152] [cursor=pointer]:
+      - /url: /checklists
+      - img [ref=e154]
+      - generic [ref=e158]: Checklists
+    - link "Map" [ref=e159] [cursor=pointer]:
+      - /url: /telemetry
+      - img [ref=e161]
+      - generic [ref=e164]: Map
+    - button "More" [ref=e165] [cursor=pointer]:
+      - img [ref=e167]
+      - generic [ref=e168]: More

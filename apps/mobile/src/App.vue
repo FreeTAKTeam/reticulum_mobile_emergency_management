@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef, watch } from "vue";
+import { App, type BackButtonListenerEvent } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import logoUrl from "./assets/rem-logo.png";
+import SplashScreen from "./components/SplashScreen.vue";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
 import { useChecklistsStore } from "./stores/checklistsStore";
@@ -12,6 +15,11 @@ import { useMessagesStore } from "./stores/messagesStore";
 import { useSosStore } from "./stores/sosStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
+import {
+  resolveAndroidRouteBackAction,
+  runBackNavigationHandlers,
+} from "./utils/androidBackNavigation";
+import { appVersion } from "./utils/appVersion";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 
 const nodeStore = useNodeStore();
@@ -42,6 +50,9 @@ registerNotificationNavigationHandler(async (target) => {
 });
 
 onMounted(async () => {
+  splashTimer = window.setTimeout(() => {
+    splashMinimumElapsed.value = true;
+  }, 1200);
   try {
     const setupCompleted = hasCompletedSetupWizard();
     if (setupCompleted) {
@@ -72,6 +83,8 @@ onMounted(async () => {
     }
   } catch (error: unknown) {
     nodeStore.lastError = error instanceof Error ? error.message : String(error);
+  } finally {
+    startupComplete.value = true;
   }
 });
 
@@ -93,6 +106,11 @@ interface NavigationItem {
 }
 
 const menuOpen = shallowRef(false);
+const splashMinimumElapsed = shallowRef(false);
+const startupComplete = shallowRef(false);
+const showSplash = computed(() => !splashMinimumElapsed.value || !startupComplete.value);
+let splashTimer: number | undefined;
+let androidBackButtonListener: { remove: () => Promise<void> } | undefined;
 
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
@@ -168,9 +186,11 @@ const pageTitle = computed(() => {
     case "dashboard":
       return "Dashboard";
     case "messages":
-      return "Action Messages";
+      return "EAM";
     case "events":
       return "Events";
+    case "event-mecp-help":
+      return "MECP Help";
     case "inbox":
       return "Chat";
     case "checklists":
@@ -192,23 +212,31 @@ const pageTitle = computed(() => {
   }
 });
 
+const readinessError = computed(() => nodeStore.readinessError.trim());
 const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
-const runningTitle = computed(() =>
-  nodeStore.ready
-    ? "App ready to send and receive events or messages."
-    : "App is still starting. Sending stays blocked until the node is ready.",
-);
+const runningTitle = computed(() => {
+  if (nodeStore.ready) {
+    return "App ready to send and receive events or messages.";
+  }
+  if (readinessError.value) {
+    return `Node is not ready: ${readinessError.value}`;
+  }
+  return "App is still starting. Sending stays blocked until the node is ready.";
+});
 const possiblePeerCount = computed(() => nodeStore.savedPeerCount);
 const connectedPeerCount = computed(() => nodeStore.connectedPeerCount);
+const reachablePeerCount = computed(() => nodeStore.reachablePeerCount);
 const peerCountLabel = computed(
-  () => `${possiblePeerCount.value}/${connectedPeerCount.value}`,
+  () => `${possiblePeerCount.value}/${connectedPeerCount.value}/${reachablePeerCount.value}`,
 );
 const connectedPeerCountTitle = computed(() => {
   const possible = possiblePeerCount.value;
   const connected = connectedPeerCount.value;
+  const reachable = reachablePeerCount.value;
   const possibleLabel = possible === 1 ? "1 saved peer" : `${possible} saved peers`;
-  const connectedLabel = connected === 1 ? "1 saved peer connected" : `${connected} saved peers connected`;
-  return `${possibleLabel}, ${connectedLabel}`;
+  const connectedLabel = connected === 1 ? "1 live link" : `${connected} live links`;
+  const reachableLabel = reachable === 1 ? "1 recently seen peer" : `${reachable} recently seen peers`;
+  return `${possibleLabel}, ${connectedLabel}, ${reachableLabel}`;
 });
 
 function isTabActive(path: string): boolean {
@@ -222,6 +250,7 @@ function isTabActive(path: string): boolean {
 const moreRouteNames = new Set([
   "messages",
   "events",
+  "event-mecp-help",
   "message-status-help",
   "peers",
   "settings",
@@ -238,12 +267,53 @@ function closeMenu(): void {
   menuOpen.value = false;
 }
 
+async function handleAndroidBackButton(event: BackButtonListenerEvent): Promise<void> {
+  if (menuOpen.value) {
+    closeMenu();
+    return;
+  }
+  if (await runBackNavigationHandlers()) {
+    return;
+  }
+
+  const action = resolveAndroidRouteBackAction({
+    canGoBack: event.canGoBack,
+    currentPath: route.path,
+  });
+  if (action === "back") {
+    router.back();
+    return;
+  }
+  if (action === "dashboard") {
+    await router.replace("/dashboard");
+  }
+}
+
+async function registerAndroidBackButtonHandler(): Promise<void> {
+  if (Capacitor.getPlatform() !== "android") {
+    return;
+  }
+  androidBackButtonListener = await App.addListener("backButton", (event) => {
+    void handleAndroidBackButton(event);
+  });
+}
+
 watch(
   () => route.fullPath,
   () => {
     closeMenu();
   },
 );
+
+void registerAndroidBackButtonHandler();
+
+onUnmounted(() => {
+  if (splashTimer !== undefined) {
+    window.clearTimeout(splashTimer);
+  }
+  void androidBackButtonListener?.remove();
+  androidBackButtonListener = undefined;
+});
 </script>
 
 <template>
@@ -261,7 +331,7 @@ watch(
           <span
             class="peer-count"
             data-testid="connected-peer-count"
-            aria-label="Saved peers and connected saved peers"
+            aria-label="Saved peers, live links, and recently seen saved peers"
             :title="connectedPeerCountTitle"
           >
             {{ peerCountLabel }}
@@ -370,6 +440,7 @@ watch(
         </button>
       </nav>
       <SosOverlay v-if="!setupActive" />
+      <SplashScreen v-if="showSplash" :version="appVersion" />
     </div>
   </div>
 </template>

@@ -170,6 +170,9 @@ dictionary NodeConfig {
   string? hub_api_base_url;
   string? hub_api_key;
   u32 hub_refresh_interval_seconds;
+
+  // Optional Android RNode Bluetooth LE LoRa interface.
+  RnodeSettingsRecord rnode;
 };
 
 dictionary NodeStatus {
@@ -335,6 +338,14 @@ dictionary PluginTrustSettingsRecord {
   sequence<TrustedPluginPublisherRecord> trusted_publishers;
 };
 
+dictionary RnodeSettingsRecord {
+  boolean enabled;
+  string peripheral_id;
+  string display_name;
+  string region;
+  string profile;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -346,6 +357,7 @@ dictionary AppSettingsRecord {
   HubSettingsRecord hub;
   ChecklistSettingsRecord checklists;
   PluginTrustSettingsRecord plugin_trust;
+  RnodeSettingsRecord rnode;
 };
 
 dictionary SavedPeerRecord {
@@ -396,6 +408,28 @@ dictionary EamTeamSummaryRecord {
   u32 yellow_total;
   u32 red_total;
   u64 updated_at_ms;
+};
+
+dictionary EamReadinessStatusMetricRecord {
+  string field;
+  string label;
+  u32 score;
+  string band;
+  string ring_color;
+};
+
+dictionary EamReadinessMessageRecord {
+  string callsign;
+  u32 overall_score;
+  string overall_band;
+  string overall_ring_color;
+};
+
+dictionary EamReadinessSummaryRecord {
+  u32 active_total;
+  u64 updated_at_ms;
+  sequence<EamReadinessStatusMetricRecord> status_metrics;
+  sequence<EamReadinessMessageRecord> messages;
 };
 
 dictionary EventProjectionRecord {
@@ -822,6 +856,8 @@ interface Node {
   void delete_eam(string callsign, u64 deleted_at_ms);
   [Throws=NodeError]
   EamTeamSummaryRecord? get_eam_team_summary(string team_uid);
+  [Throws=NodeError]
+  EamReadinessSummaryRecord get_eam_readiness_summary();
   [Throws=NodeError]
   sequence<EventProjectionRecord> get_events();
   [Throws=NodeError]
