@@ -123,6 +123,32 @@ fn metadata_is_accepted_result(metadata: Option<&MissionSyncMetadata>) -> bool {
     })
 }
 
+fn metadata_uses_compact_eam_tracking_marker(metadata: &MissionSyncMetadata) -> bool {
+    metadata.command_type.as_deref() == Some("mission.registry.eam.upsert")
+        && metadata.command_id.as_deref() == Some("m")
+        && metadata
+            .correlation_id
+            .as_deref()
+            .is_none_or(|value| value == "m")
+}
+
+fn link_connect_timeout_from_request(req: &SendRequest, fallback: Duration) -> Duration {
+    req.extensions
+        .get(EXT_LINK_CONNECT_TIMEOUT_MS)
+        .and_then(JsonValue::as_u64)
+        .map(Duration::from_millis)
+        .map(|timeout| timeout.clamp(Duration::from_millis(1), MAX_LINK_CONNECT_TIMEOUT))
+        .unwrap_or(fallback)
+}
+
+fn direct_packet_max_wire_bytes_from_request(req: &SendRequest) -> Option<usize> {
+    req.extensions
+        .get(EXT_DIRECT_PACKET_MAX_WIRE_BYTES)
+        .and_then(JsonValue::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .map(|value| value.clamp(1, LXMF_MAX_PAYLOAD))
+}
+
 #[cfg(test)]
 fn idempotency_key_for_send_mode(base_key: &str, send_mode: SendMode) -> String {
     idempotency_key_for_send_attempt(base_key, send_mode, None)
@@ -291,6 +317,7 @@ const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_LINK_CONNECT_ATTEMPTS: usize = 3;
 const ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS: usize = 1;
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
@@ -300,6 +327,8 @@ const EXT_RAW_BYTES_BASE64: &str = "reticulum.raw_bytes_base64";
 const EXT_SEND_MODE: &str = "reticulum.send_mode";
 const EXT_USE_PROPAGATION_NODE: &str = "reticulum.use_propagation_node";
 const EXT_ACCEPTED_RESULT_ACK: &str = "reticulum.accepted_result_ack";
+const EXT_LINK_CONNECT_TIMEOUT_MS: &str = "reticulum.link_connect_timeout_ms";
+const EXT_DIRECT_PACKET_MAX_WIRE_BYTES: &str = "reticulum.direct_packet_max_wire_bytes";
 const EVENT_PACKET_RECEIVED: &str = "reticulum.packet_received";
 const EVENT_ANNOUNCE_RECEIVED: &str = "reticulum.announce_received";
 const EVENT_PEER_CHANGED: &str = "reticulum.peer_changed";
@@ -800,6 +829,8 @@ impl RuntimeLxmfSdk {
             metadata,
             send_mode,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -817,6 +848,8 @@ impl RuntimeLxmfSdk {
         metadata: Option<MissionSyncMetadata>,
         send_mode: SendMode,
         direct_attempt: Option<usize>,
+        link_connect_timeout: Option<Duration>,
+        direct_packet_max_wire_bytes: Option<usize>,
     ) -> Result<LxmfSendReport, NodeError> {
         let source = self
             .client
@@ -861,16 +894,27 @@ impl RuntimeLxmfSdk {
         if metadata_is_accepted_result(metadata.as_ref()) {
             request = request.with_extension(EXT_ACCEPTED_RESULT_ACK, json!(true));
         }
+        if let Some(link_connect_timeout) = link_connect_timeout {
+            let timeout_ms = link_connect_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+            request = request.with_extension(EXT_LINK_CONNECT_TIMEOUT_MS, json!(timeout_ms));
+        }
+        if let Some(direct_packet_max_wire_bytes) = direct_packet_max_wire_bytes {
+            request = request.with_extension(
+                EXT_DIRECT_PACKET_MAX_WIRE_BYTES,
+                json!(direct_packet_max_wire_bytes),
+            );
+        }
         if let Some(correlation_id) = metadata
             .as_ref()
             .and_then(|value| value.correlation_id.clone())
         {
             request = request.with_correlation_id(correlation_id);
         }
-        if let Some(idempotency_key) = metadata
-            .as_ref()
-            .and_then(|value| value.tracking_key().map(ToOwned::to_owned))
-        {
+        if let Some(idempotency_key) = metadata.as_ref().and_then(|value| {
+            (!metadata_uses_compact_eam_tracking_marker(value))
+                .then(|| value.tracking_key().map(ToOwned::to_owned))
+                .flatten()
+        }) {
             request = request.with_idempotency_key(idempotency_key_for_send_attempt(
                 &idempotency_key,
                 send_mode,
@@ -1165,11 +1209,12 @@ async fn compat_send_lxmf(
         .get(EXT_ACCEPTED_RESULT_ACK)
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
-    let link_connect_timeout = if is_accepted_result_ack {
+    let default_link_connect_timeout = if is_accepted_result_ack {
         ACCEPTED_RESULT_LINK_CONNECT_TIMEOUT
     } else {
         DEFAULT_LINK_CONNECT_TIMEOUT
     };
+    let link_connect_timeout = link_connect_timeout_from_request(req, default_link_connect_timeout);
     let link_connect_attempts = if is_accepted_result_ack {
         ACCEPTED_RESULT_LINK_CONNECT_ATTEMPTS
     } else {
@@ -1181,9 +1226,10 @@ async fn compat_send_lxmf(
         RESOURCE_TRANSFER_TIMEOUT
     };
 
-    let remote_desc = resolve_lxmf_destination_desc(&state, destination)
-        .await
-        .map_err(|_| sdk_transport("failed to resolve destination"))?;
+    let remote_desc = match resolve_lxmf_destination_desc(&state, destination).await {
+        Ok(desc) => desc,
+        Err(_) => return Err(sdk_transport("failed to resolve destination")),
+    };
     let requested_destination_hex = destination.to_hex_string();
     let resolved_destination_hex = remote_desc.address_hash.to_hex_string();
 
@@ -1240,23 +1286,26 @@ async fn compat_send_lxmf(
     } else {
         false
     };
-    let desired_method = if is_accepted_result_ack {
-        TransportMethod::Opportunistic
-    } else {
-        transport_method_for_send_mode(
-            send_mode,
-            has_cached_direct_link,
-            has_delivery_ratchet(&state, &remote_desc.address_hash),
-        )
-    };
+    let desired_method = transport_method_for_send_mode(
+        send_mode,
+        has_cached_direct_link,
+        has_delivery_ratchet(&state, &remote_desc.address_hash),
+    );
+    let direct_packet_max_wire_bytes = direct_packet_max_wire_bytes_from_request(req);
     let DeliveryDecision {
         method,
-        representation,
+        mut representation,
     } = decide_delivery(desired_method, false, wire.len()).map_err(|err| {
         sdk_validation(format!(
             "failed to choose lxmf delivery representation: {err}"
         ))
     })?;
+    if matches!(method, TransportMethod::Direct)
+        && direct_packet_max_wire_bytes.is_some_and(|max_wire_bytes| wire.len() > max_wire_bytes)
+    {
+        representation = LxmfRepresentation::Resource;
+    }
+    let direct_packet_max_wire_bytes = direct_packet_max_wire_bytes.unwrap_or(LXMF_MAX_PAYLOAD);
     let method_value = delivery_method_from_transport(method);
     let representation_value = delivery_representation_from_lxmf(representation);
 
@@ -1301,10 +1350,7 @@ async fn compat_send_lxmf(
             wire.len(),
             LXMF_MAX_PAYLOAD,
         );
-        let trace = state
-            .transport
-            .send_packet_with_trace(packet)
-            .await;
+        let trace = state.transport.send_packet_with_trace(packet).await;
         let outcome = trace.outcome;
         info!(
             "[lxmf][events][sdk] opportunistic send outcome requested_destination={} resolved_destination={} message_id={} outcome={:?} broadcast={} matched={} sent={} failed={}",
@@ -1363,7 +1409,7 @@ async fn compat_send_lxmf(
             message_id_hex,
             resource_hash_hex,
             wire.len(),
-            LXMF_MAX_PAYLOAD,
+            direct_packet_max_wire_bytes,
         );
         let deadline = tokio::time::Instant::now() + resource_transfer_timeout;
         loop {
@@ -1449,7 +1495,7 @@ async fn compat_send_lxmf(
         resolved_destination_hex,
         message_id_hex,
         wire.len(),
-        LXMF_MAX_PAYLOAD,
+        direct_packet_max_wire_bytes,
     );
     let packet = link
         .lock()
@@ -2806,6 +2852,44 @@ mod tests {
                 .get(EXT_FIELDS_BASE64)
                 .and_then(JsonValue::as_str),
             Some(fields_payload.as_str())
+        );
+    }
+
+    #[test]
+    fn send_request_link_timeout_override_is_bounded() {
+        let req = SendRequest::new("source", "0123456789abcdef0123456789abcdef", json!({}))
+            .with_extension(EXT_LINK_CONNECT_TIMEOUT_MS, json!(75_000));
+
+        assert_eq!(
+            link_connect_timeout_from_request(&req, DEFAULT_LINK_CONNECT_TIMEOUT),
+            Duration::from_secs(75)
+        );
+
+        let too_large = SendRequest::new("source", "0123456789abcdef0123456789abcdef", json!({}))
+            .with_extension(EXT_LINK_CONNECT_TIMEOUT_MS, json!(180_000));
+
+        assert_eq!(
+            link_connect_timeout_from_request(&too_large, DEFAULT_LINK_CONNECT_TIMEOUT),
+            MAX_LINK_CONNECT_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn send_request_direct_packet_limit_override_is_bounded() {
+        let req = SendRequest::new("source", "0123456789abcdef0123456789abcdef", json!({}))
+            .with_extension(EXT_DIRECT_PACKET_MAX_WIRE_BYTES, json!(160));
+
+        assert_eq!(direct_packet_max_wire_bytes_from_request(&req), Some(160));
+
+        let too_large = SendRequest::new("source", "0123456789abcdef0123456789abcdef", json!({}))
+            .with_extension(
+                EXT_DIRECT_PACKET_MAX_WIRE_BYTES,
+                json!(LXMF_MAX_PAYLOAD + 500),
+            );
+
+        assert_eq!(
+            direct_packet_max_wire_bytes_from_request(&too_large),
+            Some(LXMF_MAX_PAYLOAD)
         );
     }
 

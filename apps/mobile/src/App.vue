@@ -112,9 +112,11 @@ onMounted(async () => {
     }
     await nodeStore.init();
     await messagingStore.init();
-    if (setupCompleted && !nodeStore.status.running) {
+    if (setupCompleted) {
       await repairStartupRnodeSelection();
-      await nodeStore.startNode();
+      if (!nodeStore.status.running) {
+        await nodeStore.startNode();
+      }
     }
     await messagingStore.hydrateStartupHistory();
 
