@@ -1469,41 +1469,11 @@ fn msgpack_map(entries: Vec<(&str, MsgPackValue)>) -> MsgPackValue {
     )
 }
 
-fn msgpack_string_array(values: &[String]) -> MsgPackValue {
-    MsgPackValue::Array(
-        values
-            .iter()
-            .map(|value| MsgPackValue::from(value.as_str()))
-            .collect(),
-    )
-}
-
 fn msgpack_hex_identity(value: &str) -> MsgPackValue {
     match hex::decode(value.trim()) {
         Ok(bytes) if bytes.len() == 16 => MsgPackValue::Binary(bytes),
         _ => MsgPackValue::from(value),
     }
-}
-
-fn event_keyword_wire_value(keyword: &str) -> MsgPackValue {
-    keyword
-        .strip_prefix("r3akt:event-type:")
-        .filter(|event_type| !event_type.is_empty() && event_type.len() <= 4)
-        .map(MsgPackValue::from)
-        .unwrap_or_else(|| MsgPackValue::from(keyword))
-}
-
-fn event_keywords_wire_value(values: &[String]) -> MsgPackValue {
-    MsgPackValue::Array(
-        values
-            .iter()
-            .map(|value| event_keyword_wire_value(value.as_str()))
-            .collect(),
-    )
-}
-
-fn event_timestamp_wire_value(timestamp_ms: u64) -> MsgPackValue {
-    MsgPackValue::from(timestamp_ms / 1_000)
 }
 
 fn is_default_event_topics(values: &[String], mission_uid: &str) -> bool {
@@ -1627,23 +1597,6 @@ fn sanitize_correlation_token(value: &str) -> String {
     token.trim_matches('-').to_string()
 }
 
-fn compact_event_token(uid: &str) -> String {
-    let compact = uid
-        .trim()
-        .chars()
-        .filter(|ch| ch.is_ascii_hexdigit())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    if compact.len() >= 8 {
-        compact[..8].to_string()
-    } else {
-        sanitize_correlation_token(uid)
-            .chars()
-            .take(8)
-            .collect::<String>()
-    }
-}
-
 fn compact_u64_token(value: u64) -> String {
     if value == 0 {
         return "0".to_string();
@@ -1693,29 +1646,23 @@ fn event_uid_wire_value(uid: &str) -> MsgPackValue {
     compact_hex_binary(uid.trim_start_matches("evt-")).unwrap_or_else(|| MsgPackValue::from(uid))
 }
 
-fn eam_uid_wire_value(uid: &str) -> MsgPackValue {
-    compact_hex_binary(uid.trim_start_matches("eam-")).unwrap_or_else(|| MsgPackValue::from(uid))
+fn event_content_wire_body(content: &str) -> Vec<u8> {
+    let trimmed = content.trim();
+    trimmed
+        .strip_prefix("MECP/2/")
+        .filter(|event_code| !event_code.trim().is_empty())
+        .unwrap_or(trimmed)
+        .as_bytes()
+        .to_vec()
 }
 
-fn event_command_id_tail_wire_value(command_id: &str, uid: &str) -> Option<MsgPackValue> {
-    let prefix = format!("log-entry-{uid}-");
-    if let Some(tail) = command_id.strip_prefix(prefix.as_str()) {
-        return compact_hex_binary(tail);
-    }
-    (command_id.len() <= 48).then(|| MsgPackValue::from(command_id))
-}
-
-fn identity_wire_value(identity_hex: &str) -> MsgPackValue {
-    compact_hex_binary(identity_hex).unwrap_or_else(|| MsgPackValue::from(identity_hex))
-}
-
-fn status_wire_value(status: &str) -> &str {
+fn status_wire_code(status: &str) -> &str {
     match status.trim() {
         "Green" => "G",
         "Yellow" => "Y",
         "Red" => "R",
         "Unknown" => "U",
-        other => other,
+        _ => "U",
     }
 }
 
@@ -2400,77 +2347,30 @@ fn build_eam_replication_payload(
     record: &EamProjectionRecord,
     _target: &MissionReplicationTarget,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
-    let team_uid = record
-        .team_uid
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(NodeError::InvalidConfig {})?;
     if record.callsign.trim().is_empty() {
         return Err(NodeError::InvalidConfig {});
     }
 
-    let subject_source = record
-        .eam_uid
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(record.callsign.as_str());
-    let subject = compact_event_token(subject_source.trim_start_matches("eam-"));
-    let update_token = compact_u64_token(record.updated_at_ms);
-    let command_id = format!("m:{subject}:{update_token}");
-    let body = b"E".to_vec();
+    let command_id = "m";
+    let body = format!(
+        "E|{}|{}{}{}{}{}{}",
+        record.callsign.trim(),
+        status_wire_code(&record.security_status),
+        status_wire_code(&record.capability_status),
+        status_wire_code(&record.preparedness_status),
+        status_wire_code(&record.medical_status),
+        status_wire_code(&record.mobility_status),
+        status_wire_code(&record.comms_status),
+    )
+    .into_bytes();
 
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![MsgPackValue::Map(vec![
-            (
-                MsgPackValue::from("i"),
-                MsgPackValue::from(command_id.as_str()),
-            ),
+            (MsgPackValue::from("i"), MsgPackValue::from(command_id)),
             (
                 MsgPackValue::from("t"),
                 MsgPackValue::from(command_wire_value("mission.registry.eam.upsert")),
-            ),
-            (
-                MsgPackValue::from("a"),
-                msgpack_map(
-                    vec![
-                        ("cs", MsgPackValue::from(record.callsign.trim())),
-                        ("tu", MsgPackValue::from(team_uid)),
-                        (
-                            "ss",
-                            MsgPackValue::from(status_wire_value(&record.security_status)),
-                        ),
-                        (
-                            "ca",
-                            MsgPackValue::from(status_wire_value(&record.capability_status)),
-                        ),
-                        (
-                            "pr",
-                            MsgPackValue::from(status_wire_value(&record.preparedness_status)),
-                        ),
-                        (
-                            "me",
-                            MsgPackValue::from(status_wire_value(&record.medical_status)),
-                        ),
-                        (
-                            "mo",
-                            MsgPackValue::from(status_wire_value(&record.mobility_status)),
-                        ),
-                        (
-                            "co",
-                            MsgPackValue::from(status_wire_value(&record.comms_status)),
-                        ),
-                    ]
-                    .into_iter()
-                    .chain(
-                        record
-                            .eam_uid
-                            .as_deref()
-                            .map(|value| ("u", eam_uid_wire_value(value)))
-                            .into_iter(),
-                    )
-                    .collect(),
-                ),
             ),
         ])]),
     )]);
@@ -2519,7 +2419,7 @@ fn build_eam_delete_replication_payload(
 }
 
 fn build_event_replication_payload(
-    status: &NodeStatus,
+    _status: &NodeStatus,
     record: &EventProjectionRecord,
     _target: &MissionReplicationTarget,
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
@@ -2541,69 +2441,18 @@ fn build_event_replication_payload(
         return Err(NodeError::InvalidConfig {});
     }
 
-    let display_name = record
-        .source_display_name
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            let fallback = status.name.trim();
-            if fallback.is_empty() {
-                record.callsign.trim()
-            } else {
-                fallback
-            }
-        });
-    let body = content.as_bytes().to_vec();
-    let mut command_entries = vec![
-        (
-            MsgPackValue::from("t"),
-            MsgPackValue::from(command_wire_value(command_type)),
-        ),
-        (
-            MsgPackValue::from("s"),
-            msgpack_map(vec![
-                ("r", identity_wire_value(source_identity)),
-                ("n", MsgPackValue::from(display_name)),
-            ]),
-        ),
-        (
-            MsgPackValue::from("ts"),
-            event_timestamp_wire_value(record.updated_at_ms),
-        ),
-        (
-            MsgPackValue::from("a"),
-            msgpack_map(
-                vec![("u", event_uid_wire_value(uid))]
-                    .into_iter()
-                    .chain(
-                        (mission_uid != DEFAULT_R3AKT_MISSION_UID)
-                            .then(|| ("m", mission_uid_wire_value(mission_uid)))
-                            .into_iter(),
-                    )
-                    .chain(
-                        event_command_id_tail_wire_value(command_id, uid)
-                            .map(|value| ("ci", value))
-                            .into_iter(),
-                    )
-                    .chain(
-                        (!record.keywords.is_empty())
-                            .then(|| ("kw", event_keywords_wire_value(record.keywords.as_slice()))),
-                    )
-                    .chain(
-                        (!record.content_hashes.is_empty()).then(|| {
-                            ("ch", msgpack_string_array(record.content_hashes.as_slice()))
-                        }),
-                    )
-                    .chain(
-                        record
-                            .deleted_at_ms
-                            .map(|value| ("d", MsgPackValue::from(value)))
-                            .into_iter(),
-                    )
-                    .collect(),
-            ),
-        ),
-    ];
+    let body = event_content_wire_body(content);
+    let mut args_entries = vec![("u", event_uid_wire_value(uid))];
+    if mission_uid != DEFAULT_R3AKT_MISSION_UID {
+        args_entries.push(("m", mission_uid_wire_value(mission_uid)));
+    }
+    if let Some(deleted_at_ms) = record.deleted_at_ms {
+        let delete_token = compact_u64_token(deleted_at_ms);
+        args_entries.push(("ci", MsgPackValue::from(format!("d:{delete_token}"))));
+        args_entries.push(("d", MsgPackValue::from(deleted_at_ms)));
+    }
+
+    let mut command_entries = vec![(MsgPackValue::from("a"), msgpack_map(args_entries))];
     if !is_default_event_topics(record.topics.as_slice(), mission_uid) {
         command_entries.push((
             MsgPackValue::from("to"),
@@ -8012,8 +7861,8 @@ mod tests {
             metadata.command_type.as_deref(),
             Some("mission.registry.eam.upsert")
         );
-        assert_eq!(metadata.eam_uid.as_deref(), record.eam_uid.as_deref());
-        assert_eq!(metadata.team_uid.as_deref(), record.team_uid.as_deref());
+        assert!(metadata.eam_uid.is_none());
+        assert!(metadata.team_uid.is_none());
         assert!(metadata.team_member_uid.is_none());
     }
 
@@ -8056,20 +7905,11 @@ mod tests {
             .first()
             .and_then(MsgPackValue::as_map)
             .expect("command map");
-        let command_args = command
-            .iter()
-            .find(|(key, _)| key.as_str() == Some("a"))
-            .and_then(|(_, value)| value.as_map())
-            .expect("command args");
         let has_command_source = command.iter().any(|(key, _)| key.as_str() == Some("s"));
-        let has_arg = |name: &str| {
-            command_args
-                .iter()
-                .any(|(key, _)| key.as_str() == Some(name))
-        };
 
+        assert_eq!(body.as_slice(), b"E|POCO|GYGGGY");
         assert!(
-            fields.len() <= 120,
+            fields.len() <= 24,
             "compact EAM fields should stay small, fields bytes={}",
             fields.len()
         );
@@ -8078,15 +7918,9 @@ mod tests {
             "compact EAM fields should derive source from the LXMF message source"
         );
         assert!(
-            has_arg("cs"),
-            "compact EAM fields should keep the stable callsign used by deletes"
+            command.iter().all(|(key, _)| key.as_str() != Some("a")),
+            "compact EAM fields should keep payload data in the body"
         );
-        for omitted in ["tm", "no"] {
-            assert!(
-                !has_arg(omitted),
-                "compact EAM fields should omit derivable or unsupported arg {omitted}"
-            );
-        }
         for verbose in [
             "command_type",
             "security_status",
@@ -8130,6 +7964,11 @@ mod tests {
             "compact EAM stamped propagation should have budget headroom, bytes={}",
             propagated.len()
         );
+        assert!(
+            wire.len() <= 140,
+            "RNode direct EAM wire bytes={} budget=140",
+            wire.len()
+        );
 
         let decision =
             decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
@@ -8140,10 +7979,10 @@ mod tests {
             metadata.command_type.as_deref(),
             Some("mission.registry.eam.upsert")
         );
-        assert_eq!(metadata.eam_uid.as_deref(), record.eam_uid.as_deref());
-        assert_eq!(metadata.team_uid.as_deref(), record.team_uid.as_deref());
+        assert!(metadata.eam_uid.is_none());
+        assert!(metadata.team_uid.is_none());
         assert!(metadata.team_member_uid.is_none());
-        assert_eq!(metadata.command_id.as_deref(), Some("m:6ef80799:loyw3v50"));
+        assert_eq!(metadata.command_id.as_deref(), Some("m"));
     }
 
     #[test]
@@ -8208,7 +8047,7 @@ mod tests {
         let (body, fields) =
             build_event_replication_payload(&status, &record, &target).expect("event payload");
 
-        assert_eq!(body.as_slice(), record.content.as_bytes());
+        assert_eq!(body.as_slice(), b"P01 stranded near bridge");
         let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
         assert_eq!(
             metadata.command_type.as_deref(),
@@ -8216,7 +8055,7 @@ mod tests {
         );
         assert_eq!(
             metadata.command_id.as_deref(),
-            Some(record.command_id.as_str())
+            Some("log-entry-evt-a9f9c462-c439-425a-879d-6d13f13a3b86")
         );
         assert_eq!(metadata.event_uid.as_deref(), Some(record.uid.as_str()));
         assert_eq!(
@@ -8239,26 +8078,36 @@ mod tests {
             .find(|(key, _)| key.as_str() == Some("a"))
             .and_then(|(_, value)| value.as_map())
             .expect("command args");
-        let keywords = args
-            .iter()
-            .find(|(key, _)| key.as_str() == Some("kw"))
-            .and_then(|(_, value)| value.as_array())
-            .expect("event keywords");
-        assert_eq!(keywords[0].as_str(), Some("P"));
+        assert!(
+            args.iter().all(|(key, _)| key.as_str() != Some("kw")),
+            "RNode compact event fields should omit keyword adornments"
+        );
+        assert!(
+            args.iter().all(|(key, _)| key.as_str() != Some("cs")),
+            "RNode compact event fields should rely on LXMF source display fallback"
+        );
+        assert!(
+            command.iter().all(|(key, _)| key.as_str() != Some("t")),
+            "RNode compact event fields should infer the log-entry command type"
+        );
         assert!(
             !fields
                 .windows("r3akt:event-type:P".len())
                 .any(|window| window == "r3akt:event-type:P".as_bytes()),
             "compact event fields should not carry verbose event keyword"
         );
-        for expected in ["hash-1", "Pixel"] {
-            assert!(
-                fields
-                    .windows(expected.len())
-                    .any(|window| window == expected.as_bytes()),
-                "compact event fields should retain semantic payload value {expected}"
-            );
-        }
+        assert!(
+            !fields
+                .windows("hash-1".len())
+                .any(|window| window == "hash-1".as_bytes()),
+            "RNode compact event fields should omit content hashes"
+        );
+        assert!(
+            !fields
+                .windows("Pixel".len())
+                .any(|window| window == "Pixel".as_bytes()),
+            "compact event fields should omit display name and use peer projection fallback"
+        );
     }
 
     #[test]
@@ -8380,7 +8229,12 @@ mod tests {
         let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
         let wire = message.to_wire(Some(&signer)).expect("wire");
 
-        assert!(fields.len() <= 200, "fields bytes={}", fields.len());
+        assert!(fields.len() <= 56, "fields bytes={}", fields.len());
+        assert!(
+            wire.len() <= 145,
+            "RNode direct event wire bytes={} budget=145",
+            wire.len()
+        );
         let decision =
             decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
         assert_eq!(decision.representation, LxmfMessageMethod::Packet);
@@ -8418,7 +8272,7 @@ mod tests {
         );
         assert_eq!(
             metadata.command_id.as_deref(),
-            Some(record.command_id.as_str())
+            Some("log-entry-evt-a3a1c275-1d90-41a6-b7ed-f8f9cf0b8fc1")
         );
     }
 
@@ -9284,8 +9138,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(250)).await;
         };
 
-        assert_eq!(received.eam_uid.as_deref(), record.eam_uid.as_deref());
-        assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
+        assert!(received.eam_uid.is_none());
+        assert!(received.team_uid.is_none());
         assert_eq!(
             received.team_member_uid.as_deref(),
             Some(node_a_status.lxmf_destination_hex.as_str())
@@ -9355,7 +9209,7 @@ mod tests {
         };
 
         assert_eq!(received.content, record.content);
-        assert_eq!(received.command_id, record.command_id);
+        assert_eq!(received.command_id, "log-entry-evt-operational-ack");
         let ack = wait_for_operational_ack(&ack_subscription, &command_id, &command_type);
         assert_eq!(
             ack.source_hex.as_deref(),
@@ -9808,7 +9662,12 @@ mod tests {
                 .get_eams()
                 .expect("get eams")
                 .into_iter()
-                .find(|eam| eam.callsign == record.callsign);
+                .find(|eam| {
+                    eam.security_status == record.security_status
+                        && eam.capability_status == record.capability_status
+                        && eam.preparedness_status == record.preparedness_status
+                        && eam.source.is_some()
+                });
             if let Some(received) = received {
                 break received;
             }
@@ -9819,22 +9678,29 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(250)).await;
         };
 
-        assert_eq!(received.callsign, record.callsign);
-        assert_eq!(received.team_uid.as_deref(), record.team_uid.as_deref());
+        assert!(!received.callsign.trim().is_empty());
+        assert!(received.team_uid.is_none());
         assert_eq!(
             received.team_member_uid.as_deref(),
             Some(node_a_status.lxmf_destination_hex.as_str())
         );
-        assert_eq!(received.eam_uid.as_deref(), record.eam_uid.as_deref());
+        assert!(received.eam_uid.is_none());
         assert_eq!(received.security_status, record.security_status);
         assert_eq!(received.capability_status, record.capability_status);
         assert_eq!(received.overall_status.as_deref(), Some("Yellow"));
-        assert_eq!(
-            received
-                .source
-                .as_ref()
-                .map(|source| source.rns_identity.as_str()),
-            Some(node_a_status.lxmf_destination_hex.as_str())
+        let source_identity = received
+            .source
+            .as_ref()
+            .map(|source| source.rns_identity.as_str());
+        assert!(
+            matches!(
+                source_identity,
+                Some(identity)
+                    if identity == node_a_status.lxmf_destination_hex
+                        || identity == node_a_status.app_destination_hex
+            ),
+            "unexpected EAM source identity {:?}",
+            source_identity
         );
 
         stop_node(node_a).await;
@@ -9955,7 +9821,7 @@ mod tests {
             received.team_member_uid.as_deref(),
             Some(node_a_status.lxmf_destination_hex.as_str())
         );
-        assert_eq!(received.team_uid.as_deref(), Some(TEAM_UID_BLUE));
+        assert!(received.team_uid.is_none());
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -10210,8 +10076,15 @@ mod tests {
         assert_eq!(received.command_type, "mission.registry.log_entry.upsert");
         assert_eq!(received.mission_uid, record.mission_uid);
         assert_eq!(received.content, record.content);
-        assert_eq!(received.callsign, record.callsign);
-        assert_eq!(received.source_identity, node_a_status.identity_hex);
+        assert_eq!(
+            received.callsign,
+            node_a_status
+                .lxmf_destination_hex
+                .chars()
+                .take(8)
+                .collect::<String>()
+        );
+        assert_eq!(received.source_identity, node_a_status.lxmf_destination_hex);
 
         stop_node(node_a).await;
         stop_node(node_b).await;
@@ -10289,6 +10162,7 @@ mod tests {
             topics: vec!["r3akt-default-mission".to_string(), "Default".to_string()],
         };
 
+        let upsert_ack_subscription = node_a.subscribe_events();
         node_a
             .upsert_event(record.clone())
             .expect("upsert local event");
@@ -10309,6 +10183,12 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        let upsert_command_id = format!("log-entry-{}", record.uid);
+        wait_for_operational_ack(
+            &upsert_ack_subscription,
+            upsert_command_id.as_str(),
+            "mission.registry.log_entry.upsert",
+        );
 
         let deleted_at_ms = now_ms();
         node_a

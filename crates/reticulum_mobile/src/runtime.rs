@@ -110,6 +110,8 @@ const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
 ];
 
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const RNODE_BLE_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(75);
+const RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES: usize = 145;
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
@@ -251,16 +253,50 @@ fn build_operational_ack_fields(
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
 }
 
+fn compact_event_uid_ack_value(command_id: &str) -> Option<MsgPackValue> {
+    let value = command_id.strip_prefix("log-entry-")?;
+    let event_uid = if value.starts_with("evt-") && value.len() >= 40 {
+        &value[..40]
+    } else {
+        value
+    };
+    let normalized = event_uid
+        .trim_start_matches("evt-")
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>();
+    if normalized.len() != 32 {
+        return None;
+    }
+    hex::decode(normalized).ok().map(MsgPackValue::Binary)
+}
+
 fn build_compact_operational_ack_fields(ack: &OperationalAck) -> Result<Vec<u8>, NodeError> {
-    let fields = MsgPackValue::Map(vec![(
-        MsgPackValue::from(FIELD_RESULTS),
-        MsgPackValue::Map(vec![
+    let result_entries = if ack.command_type.as_deref() == Some("mission.registry.log_entry.upsert")
+    {
+        if let Some(event_uid) = compact_event_uid_ack_value(ack.command_id.as_str()) {
+            vec![(MsgPackValue::from("u"), event_uid)]
+        } else {
+            vec![
+                (
+                    MsgPackValue::from("i"),
+                    MsgPackValue::from(ack.command_id.as_str()),
+                ),
+                (MsgPackValue::from("s"), MsgPackValue::from("a")),
+            ]
+        }
+    } else {
+        vec![
             (
-                MsgPackValue::from("command_id"),
+                MsgPackValue::from("i"),
                 MsgPackValue::from(ack.command_id.as_str()),
             ),
-            (MsgPackValue::from("status"), MsgPackValue::from("accepted")),
-        ]),
+            (MsgPackValue::from("s"), MsgPackValue::from("a")),
+        ]
+    };
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_RESULTS),
+        MsgPackValue::Map(result_entries),
     )]);
     rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
 }
@@ -462,6 +498,73 @@ fn compact_eam_fallback_team_member_uid(
         })
 }
 
+fn compact_eam_status_char(value: char) -> Option<String> {
+    match value {
+        'G' => Some("Green".to_string()),
+        'Y' => Some("Yellow".to_string()),
+        'R' => Some("Red".to_string()),
+        'U' => Some("Unknown".to_string()),
+        _ => None,
+    }
+}
+
+fn compact_eam_action_from_body(
+    body_utf8: &str,
+    received_at_ms: u64,
+    source_hex: Option<&str>,
+    source_display_name: Option<&str>,
+) -> Option<EamCommandAction> {
+    let mut parts = body_utf8.trim().split('|');
+    if parts.next()? != "E" {
+        return None;
+    }
+    let callsign = compact_eam_fallback_callsign(
+        parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        source_hex,
+        source_display_name,
+    )?;
+    let status_codes = parts.next()?.trim();
+    if parts.next().is_some() || status_codes.chars().count() != 6 {
+        return None;
+    }
+    let mut statuses = status_codes.chars().map(compact_eam_status_char);
+    let mut record = EamProjectionRecord {
+        callsign,
+        group_name: DEFAULT_EAM_GROUP_NAME.to_string(),
+        security_status: statuses.next()??,
+        capability_status: statuses.next()??,
+        preparedness_status: statuses.next()??,
+        medical_status: statuses.next()??,
+        mobility_status: statuses.next()??,
+        comms_status: statuses.next()??,
+        notes: None,
+        updated_at_ms: received_at_ms,
+        deleted_at_ms: None,
+        eam_uid: None,
+        team_member_uid: compact_eam_fallback_team_member_uid(None, source_hex),
+        team_uid: None,
+        reported_at: None,
+        reported_by: source_display_name.map(str::to_string),
+        overall_status: None,
+        confidence: None,
+        ttl_seconds: None,
+        source: source_hex.map(|source_hex| EamSourceRecord {
+            rns_identity: source_hex.to_string(),
+            display_name: source_display_name.map(str::to_string),
+        }),
+        sync_state: Some("synced".to_string()),
+        sync_error: None,
+        draft_created_at_ms: None,
+        last_synced_at_ms: Some(received_at_ms),
+    };
+    record.overall_status = derive_eam_overall_status(&record);
+    Some(EamCommandAction::Upsert(Box::new(record)))
+}
+
 fn eam_command_action_from_fields(
     fields_bytes: &[u8],
     received_at_ms: u64,
@@ -517,26 +620,47 @@ fn eam_command_action_from_fields(
             msgpack_get_named(args, &["team_member_uid", "tm"]).and_then(msgpack_hex_or_string),
             source_hex,
         );
+        let compact_statuses = msgpack_eam_status_array(args);
         let mut record = EamProjectionRecord {
             callsign,
             group_name: DEFAULT_EAM_GROUP_NAME.to_string(),
-            security_status: msgpack_get_named(args, &["security_status", "ss"])
+            security_status: compact_statuses[0]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["security_status", "ss"]).and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
-            capability_status: msgpack_get_named(args, &["capability_status", "ca"])
+            capability_status: compact_statuses[1]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["capability_status", "ca"])
+                        .and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
-            preparedness_status: msgpack_get_named(args, &["preparedness_status", "pr"])
+            preparedness_status: compact_statuses[2]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["preparedness_status", "pr"])
+                        .and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
-            medical_status: msgpack_get_named(args, &["medical_status", "me"])
+            medical_status: compact_statuses[3]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["medical_status", "me"]).and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
-            mobility_status: msgpack_get_named(args, &["mobility_status", "mo"])
+            mobility_status: compact_statuses[4]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["mobility_status", "mo"]).and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
-            comms_status: msgpack_get_named(args, &["comms_status", "co"])
+            comms_status: compact_statuses[5]
                 .and_then(msgpack_eam_status)
+                .or_else(|| {
+                    msgpack_get_named(args, &["comms_status", "co"]).and_then(msgpack_eam_status)
+                })
                 .unwrap_or_else(|| "Unknown".to_string()),
             notes: msgpack_get_named(args, &["notes", "no"]).and_then(msgpack_string),
             updated_at_ms: received_at_ms,
@@ -600,14 +724,28 @@ async fn persist_received_eam_if_present(
     } else {
         None
     };
-    let parsed_from_fields = fields_bytes.and_then(|value| {
-        eam_command_action_from_fields(
-            value,
-            received_at_ms,
-            source_hex,
-            source_display_name.as_deref(),
-        )
-    });
+    let parsed_from_fields = fields_bytes
+        .and_then(|value| {
+            eam_command_action_from_fields(
+                value,
+                received_at_ms,
+                source_hex,
+                source_display_name.as_deref(),
+            )
+        })
+        .or_else(|| {
+            metadata
+                .and_then(|value| value.command_type.as_deref())
+                .filter(|value| *value == "mission.registry.eam.upsert")
+                .and_then(|_| {
+                    compact_eam_action_from_body(
+                        body_utf8,
+                        received_at_ms,
+                        source_hex,
+                        source_display_name.as_deref(),
+                    )
+                })
+        });
     if metadata.is_none() && parsed_from_fields.is_none() {
         return false;
     }
@@ -694,9 +832,22 @@ async fn persist_received_eam_if_present(
     }
 }
 
+fn expand_event_wire_content(content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.contains('/') || trimmed.is_empty() {
+        trimmed.to_string()
+    } else if trimmed.len() <= 8 && trimmed.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        format!("MECP/2/{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn event_projection_from_fields(
     fields_bytes: &[u8],
     content_bytes: Option<&[u8]>,
+    source_identity_fallback: Option<&str>,
+    source_display_name_fallback: Option<&str>,
     received_at_ms: u64,
 ) -> Option<EventProjectionRecord> {
     let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).ok()?;
@@ -710,10 +861,15 @@ fn event_projection_from_fields(
         let command_map = msgpack_map_entries(command)?;
         let command_type = msgpack_get_named(command_map, &["command_type", "t"])
             .and_then(msgpack_string)
-            .map(|value| canonical_command_type(value.as_str()).to_string())?;
-        if command_type != "mission.registry.log_entry.upsert" {
+            .map(|value| canonical_command_type(value.as_str()).to_string());
+        if command_type
+            .as_deref()
+            .is_some_and(|value| value != "mission.registry.log_entry.upsert")
+        {
             continue;
         }
+        let command_type =
+            command_type.unwrap_or_else(|| "mission.registry.log_entry.upsert".to_string());
         let args = msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
         let source = msgpack_get_named(command_map, &["source", "s"]).and_then(msgpack_map_entries);
         let uid = msgpack_get_named(args, &["entry_uid", "u"]).and_then(msgpack_event_uid)?;
@@ -725,7 +881,7 @@ fn event_projection_from_fields(
             .or_else(|| {
                 content_bytes.and_then(|bytes| {
                     let text = String::from_utf8_lossy(bytes).trim().to_string();
-                    (!text.is_empty()).then_some(text)
+                    (!text.is_empty()).then_some(expand_event_wire_content(text.as_str()))
                 })
             })?;
         let callsign = msgpack_get_named(args, &["callsign", "cs"])
@@ -734,6 +890,18 @@ fn event_projection_from_fields(
                 source.and_then(|source_map| {
                     msgpack_get_named(source_map, &["display_name", "n"]).and_then(msgpack_string)
                 })
+            })
+            .or_else(|| {
+                source_display_name_fallback
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                source_identity_fallback
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.chars().take(8).collect())
             })?;
         let timestamp = msgpack_get_named(command_map, &["timestamp", "ts"])
             .and_then(msgpack_timestamp)
@@ -753,6 +921,12 @@ fn event_projection_from_fields(
                     msgpack_get_named(source_map, &["rns_identity", "r"])
                         .and_then(msgpack_hex_or_string)
                 })
+            })
+            .or_else(|| {
+                source_identity_fallback
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
             })?;
         if uid.trim().is_empty()
             || mission_uid.trim().is_empty()
@@ -788,6 +962,12 @@ fn event_projection_from_fields(
                         msgpack_get_named(source_map, &["display_name", "n"])
                             .and_then(msgpack_string)
                     })
+                })
+                .or_else(|| {
+                    source_display_name_fallback
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
                 }),
             timestamp,
             command_type,
@@ -907,9 +1087,27 @@ async fn persist_received_event_if_present(
     metadata: Option<&MissionSyncMetadata>,
     fields_bytes: Option<&[u8]>,
     content_bytes: Option<&[u8]>,
+    source_identity_fallback: Option<&str>,
 ) -> bool {
-    let parsed_from_fields =
-        fields_bytes.and_then(|value| event_projection_from_fields(value, content_bytes, now_ms()));
+    let source_display_name = if let Some(source_hex) = source_identity_fallback {
+        state
+            .messaging
+            .lock()
+            .await
+            .peer_by_destination(source_hex)
+            .and_then(|peer| peer.display_name)
+    } else {
+        None
+    };
+    let parsed_from_fields = fields_bytes.and_then(|value| {
+        event_projection_from_fields(
+            value,
+            content_bytes,
+            source_identity_fallback,
+            source_display_name.as_deref(),
+            now_ms(),
+        )
+    });
     if metadata.is_none() && parsed_from_fields.is_none() {
         return false;
     }
@@ -2837,6 +3035,20 @@ fn msgpack_eam_status(value: &MsgPackValue) -> Option<String> {
     })
 }
 
+fn msgpack_eam_status_array<'a>(
+    args: &'a [(MsgPackValue, MsgPackValue)],
+) -> [Option<&'a MsgPackValue>; 6] {
+    let mut statuses = [None, None, None, None, None, None];
+    if let Some(values) =
+        msgpack_get_named(args, &["statuses", "s"]).and_then(MsgPackValue::as_array)
+    {
+        for (index, value) in values.iter().take(statuses.len()).enumerate() {
+            statuses[index] = Some(value);
+        }
+    }
+    statuses
+}
+
 fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String> {
     match value {
         MsgPackValue::Binary(bytes) if bytes.len() == 16 => {
@@ -2850,7 +3062,14 @@ fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String>
                 &hex[20..32],
             ))
         }
-        _ => msgpack_string(value),
+        _ => {
+            let tail = msgpack_string(value)?;
+            if tail.starts_with("log-entry-") {
+                Some(tail)
+            } else {
+                Some(format!("log-entry-{uid}-{tail}"))
+            }
+        }
     }
 }
 
@@ -3009,7 +3228,7 @@ impl InterfaceTrafficSample {
     }
 }
 
-type TcpEndpointRegistry = Arc<TokioMutex<HashMap<AddressHash, String>>>;
+type ActiveInterfaceRegistry = Arc<TokioMutex<HashMap<AddressHash, String>>>;
 
 fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
     configured_seconds.max(MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
@@ -3017,7 +3236,7 @@ fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
 
 fn spawn_interface_traffic_monitor(
     transport: Arc<Transport>,
-    tcp_endpoint_registry: TcpEndpointRegistry,
+    active_interface_registry: ActiveInterfaceRegistry,
 ) {
     tokio::spawn(async move {
         let mut rx = transport.iface_rx();
@@ -3029,7 +3248,7 @@ fn spawn_interface_traffic_monitor(
                     if samples.is_empty() {
                         continue;
                     }
-                    let endpoints = tcp_endpoint_registry.lock().await.clone();
+                    let endpoints = active_interface_registry.lock().await.clone();
                     let mut rows = samples.drain().collect::<Vec<_>>();
                     rows.sort_by_key(|(_, sample)| std::cmp::Reverse(sample.bytes));
                     for (interface, sample) in rows {
@@ -5063,6 +5282,13 @@ fn direct_attempt_budget_for_send(
     )
 }
 
+fn direct_attempt_send_mode(send_mode: SendMode) -> SendMode {
+    match send_mode {
+        SendMode::Auto {} | SendMode::DirectOnly {} => SendMode::DirectOnly {},
+        SendMode::PropagationOnly {} => SendMode::PropagationOnly {},
+    }
+}
+
 fn should_try_propagation_after_direct_failure(
     send_mode: SendMode,
     is_accepted_result: bool,
@@ -6143,7 +6369,7 @@ struct NodeRuntimeState {
     peer_resolution_inflight: Arc<TokioMutex<HashSet<String>>>,
     known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>>,
     out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>>,
-    tcp_endpoint_registry: TcpEndpointRegistry,
+    active_interface_registry: ActiveInterfaceRegistry,
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
     pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
@@ -6232,10 +6458,21 @@ async fn ensure_output_link(
     state: &NodeRuntimeState,
     desc: DestinationDesc,
 ) -> Result<Arc<TokioMutex<Link>>, NodeError> {
-    const MAX_ATTEMPTS: usize = 3;
+    const DEFAULT_MAX_ATTEMPTS: usize = 3;
+    const RNODE_BLE_MAX_ATTEMPTS: usize = 1;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
+    let rnode_only = {
+        let active_interfaces = state.active_interface_registry.lock().await;
+        active_interfaces_are_rnode_ble_only(&active_interfaces)
+    };
+    let max_attempts = if rnode_only {
+        RNODE_BLE_MAX_ATTEMPTS
+    } else {
+        DEFAULT_MAX_ATTEMPTS
+    };
+    let connect_timeout = link_connect_timeout(rnode_only);
 
-    for attempt in 0..MAX_ATTEMPTS {
+    for attempt in 0..max_attempts {
         let link = {
             let mut links = state.out_links.lock().await;
             if let Some(existing) = links.get(&desc.address_hash).cloned() {
@@ -6247,20 +6484,21 @@ async fn ensure_output_link(
             }
         };
 
-        match wait_for_link_active(&state.transport, &link).await {
+        match wait_for_link_active(&state.transport, &link, connect_timeout).await {
             Ok(()) => return Ok(link),
             Err(err) => {
                 let stale = state.out_links.lock().await.remove(&desc.address_hash);
                 if let Some(stale) = stale {
                     stale.lock().await.close();
                 }
-                if attempt + 1 == MAX_ATTEMPTS {
+                if attempt + 1 == max_attempts {
                     return Err(err);
                 }
                 info!(
-                    "[lxmf][events] link activation retry destination={} attempt={} reason={}",
+                    "[lxmf][events] link activation retry destination={} attempt={} timeout_ms={} reason={}",
                     address_hash_to_hex(&desc.address_hash),
                     attempt + 1,
+                    connect_timeout.as_millis(),
                     err,
                 );
                 state
@@ -6337,7 +6575,7 @@ async fn register_desired_managed_peer_link(
     state: &NodeRuntimeState,
     destination_hex: &str,
 ) -> Option<ManagedPeerLinkTarget> {
-    if !has_active_tcp_client_interface(state).await {
+    if !has_active_reticulum_interface(state).await {
         return None;
     }
     let target = desired_managed_peer_link_target_for_destination(state, destination_hex).await?;
@@ -6352,9 +6590,9 @@ async fn add_desired_managed_peer_link_and_schedule(
     reason: &str,
 ) {
     state.managed_peer_links.add_desired(target.clone()).await;
-    if !has_active_tcp_client_interface(state).await {
+    if !has_active_reticulum_interface(state).await {
         info!(
-            "[link][maintain] destination={} status=deferred reason={} detail=no-active-tcp-interface",
+            "[link][maintain] destination={} status=deferred reason={} detail=no-active-reticulum-interface",
             target.destination_hex, reason,
         );
         return;
@@ -6428,7 +6666,7 @@ async fn ensure_managed_peer_link(
     bus: &EventBus,
     target: ManagedPeerLinkTarget,
 ) -> Result<(), NodeError> {
-    if !has_active_tcp_client_interface(state).await {
+    if !has_active_reticulum_interface(state).await {
         return Err(NodeError::NetworkError {});
     }
     let Ok(destination) = parse_address_hash(target.destination_hex.as_str()) else {
@@ -6483,7 +6721,7 @@ async fn ensure_managed_peer_link(
 }
 
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
-    if !has_active_tcp_client_interface(state).await {
+    if !has_active_reticulum_interface(state).await {
         return;
     }
     let targets = state.managed_peer_links.desired_targets().await;
@@ -6617,8 +6855,36 @@ async fn register_pending_lxmf_delivery(
     })
 }
 
-async fn has_active_tcp_client_interface(state: &NodeRuntimeState) -> bool {
-    !state.tcp_endpoint_registry.lock().await.is_empty()
+async fn has_active_reticulum_interface(state: &NodeRuntimeState) -> bool {
+    !state.active_interface_registry.lock().await.is_empty()
+}
+
+fn active_interfaces_include_relay_transport(
+    active_interfaces: &HashMap<AddressHash, String>,
+) -> bool {
+    active_interfaces
+        .values()
+        .any(|interface| !interface.starts_with("rnode-ble:"))
+}
+
+fn active_interfaces_are_rnode_ble_only(active_interfaces: &HashMap<AddressHash, String>) -> bool {
+    !active_interfaces.is_empty()
+        && active_interfaces
+            .values()
+            .all(|interface| interface.starts_with("rnode-ble:"))
+}
+
+fn link_connect_timeout(rnode_only: bool) -> Duration {
+    if rnode_only {
+        RNODE_BLE_LINK_CONNECT_TIMEOUT
+    } else {
+        DEFAULT_LINK_CONNECT_TIMEOUT
+    }
+}
+
+async fn has_active_relay_transport_interface(state: &NodeRuntimeState) -> bool {
+    let active_interfaces = state.active_interface_registry.lock().await;
+    active_interfaces_include_relay_transport(&active_interfaces)
 }
 
 #[expect(
@@ -7064,6 +7330,14 @@ async fn send_lxmf_with_delivery_policy(
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
     let has_active_relay = has_active_propagation_relay(state).await;
+    let has_active_relay_transport =
+        has_active_relay && has_active_relay_transport_interface(state).await;
+    let rnode_only_transport = {
+        let active_interfaces = state.active_interface_registry.lock().await;
+        active_interfaces_are_rnode_ble_only(&active_interfaces)
+    };
+    let direct_link_connect_timeout =
+        rnode_only_transport.then_some(RNODE_BLE_LINK_CONNECT_TIMEOUT);
     let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
     let is_sos_status = is_sos_status_metadata(metadata.as_ref());
     let retry_delay = if is_accepted_result {
@@ -7094,7 +7368,7 @@ async fn send_lxmf_with_delivery_policy(
         saved_peer_has_direct_ready_route(
             state,
             canonical_requested_destination.as_str(),
-            has_active_relay,
+            has_active_relay_transport,
         )
         .await
     } else {
@@ -7124,7 +7398,7 @@ async fn send_lxmf_with_delivery_policy(
     let direct_priority_hops = None;
     let direct_attempts = direct_attempt_budget_for_send(
         send_mode,
-        has_active_relay,
+        has_active_relay_transport,
         can_try_stored_lxmf_route,
         has_current_lxmf_route,
         direct_delivery_ready,
@@ -7143,12 +7417,12 @@ async fn send_lxmf_with_delivery_policy(
         };
     let prefer_propagation = matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
-        && has_active_relay
+        && has_active_relay_transport
         && is_saved_peer
         && saved_peer_prefers_propagation(
             state,
             requested_destination_hex,
-            has_active_relay,
+            has_active_relay_transport,
             direct_priority_hops,
         )
         .await;
@@ -7213,7 +7487,7 @@ async fn send_lxmf_with_delivery_policy(
         .await?;
         last_resolved_destination_hex = Some(resolved_destination_hex.clone());
         info!(
-            "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
+            "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} relay_transport={} direct_ready={}",
             requested_destination_hex,
             canonical_requested_destination,
             resolved_destination_hex,
@@ -7222,6 +7496,7 @@ async fn send_lxmf_with_delivery_policy(
             is_saved_peer,
             can_try_stored_lxmf_route,
             has_active_relay,
+            has_active_relay_transport,
             direct_delivery_ready,
         );
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
@@ -7266,8 +7541,10 @@ async fn send_lxmf_with_delivery_policy(
                     title.clone(),
                     fields_bytes.clone(),
                     metadata.clone(),
-                    send_mode,
+                    direct_attempt_send_mode(send_mode),
                     Some(attempt),
+                    direct_link_connect_timeout,
+                    rnode_only_transport.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
                 )
                 .await
         };
@@ -7338,24 +7615,25 @@ async fn send_lxmf_with_delivery_policy(
         }
     }
 
-    if !matches!(send_mode, SendMode::Auto {}) || !has_active_propagation_relay(state).await {
+    if !matches!(send_mode, SendMode::Auto {}) || !has_active_relay_transport {
         return Err(last_error.unwrap_or(NodeError::NetworkError {}));
     }
 
     if direct_attempts == 0 {
         info!(
-            "[lxmf][mission] auto delivery using propagation without direct probe destination={} saved_peer={} stored_lxmf_route={} active_relay={} direct_ready={}",
+            "[lxmf][mission] auto delivery using propagation without direct probe destination={} saved_peer={} stored_lxmf_route={} active_relay={} relay_transport={} direct_ready={}",
             requested_destination_hex,
             is_saved_peer,
             can_try_stored_lxmf_route,
             has_active_relay,
+            has_active_relay_transport,
             direct_delivery_ready,
         );
     } else {
         if should_try_propagation_after_direct_failure(
             send_mode,
             is_accepted_result,
-            has_active_relay,
+            has_active_relay_transport,
             is_saved_peer,
             last_error.as_ref().is_some_and(is_retriable_lxmf_error),
         ) {
@@ -7570,6 +7848,7 @@ async fn emit_received_payload(
                 Some(metadata),
                 fields_bytes.as_deref(),
                 Some(message.content.as_slice()),
+                source_hex.as_deref(),
             )
             .await;
             let persisted_telemetry = persist_received_telemetry_if_present(
@@ -8028,6 +8307,7 @@ async fn send_chat_delivery_ack_if_needed(
 async fn wait_for_link_active(
     transport: &Arc<Transport>,
     link: &Arc<TokioMutex<Link>>,
+    timeout: Duration,
 ) -> Result<(), NodeError> {
     if link.lock().await.status() == LinkStatus::Active {
         return Ok(());
@@ -8035,7 +8315,7 @@ async fn wait_for_link_active(
 
     let link_id = *link.lock().await.id();
     let mut events = transport.out_link_events();
-    let deadline = tokio::time::Instant::now() + DEFAULT_LINK_CONNECT_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
         if link.lock().await.status() == LinkStatus::Active {
@@ -8168,7 +8448,7 @@ async fn refresh_hub_directory_lxmf(
         }
     };
 
-    wait_for_link_active(&state.transport, &link).await?;
+    wait_for_link_active(&state.transport, &link, DEFAULT_LINK_CONNECT_TIMEOUT).await?;
 
     let mut source = [0u8; 16];
     source.copy_from_slice(
@@ -8368,6 +8648,7 @@ fn spawn_rnode_ble_interface(
     transport: Arc<Transport>,
     bus: EventBus,
     settings: RnodeSettingsRecord,
+    active_interface_registry: ActiveInterfaceRegistry,
 ) {
     if !settings.enabled {
         return;
@@ -8425,6 +8706,10 @@ fn spawn_rnode_ble_interface(
             "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
             label, peripheral_id, settings.region, settings.profile, iface
         );
+        active_interface_registry
+            .lock()
+            .await
+            .insert(iface, label.clone());
         emit_operational_notice(
             &bus,
             LogLevel::Info {},
@@ -8441,6 +8726,7 @@ fn spawn_rnode_ble_interface(
     _transport: Arc<Transport>,
     bus: EventBus,
     settings: RnodeSettingsRecord,
+    _active_interface_registry: ActiveInterfaceRegistry,
 ) {
     if !settings.enabled {
         return;
@@ -8472,10 +8758,10 @@ async fn any_tcp_endpoint_reachable(endpoints: &[String]) -> bool {
 }
 
 async fn unregister_tcp_client_endpoint(
-    tcp_endpoint_registry: &TcpEndpointRegistry,
+    active_interface_registry: &ActiveInterfaceRegistry,
     endpoint: &str,
 ) {
-    tcp_endpoint_registry
+    active_interface_registry
         .lock()
         .await
         .retain(|_, registered_endpoint| registered_endpoint != endpoint);
@@ -8492,7 +8778,7 @@ fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
 fn spawn_tcp_client_interface_manager(
     transport: Arc<Transport>,
     connect_addr: String,
-    tcp_endpoint_registry: TcpEndpointRegistry,
+    active_interface_registry: ActiveInterfaceRegistry,
 ) {
     tokio::spawn(async move {
         let active = Arc::new(AtomicBool::new(false));
@@ -8510,7 +8796,7 @@ fn spawn_tcp_client_interface_manager(
                 active.store(true, Ordering::Release);
                 let active_for_task = active.clone();
                 let task_addr = connect_addr.clone();
-                let registry_for_task = tcp_endpoint_registry.clone();
+                let registry_for_task = active_interface_registry.clone();
                 let iface = transport.iface_manager().lock().await.spawn(
                     TcpClient::new_from_stream(connect_addr.clone(), stream),
                     move |context| async move {
@@ -8521,7 +8807,7 @@ fn spawn_tcp_client_interface_manager(
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
                 );
-                tcp_endpoint_registry
+                active_interface_registry
                     .lock()
                     .await
                     .insert(iface, connect_addr.clone());
@@ -8651,17 +8937,23 @@ pub async fn run_node(
         .await;
 
     let transport = Arc::new(transport);
-    let tcp_endpoint_registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::new()));
-    spawn_interface_traffic_monitor(transport.clone(), tcp_endpoint_registry.clone());
+    let active_interface_registry: ActiveInterfaceRegistry =
+        Arc::new(TokioMutex::new(HashMap::new()));
+    spawn_interface_traffic_monitor(transport.clone(), active_interface_registry.clone());
     let tcp_client_endpoints = configured_tcp_client_endpoints(config.tcp_clients.as_slice());
     for endpoint in tcp_client_endpoints.iter().cloned() {
         spawn_tcp_client_interface_manager(
             transport.clone(),
             endpoint,
-            tcp_endpoint_registry.clone(),
+            active_interface_registry.clone(),
         );
     }
-    spawn_rnode_ble_interface(transport.clone(), bus.clone(), config.rnode.clone());
+    spawn_rnode_ble_interface(
+        transport.clone(),
+        bus.clone(),
+        config.rnode.clone(),
+        active_interface_registry.clone(),
+    );
 
     let _legacy_app_destination_hex = app_destination
         .lock()
@@ -8735,7 +9027,7 @@ pub async fn run_node(
         peer_resolution_inflight: peer_resolution_inflight.clone(),
         known_destinations: known_destinations.clone(),
         out_links: out_links.clone(),
-        tcp_endpoint_registry: tcp_endpoint_registry.clone(),
+        active_interface_registry: active_interface_registry.clone(),
         connected_peers: connected_peers.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
@@ -10400,8 +10692,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tcp_endpoint_registry_removes_stopped_endpoint_entries() {
-        let registry: TcpEndpointRegistry = Arc::new(TokioMutex::new(HashMap::from([
+    async fn active_interface_registry_removes_stopped_tcp_endpoint_entries() {
+        let registry: ActiveInterfaceRegistry = Arc::new(TokioMutex::new(HashMap::from([
             (
                 AddressHash::new_from_slice(&[1u8; 16]),
                 "rns.beleth.net:4242".to_string(),
@@ -10423,6 +10715,50 @@ mod tests {
         assert_eq!(
             guard.get(&AddressHash::new_from_slice(&[3u8; 16])),
             Some(&"dfw.us.g00n.cloud:6969".to_string()),
+        );
+    }
+
+    #[test]
+    fn active_relay_transport_requires_non_rnode_ble_interface() {
+        let rnode_only = HashMap::from([(
+            AddressHash::new_from_slice(&[1u8; 16]),
+            "rnode-ble:RNode 4339".to_string(),
+        )]);
+        assert!(!active_interfaces_include_relay_transport(&rnode_only));
+        assert!(active_interfaces_are_rnode_ble_only(&rnode_only));
+        assert_eq!(link_connect_timeout(true), RNODE_BLE_LINK_CONNECT_TIMEOUT);
+
+        let with_tcp = HashMap::from([
+            (
+                AddressHash::new_from_slice(&[1u8; 16]),
+                "rnode-ble:RNode 4339".to_string(),
+            ),
+            (
+                AddressHash::new_from_slice(&[2u8; 16]),
+                "rns.beleth.net:4242".to_string(),
+            ),
+        ]);
+        assert!(active_interfaces_include_relay_transport(&with_tcp));
+        assert!(!active_interfaces_are_rnode_ble_only(&with_tcp));
+        assert_eq!(link_connect_timeout(false), DEFAULT_LINK_CONNECT_TIMEOUT);
+
+        let no_interfaces = HashMap::new();
+        assert!(!active_interfaces_are_rnode_ble_only(&no_interfaces));
+    }
+
+    #[test]
+    fn direct_attempts_force_direct_sdk_mode() {
+        assert_eq!(
+            direct_attempt_send_mode(SendMode::Auto {}),
+            SendMode::DirectOnly {}
+        );
+        assert_eq!(
+            direct_attempt_send_mode(SendMode::DirectOnly {}),
+            SendMode::DirectOnly {}
+        );
+        assert_eq!(
+            direct_attempt_send_mode(SendMode::PropagationOnly {}),
+            SendMode::PropagationOnly {}
         );
     }
 
@@ -10831,6 +11167,37 @@ mod tests {
     }
 
     #[test]
+    fn compact_event_operational_ack_fields_use_event_uid_tracking_metadata() {
+        let ack = OperationalAck {
+            destination_hex: "abcdef0123456789abcdef0123456789".to_string(),
+            command_id: "log-entry-evt-984bfa16-cfe3-430a-a201-3294310a91fe".to_string(),
+            correlation_id: Some("log-entry-evt-984bfa16-cfe3-430a-a201-3294310a91fe".to_string()),
+            command_type: Some("mission.registry.log_entry.upsert".to_string()),
+        };
+
+        let fields = build_compact_operational_ack_fields(&ack).expect("ack fields");
+        assert!(
+            fields.len() < 32,
+            "compact event ack fields were {} bytes",
+            fields.len()
+        );
+        let metadata = parse_mission_sync_metadata(fields.as_slice()).expect("metadata");
+
+        assert!(metadata.result_present);
+        assert!(!metadata.command_present);
+        assert_eq!(metadata.result_status.as_deref(), Some("accepted"));
+        assert_eq!(
+            metadata.event_uid.as_deref(),
+            Some("evt-984bfa16-cfe3-430a-a201-3294310a91fe")
+        );
+        assert_eq!(
+            metadata.command_id.as_deref(),
+            Some("log-entry-evt-984bfa16-cfe3-430a-a201-3294310a91fe")
+        );
+        assert!(metadata.correlation_id.is_none());
+    }
+
+    #[test]
     fn accepted_result_metadata_is_identified_for_direct_ack_return() {
         let accepted = MissionSyncMetadata {
             result_present: true,
@@ -11189,8 +11556,14 @@ mod tests {
         )]);
         let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
 
-        let record = event_projection_from_fields(&bytes, Some(b"MECP/2/P01"), 1_700_000_000_000)
-            .expect("event projection");
+        let record = event_projection_from_fields(
+            &bytes,
+            Some(b"P01"),
+            None,
+            Some("Pixel"),
+            1_700_000_000_000,
+        )
+        .expect("event projection");
 
         assert_eq!(record.uid, "evt-1");
         assert_eq!(record.command_id, "log-entry-evt-1");
@@ -11199,7 +11572,7 @@ mod tests {
         assert_eq!(record.content, "MECP/2/P01");
         assert_eq!(record.callsign, "Pixel");
         assert_eq!(record.source_identity, "identity-1");
-        assert!(record.source_display_name.is_none());
+        assert_eq!(record.source_display_name.as_deref(), Some("Pixel"));
         assert_eq!(record.keywords, Vec::<String>::new());
         assert_eq!(record.content_hashes, Vec::<String>::new());
         assert_eq!(record.topics, vec!["mission-1".to_string()]);
@@ -11274,7 +11647,7 @@ mod tests {
         )]);
         let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
 
-        let record = event_projection_from_fields(&bytes, None, 1_700_000_000_000)
+        let record = event_projection_from_fields(&bytes, None, None, None, 1_700_000_000_000)
             .expect("event projection");
 
         assert_eq!(record.uid, "evt-1");
@@ -11336,7 +11709,8 @@ mod tests {
         )]);
         let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
 
-        let record = event_projection_from_fields(&bytes, None, 1_700_000_060_000).expect("event");
+        let record = event_projection_from_fields(&bytes, None, None, None, 1_700_000_060_000)
+            .expect("event");
 
         assert_eq!(record.uid, "evt-1");
         assert_eq!(record.deleted_at_ms, Some(1_700_000_050_000));

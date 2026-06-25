@@ -428,18 +428,24 @@ async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
         rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
         return;
       }
-      rnodeScanFeedback.value = pairResult.paired
-        ? "RNode is already paired."
-        : "Bluetooth pairing started. Confirm the Android pairing prompt before restarting the node.";
+      if (!pairResult.paired) {
+        form.rnodeEnabled = false;
+        form.rnodePeripheralId = "";
+        rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
+        rnodeScanFeedback.value = "Bluetooth pairing started. Confirm the Android pairing prompt, then select the RNode from paired devices before saving.";
+        return;
+      }
+      rnodeScanFeedback.value = "RNode is already paired.";
+      form.rnodePeripheralId = pairResult.id || pairResult.address || deviceId;
     } catch (error: unknown) {
       rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
       return;
     }
   } else {
     rnodeScanFeedback.value = "";
+    form.rnodePeripheralId = deviceId;
   }
   form.rnodeEnabled = true;
-  form.rnodePeripheralId = deviceId;
   form.rnodeDisplayName = device.name || device.address;
 }
 
