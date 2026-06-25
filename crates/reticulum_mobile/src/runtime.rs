@@ -1941,6 +1941,65 @@ fn msgpack_get_checklist_arg<'a>(
     }
 }
 
+fn msgpack_checklist_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) => value.as_u64().map(|value| format!("chk-{value}")),
+        _ => msgpack_string(value),
+    }
+}
+
+fn msgpack_checklist_template_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) => match value.as_u64()? {
+            1 => Some("tmpl-24-hour-survival-pack".to_string()),
+            2 => Some("tmpl-72-hour-home-preparedness".to_string()),
+            3 => Some("tmpl-vehicle-emergency-preparedness".to_string()),
+            _ => None,
+        },
+        _ => msgpack_string(value),
+    }
+}
+
+fn positional_checklist_command_args(
+    command: &MsgPackValue,
+) -> Option<(String, Vec<(MsgPackValue, MsgPackValue)>)> {
+    let MsgPackValue::Array(values) = command else {
+        return None;
+    };
+    let command_type = match values.first()? {
+        MsgPackValue::Integer(value) if value.as_u64() == Some(1) => {
+            "checklist.create.online".to_string()
+        }
+        value => {
+            msgpack_string(value).map(|value| canonical_command_type(value.as_str()).to_string())?
+        }
+    };
+    if command_type != "checklist.create.online" || values.len() < 5 {
+        return None;
+    }
+    Some((
+        command_type,
+        vec![
+            (
+                MsgPackValue::from("cl"),
+                values.get(1).expect("checked length").clone(),
+            ),
+            (
+                MsgPackValue::from("m"),
+                values.get(2).expect("checked length").clone(),
+            ),
+            (
+                MsgPackValue::from("tp"),
+                values.get(3).expect("checked length").clone(),
+            ),
+            (
+                MsgPackValue::from("n"),
+                values.get(4).expect("checked length").clone(),
+            ),
+        ],
+    ))
+}
+
 fn msgpack_value_to_json(value: &MsgPackValue) -> Option<serde_json::Value> {
     match value {
         MsgPackValue::Nil => Some(serde_json::Value::Null),
@@ -2057,7 +2116,18 @@ fn persist_received_checklist_if_present(
     let mut persisted_any = false;
     let mut handled_any = false;
     for command in command_entries {
-        let Some(command_map) = msgpack_map_entries(command) else {
+        let command_map_storage;
+        let args_storage;
+        let (command_map, args_override) = if let Some(command_map) = msgpack_map_entries(command) {
+            (command_map, None)
+        } else if let Some((command_type, args)) = positional_checklist_command_args(command) {
+            command_map_storage = vec![(MsgPackValue::from("t"), MsgPackValue::from(command_type))];
+            args_storage = args;
+            (
+                command_map_storage.as_slice(),
+                Some(args_storage.as_slice()),
+            )
+        } else {
             continue;
         };
         let Some(command_type) = msgpack_get_named(command_map, &["command_type", "t"])
@@ -2073,14 +2143,15 @@ fn persist_received_checklist_if_present(
             .and_then(msgpack_timestamp)
             .unwrap_or_else(current_timestamp_rfc3339);
         let source_identity = checklist_command_source_identity(command_map);
-        let args = msgpack_get_named(command_map, &["args", "a"])
+        let map_args = msgpack_get_named(command_map, &["args", "a"])
             .and_then(msgpack_map_entries)
             .unwrap_or(command_map);
+        let args = args_override.unwrap_or(map_args);
 
         match command_type.as_str() {
             "checklist.create.online" => {
                 let checklist_uid = msgpack_get_checklist_arg(args, "checklist_uid")
-                    .and_then(msgpack_string)
+                    .and_then(msgpack_checklist_uid)
                     .or_else(|| {
                         msgpack_get_named(command_map, &["command_id", "i"])
                             .and_then(msgpack_string)
@@ -2094,8 +2165,8 @@ fn persist_received_checklist_if_present(
                 else {
                     continue;
                 };
-                let Some(template_uid) =
-                    msgpack_get_checklist_arg(args, "template_uid").and_then(msgpack_string)
+                let Some(template_uid) = msgpack_get_checklist_arg(args, "template_uid")
+                    .and_then(msgpack_checklist_template_uid)
                 else {
                     continue;
                 };
@@ -2253,8 +2324,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.upload" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2289,8 +2360,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.update" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2320,8 +2391,8 @@ fn persist_received_checklist_if_present(
                 {
                     checklist.mission_uid = normalize_optional_string(Some(value.as_str()));
                 }
-                if let Some(value) =
-                    msgpack_get_checklist_arg(patch, "template_uid").and_then(msgpack_string)
+                if let Some(value) = msgpack_get_checklist_arg(patch, "template_uid")
+                    .and_then(msgpack_checklist_template_uid)
                 {
                     checklist.template_uid = normalize_optional_string(Some(value.as_str()));
                 }
@@ -2356,8 +2427,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.delete" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2380,8 +2451,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.task.row.add" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2500,8 +2571,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.task.row.delete" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2570,16 +2641,20 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.task.status.set" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
-                let Some(task_uid) =
-                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string)
-                else {
+                let incoming_number = msgpack_get_checklist_arg(args, "number")
+                    .and_then(msgpack_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0);
+                let explicit_task_uid =
+                    msgpack_get_checklist_arg(args, "task_uid").and_then(msgpack_string);
+                if explicit_task_uid.is_none() && incoming_number.is_none() {
                     continue;
-                };
+                }
                 let mut checklist = app_state
                     .get_checklist_any(checklist_uid.as_str())
                     .ok()
@@ -2590,18 +2665,26 @@ fn persist_received_checklist_if_present(
                             timestamp.as_str(),
                         )
                     });
-                if checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
-                    !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
-                }) || (checklist.deleted_at.is_some()
-                    && !is_hidden_placeholder_checklist(&checklist))
+                let hidden_placeholder = is_hidden_placeholder_checklist(&checklist);
+                if !hidden_placeholder
+                    && (checklist.deleted_at.as_deref().is_some_and(|deleted_at| {
+                        !incoming_timestamp_is_newer(Some(deleted_at), timestamp.as_str())
+                    }) || checklist.deleted_at.is_some())
                 {
                     handled_any = true;
                     continue;
                 }
-                let incoming_number = msgpack_get_checklist_arg(args, "number")
-                    .and_then(msgpack_u64)
-                    .and_then(|value| u32::try_from(value).ok())
-                    .filter(|value| *value > 0);
+                let Some(task_uid) = explicit_task_uid.or_else(|| {
+                    incoming_number.and_then(|number| {
+                        checklist
+                            .tasks
+                            .iter()
+                            .find(|task| task.number == number && task.deleted_at.is_none())
+                            .map(|task| task.task_uid.clone())
+                    })
+                }) else {
+                    continue;
+                };
                 let resolved_task_uid = if checklist
                     .tasks
                     .iter()
@@ -2676,8 +2759,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.task.row.style.set" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2739,8 +2822,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.task.cell.set" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };
@@ -2846,8 +2929,8 @@ fn persist_received_checklist_if_present(
                 );
             }
             "checklist.join" => {
-                let Some(checklist_uid) =
-                    msgpack_get_checklist_arg(args, "checklist_uid").and_then(msgpack_string)
+                let Some(checklist_uid) = msgpack_get_checklist_arg(args, "checklist_uid")
+                    .and_then(msgpack_checklist_uid)
                 else {
                     continue;
                 };

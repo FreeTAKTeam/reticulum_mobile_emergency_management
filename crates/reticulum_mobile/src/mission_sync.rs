@@ -183,6 +183,13 @@ fn msgpack_eam_uid(value: &MsgPackValue) -> Option<String> {
     }
 }
 
+fn msgpack_checklist_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) => value.as_u64().map(|value| format!("chk-{value}")),
+        _ => msgpack_string(value),
+    }
+}
+
 fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String> {
     match value {
         MsgPackValue::Binary(bytes) if bytes.len() == 16 => {
@@ -302,9 +309,13 @@ fn parse_identifier_fields(
     );
     parse_string_field(
         entries,
-        &["checklist_uid", "checklistUid", "cl"],
+        &["checklist_uid", "checklistUid"],
         &mut metadata.checklist_uid,
         false,
+    );
+    set_if_none(
+        &mut metadata.checklist_uid,
+        msgpack_get_named(entries, &["cl"]).and_then(msgpack_checklist_uid),
     );
     parse_string_field(
         entries,
@@ -380,6 +391,36 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
     }
 }
 
+fn parse_positional_command_envelope(values: &[MsgPackValue], metadata: &mut MissionSyncMetadata) {
+    let Some(command_type) = values.first().and_then(|value| match value {
+        MsgPackValue::Integer(value) if value.as_u64() == Some(1) => {
+            Some("checklist.create.online".to_string())
+        }
+        value => {
+            msgpack_string(value).map(|value| canonical_command_type(value.as_str()).to_string())
+        }
+    }) else {
+        return;
+    };
+    if command_type != "checklist.create.online" || values.len() < 5 {
+        return;
+    }
+    metadata.command_present = true;
+    metadata.command_type = Some(command_type);
+    set_if_none(
+        &mut metadata.checklist_uid,
+        values.get(1).and_then(msgpack_checklist_uid),
+    );
+    parse_mission_uid_field(
+        &[(
+            MsgPackValue::from("m"),
+            values.get(2).expect("checked length").clone(),
+        )],
+        &["m"],
+        &mut metadata.mission_uid,
+    );
+}
+
 fn parse_result_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetadata) {
     let MsgPackValue::Map(map) = envelope else {
         return;
@@ -438,6 +479,7 @@ fn parse_envelope_tree(
 ) {
     match envelope {
         MsgPackValue::Array(entries) => {
+            parse_positional_command_envelope(entries.as_slice(), metadata);
             for entry in entries {
                 parse_envelope_tree(entry, metadata, parser);
             }
