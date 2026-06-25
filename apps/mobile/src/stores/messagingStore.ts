@@ -679,7 +679,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
-      method: "Opportunistic",
+      method: "Direct",
       state: "Queued",
       detail: undefined,
       sentAtMs: now,
@@ -689,7 +689,9 @@ export const useMessagingStore = defineStore("messaging", () => {
     persistWeb();
 
     try {
-      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title);
+      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title, {
+        sendMode: "DirectOnly",
+      });
       const nextMessages = { ...byMessageId.value };
       delete nextMessages[optimisticMessageId];
       nextMessages[messageIdHex] = cloneMessage({
@@ -700,7 +702,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: "Direct",
         state: "Queued",
         detail: undefined,
         sentAtMs: now,
@@ -718,7 +720,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: "Direct",
         state: "Failed",
         detail: error instanceof Error ? error.message : "Send failed",
         sentAtMs: now,

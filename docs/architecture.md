@@ -309,6 +309,7 @@ Verification:
 
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
+- Chat sends request `DirectOnly` LXMF delivery. The user flow must announce, connect to the peer, and then send; the UI records outbound chat as `Direct` instead of `Opportunistic`.
 - If the peer is known but is not currently direct-deliverable and an active propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
 - If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
 
