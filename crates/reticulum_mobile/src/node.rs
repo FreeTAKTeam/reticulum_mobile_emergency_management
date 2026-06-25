@@ -1548,6 +1548,49 @@ fn json_value_to_msgpack(value: &JsonValue) -> Result<MsgPackValue, NodeError> {
     }
 }
 
+fn generated_checklist_uid_wire_value(value: &str) -> MsgPackValue {
+    value
+        .trim()
+        .strip_prefix("chk-")
+        .filter(|suffix| {
+            suffix.len() >= 10
+                && !suffix.starts_with('0')
+                && suffix.chars().all(|ch| ch.is_ascii_digit())
+        })
+        .and_then(|suffix| suffix.parse::<u64>().ok())
+        .map(MsgPackValue::from)
+        .unwrap_or_else(|| MsgPackValue::from(value))
+}
+
+fn default_checklist_template_wire_code(value: &str) -> Option<u64> {
+    match value.trim() {
+        "tmpl-24-hour-survival-pack" => Some(1),
+        "tmpl-72-hour-home-preparedness" => Some(2),
+        "tmpl-vehicle-emergency-preparedness" => Some(3),
+        _ => None,
+    }
+}
+
+fn default_checklist_template_wire_value(value: &str) -> MsgPackValue {
+    default_checklist_template_wire_code(value)
+        .map(MsgPackValue::from)
+        .unwrap_or_else(|| MsgPackValue::from(value))
+}
+
+fn checklist_arg_msgpack_value(key: &str, value: &JsonValue) -> Result<MsgPackValue, NodeError> {
+    match key {
+        "checklist_uid" => value
+            .as_str()
+            .map(generated_checklist_uid_wire_value)
+            .ok_or(NodeError::InvalidConfig {}),
+        "template_uid" => value
+            .as_str()
+            .map(default_checklist_template_wire_value)
+            .ok_or(NodeError::InvalidConfig {}),
+        _ => json_value_to_msgpack(value),
+    }
+}
+
 fn checklist_args_to_msgpack(args: &JsonMap<String, JsonValue>) -> Result<MsgPackValue, NodeError> {
     Ok(MsgPackValue::Map(
         args.iter()
@@ -1558,7 +1601,7 @@ fn checklist_args_to_msgpack(args: &JsonMap<String, JsonValue>) -> Result<MsgPac
                         _ => json_value_to_msgpack(value)?,
                     }
                 } else {
-                    json_value_to_msgpack(value)?
+                    checklist_arg_msgpack_value(key, value)?
                 };
                 Ok((
                     MsgPackValue::from(checklist_arg_wire_key(key.as_str())),
@@ -1757,24 +1800,17 @@ fn build_checklist_command_fields(
         .map(str::to_string)
         .unwrap_or_else(|| correlation_id.clone());
     if command_type == "checklist.task.status.set" {
-        let mut command_entries = vec![
-            ("t", MsgPackValue::from(command_wire_value(command_type))),
-            (
-                "s",
-                msgpack_map(vec![(
-                    "r",
-                    msgpack_hex_identity(status.identity_hex.as_str()),
-                )]),
-            ),
-        ];
+        let mut command_entries = vec![("t", MsgPackValue::from(command_wire_value(command_type)))];
         if let Some(checklist_uid) = checklist_key_arg(args, "checklist_uid") {
-            command_entries.push(("cl", MsgPackValue::from(checklist_uid.as_str())));
-        }
-        if let Some(task_uid) = checklist_key_arg(args, "task_uid") {
-            command_entries.push(("tsk", MsgPackValue::from(task_uid.as_str())));
+            command_entries.push((
+                "cl",
+                generated_checklist_uid_wire_value(checklist_uid.as_str()),
+            ));
         }
         if let Some(number) = args.get("number").and_then(JsonValue::as_u64) {
             command_entries.push(("no", MsgPackValue::from(number)));
+        } else if let Some(task_uid) = checklist_key_arg(args, "task_uid") {
+            command_entries.push(("tsk", MsgPackValue::from(task_uid.as_str())));
         }
         let completed = args
             .get("user_status")
@@ -1788,46 +1824,33 @@ fn build_checklist_command_fields(
         return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
     }
     if command_type == "checklist.create.online" {
-        let mut command_entries = vec![
-            ("t", MsgPackValue::from(command_wire_value(command_type))),
-            (
-                "s",
-                msgpack_map(vec![(
-                    "r",
-                    msgpack_hex_identity(status.identity_hex.as_str()),
-                )]),
-            ),
-        ];
-        for key in [
-            "checklist_uid",
-            "mission_uid",
-            "template_uid",
-            "name",
-            "description",
-            "start_time",
-            "total_tasks",
-        ] {
-            if let Some(value) = args.get(key) {
-                command_entries.push((checklist_arg_wire_key(key), json_value_to_msgpack(value)?));
-            }
-        }
+        let command_entries = MsgPackValue::Array(vec![
+            MsgPackValue::from(1_u64),
+            args.get("checklist_uid")
+                .map(|value| checklist_arg_msgpack_value("checklist_uid", value))
+                .transpose()?
+                .ok_or(NodeError::InvalidConfig {})?,
+            args.get("mission_uid")
+                .map(|value| checklist_arg_msgpack_value("mission_uid", value))
+                .transpose()?
+                .ok_or(NodeError::InvalidConfig {})?,
+            args.get("template_uid")
+                .map(|value| checklist_arg_msgpack_value("template_uid", value))
+                .transpose()?
+                .ok_or(NodeError::InvalidConfig {})?,
+            args.get("name")
+                .map(|value| checklist_arg_msgpack_value("name", value))
+                .transpose()?
+                .ok_or(NodeError::InvalidConfig {})?,
+        ]);
         let fields = MsgPackValue::Map(vec![(
             MsgPackValue::from(FIELD_COMMANDS),
-            MsgPackValue::Array(vec![msgpack_map(command_entries)]),
+            MsgPackValue::Array(vec![command_entries]),
         )]);
         return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
     }
     if command_type == "checklist.task.row.add" {
-        let mut command_entries = vec![
-            ("t", MsgPackValue::from(command_wire_value(command_type))),
-            (
-                "s",
-                msgpack_map(vec![(
-                    "r",
-                    msgpack_hex_identity(status.identity_hex.as_str()),
-                )]),
-            ),
-        ];
+        let mut command_entries = vec![("t", MsgPackValue::from(command_wire_value(command_type)))];
         for key in [
             "checklist_uid",
             "task_uid",
@@ -1838,7 +1861,10 @@ fn build_checklist_command_fields(
             "notes",
         ] {
             if let Some(value) = args.get(key) {
-                command_entries.push((checklist_arg_wire_key(key), json_value_to_msgpack(value)?));
+                command_entries.push((
+                    checklist_arg_wire_key(key),
+                    checklist_arg_msgpack_value(key, value)?,
+                ));
             }
         }
         let fields = MsgPackValue::Map(vec![(
@@ -1957,10 +1983,11 @@ fn build_checklist_replication_payload_with_command_id(
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let fields =
         build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
-    let body = if matches!(
-        command_type,
-        "checklist.task.status.set" | "checklist.create.online" | "checklist.task.row.add"
-    ) {
+    let body = if matches!(command_type, "checklist.create.online") {
+        command_wire_value(command_type).as_bytes().to_vec()
+    } else if matches!(command_type, "checklist.task.status.set") {
+        command_wire_value(command_type).as_bytes().to_vec()
+    } else if matches!(command_type, "checklist.task.row.add") {
         format!("C {}", command_wire_value(command_type)).into_bytes()
     } else {
         format!(
@@ -2033,6 +2060,33 @@ fn checklist_create_online_args_json(
     }
 }
 
+fn compact_checklist_create_online_args_json(
+    request: &ChecklistCreateOnlineRequest,
+    total_tasks: Option<u32>,
+) -> Result<JsonMap<String, JsonValue>, NodeError> {
+    let mut args = checklist_create_online_args_json(request)?;
+    args.remove("description");
+    args.remove("start_time");
+    if let Some(total_tasks) = total_tasks {
+        args.insert("total_tasks".to_string(), JsonValue::from(total_tasks));
+    }
+    Ok(args)
+}
+
+fn create_template_replicates_tasks_from_template(args: &JsonMap<String, JsonValue>) -> bool {
+    let has_template = args
+        .get("template_uid")
+        .and_then(JsonValue::as_str)
+        .and_then(default_checklist_template_wire_code)
+        .is_some();
+    let has_tasks = args
+        .get("total_tasks")
+        .and_then(JsonValue::as_u64)
+        .is_some_and(|total| total > 0);
+    has_template && has_tasks
+}
+
+#[cfg(test)]
 fn append_checklist_create_snapshot_args(
     args: &mut JsonMap<String, JsonValue>,
     checklist: &ChecklistRecord,
@@ -3824,8 +3878,12 @@ impl Node {
                 for invalidation in invalidations {
                     emit_projection_invalidation(&inner.bus, invalidation);
                 }
-                let mut create_args = checklist_create_online_args_json(&create_request)?;
-                append_checklist_create_snapshot_args(&mut create_args, &snapshot)?;
+                let create_args = compact_checklist_create_online_args_json(
+                    &create_request,
+                    snapshot.expected_task_count,
+                )?;
+                let create_replicates_template_tasks =
+                    create_template_replicates_tasks_from_template(&create_args);
                 let peers = inner
                     .peers_snapshot
                     .lock()
@@ -3873,13 +3931,15 @@ impl Node {
                             ),
                         }),
                     }
-                    delayed_sends.extend(build_initial_checklist_task_payloads(
-                        &status,
-                        &target,
-                        checklist_uid.as_str(),
-                        snapshot.tasks.as_slice(),
-                        request.created_by_team_member_rns_identity.as_deref(),
-                    ));
+                    if !create_replicates_template_tasks {
+                        delayed_sends.extend(build_initial_checklist_task_payloads(
+                            &status,
+                            &target,
+                            checklist_uid.as_str(),
+                            snapshot.tasks.as_slice(),
+                            request.created_by_team_member_rns_identity.as_deref(),
+                        ));
+                    }
                 }
             }
 
@@ -3969,7 +4029,7 @@ impl Node {
                 .filter(|value| !value.is_empty())
                 .ok_or(NodeError::InvalidConfig {})?
                 .to_string();
-            let mut args = checklist_create_online_args_json(&request)?;
+            let create_args = compact_checklist_create_online_args_json(&request, None)?;
             let command_id = format!("cmd-{checklist_uid}");
             let invalidations = inner.app_state.create_online_checklist(&request)?;
             for invalidation in invalidations {
@@ -3979,7 +4039,10 @@ impl Node {
                 .app_state
                 .get_checklist_any(checklist_uid.as_str())?
                 .ok_or(NodeError::InternalError {})?;
-            append_checklist_create_snapshot_args(&mut args, &checklist)?;
+            let mut args = create_args;
+            if let Some(total_tasks) = checklist.expected_task_count {
+                args.insert("total_tasks".to_string(), JsonValue::from(total_tasks));
+            }
 
             if inner.cmd_tx.is_some() {
                 let peers = inner
@@ -6896,13 +6959,19 @@ mod tests {
 
     #[test]
     fn compact_checklist_create_payload_stays_packet_sized() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod,
+        };
+        use reticulum::transport::identity::PrivateIdentity;
+
         let checklist = ChecklistRecord {
-            uid: "chk-hydrate".to_string(),
-            mission_uid: Some("mission-alpha".to_string()),
+            uid: "chk-1780000000000".to_string(),
+            mission_uid: Some("LORA".to_string()),
             template_uid: None,
             template_version: None,
             template_name: None,
-            name: "Hydrate".to_string(),
+            name: "LoRaChk0927".to_string(),
             description: String::new(),
             start_time: None,
             mode: crate::types::ChecklistMode::Online {},
@@ -6963,10 +7032,10 @@ mod tests {
             }],
             feed_publications: Vec::new(),
         };
-        let mut create_args = checklist_create_online_args_json(&ChecklistCreateOnlineRequest {
+        let create_request = ChecklistCreateOnlineRequest {
             checklist_uid: Some(checklist.uid.clone()),
             mission_uid: checklist.mission_uid.clone(),
-            template_uid: "tmpl-hydrate".to_string(),
+            template_uid: "tmpl-vehicle-emergency-preparedness".to_string(),
             name: checklist.name.clone(),
             description: checklist.description.clone(),
             start_time: "2026-04-23T12:00:00Z".to_string(),
@@ -6976,50 +7045,119 @@ mod tests {
             created_by_team_member_display_name: checklist
                 .created_by_team_member_display_name
                 .clone(),
-        })
-        .expect("create args");
-        append_checklist_create_snapshot_args(&mut create_args, &checklist)
+        };
+        let mut snapshot_args =
+            checklist_create_online_args_json(&create_request).expect("create args");
+        append_checklist_create_snapshot_args(&mut snapshot_args, &checklist)
             .expect("append create snapshot");
         assert_eq!(
-            create_args.get("checklist_uid").and_then(JsonValue::as_str),
-            Some("chk-hydrate")
+            snapshot_args
+                .get("checklist_uid")
+                .and_then(JsonValue::as_str),
+            Some("chk-1780000000000")
         );
-        assert!(create_args.get("columns").is_none());
+        assert!(snapshot_args.get("columns").is_none());
         assert_eq!(
-            create_args.get("total_tasks").and_then(JsonValue::as_u64),
+            snapshot_args.get("total_tasks").and_then(JsonValue::as_u64),
             Some(1)
         );
         assert_eq!(
-            create_args
+            snapshot_args
                 .get("created_by_team_member_display_name")
                 .and_then(JsonValue::as_str),
             Some("Peer A")
         );
-        assert!(create_args.get("tasks").is_none());
-        assert!(create_args.get("counts").is_none());
-        assert!(create_args.get("progress_percent").is_none());
+        assert!(snapshot_args.get("tasks").is_none());
+        assert!(snapshot_args.get("counts").is_none());
+        assert!(snapshot_args.get("progress_percent").is_none());
 
         let status = build_status_for_tests();
         let target = MissionReplicationTarget {
             app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             send_mode: SendMode::Auto {},
         };
+        let create_args = compact_checklist_create_online_args_json(
+            &create_request,
+            checklist.expected_task_count,
+        )
+        .expect("compact create args");
+        assert!(create_args.get("description").is_none());
+        assert!(create_args.get("start_time").is_none());
         let (create_body, create_fields) = build_checklist_replication_payload_with_command_id(
             &status,
             &target,
             "checklist.create.online",
             &create_args,
-            Some("cmd-chk-hydrate"),
+            Some("cmd-chk-1780000000000"),
         )
         .expect("create payload");
+        assert_eq!(String::from_utf8_lossy(create_body.as_slice()), "C1");
+
+        let source = hex::decode(status.lxmf_destination_hex.as_str()).expect("source hex");
+        let destination = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(destination.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(create_body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(create_fields.as_slice()).expect("fields"));
+        let identity = PrivateIdentity::new_from_name("compact-checklist-create");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+        const RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES: usize = 145;
         assert!(
-            create_body.len() + create_fields.len() <= 400,
-            "initial create should stay packet-sized, body={} fields={} total={}",
+            wire.len() <= RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES,
+            "compact checklist create should fit RNode direct packet budget, body={} fields={} wire={} budget={}",
             create_body.len(),
             create_fields.len(),
-            create_body.len() + create_fields.len()
+            wire.len(),
+            RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES
         );
-        assert_eq!(String::from_utf8_lossy(create_body.as_slice()), "C C1");
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(
+            decision.representation,
+            LxmfMessageMethod::Packet,
+            "compact checklist create should avoid resource mode, body={} fields={} wire={}",
+            create_body.len(),
+            create_fields.len(),
+            wire.len()
+        );
+    }
+
+    #[test]
+    fn built_in_checklist_create_replicates_template_tasks() {
+        let request = ChecklistCreateOnlineRequest {
+            checklist_uid: Some("chk-1780000000000".to_string()),
+            mission_uid: Some("LORA".to_string()),
+            template_uid: "tmpl-72-hour-home-preparedness".to_string(),
+            name: "LoRaChk".to_string(),
+            description: String::new(),
+            start_time: "2026-04-23T12:00:00Z".to_string(),
+            created_by_team_member_rns_identity: Some("peer-a".to_string()),
+            created_by_team_member_display_name: Some("Peer A".to_string()),
+        };
+        let create_args =
+            compact_checklist_create_online_args_json(&request, Some(12)).expect("create args");
+
+        assert!(create_template_replicates_tasks_from_template(&create_args));
+    }
+
+    #[test]
+    fn custom_or_empty_checklist_create_still_needs_task_rows() {
+        let mut args = JsonMap::new();
+        args.insert(
+            "template_uid".to_string(),
+            JsonValue::from("tmpl-custom-offline"),
+        );
+        args.insert("total_tasks".to_string(), JsonValue::from(12_u64));
+        assert!(!create_template_replicates_tasks_from_template(&args));
+
+        args.insert(
+            "template_uid".to_string(),
+            JsonValue::from("tmpl-72-hour-home-preparedness"),
+        );
+        args.insert("total_tasks".to_string(), JsonValue::from(0_u64));
+        assert!(!create_template_replicates_tasks_from_template(&args));
     }
 
     #[test]
@@ -11920,12 +12058,18 @@ mod tests {
 
     #[test]
     fn checklist_task_status_payload_stays_packet_sized_for_template_task_ids() {
+        use lxmf::message::{
+            decide_delivery, Message as LxmfMessage, MessageMethod as LxmfMessageMethod,
+            TransportMethod,
+        };
+        use reticulum::transport::identity::PrivateIdentity;
+
         let status = build_status_for_tests();
         let target = MissionReplicationTarget {
             app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             send_mode: SendMode::Auto {},
         };
-        let args = checklist_task_status_args_json(&ChecklistTaskStatusSetRequest {
+        let mut args = checklist_task_status_args_json(&ChecklistTaskStatusSetRequest {
             checklist_uid: "chk-1779802362961".to_string(),
             task_uid: "tmpl-vehicle-emergency-preparedness-task-1".to_string(),
             user_status: crate::types::ChecklistUserTaskStatus::Complete {},
@@ -11933,6 +12077,7 @@ mod tests {
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             ),
         });
+        args.insert("number".to_string(), JsonValue::from(1_u64));
 
         let (body, fields) = build_checklist_replication_payload(
             &status,
@@ -11942,12 +12087,34 @@ mod tests {
         )
         .expect("checklist task status payload");
 
+        let source = hex::decode(status.lxmf_destination_hex.as_str()).expect("source hex");
+        let destination = hex::decode(target.app_destination_hex.as_str()).expect("target hex");
+        let mut message = LxmfMessage::new();
+        message.source_hash = Some(source.as_slice().try_into().expect("source hash"));
+        message.destination_hash = Some(destination.as_slice().try_into().expect("target hash"));
+        message.set_content_from_bytes(body.as_slice());
+        message.fields = Some(rmp_serde::from_slice(fields.as_slice()).expect("fields"));
+        let identity = PrivateIdentity::new_from_name("compact-checklist-task-status");
+        let signer = crate::runtime::lxmf_private_identity(&identity).expect("signer");
+        let wire = message.to_wire(Some(&signer)).expect("wire");
+        const RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES: usize = 145;
         assert!(
-            body.len() + fields.len() <= 360,
-            "task status should stay safely packet-sized, body={} fields={} total={}",
+            wire.len() <= RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES,
+            "task status should fit RNode direct packet budget, body={} fields={} wire={} budget={}",
             body.len(),
             fields.len(),
-            body.len() + fields.len()
+            wire.len(),
+            RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES
+        );
+        let decision =
+            decide_delivery(TransportMethod::Direct, false, wire.len()).expect("delivery decision");
+        assert_eq!(
+            decision.representation,
+            LxmfMessageMethod::Packet,
+            "task status should avoid resource mode, body={} fields={} wire={}",
+            body.len(),
+            fields.len(),
+            wire.len()
         );
         let field_text = String::from_utf8_lossy(fields.as_slice());
         assert!(
@@ -11961,10 +12128,7 @@ mod tests {
             Some("checklist.task.status.set")
         );
         assert_eq!(metadata.checklist_uid.as_deref(), Some("chk-1779802362961"));
-        assert_eq!(
-            metadata.task_uid.as_deref(),
-            Some("tmpl-vehicle-emergency-preparedness-task-1")
-        );
+        assert_eq!(metadata.task_uid.as_deref(), None);
     }
 
     #[test]
