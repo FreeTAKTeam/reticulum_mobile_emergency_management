@@ -17,6 +17,8 @@ import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.inbox.v1";
+const DIRECT_CHAT_CONNECT_TIMEOUT_MS = 7_000;
+const DIRECT_CHAT_CONNECT_POLL_MS = 250;
 
 type StoredMessages = Record<string, MessageRecord>;
 type ProjectionClientCache = typeof globalThis & {
@@ -84,6 +86,10 @@ function normalizeDestinationHex(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function isDestinationHash(value: string | undefined): boolean {
   return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value.trim());
 }
@@ -122,6 +128,54 @@ function displayNameForDestination(
     return displayName;
   }
   return nodeStore.savedByDestination[normalized]?.label?.trim() || destinationHex;
+}
+
+function activePeerForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  return peerForDestination(destinationHex, nodeStore)?.activeLink === true;
+}
+
+function peerConnectionDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): string {
+  const normalized = normalizeDestinationHex(destinationHex);
+  const peer = peerForDestination(normalized, nodeStore);
+  return normalizeDestinationHex(peer?.destination ?? normalized);
+}
+
+async function waitForDirectPeerLink(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): Promise<boolean> {
+  const deadline = Date.now() + DIRECT_CHAT_CONNECT_TIMEOUT_MS;
+  do {
+    if (activePeerForDestination(destinationHex, nodeStore)) {
+      return true;
+    }
+    await sleep(DIRECT_CHAT_CONNECT_POLL_MS);
+  } while (Date.now() < deadline);
+  return activePeerForDestination(destinationHex, nodeStore);
+}
+
+async function ensureDirectChatPeerConnected(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): Promise<void> {
+  if (activePeerForDestination(destinationHex, nodeStore)) {
+    return;
+  }
+
+  const connectionDestination = peerConnectionDestination(destinationHex, nodeStore);
+  await nodeStore.connectPeer(connectionDestination);
+  if (await waitForDirectPeerLink(destinationHex, nodeStore)) {
+    return;
+  }
+
+  const displayName = displayNameForDestination(destinationHex, nodeStore);
+  throw new Error(`Peer ${displayName} is not connected. Announce and connect before sending direct chat.`);
 }
 
 function remoteDestinationForMessage(message: MessageRecord): string {
@@ -657,6 +711,7 @@ export const useMessagingStore = defineStore("messaging", () => {
   async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
     nodeStore.assertReadyForOutbound("send LXMF messages");
     const normalizedDestination = normalizeDestinationHex(destinationHex);
+    await ensureDirectChatPeerConnected(normalizedDestination, nodeStore);
     const existingConversation = findNativeConversationByDestination(normalizedDestination);
     const currentPending = pendingConversationForDestination(normalizedDestination);
     const conversationId = existingConversation?.conversationId
@@ -679,7 +734,7 @@ export const useMessagingStore = defineStore("messaging", () => {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
-      method: "Opportunistic",
+      method: "Direct",
       state: "Queued",
       detail: undefined,
       sentAtMs: now,
@@ -689,7 +744,9 @@ export const useMessagingStore = defineStore("messaging", () => {
     persistWeb();
 
     try {
-      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title);
+      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title, {
+        sendMode: "DirectOnly",
+      });
       const nextMessages = { ...byMessageId.value };
       delete nextMessages[optimisticMessageId];
       nextMessages[messageIdHex] = cloneMessage({
@@ -700,7 +757,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: "Direct",
         state: "Queued",
         detail: undefined,
         sentAtMs: now,
@@ -718,7 +775,7 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: "Direct",
         state: "Failed",
         detail: error instanceof Error ? error.message : "Send failed",
         sentAtMs: now,
