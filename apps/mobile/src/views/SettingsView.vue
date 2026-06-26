@@ -557,6 +557,8 @@ async function applySettings(): Promise<void> {
     ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
     : rnodeChangedBeforeSave && rnodeAppliedToRuntime
       ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : nodeStore.nodeConfigRestartRequired
+        ? "Settings saved. Restart the app or node to apply updated interface configuration."
       : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
       : nodeStore.status.running && hubRoutingChanged

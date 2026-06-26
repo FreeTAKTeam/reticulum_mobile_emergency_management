@@ -96,6 +96,7 @@ const NODE_START_TIMEOUT_MS = 15_000;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
 const REMOVED_PEERS_STORAGE_KEY = "reticulum.mobile.removedPeers.v1";
+const NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY = "reticulum.mobile.nodeConfigRestartRequired.v1";
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -430,6 +431,30 @@ function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord)
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function nodeConfigsEqual(left: NodeConfig, right: NodeConfig): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function loadNodeConfigRestartRequired(): boolean {
+  try {
+    return window.localStorage.getItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeNodeConfigRestartRequired(required: boolean): void {
+  try {
+    if (required) {
+      window.localStorage.setItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY, "1");
+    } else {
+      window.localStorage.removeItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY);
+    }
+  } catch {
+    // Local storage can be unavailable in restricted webviews; the in-memory flag still applies.
+  }
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -546,6 +571,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
 export const useNodeStore = defineStore("node", () => {
   const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
+  const nodeConfigRestartRequired = ref(loadNodeConfigRestartRequired());
   const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>({});
@@ -601,6 +627,11 @@ export const useNodeStore = defineStore("node", () => {
 
   function appendNodeControlEntry(level: string, message: string, at = nowMs()): void {
     nodeControlEntries.value = [{ at, level, message }, ...nodeControlEntries.value].slice(0, 120);
+  }
+
+  function setNodeConfigRestartRequired(required: boolean): void {
+    nodeConfigRestartRequired.value = required;
+    storeNodeConfigRestartRequired(required);
   }
 
   function toPluginLogLevel(level: string): LogLevel {
@@ -2040,6 +2071,7 @@ export const useNodeStore = defineStore("node", () => {
         NODE_START_TIMEOUT_MS,
         `node runtime start timed out after ${NODE_START_TIMEOUT_MS}ms`,
       );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -2094,6 +2126,7 @@ export const useNodeStore = defineStore("node", () => {
         NODE_START_TIMEOUT_MS,
         `node runtime restart timed out after ${NODE_START_TIMEOUT_MS}ms`,
       );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -2352,6 +2385,7 @@ export const useNodeStore = defineStore("node", () => {
   async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
+    const previousNodeConfig = toNodeConfig(settings);
     if (next.displayName !== undefined) {
       settings.displayName = normalizeStoredDisplayName(next.displayName);
     }
@@ -2415,6 +2449,11 @@ export const useNodeStore = defineStore("node", () => {
     } catch (error: unknown) {
       appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
       throw error;
+    }
+    const nodeConfigChanged = !nodeConfigsEqual(previousNodeConfig, toNodeConfig(settings));
+    if (status.value.running && nodeConfigChanged) {
+      setNodeConfigRestartRequired(true);
+      appendLog("Info", "Node interface settings changed. Restart the app or node to apply them.");
     }
     if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
       void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
@@ -3090,6 +3129,7 @@ export const useNodeStore = defineStore("node", () => {
 
   return {
     settings,
+    nodeConfigRestartRequired,
     watchStatusServer,
     status,
     syncStatus,

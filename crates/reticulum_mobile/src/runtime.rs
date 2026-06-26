@@ -50,7 +50,7 @@ use rns_transport::iface::rnode_ble::{
 use rns_transport::iface::{IfaceRole, InterfaceMode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpStream};
 use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 #[path = "runtime_projection.rs"]
@@ -87,6 +87,8 @@ const DESTINATION_KIND_OTHER: &str = "other";
 const TCP_CLIENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TCP_CLIENT_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+#[cfg(target_os = "android")]
+const RNODE_BLE_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 3] = [0, 10, 30];
 const MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 3600;
@@ -112,6 +114,8 @@ const RCH_SERVER_FEATURE_CAPABILITIES: [&str; 5] = [
 const DEFAULT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const RNODE_BLE_LINK_CONNECT_TIMEOUT: Duration = Duration::from_secs(75);
 const RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES: usize = 145;
+const RNODE_BLE_RESOURCE_RETRY_INTERVAL_SECS: u64 = 8;
+const RNODE_BLE_RESOURCE_RETRY_LIMIT: u8 = 24;
 const DEFAULT_IDENTITY_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
@@ -4386,7 +4390,7 @@ enum ManagedPeerReconnectStart {
 #[derive(Clone, Default)]
 struct ManagedPeerLinks {
     desired: Arc<TokioMutex<HashMap<String, ManagedPeerLinkTarget>>>,
-    reconnecting: Arc<TokioMutex<HashSet<String>>>,
+    reconnecting: Arc<TokioMutex<HashMap<String, ManagedPeerLinkKind>>>,
     failures: Arc<TokioMutex<HashMap<String, ManagedPeerLinkBackoff>>>,
 }
 
@@ -4460,15 +4464,37 @@ impl ManagedPeerLinks {
             }
         }
         let mut reconnecting = self.reconnecting.lock().await;
-        if !reconnecting.insert(normalized.clone()) {
-            return ManagedPeerReconnectStart::AlreadyReconnecting;
+        if let Some(active_kind) = reconnecting.get(normalized.as_str()) {
+            if *active_kind == target.kind {
+                return ManagedPeerReconnectStart::AlreadyReconnecting;
+            }
+            if !matches!(
+                (*active_kind, target.kind),
+                (ManagedPeerLinkKind::App, ManagedPeerLinkKind::LxmfDelivery)
+            ) {
+                return ManagedPeerReconnectStart::AlreadyReconnecting;
+            }
         }
+        reconnecting.insert(normalized.clone(), target.kind);
         ManagedPeerReconnectStart::Started(target)
     }
 
-    async fn finish_reconnect(&self, destination_hex: &str, result: Result<(), String>) {
-        if let Some(normalized) = normalize_hex_32(destination_hex) {
-            self.reconnecting.lock().await.remove(normalized.as_str());
+    async fn finish_reconnect(&self, target: &ManagedPeerLinkTarget, result: Result<(), String>) {
+        if let Some(normalized) = normalize_hex_32(target.destination_hex.as_str()) {
+            let obsolete_reconnect = {
+                let mut reconnecting = self.reconnecting.lock().await;
+                match reconnecting.get(normalized.as_str()).copied() {
+                    Some(kind) if kind == target.kind => {
+                        reconnecting.remove(normalized.as_str());
+                        false
+                    }
+                    Some(_) => true,
+                    None => false,
+                }
+            };
+            if obsolete_reconnect {
+                return;
+            }
             match result {
                 Ok(()) => {
                     self.failures.lock().await.remove(normalized.as_str());
@@ -6544,16 +6570,13 @@ async fn ensure_output_link(
     const DEFAULT_MAX_ATTEMPTS: usize = 3;
     const RNODE_BLE_MAX_ATTEMPTS: usize = 1;
     const RETRY_DELAY: Duration = Duration::from_millis(500);
-    let rnode_only = {
-        let active_interfaces = state.active_interface_registry.lock().await;
-        active_interfaces_are_rnode_ble_only(&active_interfaces)
-    };
-    let max_attempts = if rnode_only {
+    let rnode_route = destination_uses_rnode_ble_route(state, &desc.address_hash).await;
+    let max_attempts = if rnode_route {
         RNODE_BLE_MAX_ATTEMPTS
     } else {
         DEFAULT_MAX_ATTEMPTS
     };
-    let connect_timeout = link_connect_timeout(rnode_only);
+    let connect_timeout = link_connect_timeout(rnode_route);
 
     for attempt in 0..max_attempts {
         let link = {
@@ -6597,21 +6620,24 @@ async fn ensure_output_link(
 }
 
 fn managed_peer_link_target(peer: &sdkmsg::PeerRecord) -> Option<ManagedPeerLinkTarget> {
-    let has_saved_route_target = peer.saved
-        && peer
+    let normalized_destination_hex = normalize_hex_32(peer.destination_hex.as_str());
+    let has_rem_capabilities = peer
+        .app_data
+        .as_deref()
+        .is_some_and(app_data_has_rem_peer_capabilities);
+    let has_saved_lxmf_route_target = peer.saved
+        && (peer
             .lxmf_destination_hex
             .as_deref()
             .and_then(normalize_hex_32)
-            .is_some();
-    if peer.stale && !has_saved_route_target {
+            .is_some()
+            || (normalized_destination_hex.is_some()
+                && has_rem_capabilities
+                && peer.lxmf_last_seen_at_ms.is_some()));
+    if peer.stale && !has_saved_lxmf_route_target {
         return None;
     }
-    if !peer.saved
-        && !peer
-            .app_data
-            .as_deref()
-            .is_some_and(app_data_has_rem_peer_capabilities)
-    {
+    if !peer.saved && !has_rem_capabilities {
         return None;
     }
     if let Some(destination_hex) = peer
@@ -6624,9 +6650,16 @@ fn managed_peer_link_target(peer: &sdkmsg::PeerRecord) -> Option<ManagedPeerLink
             kind: ManagedPeerLinkKind::LxmfDelivery,
         });
     }
-    normalize_hex_32(peer.destination_hex.as_str()).map(|destination_hex| ManagedPeerLinkTarget {
-        destination_hex,
-        kind: ManagedPeerLinkKind::App,
+    normalized_destination_hex.map(|destination_hex| {
+        let kind = if peer.saved && has_rem_capabilities && peer.lxmf_last_seen_at_ms.is_some() {
+            ManagedPeerLinkKind::LxmfDelivery
+        } else {
+            ManagedPeerLinkKind::App
+        };
+        ManagedPeerLinkTarget {
+            destination_hex,
+            kind,
+        }
     })
 }
 
@@ -6882,7 +6915,7 @@ fn spawn_managed_peer_link_reconnect(
         state
             .managed_peer_links
             .finish_reconnect(
-                target.destination_hex.as_str(),
+                &target,
                 result.as_ref().map(|_| ()).map_err(ToString::to_string),
             )
             .await;
@@ -6947,22 +6980,59 @@ fn active_interfaces_include_relay_transport(
 ) -> bool {
     active_interfaces
         .values()
-        .any(|interface| !interface.starts_with("rnode-ble:"))
+        .any(|interface| !interface_label_is_rnode_ble(interface))
 }
 
 fn active_interfaces_are_rnode_ble_only(active_interfaces: &HashMap<AddressHash, String>) -> bool {
     !active_interfaces.is_empty()
         && active_interfaces
             .values()
-            .all(|interface| interface.starts_with("rnode-ble:"))
+            .all(|interface| interface_label_is_rnode_ble(interface))
 }
 
-fn link_connect_timeout(rnode_only: bool) -> Duration {
-    if rnode_only {
+fn interface_label_is_rnode_ble(interface: &str) -> bool {
+    interface.starts_with("rnode-ble:")
+}
+
+fn active_interface_is_rnode_ble(
+    active_interfaces: &HashMap<AddressHash, String>,
+    interface: &AddressHash,
+) -> bool {
+    active_interfaces
+        .get(interface)
+        .is_some_and(|label| interface_label_is_rnode_ble(label))
+}
+
+fn link_connect_timeout(rnode_route: bool) -> Duration {
+    if rnode_route {
         RNODE_BLE_LINK_CONNECT_TIMEOUT
     } else {
         DEFAULT_LINK_CONNECT_TIMEOUT
     }
+}
+
+async fn destination_uses_rnode_ble_route(
+    state: &NodeRuntimeState,
+    destination: &AddressHash,
+) -> bool {
+    let destination_hex = address_hash_to_hex(destination);
+    let active_interfaces = state.active_interface_registry.lock().await.clone();
+    if active_interfaces_are_rnode_ble_only(&active_interfaces) {
+        return true;
+    }
+
+    state
+        .app_state
+        .list_announces()
+        .ok()
+        .and_then(|announces| {
+            announces.into_iter().find(|announce| {
+                normalize_hex_32(announce.destination_hex.as_str()).as_deref()
+                    == Some(destination_hex.as_str())
+            })
+        })
+        .and_then(|announce| parse_address_hash(announce.interface_hex.as_str()).ok())
+        .is_some_and(|interface| active_interface_is_rnode_ble(&active_interfaces, &interface))
 }
 
 async fn has_active_relay_transport_interface(state: &NodeRuntimeState) -> bool {
@@ -7419,8 +7489,6 @@ async fn send_lxmf_with_delivery_policy(
         let active_interfaces = state.active_interface_registry.lock().await;
         active_interfaces_are_rnode_ble_only(&active_interfaces)
     };
-    let direct_link_connect_timeout =
-        rnode_only_transport.then_some(RNODE_BLE_LINK_CONNECT_TIMEOUT);
     let is_accepted_result = is_accepted_result_metadata(metadata.as_ref());
     let is_sos_status = is_sos_status_metadata(metadata.as_ref());
     let retry_delay = if is_accepted_result {
@@ -7583,6 +7651,10 @@ async fn send_lxmf_with_delivery_policy(
             direct_delivery_ready,
         );
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
+        let rnode_direct_route =
+            rnode_only_transport || destination_uses_rnode_ble_route(state, &destination).await;
+        let direct_link_connect_timeout =
+            rnode_direct_route.then_some(RNODE_BLE_LINK_CONNECT_TIMEOUT);
         #[cfg(not(test))]
         if !mission_direct_admission_delay.is_zero() {
             info!(
@@ -7627,7 +7699,7 @@ async fn send_lxmf_with_delivery_policy(
                     direct_attempt_send_mode(send_mode),
                     Some(attempt),
                     direct_link_connect_timeout,
-                    rnode_only_transport.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
+                    rnode_direct_route.then_some(RNODE_BLE_DIRECT_PACKET_MAX_WIRE_BYTES),
                 )
                 .await
         };
@@ -8745,62 +8817,94 @@ fn spawn_rnode_ble_interface(
         return;
     }
 
-    let lora_config = match rnode_lora_config(&settings) {
-        Ok(config) => config,
-        Err(error) => {
-            bus.emit(NodeEvent::Error {
-                code: "InvalidConfig".to_string(),
-                message: format!("RNode LoRa profile is invalid: {error}"),
-            });
-            return;
-        }
-    };
+    if let Err(error) = rnode_lora_config(&settings) {
+        bus.emit(NodeEvent::Error {
+            code: "InvalidConfig".to_string(),
+            message: format!("RNode LoRa profile is invalid: {error}"),
+        });
+        return;
+    }
     let label = if settings.display_name.trim().is_empty() {
         format!("rnode-ble:{peripheral_id}")
     } else {
         format!("rnode-ble:{}", settings.display_name.trim())
     };
-    let kiss_config = RnodeBleKissConfig {
-        mtu: usize::from(lora_config.max_payload_bytes),
-        max_write_len: 20,
-        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
-        initial_frames: lora_config.probe_frames(),
-        deferred_frames: lora_config.radio_config_frames(),
-        shutdown_frames: lora_config.shutdown_frames(),
-        ..RnodeBleKissConfig::default()
-    };
-    let adapter = NativeRnodeBleKissInterface::new(
-        label.clone(),
-        NativeRnodeBleSettings::for_peripheral(peripheral_id.clone())
-            .with_peripheral_alias(settings.display_name.trim()),
-        kiss_config,
-    )
-    .with_rnode_validation(lora_config, Duration::from_millis(15_000))
-    .with_detection_fallback_timeout(Duration::from_millis(5_000));
 
     tokio::spawn(async move {
-        let iface = transport.iface_manager().lock().await.spawn_as_with_mode(
-            adapter,
-            NativeRnodeBleKissInterface::spawn,
-            IfaceRole::Unicast,
-            InterfaceMode::Full,
-        );
-        info!(
-            "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
-            label, peripheral_id, settings.region, settings.profile, iface
-        );
-        active_interface_registry
-            .lock()
-            .await
-            .insert(iface, label.clone());
-        emit_operational_notice(
-            &bus,
-            LogLevel::Info {},
-            format!(
-                "RNode Bluetooth LoRa interface enabled: {} ({}, {})",
-                label, settings.region, settings.profile
-            ),
-        );
+        let active = Arc::new(AtomicBool::new(false));
+        loop {
+            if active.load(Ordering::Acquire) {
+                tokio::time::sleep(RNODE_BLE_INTERFACE_RETRY_INTERVAL).await;
+                continue;
+            }
+
+            let lora_config = match rnode_lora_config(&settings) {
+                Ok(config) => config,
+                Err(error) => {
+                    bus.emit(NodeEvent::Error {
+                        code: "InvalidConfig".to_string(),
+                        message: format!("RNode LoRa profile is invalid: {error}"),
+                    });
+                    return;
+                }
+            };
+            let kiss_config = RnodeBleKissConfig {
+                mtu: usize::from(lora_config.max_payload_bytes),
+                max_write_len: 20,
+                read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
+                initial_frames: lora_config.probe_frames(),
+                deferred_frames: lora_config.radio_config_frames(),
+                shutdown_frames: lora_config.shutdown_frames(),
+                ..RnodeBleKissConfig::default()
+            };
+            let adapter = NativeRnodeBleKissInterface::new(
+                label.clone(),
+                NativeRnodeBleSettings::for_peripheral(peripheral_id.clone())
+                    .with_peripheral_alias(settings.display_name.trim()),
+                kiss_config,
+            )
+            .with_rnode_validation(lora_config, Duration::from_millis(15_000))
+            .with_detection_fallback_timeout(Duration::from_millis(5_000));
+
+            active.store(true, Ordering::Release);
+            let context = transport
+                .iface_manager()
+                .lock()
+                .await
+                .new_context_with_role_and_mode(adapter, IfaceRole::Unicast, InterfaceMode::Full);
+            let iface = *context.channel.address();
+            active_interface_registry
+                .lock()
+                .await
+                .insert(iface, label.clone());
+            info!(
+                "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
+                label, peripheral_id, settings.region, settings.profile, iface
+            );
+            emit_operational_notice(
+                &bus,
+                LogLevel::Info {},
+                format!(
+                    "RNode Bluetooth LoRa interface enabled: {} ({}, {})",
+                    label, settings.region, settings.profile
+                ),
+            );
+
+            let active_for_task = active.clone();
+            let registry_for_task = active_interface_registry.clone();
+            let label_for_task = label.clone();
+            tokio::spawn(async move {
+                NativeRnodeBleKissInterface::spawn(context).await;
+                registry_for_task.lock().await.remove(&iface);
+                active_for_task.store(false, Ordering::Release);
+                warn!(
+                    "rnode_ble: stopped interface label={} iface={}; retrying",
+                    label_for_task, iface
+                );
+            });
+
+            tokio::time::sleep(RNODE_BLE_INTERFACE_RETRY_INTERVAL).await;
+        }
     });
 }
 
@@ -8821,10 +8925,42 @@ fn spawn_rnode_ble_interface(
 }
 
 async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
-    tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, TcpStream::connect(connect_addr))
+    match connect_tcp_endpoint_with_error(connect_addr).await {
+        Ok(stream) => Some(stream),
+        Err(error) => {
+            warn!(
+                "tcp_client: connect failed endpoint=<{}>: {}",
+                connect_addr, error
+            );
+            None
+        }
+    }
+}
+
+async fn connect_tcp_endpoint_with_error(connect_addr: &str) -> Result<TcpStream, String> {
+    let addresses = tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, lookup_host(connect_addr))
         .await
-        .ok()
-        .and_then(Result::ok)
+        .map_err(|_| format!("DNS lookup timed out after {TCP_CLIENT_CONNECT_TIMEOUT:?}"))?
+        .map_err(|error| format!("DNS lookup failed: {error}"))?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("DNS lookup returned no socket addresses".to_string());
+    }
+
+    let mut failures = Vec::new();
+    for address in addresses {
+        match tokio::time::timeout(TCP_CLIENT_CONNECT_TIMEOUT, TcpStream::connect(address)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => failures.push(format!("{address}: {error}")),
+            Err(_) => failures.push(format!(
+                "{address}: connect timed out after {TCP_CLIENT_CONNECT_TIMEOUT:?}"
+            )),
+        }
+    }
+    Err(format!(
+        "all resolved socket addresses failed: {}",
+        failures.join("; ")
+    ))
 }
 
 async fn tcp_endpoint_reachable(connect_addr: &str) -> bool {
@@ -8973,6 +9109,10 @@ pub async fn run_node(
 ) {
     let mut transport_cfg = TransportConfig::new(config.name.clone(), &identity, config.broadcast);
     transport_cfg.set_retransmit(false);
+    if config.rnode.enabled {
+        transport_cfg.set_resource_retry_interval_secs(RNODE_BLE_RESOURCE_RETRY_INTERVAL_SECS);
+        transport_cfg.set_resource_retry_limit(RNODE_BLE_RESOURCE_RETRY_LIMIT);
+    }
 
     if let Some(dir) = config
         .storage_dir
@@ -10809,6 +10949,10 @@ mod tests {
         )]);
         assert!(!active_interfaces_include_relay_transport(&rnode_only));
         assert!(active_interfaces_are_rnode_ble_only(&rnode_only));
+        assert!(active_interface_is_rnode_ble(
+            &rnode_only,
+            &AddressHash::new_from_slice(&[1u8; 16]),
+        ));
         assert_eq!(link_connect_timeout(true), RNODE_BLE_LINK_CONNECT_TIMEOUT);
 
         let with_tcp = HashMap::from([
@@ -10823,10 +10967,23 @@ mod tests {
         ]);
         assert!(active_interfaces_include_relay_transport(&with_tcp));
         assert!(!active_interfaces_are_rnode_ble_only(&with_tcp));
+        assert!(active_interface_is_rnode_ble(
+            &with_tcp,
+            &AddressHash::new_from_slice(&[1u8; 16]),
+        ));
+        assert!(!active_interface_is_rnode_ble(
+            &with_tcp,
+            &AddressHash::new_from_slice(&[2u8; 16]),
+        ));
         assert_eq!(link_connect_timeout(false), DEFAULT_LINK_CONNECT_TIMEOUT);
+        assert_eq!(link_connect_timeout(true), RNODE_BLE_LINK_CONNECT_TIMEOUT);
 
         let no_interfaces = HashMap::new();
         assert!(!active_interfaces_are_rnode_ble_only(&no_interfaces));
+        assert!(!active_interface_is_rnode_ble(
+            &no_interfaces,
+            &AddressHash::new_from_slice(&[1u8; 16]),
+        ));
     }
 
     #[test]
@@ -13238,9 +13395,7 @@ mod tests {
             ManagedPeerReconnectStart::AlreadyReconnecting
         );
 
-        links
-            .finish_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ok(()))
-            .await;
+        links.finish_reconnect(&target, Ok(())).await;
         assert_eq!(
             links
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -13276,10 +13431,7 @@ mod tests {
             ManagedPeerReconnectStart::Started(target.clone())
         );
         links
-            .finish_reconnect(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                Err("link failed".to_string()),
-            )
+            .finish_reconnect(&target, Err("link failed".to_string()))
             .await;
 
         links.add_desired(target).await;
@@ -13312,10 +13464,7 @@ mod tests {
             ManagedPeerReconnectStart::Started(target.clone())
         );
         links
-            .finish_reconnect(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                Err("link failed".to_string()),
-            )
+            .finish_reconnect(&target, Err("link failed".to_string()))
             .await;
         match links
             .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -13334,6 +13483,53 @@ mod tests {
                 .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .await,
             ManagedPeerReconnectStart::Started(target)
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_lxmf_target_replaces_app_reconnect_for_same_destination() {
+        let links = ManagedPeerLinks::default();
+        let app_target = ManagedPeerLinkTarget {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            kind: ManagedPeerLinkKind::App,
+        };
+        let lxmf_target = ManagedPeerLinkTarget {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            kind: ManagedPeerLinkKind::LxmfDelivery,
+        };
+
+        links.add_desired(app_target.clone()).await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(app_target.clone())
+        );
+
+        links.add_desired(lxmf_target.clone()).await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(lxmf_target.clone())
+        );
+
+        links
+            .finish_reconnect(&app_target, Err("app route failed".to_string()))
+            .await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::AlreadyReconnecting
+        );
+
+        links.finish_reconnect(&lxmf_target, Ok(())).await;
+        assert_eq!(
+            links
+                .begin_reconnect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .await,
+            ManagedPeerReconnectStart::Started(lxmf_target)
         );
     }
 
@@ -13595,6 +13791,28 @@ mod tests {
                     kind: ManagedPeerLinkKind::LxmfDelivery,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn saved_raw_lxmf_peer_without_separate_lxmf_destination_uses_lxmf_link_kind() {
+        let mut saved_raw_lxmf_peer = send_peer(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            None,
+            false,
+            false,
+            Some(now_ms()),
+        );
+        saved_raw_lxmf_peer.saved = true;
+        saved_raw_lxmf_peer.lxmf_last_seen_at_ms = Some(now_ms());
+
+        assert_eq!(
+            managed_peer_link_target(&saved_raw_lxmf_peer),
+            Some(ManagedPeerLinkTarget {
+                destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                kind: ManagedPeerLinkKind::LxmfDelivery,
+            })
         );
     }
 

@@ -545,6 +545,7 @@ fn populate_eam_defaults(status: &NodeStatus, record: &EamProjectionRecord) -> E
     normalized
 }
 
+#[cfg(test)]
 fn has_known_lxmf_route(peer: &PeerRecord) -> bool {
     delivery_policy::peer_has_known_lxmf_route(peer)
 }
@@ -1053,9 +1054,6 @@ fn build_event_replication_targets(
             continue;
         }
         if !seen_app_destinations.insert(app_destination_hex.clone()) {
-            continue;
-        }
-        if !has_known_lxmf_route(peer) {
             continue;
         }
         if !saved_destination_set.contains(app_destination_hex.as_str()) {
@@ -11115,6 +11113,35 @@ mod tests {
                 "3457d5ba744e89bbae543c5ff9c679fb",
             ]
         );
+    }
+
+    #[test]
+    fn event_replication_targets_include_saved_active_link_without_lxmf_route() {
+        let status = build_status_for_tests();
+        let saved_peer = build_saved_peer();
+        let mut peer = build_peer_record(
+            saved_peer.destination_hex.as_str(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            true,
+            true,
+            true,
+        );
+        peer.lxmf_destination_hex = None;
+        peer.lxmf_last_seen_at_ms = None;
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[peer],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::Auto {});
     }
 
     #[test]
