@@ -15,6 +15,7 @@ def computedVersionCode = overrideVersionCode ? overrideVersionCode.toInteger() 
 def overrideVersionName = project.findProperty("appVersionName")?.toString()?.trim()
 def computedVersionName = overrideVersionName ? overrideVersionName : "1.0.${versionNameStamp}"
 def enableWebViewDebugging = project.findProperty("enableWebViewDebugging")?.toString()?.toBoolean() ?: false
+def enableAdbTestControl = project.findProperty("enableAdbTestControl")?.toString()?.toBoolean() ?: false
 def abiFiltersProperty = project.findProperty("abiFilters")?.toString()?.trim()
 def abiFiltersList = abiFiltersProperty
     ? abiFiltersProperty.split(",").collect { it.trim() }.findAll { !it.isEmpty() }
@@ -46,6 +47,8 @@ android {
         versionCode computedVersionCode
         versionName computedVersionName
         buildConfigField "boolean", "ENABLE_WEBVIEW_DEBUGGING", enableWebViewDebugging.toString()
+        buildConfigField "boolean", "ENABLE_ADB_TEST_CONTROL", enableAdbTestControl.toString()
+        manifestPlaceholders["enableAdbTestControl"] = enableAdbTestControl.toString()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         if (!abiFiltersList.isEmpty()) {
             ndk {
