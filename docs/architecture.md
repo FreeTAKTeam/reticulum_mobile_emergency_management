@@ -471,6 +471,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Mixed-interface duplicate delivery is expected when Reticulum receives the same LXMF payload over both transports. Application projections must treat those arrivals as idempotent and avoid duplicate chat, event, EAM, or checklist records.
 
 1.2 release gate:
+- For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
 - Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
 - Peer connection works after announce in all three modes.
 - Chat delivery works in all three modes.
