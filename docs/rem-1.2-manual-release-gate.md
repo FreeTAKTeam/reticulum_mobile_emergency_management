@@ -28,6 +28,28 @@ Validate the full workflow set in each mode:
 
 After changing TCP or LoRa settings, save settings and restart REM before validating traffic. Restart-free interface reconfiguration is not required for 1.2 final.
 
+## Diagnostic ADB Control
+
+Diagnostic builds can expose a small adb-only control receiver for repeatable announce and peer-link checks. The receiver is disabled in normal release builds and is enabled only when the Android build is compiled with `-PenableAdbTestControl=true`.
+
+Build example:
+
+```powershell
+cmd /c "gradlew.bat :app:assembleRelease -PappVersionName=1.2.0-rc.2 -PappVersionCode=261772128 -PenableAdbTestControl=true -PapkClassifierSuffix=adb-test"
+```
+
+Useful commands:
+
+```powershell
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_STATUS
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_APP_SETTINGS
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_ANNOUNCE
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_CONNECT_PEER --es destinationHex <peer-lxmf-destination>
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_DISCONNECT_PEER --es destinationHex <peer-lxmf-destination>
+```
+
+The receiver only triggers status, read-only app settings, announce, connect, and disconnect calls. It does not change TCP or LoRa configuration, does not delete saved peers, and does not replace UI verification for chat, events, EAM, or checklist rows.
+
 ## Workflow Matrix
 
 Each row requires a unique marker string recorded in issue #149.
