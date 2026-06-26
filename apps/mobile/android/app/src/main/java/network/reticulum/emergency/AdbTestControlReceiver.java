@@ -9,6 +9,7 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_ANNOUNCE = "network.reticulum.emergency.action.ADB_ANNOUNCE";
     public static final String ACTION_CONNECT_PEER = "network.reticulum.emergency.action.ADB_CONNECT_PEER";
     public static final String ACTION_DISCONNECT_PEER = "network.reticulum.emergency.action.ADB_DISCONNECT_PEER";
+    public static final String ACTION_APP_SETTINGS = "network.reticulum.emergency.action.ADB_APP_SETTINGS";
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
     public static final String EXTRA_DESTINATION_HEX = "destinationHex";
 
@@ -35,6 +36,8 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
             } else if (ACTION_DISCONNECT_PEER.equals(action)) {
                 final String destinationHex = requireDestination(intent);
                 logResult("disconnect destination=" + destinationHex, ReticulumBridge.disconnectPeer(destinationHex));
+            } else if (ACTION_APP_SETTINGS.equals(action)) {
+                Log.i(TAG, "appSettings " + ReticulumBridge.getAppSettingsJson());
             } else if (ACTION_STATUS.equals(action)) {
                 Log.i(TAG, "status " + ReticulumBridge.getStatusJson());
             } else {

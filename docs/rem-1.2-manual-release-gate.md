@@ -42,12 +42,13 @@ Useful commands:
 
 ```powershell
 adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_STATUS
+adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_APP_SETTINGS
 adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_ANNOUNCE
 adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_CONNECT_PEER --es destinationHex <peer-lxmf-destination>
 adb -s <serial> shell am broadcast -n network.reticulum.emergency/.AdbTestControlReceiver -a network.reticulum.emergency.action.ADB_DISCONNECT_PEER --es destinationHex <peer-lxmf-destination>
 ```
 
-The receiver only triggers status, announce, connect, and disconnect calls. It does not change TCP or LoRa configuration, does not delete saved peers, and does not replace UI verification for chat, events, EAM, or checklist rows.
+The receiver only triggers status, read-only app settings, announce, connect, and disconnect calls. It does not change TCP or LoRa configuration, does not delete saved peers, and does not replace UI verification for chat, events, EAM, or checklist rows.
 
 ## Workflow Matrix
 
