@@ -3965,6 +3965,39 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_chat_delivery_keeps_single_message_record() {
+        let storage_dir = test_storage_dir("duplicate-chat-delivery");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        let first = message(
+            "lxmf-chat-duplicate",
+            "peer-chat",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("PEER-CHAT"),
+            40,
+        );
+        let mut duplicate = first.clone();
+        duplicate.updated_at_ms = 45;
+
+        store
+            .upsert_message(&first)
+            .expect("persist first delivery");
+        store
+            .upsert_message(&duplicate)
+            .expect("persist duplicate delivery");
+
+        let messages = store.list_messages(None).expect("list messages");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].message_id_hex, "lxmf-chat-duplicate");
+        assert_eq!(messages[0].updated_at_ms, 45);
+
+        let conversations = store.list_conversations().expect("list conversations");
+        assert_eq!(conversations.len(), 1);
+    }
+
+    #[test]
     fn latest_announce_is_one_row_per_destination_and_preserves_display_name() {
         let storage_dir = test_storage_dir("latest-announce");
         let store =
