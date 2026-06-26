@@ -468,7 +468,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
 - TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
-- Mixed-interface duplicate delivery is expected when Reticulum receives the same LXMF payload over both transports. The Reticulum/LXMF receive path suppresses repeated wire message ids before REM workflow handlers process chat, event, EAM, or checklist payloads.
+- Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 
 1.2 release gate:
 - For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
@@ -479,7 +479,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - EAM/preparedness updates work in all three modes.
 - Checklist updates work in all three modes.
 - Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
-- Duplicate delivery across TCP+LoRa is deduped cleanly.
+- Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
 - Settings clearly document that REM must be restarted after interface configuration changes for this release.
 - 1.2.0 remains a prerelease until this matrix passes on the connected phones.
 

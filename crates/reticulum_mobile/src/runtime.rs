@@ -121,8 +121,6 @@ const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
-const DEFAULT_RECEIVED_LXMF_DEDUPE_TTL: Duration = Duration::from_secs(10 * 60);
-const MAX_RECEIVED_LXMF_DEDUPE_IDS: usize = 2048;
 const PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS: usize = 6;
 #[cfg(not(test))]
 const PROPAGATION_SYNC_RELAY_SELECTION_WAIT: Duration = Duration::from_secs(30);
@@ -4150,42 +4148,6 @@ struct ReceiptMessageTracking {
     recorded_at_ms: u64,
 }
 
-#[derive(Debug, Default)]
-struct RecentLxmfMessageIds {
-    ids: HashMap<String, u64>,
-}
-
-impl RecentLxmfMessageIds {
-    fn record_if_new(&mut self, message_id_hex: &str, now_ms: u64, ttl_ms: u64) -> bool {
-        self.prune(now_ms, ttl_ms);
-        if self.ids.contains_key(message_id_hex) {
-            return false;
-        }
-        self.ids.insert(message_id_hex.to_string(), now_ms);
-        self.prune_overflow();
-        true
-    }
-
-    fn prune(&mut self, now_ms: u64, ttl_ms: u64) {
-        self.ids
-            .retain(|_, recorded_at_ms| now_ms.saturating_sub(*recorded_at_ms) <= ttl_ms);
-    }
-
-    fn prune_overflow(&mut self) {
-        while self.ids.len() > MAX_RECEIVED_LXMF_DEDUPE_IDS {
-            let Some(oldest_id) = self
-                .ids
-                .iter()
-                .min_by_key(|(_, recorded_at_ms)| *recorded_at_ms)
-                .map(|(message_id_hex, _)| message_id_hex.clone())
-            else {
-                break;
-            };
-            self.ids.remove(&oldest_id);
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendTaskClass {
     Mission,
@@ -6520,7 +6482,6 @@ struct NodeRuntimeState {
     connected_peers: Arc<TokioMutex<HashSet<AddressHash>>>,
     pending_lxmf_deliveries: Arc<TokioMutex<HashMap<String, PendingLxmfDelivery>>>,
     pending_lxmf_acknowledgements: Arc<TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>>,
-    received_lxmf_message_ids: Arc<TokioMutex<RecentLxmfMessageIds>>,
     messaging: Arc<TokioMutex<sdkmsg::MessagingStore>>,
     peers_snapshot: Arc<Mutex<Vec<PeerRecord>>>,
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
@@ -7979,20 +7940,6 @@ async fn emit_received_payload(
         let wire_message_id_hex = LxmfWireMessage::unpack(payload.as_slice())
             .map(|wire| hex::encode(wire.message_id()))
             .ok();
-        if let Some(message_id_hex) = wire_message_id_hex.as_deref() {
-            let is_new = state.received_lxmf_message_ids.lock().await.record_if_new(
-                message_id_hex,
-                now_ms(),
-                DEFAULT_RECEIVED_LXMF_DEDUPE_TTL.as_millis() as u64,
-            );
-            if !is_new {
-                info!(
-                    "[lxmf][rx] duplicate suppressed message_id={} destination={}",
-                    message_id_hex, destination_hex,
-                );
-                return;
-            }
-        }
         let source_hex = message.source_hash.map(hex::encode);
         let body_utf8 = String::from_utf8_lossy(message.content.as_slice()).to_string();
         let title = if message.title.is_empty() {
@@ -9262,7 +9209,6 @@ pub async fn run_node(
     let pending_lxmf_acknowledgements: Arc<
         TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>,
     > = Arc::new(TokioMutex::new(HashMap::new()));
-    let received_lxmf_message_ids = Arc::new(TokioMutex::new(RecentLxmfMessageIds::default()));
     let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::new(
         config.stale_after_minutes,
     )));
@@ -9311,7 +9257,6 @@ pub async fn run_node(
         connected_peers: connected_peers.clone(),
         pending_lxmf_deliveries: pending_lxmf_deliveries.clone(),
         pending_lxmf_acknowledgements: pending_lxmf_acknowledgements.clone(),
-        received_lxmf_message_ids: received_lxmf_message_ids.clone(),
         messaging: messaging.clone(),
         peers_snapshot: peers_snapshot.clone(),
         sync_status_snapshot: sync_status_snapshot.clone(),
@@ -11729,15 +11674,6 @@ mod tests {
             None
         );
         assert_eq!(parse_chat_delivery_ack_body("regular chat"), None);
-    }
-
-    #[test]
-    fn received_lxmf_message_ids_suppress_duplicate_until_ttl_expires() {
-        let mut received = RecentLxmfMessageIds::default();
-
-        assert!(received.record_if_new("message-1", 1_000, 10_000));
-        assert!(!received.record_if_new("message-1", 1_500, 10_000));
-        assert!(received.record_if_new("message-1", 11_001, 10_000));
     }
 
     fn propagation_announce(
