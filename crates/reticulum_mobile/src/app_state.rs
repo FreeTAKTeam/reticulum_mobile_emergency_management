@@ -3507,6 +3507,66 @@ mod tests {
         }
     }
 
+    fn event_projection(uid: &str, mission_uid: &str, updated_at_ms: u64) -> EventProjectionRecord {
+        EventProjectionRecord {
+            uid: uid.to_string(),
+            command_id: format!("log-entry-{uid}"),
+            source_identity: "peer-a".to_string(),
+            source_display_name: Some("Peer A".to_string()),
+            timestamp: "2026-04-22T12:00:00Z".to_string(),
+            command_type: "mission.registry.log_entry.upsert".to_string(),
+            mission_uid: mission_uid.to_string(),
+            content: "MECP/2/P01 duplicate delivery".to_string(),
+            callsign: "Peer A".to_string(),
+            server_time: Some("2026-04-22T12:00:00Z".to_string()),
+            client_time: Some("2026-04-22T12:00:00Z".to_string()),
+            keywords: vec!["r3akt:event-type:P".to_string()],
+            content_hashes: Vec::new(),
+            updated_at_ms,
+            deleted_at_ms: None,
+            correlation_id: Some(format!("log-entry-{uid}")),
+            topics: vec![mission_uid.to_string()],
+        }
+    }
+
+    #[test]
+    fn duplicate_event_delivery_keeps_single_projection_row() {
+        let storage_dir = test_storage_dir("event-duplicate-delivery");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let event = event_projection("evt-duplicate", "mission-alpha", 100);
+
+        store.upsert_event(&event).expect("first event upsert");
+        store.upsert_event(&event).expect("duplicate event upsert");
+
+        let events = store.get_events().expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].uid, "evt-duplicate");
+        assert_eq!(events[0].content, "MECP/2/P01 duplicate delivery");
+    }
+
+    #[test]
+    fn duplicate_eam_delivery_keeps_single_projection_row() {
+        let storage_dir = test_storage_dir("eam-duplicate-delivery");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let eam = readiness_eam(
+            "DuplicatePeer",
+            ["Green", "Green", "Green", "Green", "Green", "Green"],
+            100,
+            None,
+        );
+
+        store.upsert_eam(&eam).expect("first eam upsert");
+        store.upsert_eam(&eam).expect("duplicate eam upsert");
+
+        let eams = store.get_eams().expect("eams");
+        assert_eq!(eams.len(), 1);
+        assert_eq!(eams[0].callsign, "DuplicatePeer");
+        assert_eq!(eams[0].security_status, "Green");
+        assert_eq!(eams[0].updated_at_ms, 100);
+    }
+
     #[test]
     fn eam_readiness_score_bands_and_colors_match_dashboard_contract() {
         assert_eq!(eam_status_score("Green"), 100);
