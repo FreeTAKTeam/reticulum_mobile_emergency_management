@@ -464,6 +464,26 @@ REM profile mapping:
 
 Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM defaults to `US915` with `REM-LF-RURAL-v1`; setup may infer `EU868` from location or timezone before saving.
 
+Mixed TCP and LoRa behavior for the 1.2 release:
+- REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
+- TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
+- Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
+- Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
+
+1.2 release gate:
+- The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
+- For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
+- Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
+- Peer connection works after announce in all three modes.
+- Chat delivery works in all three modes.
+- Event replication works in all three modes.
+- EAM/preparedness updates work in all three modes.
+- Checklist updates work in all three modes.
+- Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
+- Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
+- Settings clearly document that REM must be restarted after interface configuration changes for this release.
+- 1.2.0 remains a prerelease until this matrix passes on the connected phones.
+
 ## Mobile Runtime Ownership Status
 
 The mobile runtime is now moving toward a Rust-authoritative projection model on device:

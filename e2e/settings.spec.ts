@@ -94,7 +94,9 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
 
   await runtimePanel.locator("summary").click();
   await runtimePanel.getByLabel("Call Sign").fill("Atlas-7");
-  await runtimePanel.getByPlaceholder("Add custom endpoint (host:port)").fill("mesh.example.org:5151");
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("mesh.example.org:5151");
   await runtimePanel.getByRole("button", { name: "Add" }).click();
 
   await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
@@ -106,6 +108,33 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   );
 
   expect(storedSettings.displayName).toBe("Atlas-7");
+  expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+});
+
+test("operators can add Reticulum-style TCP URLs as custom endpoints", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
+  });
+
+  await runtimePanel.locator("summary").click();
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("tcp://mesh.example.org:5151");
+  await runtimePanel.getByRole("button", { name: "Add" }).click();
+
+  await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 

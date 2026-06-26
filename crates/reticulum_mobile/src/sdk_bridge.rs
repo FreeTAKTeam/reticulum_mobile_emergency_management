@@ -44,7 +44,7 @@ use crate::types::{
 };
 
 const SDK_CAUSE_LXMF_PACKET_TOO_LARGE: &str = "LxmfPacketTooLarge";
-const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+const RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
 const ACCEPTED_RESULT_RESOURCE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(8);
 const PROPAGATION_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
 const PROPAGATION_FETCH_CONTROL_TIMEOUT: Duration = Duration::from_secs(90);
@@ -147,6 +147,21 @@ fn direct_packet_max_wire_bytes_from_request(req: &SendRequest) -> Option<usize>
         .and_then(JsonValue::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .map(|value| value.clamp(1, LXMF_MAX_PAYLOAD))
+}
+
+fn apply_direct_packet_max_wire_bytes(
+    method: TransportMethod,
+    representation: LxmfRepresentation,
+    wire_len: usize,
+    direct_packet_max_wire_bytes: Option<usize>,
+) -> LxmfRepresentation {
+    if matches!(method, TransportMethod::Direct)
+        && direct_packet_max_wire_bytes.is_some_and(|max_wire_bytes| wire_len > max_wire_bytes)
+    {
+        LxmfRepresentation::Resource
+    } else {
+        representation
+    }
 }
 
 #[cfg(test)]
@@ -1294,17 +1309,18 @@ async fn compat_send_lxmf(
     let direct_packet_max_wire_bytes = direct_packet_max_wire_bytes_from_request(req);
     let DeliveryDecision {
         method,
-        mut representation,
+        representation,
     } = decide_delivery(desired_method, false, wire.len()).map_err(|err| {
         sdk_validation(format!(
             "failed to choose lxmf delivery representation: {err}"
         ))
     })?;
-    if matches!(method, TransportMethod::Direct)
-        && direct_packet_max_wire_bytes.is_some_and(|max_wire_bytes| wire.len() > max_wire_bytes)
-    {
-        representation = LxmfRepresentation::Resource;
-    }
+    let representation = apply_direct_packet_max_wire_bytes(
+        method,
+        representation,
+        wire.len(),
+        direct_packet_max_wire_bytes,
+    );
     let direct_packet_max_wire_bytes = direct_packet_max_wire_bytes.unwrap_or(LXMF_MAX_PAYLOAD);
     let method_value = delivery_method_from_transport(method);
     let representation_value = delivery_representation_from_lxmf(representation);
@@ -1503,7 +1519,19 @@ async fn compat_send_lxmf(
         .data_packet(&wire)
         .map_err(|_| sdk_internal("failed to create transport packet"))?;
     let receipt_hash_hex = hex::encode(packet.hash().to_bytes());
-    let outcome = state.transport.send_packet_with_outcome(packet).await;
+    let trace = state.transport.send_packet_with_trace(packet).await;
+    let outcome = trace.outcome;
+    info!(
+        "[lxmf][events][sdk] direct packet send outcome requested_destination={} resolved_destination={} message_id={} outcome={:?} broadcast={} matched={} sent={} failed={}",
+        requested_destination_hex,
+        resolved_destination_hex,
+        message_id_hex,
+        outcome,
+        trace.broadcast,
+        trace.dispatch.matched_ifaces,
+        trace.dispatch.sent_ifaces,
+        trace.dispatch.failed_ifaces,
+    );
     if !matches!(
         outcome,
         RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
@@ -2890,6 +2918,39 @@ mod tests {
         assert_eq!(
             direct_packet_max_wire_bytes_from_request(&too_large),
             Some(LXMF_MAX_PAYLOAD)
+        );
+    }
+
+    #[test]
+    fn direct_packet_limit_override_is_the_resource_switch() {
+        let compact_event_wire_len = 218;
+
+        assert_eq!(
+            apply_direct_packet_max_wire_bytes(
+                TransportMethod::Direct,
+                LxmfRepresentation::Packet,
+                compact_event_wire_len,
+                None,
+            ),
+            LxmfRepresentation::Packet
+        );
+        assert_eq!(
+            apply_direct_packet_max_wire_bytes(
+                TransportMethod::Direct,
+                LxmfRepresentation::Packet,
+                compact_event_wire_len,
+                Some(145),
+            ),
+            LxmfRepresentation::Resource
+        );
+        assert_eq!(
+            apply_direct_packet_max_wire_bytes(
+                TransportMethod::Direct,
+                LxmfRepresentation::Packet,
+                compact_event_wire_len,
+                Some(400),
+            ),
+            LxmfRepresentation::Packet
         );
     }
 

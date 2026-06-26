@@ -14,6 +14,7 @@ def overrideVersionCode = project.findProperty("appVersionCode")?.toString()?.tr
 def computedVersionCode = overrideVersionCode ? overrideVersionCode.toInteger() : versionCodeStamp.toInteger()
 def overrideVersionName = project.findProperty("appVersionName")?.toString()?.trim()
 def computedVersionName = overrideVersionName ? overrideVersionName : "1.0.${versionNameStamp}"
+def enableWebViewDebugging = project.findProperty("enableWebViewDebugging")?.toString()?.toBoolean() ?: false
 def abiFiltersProperty = project.findProperty("abiFilters")?.toString()?.trim()
 def abiFiltersList = abiFiltersProperty
     ? abiFiltersProperty.split(",").collect { it.trim() }.findAll { !it.isEmpty() }
@@ -35,12 +36,16 @@ android {
     namespace "network.reticulum.emergency"
     compileSdk rootProject.ext.compileSdkVersion
     ndkVersion rootProject.ext.ndkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
         applicationId "network.reticulum.emergency"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode computedVersionCode
         versionName computedVersionName
+        buildConfigField "boolean", "ENABLE_WEBVIEW_DEBUGGING", enableWebViewDebugging.toString()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         if (!abiFiltersList.isEmpty()) {
             ndk {

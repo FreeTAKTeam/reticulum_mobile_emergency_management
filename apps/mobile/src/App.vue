@@ -114,7 +114,9 @@ onMounted(async () => {
     await messagingStore.init();
     if (setupCompleted) {
       await repairStartupRnodeSelection();
-      if (!nodeStore.status.running) {
+      if (nodeStore.status.running && nodeStore.nodeConfigRestartRequired) {
+        await nodeStore.restartNode();
+      } else if (!nodeStore.status.running) {
         await nodeStore.startNode();
       }
     }

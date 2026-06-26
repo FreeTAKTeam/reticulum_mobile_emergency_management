@@ -300,7 +300,7 @@ const unsavedSettingsCount = computed(() =>
 );
 
 function normalizeTcpEndpoint(value: string): string | undefined {
-  const candidate = value.trim();
+  const candidate = value.trim().replace(/^tcp:\/\//i, "");
   if (!candidate) {
     return undefined;
   }
@@ -345,7 +345,7 @@ function toggleKnownTcpEndpoint(endpoint: string, selected: boolean): void {
 function addCustomTcpEndpoint(): void {
   const normalized = normalizeTcpEndpoint(customTcpEndpoint.value);
   if (!normalized) {
-    runtimeFeedback.value = "Invalid endpoint. Use host:port or [ipv6]:port.";
+    runtimeFeedback.value = "Invalid endpoint. Use host:port, tcp://host:port, or [ipv6]:port.";
     return;
   }
   const next = new Set(normalizedTcpClients.value);
@@ -557,6 +557,8 @@ async function applySettings(): Promise<void> {
     ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
     : rnodeChangedBeforeSave && rnodeAppliedToRuntime
       ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : nodeStore.nodeConfigRestartRequired
+        ? "Settings saved. Restart the app or node to apply updated interface configuration."
       : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
       : nodeStore.status.running && hubRoutingChanged
@@ -773,7 +775,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             <input
               v-model="customTcpEndpoint"
               type="text"
-              placeholder="Add custom endpoint (host:port)"
+              placeholder="Add custom endpoint (host:port or tcp://host:port)"
             />
             <button type="button" @click="addCustomTcpEndpoint">Add</button>
           </div>
@@ -869,6 +871,11 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </div>
           <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
         </section>
+
+        <p class="section-note">
+          Save TCP or LoRa changes, then restart REM before validating interface traffic.
+          When TCP and LoRa are both active, Reticulum selects the route.
+        </p>
 
         <div class="grid propagation-grid">
           <label>
