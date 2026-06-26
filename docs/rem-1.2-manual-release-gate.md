@@ -55,7 +55,7 @@ Acceptable evidence:
 
 Duplicate packet delivery across simultaneous TCP+LoRa must be handled by Reticulum transport packet-cache behavior before REM workflow handlers receive payloads.
 
-Do not satisfy this gate with REM workflow or UI cleanup. Projection idempotency tests are defensive only.
+Do not satisfy this gate with REM-side message-id filters, TCP-first/LoRa-first routing policy, or workflow/UI cleanup.
 
 Acceptable evidence:
 

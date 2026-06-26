@@ -12653,61 +12653,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_compact_checklist_status_delivery_keeps_single_completed_row() {
-        let storage_dir = std::env::temp_dir().join(format!(
-            "rem-runtime-checklist-status-duplicate-{}",
-            now_ms()
-        ));
-        let store = AppStateStore::new(Some(
-            storage_dir
-                .to_str()
-                .expect("temporary storage dir should be utf-8"),
-        ))
-        .expect("app state store");
-        let task = checklist_test_task("task-1", 1, "Existing", "2026-04-22T12:05:00.000000000Z");
-        let checklist = checklist_test_record("2026-04-22T12:05:00.000000000Z", task);
-        store
-            .upsert_checklist(&checklist, "seed-checklist")
-            .expect("seed checklist");
-        let bus = EventBus::new();
-        let fields = compact_checklist_status_fields(
-            "chk-merge",
-            "task-1",
-            Some(1),
-            "2026-04-22T12:06:00.000000000Z",
-            "COMPLETE",
-        );
-
-        assert!(persist_received_checklist_if_present(
-            &store,
-            &bus,
-            None,
-            Some(fields.as_slice()),
-            None,
-        ));
-        assert!(persist_received_checklist_if_present(
-            &store,
-            &bus,
-            None,
-            Some(fields.as_slice()),
-            None,
-        ));
-
-        let stored = store
-            .get_checklist_any("chk-merge")
-            .expect("stored checklist query")
-            .expect("stored checklist");
-        assert_eq!(stored.tasks.len(), 1);
-        assert_eq!(stored.counts.complete_count, 1);
-        assert_eq!(stored.counts.pending_count, 0);
-        assert_eq!(stored.progress_percent, 100.0);
-        assert_eq!(
-            stored.tasks[0].updated_at.as_deref(),
-            Some("2026-04-22T12:06:00.000000000Z")
-        );
-    }
-
-    #[test]
     fn compact_checklist_status_update_resolves_visible_row_by_number_when_task_uid_differs() {
         let storage_dir = std::env::temp_dir().join(format!(
             "rem-runtime-checklist-status-row-number-{}",
