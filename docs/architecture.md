@@ -471,6 +471,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 
 1.2 release gate:
+- The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
 - For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
 - Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
 - Peer connection works after announce in all three modes.
