@@ -459,9 +459,35 @@ function syncWatchStatusServerForm(): void {
   form.watchStatusServerPort = nodeStore.watchStatusServer.port;
 }
 
+function syncSettingsForm(): void {
+  form.displayName = nodeStore.settings.displayName;
+  form.clientMode = nodeStore.settings.clientMode;
+  form.announceCapabilities = ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities);
+  form.announceIntervalSeconds = nodeStore.settings.announceIntervalSeconds;
+  form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.broadcast = nodeStore.settings.broadcast;
+  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
+  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
+  form.rnodeRegion = nodeStore.settings.rnode.region;
+  form.rnodeProfile = nodeStore.settings.rnode.profile;
+  form.telemetryEnabled = nodeStore.settings.telemetry.enabled;
+  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
+  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
+  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
+  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  form.hubMode = nodeStore.settings.hub.mode;
+  form.hubIdentityHash = nodeStore.settings.hub.identityHash;
+  form.hubApiBaseUrl = nodeStore.settings.hub.apiBaseUrl;
+  form.hubApiKey = nodeStore.settings.hub.apiKey;
+  form.hubRefreshIntervalSeconds = nodeStore.settings.hub.refreshIntervalSeconds;
+  syncWatchStatusServerForm();
+}
+
 onMounted(() => {
-  void nodeStore.refreshWatchStatusServerSettings()
-    .then(syncWatchStatusServerForm)
+  void nodeStore.init()
+    .then(() => nodeStore.refreshWatchStatusServerSettings())
+    .then(syncSettingsForm)
     .catch(() => undefined);
 });
 
@@ -536,19 +562,7 @@ async function applySettings(): Promise<void> {
     savingSettings.value = false;
   }
 
-  form.displayName = nodeStore.settings.displayName;
-  form.announceCapabilities = nodeStore.settings.announceCapabilities;
-  form.tcpClients = [...nodeStore.settings.tcpClients];
-  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
-  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
-  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
-  form.rnodeRegion = nodeStore.settings.rnode.region;
-  form.rnodeProfile = nodeStore.settings.rnode.profile;
-  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
-  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
-  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
-  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
-  syncWatchStatusServerForm();
+  syncSettingsForm();
   const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
   const hubRoutingChanged =
     nodeStore.settings.hub.mode !== previousHubMode

@@ -46,7 +46,7 @@ test("fresh installs default to the first TCP community server", async ({ page }
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
-test("legacy placeholder TCP selection normalizes to the first community server", async ({ page }) => {
+test("rmap TCP selection is preserved as a community server", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -62,20 +62,23 @@ test("legacy placeholder TCP selection normalizes to the first community server"
 
   await runtimePanel.locator("summary").click();
 
-  const firstServer = page
-    .locator("label.server-option")
-    .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
+  const rmapServer = page.locator("label.server-option").filter({ hasText: "rmap.world:4242" });
 
-  await expect(firstServer.getByRole("checkbox")).toBeChecked();
-  await expect(page.getByText("rmap.world:4242")).toHaveCount(0);
+  await expect(rmapServer.getByRole("checkbox")).toBeChecked();
+  await expect(page.getByText(DEFAULT_TCP_COMMUNITY_ENDPOINT)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 
-  await page.getByRole("button", { name: "Save" }).click();
+  const runtimeSettings = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().settings;
+  });
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
   );
 
-  expect(storedSettings.tcpClients).toEqual([DEFAULT_TCP_COMMUNITY_ENDPOINT]);
+  expect(runtimeSettings.tcpClients).toEqual(["rmap.world:4242"]);
+  expect(storedSettings.tcpClients).toEqual(["rmap.world:4242"]);
 });
 
 test("operators can update runtime settings and persist TCP endpoints", async ({ page }) => {
