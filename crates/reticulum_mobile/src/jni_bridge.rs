@@ -210,6 +210,12 @@ struct SavedPeerInput {
     destination: String,
     label: Option<String>,
     saved_at: u64,
+    identity_hex: Option<String>,
+    lxmf_destination_hex: Option<String>,
+    app_data: Option<String>,
+    display_name: Option<String>,
+    last_route_seen_at_ms: Option<u64>,
+    last_hops: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -800,18 +806,29 @@ fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     }
 }
 
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
 fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
     SavedPeerRecord {
         destination_hex: input.destination.trim().to_ascii_lowercase(),
-        label: input.label.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
+        label: trimmed_non_empty(input.label),
         saved_at_ms: input.saved_at,
+        identity_hex: trimmed_non_empty(input.identity_hex).map(|value| value.to_ascii_lowercase()),
+        lxmf_destination_hex: trimmed_non_empty(input.lxmf_destination_hex)
+            .map(|value| value.to_ascii_lowercase()),
+        app_data: trimmed_non_empty(input.app_data),
+        display_name: trimmed_non_empty(input.display_name),
+        last_route_seen_at_ms: input.last_route_seen_at_ms,
+        last_hops: input.last_hops,
     }
 }
 
@@ -1332,7 +1349,13 @@ fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
     json!({
         "destination": peer.destination_hex,
         "label": peer.label,
-        "savedAt": peer.saved_at_ms
+        "savedAt": peer.saved_at_ms,
+        "identityHex": peer.identity_hex,
+        "lxmfDestinationHex": peer.lxmf_destination_hex,
+        "appData": peer.app_data,
+        "displayName": peer.display_name,
+        "lastRouteSeenAtMs": peer.last_route_seen_at_ms,
+        "lastHops": peer.last_hops
     })
 }
 

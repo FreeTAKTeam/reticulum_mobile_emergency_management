@@ -4830,6 +4830,18 @@ struct RestoredSavedPeerManagement {
     pruned_destinations: Vec<String>,
 }
 
+fn record_saved_peer_profile(messaging: &mut sdkmsg::MessagingStore, peer: &SavedPeerRecord) {
+    messaging.record_saved_peer_profile(
+        peer.destination_hex.as_str(),
+        peer.identity_hex.as_deref(),
+        peer.lxmf_destination_hex.as_deref(),
+        peer.app_data.as_deref(),
+        peer.display_name.as_deref().or(peer.label.as_deref()),
+        peer.last_route_seen_at_ms,
+        peer.last_hops,
+    );
+}
+
 fn restore_saved_peer_management(
     messaging: &mut sdkmsg::MessagingStore,
     saved_peers: &[SavedPeerRecord],
@@ -4844,6 +4856,7 @@ fn restore_saved_peer_management(
             continue;
         }
         messaging.mark_peer_saved(destination_hex.as_str(), true);
+        record_saved_peer_profile(messaging, peer);
         restored_destinations.push(destination_hex);
     }
     let pruned_destinations = messaging.prune_saved_destinations_with_non_rem_announce_evidence();
@@ -4981,6 +4994,9 @@ async fn apply_saved_peer_management_projection(
 
         let (added, removed) =
             messaging.replace_saved_destinations(desired_destinations.iter().map(String::as_str));
+        for peer in saved_peers {
+            record_saved_peer_profile(&mut messaging, peer);
+        }
         let now = now_ms();
         for destination in &cleanup_destinations {
             if desired_set.contains(destination) {
@@ -5311,12 +5327,19 @@ async fn saved_peer_matches_destination(
         Ok(saved_peers) => saved_peers,
         Err(_) => return false,
     };
-    saved_peers
-        .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+    saved_peers.iter().any(|peer| {
+        [
+            normalize_hex_32(peer.destination_hex.as_str()),
+            peer.lxmf_destination_hex
+                .as_deref()
+                .and_then(normalize_hex_32),
+        ]
+        .into_iter()
+        .flatten()
         .any(|destination_hex| {
             destination_hex == canonical_destination || destination_hex == normalized_destination
         })
+    })
 }
 
 fn mission_direct_priority_delay_for_hops(hops: Option<u8>) -> Duration {
@@ -14142,16 +14165,34 @@ mod tests {
                     destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
                     label: Some("Pixel".to_string()),
                     saved_at_ms: now,
+                    identity_hex: None,
+                    lxmf_destination_hex: None,
+                    app_data: None,
+                    display_name: None,
+                    last_route_seen_at_ms: None,
+                    last_hops: None,
                 },
                 crate::types::SavedPeerRecord {
                     destination_hex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                     label: Some("Pixel duplicate".to_string()),
                     saved_at_ms: now,
+                    identity_hex: None,
+                    lxmf_destination_hex: None,
+                    app_data: None,
+                    display_name: None,
+                    last_route_seen_at_ms: None,
+                    last_hops: None,
                 },
                 crate::types::SavedPeerRecord {
                     destination_hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
                     label: Some("Non REM".to_string()),
                     saved_at_ms: now,
+                    identity_hex: None,
+                    lxmf_destination_hex: None,
+                    app_data: None,
+                    display_name: None,
+                    last_route_seen_at_ms: None,
+                    last_hops: None,
                 },
             ],
         );

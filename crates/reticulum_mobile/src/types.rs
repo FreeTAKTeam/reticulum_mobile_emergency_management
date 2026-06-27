@@ -662,6 +662,18 @@ pub struct SavedPeerRecord {
     pub destination_hex: String,
     pub label: Option<String>,
     pub saved_at_ms: u64,
+    #[serde(default)]
+    pub identity_hex: Option<String>,
+    #[serde(default)]
+    pub lxmf_destination_hex: Option<String>,
+    #[serde(default)]
+    pub app_data: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub last_route_seen_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_hops: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
