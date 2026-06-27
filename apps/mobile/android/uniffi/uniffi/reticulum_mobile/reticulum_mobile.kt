@@ -5541,7 +5541,13 @@ public object FfiConverterTypeRnodeSettingsRecord: FfiConverterRustBuffer<RnodeS
 data class SavedPeerRecord (
     var `destinationHex`: kotlin.String,
     var `label`: kotlin.String?,
-    var `savedAtMs`: kotlin.ULong
+    var `savedAtMs`: kotlin.ULong,
+    var `identityHex`: kotlin.String?,
+    var `lxmfDestinationHex`: kotlin.String?,
+    var `appData`: kotlin.String?,
+    var `displayName`: kotlin.String?,
+    var `lastRouteSeenAtMs`: kotlin.ULong?,
+    var `lastHops`: kotlin.UByte?
 ) {
 
     companion object
@@ -5556,19 +5562,37 @@ public object FfiConverterTypeSavedPeerRecord: FfiConverterRustBuffer<SavedPeerR
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalUByte.read(buf),
         )
     }
 
     override fun allocationSize(value: SavedPeerRecord) = (
             FfiConverterString.allocationSize(value.`destinationHex`) +
             FfiConverterOptionalString.allocationSize(value.`label`) +
-            FfiConverterULong.allocationSize(value.`savedAtMs`)
+            FfiConverterULong.allocationSize(value.`savedAtMs`) +
+            FfiConverterOptionalString.allocationSize(value.`identityHex`) +
+            FfiConverterOptionalString.allocationSize(value.`lxmfDestinationHex`) +
+            FfiConverterOptionalString.allocationSize(value.`appData`) +
+            FfiConverterOptionalString.allocationSize(value.`displayName`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastRouteSeenAtMs`) +
+            FfiConverterOptionalUByte.allocationSize(value.`lastHops`)
     )
 
     override fun write(value: SavedPeerRecord, buf: ByteBuffer) {
             FfiConverterString.write(value.`destinationHex`, buf)
             FfiConverterOptionalString.write(value.`label`, buf)
             FfiConverterULong.write(value.`savedAtMs`, buf)
+            FfiConverterOptionalString.write(value.`identityHex`, buf)
+            FfiConverterOptionalString.write(value.`lxmfDestinationHex`, buf)
+            FfiConverterOptionalString.write(value.`appData`, buf)
+            FfiConverterOptionalString.write(value.`displayName`, buf)
+            FfiConverterOptionalULong.write(value.`lastRouteSeenAtMs`, buf)
+            FfiConverterOptionalUByte.write(value.`lastHops`, buf)
     }
 }
 
@@ -8741,6 +8765,5 @@ public object FfiConverterSequenceTypeTelemetryPositionRecord: FfiConverterRustB
 }
     )
     }
-
 
 

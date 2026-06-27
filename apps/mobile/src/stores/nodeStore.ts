@@ -1534,7 +1534,12 @@ export const useNodeStore = defineStore("node", () => {
       destination: canonicalDestination,
       label: existingPeer?.label ?? aliasPeer.label,
       savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
+      identityHex: existingPeer?.identityHex ?? aliasPeer.identityHex,
       lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex ?? canonicalDestination,
+      appData: existingPeer?.appData ?? aliasPeer.appData,
+      displayName: existingPeer?.displayName ?? aliasPeer.displayName,
+      lastRouteSeenAtMs: existingPeer?.lastRouteSeenAtMs ?? aliasPeer.lastRouteSeenAtMs,
+      lastHops: existingPeer?.lastHops ?? aliasPeer.lastHops,
     };
     delete savedByDestination[aliasDestination];
     savedByDestination[canonicalDestination] = migratedPeer;
