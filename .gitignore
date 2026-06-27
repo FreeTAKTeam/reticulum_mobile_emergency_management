@@ -18,3 +18,8 @@ playwright-report/
 test-results/
 tmp/
 crates/reticulum_mobile/reticulum-mobile/app_state.db
+
+# Generated mobile native artifacts
+apps/mobile/android/app/src/main/jniLibs/
+apps/mobile/android/uniffi/
+apps/mobile/ios/uniffi/
