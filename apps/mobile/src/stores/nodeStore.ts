@@ -497,6 +497,20 @@ function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): SavedPeerRec
     destination: normalizeDestinationHex(peer.destination),
     label: peer.label?.trim() || undefined,
     savedAt: Number(peer.savedAt ?? nowMs()),
+    identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+      ? normalizeDestinationHex(peer.identityHex ?? "")
+      : undefined,
+    lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+      ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+      : undefined,
+    appData: peer.appData?.trim() || undefined,
+    displayName: peer.displayName?.trim() || undefined,
+    lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+      ? peer.lastRouteSeenAtMs
+      : undefined,
+    lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+      ? peer.lastHops
+      : undefined,
   }));
 }
 
@@ -511,6 +525,20 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
       destination,
       label: peer.label?.trim() || undefined,
       savedAt: Number(peer.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+        ? normalizeDestinationHex(peer.identityHex ?? "")
+        : undefined,
+      lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+        ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+        : undefined,
+      appData: peer.appData?.trim() || undefined,
+      displayName: peer.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+        ? peer.lastRouteSeenAtMs
+        : undefined,
+      lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+        ? peer.lastHops
+        : undefined,
     };
   }
   return out;
@@ -952,6 +980,7 @@ export const useNodeStore = defineStore("node", () => {
       },
       peer.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "native peer route profile");
   }
 
   function applyPeerChanged(change: PeerChangedEvent["change"]): void {
@@ -1017,6 +1046,7 @@ export const useNodeStore = defineStore("node", () => {
       },
       change.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "peer change route profile");
   }
 
   function reconcileNativePeerSnapshot(peers: PeerRecord[]): void {
@@ -1499,9 +1529,12 @@ export const useNodeStore = defineStore("node", () => {
 
     const existingPeer = savedByDestination[canonicalDestination];
     const migratedPeer: SavedPeer = {
+      ...aliasPeer,
+      ...existingPeer,
       destination: canonicalDestination,
       label: existingPeer?.label ?? aliasPeer.label,
       savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
+      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex ?? canonicalDestination,
     };
     delete savedByDestination[aliasDestination];
     savedByDestination[canonicalDestination] = migratedPeer;
@@ -1513,6 +1546,70 @@ export const useNodeStore = defineStore("node", () => {
       `canonical saved peer ${canonicalDestination}`,
     );
     return migratedPeer;
+  }
+
+  function savedPeerProfileFromDiscovered(
+    destinationRaw: string,
+    discovered?: DiscoveredPeer,
+    fallback?: Partial<SavedPeer>,
+  ): SavedPeer {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const identityHex = normalizeDestinationHex(discovered?.identityHex ?? fallback?.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(
+      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? destination,
+    );
+    const routeSeenAt = Math.max(
+      discovered?.lxmfLastSeenAt ?? 0,
+      discovered?.announceLastSeenAt ?? 0,
+      discovered?.lastSeenAt ?? 0,
+      fallback?.lastRouteSeenAtMs ?? 0,
+    );
+    const hops = typeof discovered?.hops === "number" && Number.isFinite(discovered.hops)
+      ? discovered.hops
+      : fallback?.lastHops;
+
+    return {
+      destination,
+      label: discovered?.label ?? fallback?.label,
+      savedAt: Number(fallback?.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+      lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
+      appData: discovered?.appData?.trim() || fallback?.appData?.trim() || undefined,
+      displayName: discovered?.announcedName?.trim() || fallback?.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: routeSeenAt > 0 ? routeSeenAt : undefined,
+      lastHops: typeof hops === "number" && Number.isFinite(hops) ? hops : undefined,
+    };
+  }
+
+  function sameSavedPeerProfile(left: SavedPeer, right: SavedPeer): boolean {
+    return left.destination === right.destination
+      && left.label === right.label
+      && left.savedAt === right.savedAt
+      && left.identityHex === right.identityHex
+      && left.lxmfDestinationHex === right.lxmfDestinationHex
+      && left.appData === right.appData
+      && left.displayName === right.displayName
+      && left.lastRouteSeenAtMs === right.lastRouteSeenAtMs
+      && left.lastHops === right.lastHops;
+  }
+
+  function refreshSavedPeerProfile(destinationRaw: string, reason: string): void {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const saved = savedByDestination[destination];
+    const discovered = discoveredByDestination[destination];
+    if (!saved || !discovered) {
+      return;
+    }
+
+    const next = savedPeerProfileFromDiscovered(destination, discovered, saved);
+    if (sameSavedPeerProfile(saved, next)) {
+      return;
+    }
+    savedByDestination[destination] = next;
+    void persistSavedPeersProjection(
+      { ...savedByDestination },
+      `${reason} ${destination}`,
+    );
   }
 
   function nativeSavedPeerForCanonicalDestination(
@@ -1537,11 +1634,11 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     const existing = peerByAnyKnownDestination(discoveredByDestination, canonicalDestination);
-    const adoptedPeer: SavedPeer = {
-      destination: canonicalDestination,
-      label: existing?.label ?? (displayName?.trim() || undefined),
+    const adoptedPeer = savedPeerProfileFromDiscovered(canonicalDestination, existing, {
+      label: displayName?.trim() || undefined,
+      displayName: displayName?.trim() || undefined,
       savedAt: nowMs(),
-    };
+    });
     savedByDestination[canonicalDestination] = adoptedPeer;
     void persistSavedPeersProjection(
       { ...savedByDestination },
@@ -2315,11 +2412,10 @@ export const useNodeStore = defineStore("node", () => {
     clearPeerRemoved(destination, discovered);
     const nextSavedPeers = {
       ...savedByDestination,
-      [destination]: {
-        destination,
+      [destination]: savedPeerProfileFromDiscovered(destination, discovered, {
         label: discovered?.label,
         savedAt: nowMs(),
-      },
+      }),
     };
     if (requestedDestination !== destination) {
       delete nextSavedPeers[requestedDestination];
@@ -2499,6 +2595,7 @@ export const useNodeStore = defineStore("node", () => {
         destination,
         label: peer.label?.trim() || undefined,
         savedAt: nowMs(),
+        lxmfDestinationHex: destination,
       };
       upsertDiscovered(
         destination,

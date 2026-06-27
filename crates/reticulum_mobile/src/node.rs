@@ -611,6 +611,24 @@ fn peer_has_stored_propagation_route(peer: &PeerRecord) -> bool {
     peer_connectivity_model(peer, true, true).stored_propagation_available()
 }
 
+fn saved_peer_target_destination(peer: &SavedPeerRecord) -> Option<String> {
+    peer.lxmf_destination_hex
+        .as_deref()
+        .and_then(normalize_hex_32)
+        .or_else(|| normalize_hex_32(peer.destination_hex.as_str()))
+}
+
+fn saved_peer_supports_mission_traffic(peer: &SavedPeerRecord) -> bool {
+    has_capability_token(peer.app_data.as_deref(), "r3akt")
+        && has_capability_token(peer.app_data.as_deref(), "emergencymessages")
+}
+
+fn saved_peer_has_stored_propagation_route(peer: &SavedPeerRecord) -> bool {
+    saved_peer_supports_mission_traffic(peer)
+        && normalize_hex_32(peer.destination_hex.as_str()).is_some()
+        && saved_peer_target_destination(peer).is_some()
+}
+
 fn saved_peer_can_try_stored_lxmf_route(peer: &PeerRecord, saved: bool) -> bool {
     peer_supports_mission_traffic(peer)
         && peer_connectivity_model(peer, true, saved).stored_propagation_available()
@@ -813,7 +831,7 @@ fn prioritize_sos_replication_targets(
 ) {
     let saved_destination_set = saved_peers
         .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .filter_map(saved_peer_target_destination)
         .collect::<HashSet<_>>();
     let sequence_by_destination = targets
         .iter()
@@ -843,7 +861,7 @@ fn build_mission_replication_targets(
 ) -> Vec<MissionReplicationTarget> {
     let saved_destinations = saved_peers
         .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
     let mut direct_targets = Vec::new();
@@ -902,7 +920,10 @@ fn build_mission_replication_targets(
             continue;
         }
         if has_active_relay {
-            let relay_ready = peers.iter().any(|peer| {
+            let relay_ready = saved_peers.iter().any(|peer| {
+                saved_peer_target_destination(peer).as_deref() == Some(app_destination_hex.as_str())
+                    && saved_peer_has_stored_propagation_route(peer)
+            }) || peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
                     && peer_supports_mission_traffic(peer)
@@ -936,7 +957,7 @@ fn build_sos_replication_targets(
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
     let saved_destinations = saved_peers
         .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
     let has_active_relay = active_propagation_node_hex
@@ -1008,7 +1029,10 @@ fn build_sos_replication_targets(
         if !has_active_relay {
             continue;
         }
-        let relay_ready = peers.iter().any(|peer| {
+        let relay_ready = saved_peers.iter().any(|peer| {
+            saved_peer_target_destination(peer).as_deref() == Some(app_destination_hex.as_str())
+                && saved_peer_has_stored_propagation_route(peer)
+        }) || peers.iter().any(|peer| {
             normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                 == Some(app_destination_hex.as_str())
                 && peer_supports_mission_traffic(peer)
@@ -1034,7 +1058,7 @@ fn build_event_replication_targets(
 ) -> Vec<MissionReplicationTarget> {
     let saved_destinations = saved_peers
         .iter()
-        .filter_map(|peer| normalize_hex_32(peer.destination_hex.as_str()))
+        .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
     let mut direct_targets = Vec::new();
@@ -1093,7 +1117,10 @@ fn build_event_replication_targets(
             continue;
         }
         if has_active_relay {
-            let relay_ready = peers.iter().any(|peer| {
+            let relay_ready = saved_peers.iter().any(|peer| {
+                saved_peer_target_destination(peer).as_deref() == Some(app_destination_hex.as_str())
+                    && saved_peer_has_stored_propagation_route(peer)
+            }) || peers.iter().any(|peer| {
                 normalize_hex_32(peer.destination_hex.as_str()).as_deref()
                     == Some(app_destination_hex.as_str())
                     && peer_supports_mission_traffic(peer)
@@ -7345,6 +7372,29 @@ mod tests {
             destination_hex: destination_hex.to_string(),
             label: Some("POCO".to_string()),
             saved_at_ms: 1_700_000_000_000,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
+        }
+    }
+
+    fn build_saved_peer_with_lxmf_route(
+        destination_hex: &str,
+        identity_hex: &str,
+    ) -> SavedPeerRecord {
+        SavedPeerRecord {
+            destination_hex: destination_hex.to_string(),
+            label: Some("Routable saved peer".to_string()),
+            saved_at_ms: 1_700_000_000_000,
+            identity_hex: Some(identity_hex.to_string()),
+            lxmf_destination_hex: Some(destination_hex.to_string()),
+            app_data: Some("R3AKT,EmergencyMessages,Telemetry".to_string()),
+            display_name: Some("Routable saved peer".to_string()),
+            last_route_seen_at_ms: Some(1_700_000_000_000),
+            last_hops: Some(2),
         }
     }
 
@@ -8557,6 +8607,12 @@ mod tests {
             destination_hex: "A1B2C3D4".to_string(),
             label: Some("Bravo".to_string()),
             saved_at_ms: 1,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         }
     }
 
@@ -9655,6 +9711,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -9697,6 +9759,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -9857,6 +9925,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -9977,6 +10051,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -10109,6 +10189,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -10240,6 +10326,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -10371,6 +10463,12 @@ mod tests {
                 destination_hex: node_b_status.app_destination_hex.clone(),
                 label: Some("peer-b".to_string()),
                 saved_at_ms: now_ms(),
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             }])
             .expect("save peer b");
         node_a
@@ -10573,6 +10671,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-connected".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -10606,6 +10710,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-connected".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -10669,11 +10779,23 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("Pixel".to_string()),
             saved_at_ms: 1,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let relay_saved_peer = SavedPeerRecord {
             destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             label: Some("RelayOnly".to_string()),
             saved_at_ms: 2,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let direct_peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -10726,6 +10848,12 @@ mod tests {
             destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let mut saved_relay_peer = build_peer_record(
             "cccccccccccccccccccccccccccccccc",
@@ -10850,11 +10978,23 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("stale".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let connected_saved_peer = SavedPeerRecord {
             destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             label: Some("pixel".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let mut stale_peer = build_peer_record(
             stale_saved_peer.destination_hex.as_str(),
@@ -11055,6 +11195,12 @@ mod tests {
                 destination_hex: peer.destination_hex.clone(),
                 label: peer.display_name.clone(),
                 saved_at_ms: 1_700_000_000_000,
+                identity_hex: None,
+                lxmf_destination_hex: None,
+                app_data: None,
+                display_name: None,
+                last_route_seen_at_ms: None,
+                last_hops: None,
             })
             .collect::<Vec<_>>();
         let announces = vec![
@@ -11180,11 +11326,23 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("Pixel".to_string()),
             saved_at_ms: 1,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let relay_saved_peer = SavedPeerRecord {
             destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
             label: Some("RelayOnly".to_string()),
             saved_at_ms: 2,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let direct_peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11237,6 +11395,12 @@ mod tests {
             destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
             label: Some("saved-relay".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let mut saved_relay_peer = build_peer_record(
             "cccccccccccccccccccccccccccccccc",
@@ -11305,6 +11469,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-connected".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11338,6 +11508,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-direct".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peer = PeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -11380,6 +11556,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-direct".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let mut peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11625,6 +11807,35 @@ mod tests {
     }
 
     #[test]
+    fn eam_replication_targets_use_saved_lxmf_profile_without_current_peer() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer_with_lxmf_route(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        );
+
+        let targets = build_mission_replication_targets(
+            &status,
+            &[],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
+    }
+
+    #[test]
     fn replication_targets_skip_saved_peer_without_mission_capabilities() {
         let status = NodeStatus {
             running: true,
@@ -11674,6 +11885,35 @@ mod tests {
         let targets = build_event_replication_targets(&status, &[], &[saved_peer], None);
 
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn event_replication_targets_use_saved_lxmf_profile_without_current_peer() {
+        let status = NodeStatus {
+            running: true,
+            name: "pixel".to_string(),
+            identity_hex: "22222222222222222222222222222222".to_string(),
+            app_destination_hex: "11111111111111111111111111111111".to_string(),
+            lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+        };
+        let saved_peer = build_saved_peer_with_lxmf_route(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        );
+
+        let targets = build_event_replication_targets(
+            &status,
+            &[],
+            &[saved_peer],
+            Some("99999999999999999999999999999999"),
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].app_destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(targets[0].send_mode, SendMode::PropagationOnly {});
     }
 
     #[test]
@@ -11919,6 +12159,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-peer".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11951,6 +12197,12 @@ mod tests {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             label: Some("saved-peer".to_string()),
             saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
         };
         let peers = vec![build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

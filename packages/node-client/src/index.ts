@@ -425,6 +425,12 @@ export interface SavedPeerRecord {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export interface EamSourceRecord {
@@ -1927,6 +1933,20 @@ function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
     destination: normalizeHex(raw.destination ?? raw.destinationHex ?? ""),
     label: typeof raw.label === "string" ? raw.label : undefined,
     savedAt: Number(raw.savedAt ?? raw.saved_at_ms ?? raw.savedAtMs ?? Date.now()),
+    identityHex: toOptionalHex(raw.identityHex ?? raw.identity_hex),
+    lxmfDestinationHex: toOptionalHex(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex),
+    appData: typeof raw.appData === "string"
+      ? raw.appData
+      : typeof raw.app_data === "string"
+        ? raw.app_data
+        : undefined,
+    displayName: typeof raw.displayName === "string"
+      ? raw.displayName
+      : typeof raw.display_name === "string"
+        ? raw.display_name
+        : undefined,
+    lastRouteSeenAtMs: toOptionalNumber(raw.lastRouteSeenAtMs ?? raw.last_route_seen_at_ms),
+    lastHops: toOptionalNumber(raw.lastHops ?? raw.last_hops),
   };
 }
 
