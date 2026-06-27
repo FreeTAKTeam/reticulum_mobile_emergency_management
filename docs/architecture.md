@@ -500,8 +500,8 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
   - query refresh after projection invalidation
   - platform-only concerns such as geolocation permission UX
 - UI-only preferences such as `clientMode` and `showOnlyCapabilityVerified` remain in TypeScript storage and are not part of the native `AppSettingsRecord`.
-- Fresh installs and empty legacy TCP selections normalize to the first entry in `TCP_COMMUNITY_SERVERS`, so mobile starts with an active TCP community server selected by default.
-- The legacy `rmap.world:4242` placeholder is treated as unset and is normalized to that first community server during migration and settings persistence.
+- Fresh installs and empty legacy TCP selections normalize to the first entry in `TCP_COMMUNITY_SERVERS`, currently `R3AKT Server` at `134.122.46.48:37428`, so mobile starts with an active TCP community server selected by default.
+- `rmap.world:4242` is an available community TCP server and is preserved when selected or loaded from persisted settings.
 - Pre-start app-state/projection queries are valid through the JNI bridge; only runtime transport commands still require an initialized node.
 - Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
 - Saved peers are rehydrated into the Rust managed-peer set during runtime startup, so the app does not depend on a later UI-driven connect pass before EAM/Event/message sends can target intentional peers.
