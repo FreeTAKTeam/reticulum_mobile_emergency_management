@@ -8802,6 +8802,49 @@ fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, Strin
 }
 
 #[cfg(target_os = "android")]
+struct RnodeBleWiring {
+    label: String,
+    lora: LoraConfig,
+    native: NativeRnodeBleSettings,
+    kiss: RnodeBleKissConfig,
+}
+
+#[cfg(target_os = "android")]
+fn rnode_ble_wiring_from_settings(
+    settings: &RnodeSettingsRecord,
+) -> Result<RnodeBleWiring, String> {
+    let peripheral_id = settings.peripheral_id.trim().to_string();
+    if peripheral_id.is_empty() {
+        return Err("RNode Bluetooth is enabled but no paired device is selected.".to_string());
+    }
+
+    let lora = rnode_lora_config(settings)?;
+    let label = if settings.display_name.trim().is_empty() {
+        format!("rnode-ble:{peripheral_id}")
+    } else {
+        format!("rnode-ble:{}", settings.display_name.trim())
+    };
+    let native = NativeRnodeBleSettings::for_peripheral(peripheral_id)
+        .with_peripheral_alias(settings.display_name.trim());
+    let kiss = RnodeBleKissConfig {
+        mtu: usize::from(lora.max_payload_bytes),
+        max_write_len: 20,
+        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
+        initial_frames: lora.probe_frames(),
+        deferred_frames: lora.radio_config_frames(),
+        shutdown_frames: lora.shutdown_frames(),
+        ..RnodeBleKissConfig::default()
+    };
+
+    Ok(RnodeBleWiring {
+        label,
+        lora,
+        native,
+        kiss,
+    })
+}
+
+#[cfg(target_os = "android")]
 fn spawn_rnode_ble_interface(
     transport: Arc<Transport>,
     bus: EventBus,
@@ -8811,27 +8854,18 @@ fn spawn_rnode_ble_interface(
     if !settings.enabled {
         return;
     }
+    if let Err(error) = rnode_ble_wiring_from_settings(&settings) {
+        bus.emit(NodeEvent::Error {
+            code: "InvalidConfig".to_string(),
+            message: if error.starts_with("RNode Bluetooth") {
+                error
+            } else {
+                format!("RNode LoRa profile is invalid: {error}")
+            },
+        });
+        return;
+    }
     let peripheral_id = settings.peripheral_id.trim().to_string();
-    if peripheral_id.is_empty() {
-        bus.emit(NodeEvent::Error {
-            code: "InvalidConfig".to_string(),
-            message: "RNode Bluetooth is enabled but no paired device is selected.".to_string(),
-        });
-        return;
-    }
-
-    if let Err(error) = rnode_lora_config(&settings) {
-        bus.emit(NodeEvent::Error {
-            code: "InvalidConfig".to_string(),
-            message: format!("RNode LoRa profile is invalid: {error}"),
-        });
-        return;
-    }
-    let label = if settings.display_name.trim().is_empty() {
-        format!("rnode-ble:{peripheral_id}")
-    } else {
-        format!("rnode-ble:{}", settings.display_name.trim())
-    };
 
     tokio::spawn(async move {
         let active = Arc::new(AtomicBool::new(false));
@@ -8841,33 +8875,25 @@ fn spawn_rnode_ble_interface(
                 continue;
             }
 
-            let lora_config = match rnode_lora_config(&settings) {
-                Ok(config) => config,
+            let wiring = match rnode_ble_wiring_from_settings(&settings) {
+                Ok(wiring) => wiring,
                 Err(error) => {
                     bus.emit(NodeEvent::Error {
                         code: "InvalidConfig".to_string(),
-                        message: format!("RNode LoRa profile is invalid: {error}"),
+                        message: if error.starts_with("RNode Bluetooth") {
+                            error
+                        } else {
+                            format!("RNode LoRa profile is invalid: {error}")
+                        },
                     });
                     return;
                 }
             };
-            let kiss_config = RnodeBleKissConfig {
-                mtu: usize::from(lora_config.max_payload_bytes),
-                max_write_len: 20,
-                read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
-                initial_frames: lora_config.probe_frames(),
-                deferred_frames: lora_config.radio_config_frames(),
-                shutdown_frames: lora_config.shutdown_frames(),
-                ..RnodeBleKissConfig::default()
-            };
-            let adapter = NativeRnodeBleKissInterface::new(
-                label.clone(),
-                NativeRnodeBleSettings::for_peripheral(peripheral_id.clone())
-                    .with_peripheral_alias(settings.display_name.trim()),
-                kiss_config,
-            )
-            .with_rnode_validation(lora_config, Duration::from_millis(15_000))
-            .with_detection_fallback_timeout(Duration::from_millis(5_000));
+            let label = wiring.label;
+            let adapter =
+                NativeRnodeBleKissInterface::new(label.clone(), wiring.native, wiring.kiss)
+                    .with_rnode_validation(wiring.lora, Duration::from_millis(15_000))
+                    .with_detection_fallback_timeout(Duration::from_millis(5_000));
 
             active.store(true, Ordering::Release);
             let context = transport
@@ -14242,6 +14268,54 @@ mod tests {
     fn startup_announce_burst_leaves_reticulum_rate_limit_headroom() {
         assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS.len(), 3);
         assert_eq!(STARTUP_ANNOUNCE_DELAYS_SECS[0], 0);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn rnode_ble_wiring_derives_kiss_and_native_settings_from_rem_settings() {
+        let settings = RnodeSettingsRecord {
+            enabled: true,
+            peripheral_id: "AA:BB:CC:DD:EE:FF".to_string(),
+            display_name: "Field RNode".to_string(),
+            region: "EU868".to_string(),
+            profile: "REM-MF-URBAN-v1".to_string(),
+        };
+
+        let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
+
+        assert_eq!(wiring.label, "rnode-ble:Field RNode");
+        assert_eq!(wiring.native.peripheral_id, "AA:BB:CC:DD:EE:FF");
+        assert!(wiring
+            .native
+            .peripheral_aliases
+            .iter()
+            .any(|alias| alias == "Field RNode"));
+        assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
+        assert_eq!(wiring.kiss.max_write_len, 20);
+        assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
+        assert!(!wiring.kiss.initial_frames.is_empty());
+        assert!(!wiring.kiss.deferred_frames.is_empty());
+        assert!(!wiring.kiss.shutdown_frames.is_empty());
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
+        let settings = RnodeSettingsRecord {
+            enabled: true,
+            peripheral_id: "AA:BB:CC:DD:EE:FF".to_string(),
+            display_name: " ".to_string(),
+            region: "US915".to_string(),
+            profile: "REM-LF-RURAL-v1".to_string(),
+        };
+
+        let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
+
+        assert_eq!(wiring.label, "rnode-ble:AA:BB:CC:DD:EE:FF");
+        assert!(wiring.native.peripheral_aliases.is_empty());
+        assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
+        assert!(!wiring.kiss.initial_frames.is_empty());
+        assert!(!wiring.kiss.deferred_frames.is_empty());
     }
 
     #[test]
