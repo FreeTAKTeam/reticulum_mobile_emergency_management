@@ -43,6 +43,40 @@ pub enum MessageState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransportDeliveryState {
+    Queued,
+    Sending,
+    SentDirect,
+    SentToPropagation,
+    TransportDelivered,
+    Failed,
+    TimedOut,
+    Cancelled,
+}
+
+impl Default for TransportDeliveryState {
+    fn default() -> Self {
+        Self::Queued
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplicationAckState {
+    NotRequired,
+    Waiting,
+    Accepted,
+    Completed,
+    Rejected,
+    Failed,
+}
+
+impl Default for ApplicationAckState {
+    fn default() -> Self {
+        Self::NotRequired
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageDirection {
     Inbound,
     Outbound,
@@ -144,10 +178,22 @@ pub struct MessageRecord {
     pub direction: MessageDirection,
     pub destination_hex: String,
     pub source_hex: Option<String>,
+    #[serde(default)]
+    pub requested_destination_hex: Option<String>,
+    #[serde(default)]
+    pub delivery_destination_hex: Option<String>,
+    #[serde(default)]
+    pub recipient_identity_hex: Option<String>,
+    #[serde(default)]
+    pub last_wire_message_id_hex: Option<String>,
     pub title: Option<String>,
     pub body_utf8: String,
     pub method: MessageMethod,
     pub state: MessageState,
+    #[serde(default)]
+    pub transport_state: TransportDeliveryState,
+    #[serde(default)]
+    pub application_ack_state: ApplicationAckState,
     pub detail: Option<String>,
     pub sent_at_ms: Option<u64>,
     pub received_at_ms: Option<u64>,
@@ -872,15 +918,46 @@ impl MessagingStore {
         is_new
     }
 
-    pub fn update_message(
+    pub fn update_message_delivery_state(
         &mut self,
         message_id_hex: &str,
-        state: MessageState,
+        state: Option<MessageState>,
+        transport_state: Option<TransportDeliveryState>,
+        application_ack_state: Option<ApplicationAckState>,
         detail: Option<String>,
+        last_wire_message_id_hex: Option<String>,
         updated_at_ms: u64,
     ) -> Option<MessageRecord> {
-        let record = self.message_records.get_mut(message_id_hex)?;
-        record.state = state;
+        let resolved_message_id_hex = if self.message_records.contains_key(message_id_hex) {
+            message_id_hex.to_string()
+        } else {
+            self.message_records
+                .iter()
+                .find_map(|(stored_message_id_hex, record)| {
+                    record
+                        .last_wire_message_id_hex
+                        .as_deref()
+                        .is_some_and(|wire_message_id_hex| {
+                            wire_message_id_hex.eq_ignore_ascii_case(message_id_hex)
+                        })
+                        .then(|| stored_message_id_hex.clone())
+                })?
+        };
+        let record = self
+            .message_records
+            .get_mut(resolved_message_id_hex.as_str())?;
+        if let Some(state) = state {
+            record.state = state;
+        }
+        if let Some(transport_state) = transport_state {
+            record.transport_state = transport_state;
+        }
+        if let Some(application_ack_state) = application_ack_state {
+            record.application_ack_state = application_ack_state;
+        }
+        if let Some(last_wire_message_id_hex) = last_wire_message_id_hex {
+            record.last_wire_message_id_hex = Some(last_wire_message_id_hex);
+        }
         record.detail = detail;
         record.updated_at_ms = updated_at_ms;
         Some(record.clone())
@@ -1657,10 +1734,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "lxmfdest".into(),
             source_hex: None,
+            requested_destination_hex: Some("lxmfdest".into()),
+            delivery_destination_hex: Some("lxmfdest".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("msg".into()),
             title: None,
             body_utf8: "hello".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(30),
             received_at_ms: None,
@@ -1681,10 +1764,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "appdest".into(),
             source_hex: None,
+            requested_destination_hex: Some("appdest".into()),
+            delivery_destination_hex: Some("appdest".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("outbound".into()),
             title: None,
             body_utf8: "hello".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(10),
             received_at_ms: None,
@@ -1696,10 +1785,16 @@ mod tests {
             direction: MessageDirection::Inbound,
             destination_hex: "local".into(),
             source_hex: Some("lxmfdest".into()),
+            requested_destination_hex: Some("lxmfdest".into()),
+            delivery_destination_hex: Some("local".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("inbound".into()),
             title: None,
             body_utf8: "copy".into(),
             method: MessageMethod::Direct,
             state: MessageState::Received,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::NotRequired,
             detail: None,
             sent_at_ms: None,
             received_at_ms: Some(20),
@@ -1711,10 +1806,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "other".into(),
             source_hex: None,
+            requested_destination_hex: Some("other".into()),
+            delivery_destination_hex: Some("other".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("unrelated".into()),
             title: None,
             body_utf8: "keep".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(30),
             received_at_ms: None,
@@ -2103,5 +2204,145 @@ mod tests {
             Some(now.saturating_sub(10))
         );
         assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(now.saturating_sub(10)));
+    }
+
+    #[test]
+    fn transport_receipt_does_not_mark_application_ack_accepted() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("wire-1".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "msg",
+                None,
+                Some(TransportDeliveryState::TransportDelivered),
+                None,
+                Some("transport receipt".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated");
+
+        assert_eq!(updated.state, MessageState::SentDirect);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Waiting);
+    }
+
+    #[test]
+    fn chat_ack_marks_application_ack_accepted() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("wire-1".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "msg",
+                Some(MessageState::Delivered),
+                Some(TransportDeliveryState::TransportDelivered),
+                Some(ApplicationAckState::Accepted),
+                Some("chat delivery ack".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated");
+
+        assert_eq!(updated.state, MessageState::Delivered);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
+    }
+
+    #[test]
+    fn retry_chat_ack_updates_original_record_by_wire_message_id() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "logical-msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("retry-wire-msg".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "retry-wire-msg",
+                Some(MessageState::Delivered),
+                Some(TransportDeliveryState::TransportDelivered),
+                Some(ApplicationAckState::Accepted),
+                Some("chat delivery ack".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated by wire id");
+
+        assert_eq!(updated.message_id_hex, "logical-msg");
+        assert_eq!(
+            updated.last_wire_message_id_hex.as_deref(),
+            Some("retry-wire-msg")
+        );
+        assert_eq!(updated.state, MessageState::Delivered);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
     }
 }

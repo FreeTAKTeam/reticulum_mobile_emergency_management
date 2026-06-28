@@ -576,6 +576,25 @@ impl AppStateStore {
         Ok(invalidation)
     }
 
+    pub fn upsert_saved_peer(
+        &self,
+        peer: &SavedPeerRecord,
+    ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        self.write_saved_peer_tx(&transaction, peer)?;
+        let invalidation = self.bump_projection_revision_tx(
+            &transaction,
+            ProjectionScope::SavedPeers {},
+            None,
+            Some("saved-peer-upserted".to_string()),
+        )?;
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(invalidation)
+    }
+
     pub(crate) fn get_ignored_peer_destinations(&self) -> Result<Vec<String>, NodeError> {
         let connection = self.connect()?;
         let mut statement = connection
@@ -2095,7 +2114,10 @@ impl AppStateStore {
         let json = serialize_json(peer)?;
         transaction
             .execute(
-                "INSERT INTO saved_peers (destination_hex, json, updated_at_ms) VALUES (?1, ?2, ?3)",
+                "INSERT INTO saved_peers (destination_hex, json, updated_at_ms) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(destination_hex) DO UPDATE SET
+                    json = excluded.json,
+                    updated_at_ms = excluded.updated_at_ms",
                 params![peer.destination_hex, json, peer.saved_at_ms as i64],
             )
             .map_err(|_| NodeError::IoError {})?;
@@ -3449,7 +3471,7 @@ mod tests {
 
     use super::*;
     use crate::types::{
-        AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord,
+        AnnounceClass, AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCellRecord,
         ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
         ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSettingsRecord,
         ChecklistStatusCounts, ChecklistSystemColumnKey, ChecklistTaskCellSetRequest,
@@ -3458,7 +3480,7 @@ mod tests {
         ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
         ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
         MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
-        TelemetrySettingsRecord,
+        TelemetrySettingsRecord, TransportDeliveryState,
     };
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -3666,6 +3688,56 @@ mod tests {
         assert_eq!(remaining, vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
     }
 
+    #[test]
+    fn upsert_saved_peer_persists_selected_lxmf_route() {
+        let storage_dir = test_storage_dir("saved-peer-upsert");
+        let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+
+        store
+            .upsert_saved_peer(&SavedPeerRecord {
+                destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                label: Some("Original".to_string()),
+                saved_at_ms: 1,
+                identity_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+                lxmf_destination_hex: Some("cccccccccccccccccccccccccccccccc".to_string()),
+                app_data: Some("R3AKT,EMergencyMessages".to_string()),
+                display_name: Some("Peer".to_string()),
+                last_route_seen_at_ms: Some(42),
+                last_hops: Some(2),
+            })
+            .expect("insert saved peer");
+        store
+            .upsert_saved_peer(&SavedPeerRecord {
+                destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                label: Some("Updated".to_string()),
+                saved_at_ms: 2,
+                identity_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+                lxmf_destination_hex: Some("dddddddddddddddddddddddddddddddd".to_string()),
+                app_data: Some("R3AKT,EMergencyMessages,Telemetry".to_string()),
+                display_name: Some("Updated Peer".to_string()),
+                last_route_seen_at_ms: Some(84),
+                last_hops: Some(1),
+            })
+            .expect("update saved peer");
+
+        let restored = AppStateStore::new(storage_dir.to_str())
+            .expect("reopen store")
+            .get_saved_peers()
+            .expect("saved peers");
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(
+            restored[0].destination_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            restored[0].lxmf_destination_hex.as_deref(),
+            Some("dddddddddddddddddddddddddddddddd")
+        );
+        assert_eq!(restored[0].label.as_deref(), Some("Updated"));
+        assert_eq!(restored[0].last_route_seen_at_ms, Some(84));
+    }
+
     fn message(
         id: &str,
         conversation_id: &str,
@@ -3680,10 +3752,16 @@ mod tests {
             direction,
             destination_hex: destination_hex.to_string(),
             source_hex: source_hex.map(str::to_string),
+            requested_destination_hex: Some(destination_hex.to_string()),
+            delivery_destination_hex: Some(destination_hex.to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some(id.to_string()),
             title: Some("chat".to_string()),
             body_utf8: format!("body {id}"),
             method: MessageMethod::Direct {},
             state: MessageState::Received {},
+            transport_state: TransportDeliveryState::TransportDelivered {},
+            application_ack_state: ApplicationAckState::NotRequired {},
             detail: None,
             sent_at_ms: Some(updated_at_ms),
             received_at_ms: None,
