@@ -1,11 +1,6 @@
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-pub use crate::wearables::{
-    WearableDeviceConfigRecord, WearableSensorEvent, WearableSensorType, WearableSensorValue,
-    WearableSettingsRecord, WearableStatusKind, WearableStatusRecord,
-};
-
 macro_rules! string_enum {
     ($vis:vis enum $name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -680,8 +675,6 @@ pub struct AppSettingsRecord {
     #[serde(default)]
     pub checklists: ChecklistSettingsRecord,
     #[serde(default)]
-    pub wearables: WearableSettingsRecord,
-    #[serde(default)]
     pub plugin_trust: PluginTrustSettingsRecord,
     #[serde(default)]
     pub rnode: RnodeSettingsRecord,
@@ -1053,7 +1046,6 @@ pub enum ProjectionScope {
     Conversations {},
     Messages {},
     Telemetry {},
-    Wearables {},
     Plugins {},
     Sos {},
 }
@@ -1078,7 +1070,6 @@ pub struct OperationalSummary {
     pub eam_count: u32,
     pub event_count: u32,
     pub telemetry_count: u32,
-    pub wearable_count: u32,
     pub active_propagation_node_hex: Option<String>,
     pub updated_at_ms: u64,
 }
@@ -1136,9 +1127,6 @@ pub enum NodeEvent {
     },
     ProjectionInvalidated {
         invalidation: ProjectionInvalidation,
-    },
-    WearableSensorUpdated {
-        status_json: String,
     },
     SosStatusChanged {
         status: SosStatusRecord,
