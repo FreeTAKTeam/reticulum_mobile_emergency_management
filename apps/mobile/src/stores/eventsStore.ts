@@ -16,6 +16,13 @@ import {
   DEFAULT_R3AKT_MISSION_NAME,
   DEFAULT_R3AKT_MISSION_UID,
 } from "../utils/r3akt";
+import {
+  type DecodedMecpMessage,
+  decodeMecpMessage,
+  mecpCategoryLabel,
+  mecpSeverityLabel,
+  parseMecpMessage,
+} from "../utils/mecp";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -28,6 +35,19 @@ type EventTimelineRecord = {
   summary: string;
   callsign: string;
   updatedAt: number;
+  mecp?: {
+    raw: string;
+    severity: string;
+    severityStatus: string;
+    category: string;
+    categoryCode: string;
+    codes: string[];
+    codeLabels: string[];
+    details: string;
+    extras: string[];
+    warnings: string[];
+    byteLength: number;
+  };
 };
 
 type ProjectionClientCache = typeof globalThis & {
@@ -144,7 +164,9 @@ function getEventContent(record: EventProjectionRecord): string {
 }
 
 function getEventType(record: EventProjectionRecord): string {
-  return decodeEventType(normalizeKeywords(record.args.keywords), "Incident");
+  const parsedMecp = parseMecpMessage(record.args.content);
+  const fallback = parsedMecp.valid && parsedMecp.category ? parsedMecp.category : "Incident";
+  return decodeEventType(normalizeKeywords(record.args.keywords), fallback);
 }
 
 function getEventUpdatedAt(record: EventProjectionRecord): number {
@@ -158,17 +180,104 @@ function getEventUpdatedAt(record: EventProjectionRecord): number {
   );
 }
 
+function toHumanMecpLabel(code: { label: string; known: boolean }): string {
+  if (!code.known) {
+    return code.label;
+  }
+  return code.label.replace(/^([A-Z])/, (_match, first: string) => first.toLowerCase());
+}
+
+function formatMecpExtraLabels(parsedMecp: DecodedMecpMessage): string[] {
+  if (!parsedMecp.valid) {
+    return [];
+  }
+  const extras: string[] = [];
+  if (parsedMecp.extras.pax !== null) {
+    extras.push(`${parsedMecp.extras.pax} pax`);
+  }
+  if (parsedMecp.extras.coordinates) {
+    extras.push(
+      `${parsedMecp.extras.coordinates.latitude.toFixed(5)}, ${parsedMecp.extras.coordinates.longitude.toFixed(5)}`,
+    );
+  }
+  extras.push(...parsedMecp.extras.references);
+  if (parsedMecp.extras.etaMinutes !== null) {
+    extras.push(`ETA ${parsedMecp.extras.etaMinutes} min`);
+  }
+  if (parsedMecp.extras.language) {
+    extras.push(`@${parsedMecp.extras.language}`);
+  }
+  if (parsedMecp.extras.timestamp) {
+    extras.push(`@${parsedMecp.extras.timestamp}`);
+  }
+  if (parsedMecp.extras.callsign) {
+    extras.push(`~${parsedMecp.extras.callsign}`);
+  }
+  return extras;
+}
+
+function formatMecpDisplayDetails(parsedMecp: DecodedMecpMessage): string {
+  let details = parsedMecp.details;
+  if (parsedMecp.extras.pax !== null) {
+    details = details.replace(new RegExp(`\\b${parsedMecp.extras.pax}pax\\b`, "i"), "");
+  }
+  if (parsedMecp.extras.coordinates) {
+    const { latitude, longitude } = parsedMecp.extras.coordinates;
+    details = details.replace(`${latitude},${longitude}`, "");
+  }
+  for (const reference of parsedMecp.extras.references) {
+    details = details.replace(reference, "");
+  }
+  if (parsedMecp.extras.etaMinutes !== null) {
+    details = details.replace(new RegExp(`\\b${parsedMecp.extras.etaMinutes}(?:m|min)?\\b`, "i"), "");
+  }
+  if (parsedMecp.extras.language) {
+    details = details.replace(new RegExp(`@${parsedMecp.extras.language}\\b`, "i"), "");
+  }
+  if (parsedMecp.extras.timestamp) {
+    details = details.replace(`@${parsedMecp.extras.timestamp}`, "");
+  }
+  if (parsedMecp.extras.callsign) {
+    details = details.replace(`~${parsedMecp.extras.callsign}`, "");
+  }
+  return details.replace(/\s+/g, " ").trim();
+}
+
 function isDeletedEvent(record: EventProjectionRecord): boolean {
   return typeof record.deleted_at === "number" && Number.isFinite(record.deleted_at);
 }
 
 function toTimelineRecord(record: EventProjectionRecord): EventTimelineRecord {
+  const parsedMecp = decodeMecpMessage(getEventContent(record));
+  const mecp = parsedMecp.valid
+    ? {
+        raw: parsedMecp.raw,
+        severity: mecpSeverityLabel(parsedMecp.severity),
+        severityStatus: parsedMecp.severity === 0
+          ? "red"
+          : parsedMecp.severity === 1
+            ? "yellow"
+            : parsedMecp.severity === 2
+              ? "green"
+              : "unknown",
+        category: mecpCategoryLabel(parsedMecp.category),
+        categoryCode: parsedMecp.category ?? "",
+        codes: parsedMecp.codes,
+        codeLabels: parsedMecp.codeDetails.map((code) => toHumanMecpLabel(code)),
+        details: formatMecpDisplayDetails(parsedMecp),
+        extras: formatMecpExtraLabels(parsedMecp),
+        warnings: parsedMecp.warnings,
+        byteLength: parsedMecp.byteLength,
+      }
+    : undefined;
+
   return {
     uid: getEventUid(record),
-    type: getEventType(record),
+    type: parsedMecp.valid ? mecpCategoryLabel(parsedMecp.category) : getEventType(record),
     summary: getEventContent(record),
     callsign: asTrimmedString(record.args.callsign) || "Unknown",
     updatedAt: getEventUpdatedAt(record),
+    mecp,
   };
 }
 
@@ -206,7 +315,9 @@ function normalizeEvent(entry: EventProjectionRecord | Record<string, unknown>):
     || sourceDisplayName
     || "Unknown";
   const baseKeywords = normalizeKeywords(rawArgs.keywords ?? raw.keywords);
-  const normalizedType = asTrimmedString(raw.type) || decodeEventType(baseKeywords, "Incident");
+  const parsedMecp = parseMecpMessage(content);
+  const normalizedType = asTrimmedString(raw.type)
+    || decodeEventType(baseKeywords, parsedMecp.category ?? "Incident");
   const serverTime = toIsoString(rawArgs.server_time)
     ?? toIsoString(rawArgs.serverTime)
     ?? toIsoString(raw.serverTime)

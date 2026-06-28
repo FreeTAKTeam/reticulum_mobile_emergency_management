@@ -2,6 +2,7 @@ package network.reticulum.emergency;
 
 import android.os.Bundle;
 import android.util.Log;
+import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -17,6 +18,7 @@ public class MainActivity extends BridgeActivity {
         // Register custom plugin before bridge startup.
         registerPlugin(ReticulumNodePlugin.class);
         registerPlugin(TelemetryLocationPlugin.class);
+        configureWebViewDebugging();
         super.onCreate(savedInstanceState);
         installCapacitorTriggerEventShim();
         Log.i(TAG, "MainActivity initialized and ReticulumNode plugin registered.");
@@ -33,5 +35,13 @@ public class MainActivity extends BridgeActivity {
             return;
         }
         bridge.getWebView().post(() -> bridge.getWebView().evaluateJavascript(CAPACITOR_TRIGGER_EVENT_SHIM, null));
+    }
+
+    private void configureWebViewDebugging() {
+        final boolean enabled = BuildConfig.DEBUG || BuildConfig.ENABLE_WEBVIEW_DEBUGGING;
+        WebView.setWebContentsDebuggingEnabled(enabled);
+        if (enabled) {
+            Log.i(TAG, "Android WebView debugging enabled.");
+        }
     }
 }

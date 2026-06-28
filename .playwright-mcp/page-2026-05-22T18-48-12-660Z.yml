@@ -1,0 +1,44 @@
+- main [ref=e5]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - img "Reticulum Emergency Manager logo" [ref=e10]
+      - generic [ref=e11]:
+        - paragraph [ref=e12]: Reticulum
+        - generic [ref=e13]: Emergency Manager
+    - generic [ref=e14]:
+      - paragraph [ref=e16]: Setup Wizard
+      - generic [ref=e18]: Step 2 of 7
+    - list "Setup progress" [ref=e19]:
+      - listitem [ref=e20]:
+        - generic [ref=e21]: "1"
+      - listitem [ref=e22]:
+        - generic [ref=e23]: "2"
+      - listitem [ref=e24]:
+        - generic [ref=e25]: "3"
+      - listitem [ref=e26]:
+        - generic [ref=e27]: "4"
+      - listitem [ref=e28]:
+        - generic [ref=e29]: "5"
+      - listitem [ref=e30]:
+        - generic [ref=e31]: "6"
+      - listitem [ref=e32]:
+        - generic [ref=e33]: "7"
+    - article [ref=e34]:
+      - generic [ref=e74]:
+        - generic [ref=e75]:
+          - paragraph [ref=e76]: Operator identity
+          - heading "Set Call Sign" [level=1] [ref=e77]
+          - paragraph [ref=e78]: Used for messages, telemetry, and node announcements.
+        - generic [ref=e79]:
+          - generic [ref=e80]: Call Sign
+          - textbox "Call Sign" [active] [ref=e81]: Pi938
+        - generic [ref=e82]:
+          - generic [ref=e83]: Identity ready
+          - strong [ref=e84]: Pi938
+        - generic [ref=e85]:
+          - generic [ref=e86]: Announced as
+          - strong [ref=e87]: Pi938
+          - generic [ref=e88]: Node identity will populate after runtime startup.
+    - generic [ref=e65]:
+      - button "Back" [ref=e66] [cursor=pointer]
+      - button "Next" [ref=e89] [cursor=pointer]

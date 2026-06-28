@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -10,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
+use crate::plugins::{PluginLxmfSendRequest, PluginPermissions};
 use crate::types::{
     AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
+    ChecklistDeleteRequest, ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
     ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
     ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
@@ -21,17 +24,33 @@ use crate::types::{
     HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
-    SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord, WearableDeviceConfigRecord,
-    WearableSensorEvent, WearableSensorType, WearableSensorValue, WearableSettingsRecord,
-    WearableStatusKind, WearableStatusRecord,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
+    TrustedPluginPublisherRecord, WearableDeviceConfigRecord, WearableSensorEvent,
+    WearableSensorType, WearableSensorValue, WearableSettingsRecord, WearableStatusKind,
+    WearableStatusRecord,
 };
 use crate::wearables::DEFAULT_WEARABLE_STALE_TIMEOUT_SECONDS;
 
 const RESULT_OK: jint = 0;
 const RESULT_ERR: jint = 1;
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(vm: jni19::JavaVM, _reserved: *mut c_void) -> jint {
+    match vm.get_env() {
+        Ok(env) => match btleplug::platform::init(&env) {
+            Ok(()) => log::info!("btleplug Android BLE backend initialized"),
+            Err(error) => {
+                log::error!("btleplug Android BLE backend initialization failed: {error}")
+            }
+        },
+        Err(error) => log::error!("btleplug Android BLE backend missing JNI env: {error}"),
+    }
+    jni19::sys::JNI_VERSION_1_6
+}
 
 #[derive(Default)]
 struct BridgeState {
@@ -61,8 +80,11 @@ struct LastError {
 struct NodeConfigInput {
     name: Option<String>,
     storage_dir: Option<String>,
+    plugin_android_abi: Option<String>,
+    plugin_trusted_publishers: Option<Vec<TrustedPluginPublisherRecord>>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
+    transport_node_enabled: Option<bool>,
     announce_interval_seconds: Option<u32>,
     stale_after_minutes: Option<u32>,
     announce_capabilities: Option<String>,
@@ -71,6 +93,17 @@ struct NodeConfigInput {
     hub_api_base_url: Option<String>,
     hub_api_key: Option<String>,
     hub_refresh_interval_seconds: Option<u32>,
+    rnode: Option<RnodeSettingsInput>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RnodeSettingsInput {
+    enabled: Option<bool>,
+    peripheral_id: Option<String>,
+    display_name: Option<String>,
+    region: Option<String>,
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +130,26 @@ struct SendLxmfInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PluginLxmfSendInput {
+    plugin_id: String,
+    destination_hex: String,
+    message_name: String,
+    payload: Value,
+    body_utf8: String,
+    title: Option<String>,
+    send_mode: Option<String>,
+    #[serde(default)]
+    use_propagation_node: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginLxmfDecodeInput {
+    fields_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MessageIdInput {
     message_id_hex: String,
 }
@@ -105,6 +158,69 @@ struct MessageIdInput {
 #[serde(rename_all = "camelCase")]
 struct OptionalDestinationInput {
     destination_hex: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginEnabledInput {
+    plugin_id: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallPackageInput {
+    package_path: Option<String>,
+    package_dir: Option<String>,
+}
+
+impl PluginInstallPackageInput {
+    fn package_path(&self) -> Option<&str> {
+        self.package_path
+            .as_deref()
+            .or(self.package_dir.as_deref())
+            .filter(|value| !value.trim().is_empty())
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginPermissionsInput {
+    #[serde(default)]
+    storage_plugin: bool,
+    #[serde(default)]
+    storage_shared: bool,
+    #[serde(default)]
+    messages_read: bool,
+    #[serde(default)]
+    messages_write: bool,
+    #[serde(default)]
+    lxmf_send: bool,
+    #[serde(default)]
+    lxmf_receive: bool,
+    #[serde(default)]
+    notifications_raise: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginPermissionsGrantInput {
+    plugin_id: String,
+    permissions: PluginPermissionsInput,
+}
+
+impl From<PluginPermissionsInput> for PluginPermissions {
+    fn from(value: PluginPermissionsInput) -> Self {
+        Self {
+            storage_plugin: value.storage_plugin,
+            storage_shared: value.storage_shared,
+            messages_read: value.messages_read,
+            messages_write: value.messages_write,
+            lxmf_send: value.lxmf_send,
+            lxmf_receive: value.lxmf_receive,
+            notifications_raise: value.notifications_raise,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +260,8 @@ struct AppSettingsInput {
     announce_capabilities: String,
     tcp_clients: Vec<String>,
     broadcast: bool,
+    #[serde(default = "default_true")]
+    transport_node_enabled: bool,
     announce_interval_seconds: u32,
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
@@ -151,6 +269,10 @@ struct AppSettingsInput {
     checklists: ChecklistSettingsInput,
     #[serde(default)]
     wearables: WearableSettingsInput,
+    #[serde(default)]
+    plugin_trust: PluginTrustSettingsInput,
+    #[serde(default)]
+    rnode: RnodeSettingsInput,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -175,6 +297,16 @@ struct WearableDeviceConfigInput {
     alias: Option<String>,
     operator_rns_identity: Option<String>,
     sensor_type: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginTrustSettingsInput {
+    trusted_publishers: Vec<TrustedPluginPublisherRecord>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,6 +335,12 @@ struct SavedPeerInput {
     destination: String,
     label: Option<String>,
     saved_at: u64,
+    identity_hex: Option<String>,
+    lxmf_destination_hex: Option<String>,
+    app_data: Option<String>,
+    display_name: Option<String>,
+    last_route_seen_at_ms: Option<u64>,
+    last_hops: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -319,6 +457,14 @@ struct ChecklistListInput {
 #[serde(rename_all = "camelCase")]
 struct ChecklistUidInput {
     checklist_uid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChecklistDeleteInput {
+    checklist_uid: String,
+    #[serde(default)]
+    delete_remote: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -487,6 +633,18 @@ struct SosTelemetryInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SosAudioInput {
+    audio_id: String,
+    incident_id: String,
+    source_hex: String,
+    path: String,
+    mime_type: String,
+    duration_seconds: u32,
+    created_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SosAccelerometerInput {
     x: f64,
     y: f64,
@@ -609,6 +767,37 @@ fn normalize_non_empty_string(value: &str) -> Option<String> {
     }
 }
 
+fn normalize_rnode_region(value: Option<String>) -> String {
+    match value
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "EU868" => "EU868".to_string(),
+        _ => "US915".to_string(),
+    }
+}
+
+fn normalize_rnode_profile(value: Option<String>) -> String {
+    match value.unwrap_or_default().trim() {
+        "REM-MF-URBAN-v1" => "REM-MF-URBAN-v1".to_string(),
+        "REM-LM-EXTREME-v1" => "REM-LM-EXTREME-v1".to_string(),
+        _ => "REM-LF-RURAL-v1".to_string(),
+    }
+}
+
+fn to_rnode_settings_record(input: Option<RnodeSettingsInput>) -> RnodeSettingsRecord {
+    let input = input.unwrap_or_default();
+    RnodeSettingsRecord {
+        enabled: input.enabled.unwrap_or(false),
+        peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
+        display_name: input.display_name.unwrap_or_default().trim().to_string(),
+        region: normalize_rnode_region(input.region),
+        profile: normalize_rnode_profile(input.profile),
+    }
+}
+
 fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
     NodeConfig {
         name: input
@@ -624,6 +813,9 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
                 Some(trimmed)
             }
         }),
+        plugin_trusted_publishers: normalize_trusted_plugin_publishers(
+            input.plugin_trusted_publishers.unwrap_or_default(),
+        ),
         tcp_clients: input
             .tcp_clients
             .unwrap_or_default()
@@ -632,6 +824,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .filter(|v| !v.is_empty())
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
+        transport_node_enabled: input.transport_node_enabled.unwrap_or(true),
         announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
         stale_after_minutes: input.stale_after_minutes.unwrap_or(30).max(1),
         announce_capabilities: input
@@ -665,7 +858,28 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             }
         }),
         hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
+        rnode: to_rnode_settings_record(input.rnode),
     }
+}
+
+fn normalize_trusted_plugin_publishers(
+    publishers: Vec<TrustedPluginPublisherRecord>,
+) -> Vec<TrustedPluginPublisherRecord> {
+    publishers
+        .into_iter()
+        .filter_map(|publisher| {
+            let publisher_name = publisher.publisher.trim().to_string();
+            let public_key_base64 = publisher.public_key_base64.trim().to_string();
+            if publisher_name.is_empty() || public_key_base64.is_empty() {
+                None
+            } else {
+                Some(TrustedPluginPublisherRecord {
+                    publisher: publisher_name,
+                    public_key_base64,
+                })
+            }
+        })
+        .collect()
 }
 
 #[no_mangle]
@@ -764,18 +978,29 @@ fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     }
 }
 
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
 fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
     SavedPeerRecord {
         destination_hex: input.destination.trim().to_ascii_lowercase(),
-        label: input.label.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
+        label: trimmed_non_empty(input.label),
         saved_at_ms: input.saved_at,
+        identity_hex: trimmed_non_empty(input.identity_hex).map(|value| value.to_ascii_lowercase()),
+        lxmf_destination_hex: trimmed_non_empty(input.lxmf_destination_hex)
+            .map(|value| value.to_ascii_lowercase()),
+        app_data: trimmed_non_empty(input.app_data),
+        display_name: trimmed_non_empty(input.display_name),
+        last_route_seen_at_ms: input.last_route_seen_at_ms,
+        last_hops: input.last_hops,
     }
 }
 
@@ -826,6 +1051,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
         announce_capabilities: input.announce_capabilities,
         tcp_clients: input.tcp_clients,
         broadcast: input.broadcast,
+        transport_node_enabled: input.transport_node_enabled,
         announce_interval_seconds: input.announce_interval_seconds,
         telemetry: TelemetrySettingsRecord {
             enabled: input.telemetry.enabled,
@@ -876,6 +1102,12 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
                 })
                 .collect(),
         },
+        plugin_trust: crate::types::PluginTrustSettingsRecord {
+            trusted_publishers: normalize_trusted_plugin_publishers(
+                input.plugin_trust.trusted_publishers,
+            ),
+        },
+        rnode: to_rnode_settings_record(Some(input.rnode)),
     }
 }
 
@@ -1219,6 +1451,34 @@ fn wearable_settings_json(settings: &WearableSettingsRecord) -> serde_json::Valu
     })
 }
 
+fn rnode_settings_json(settings: &RnodeSettingsRecord) -> serde_json::Value {
+    json!({
+        "enabled": settings.enabled,
+        "peripheralId": settings.peripheral_id,
+        "displayName": settings.display_name,
+        "region": settings.region,
+        "profile": settings.profile
+    })
+}
+
+fn plugin_trust_settings_json(
+    settings: &crate::types::PluginTrustSettingsRecord,
+) -> serde_json::Value {
+    let trusted_publishers: Vec<serde_json::Value> = settings
+        .trusted_publishers
+        .iter()
+        .map(|publisher| {
+            json!({
+                "publisher": publisher.publisher,
+                "publicKeyBase64": publisher.public_key_base64
+            })
+        })
+        .collect();
+    json!({
+        "trustedPublishers": trusted_publishers
+    })
+}
+
 fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
     json!({
         "displayName": settings.display_name,
@@ -1226,13 +1486,16 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceCapabilities": settings.announce_capabilities,
         "tcpClients": settings.tcp_clients,
         "broadcast": settings.broadcast,
+        "transportNodeEnabled": settings.transport_node_enabled,
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub),
         "checklists": {
             "defaultTaskDueStepMinutes": settings.checklists.default_task_due_step_minutes
         },
-        "wearables": wearable_settings_json(&settings.wearables)
+        "wearables": wearable_settings_json(&settings.wearables),
+        "pluginTrust": plugin_trust_settings_json(&settings.plugin_trust),
+        "rnode": rnode_settings_json(&settings.rnode)
     })
 }
 
@@ -1330,11 +1593,29 @@ fn sos_audio_json(audio: &SosAudioRecord) -> serde_json::Value {
     })
 }
 
+fn to_sos_audio_record(input: SosAudioInput) -> SosAudioRecord {
+    SosAudioRecord {
+        audio_id: input.audio_id,
+        incident_id: input.incident_id,
+        source_hex: input.source_hex,
+        path: input.path,
+        mime_type: input.mime_type,
+        duration_seconds: input.duration_seconds,
+        created_at_ms: input.created_at_ms,
+    }
+}
+
 fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
     json!({
         "destination": peer.destination_hex,
         "label": peer.label,
-        "savedAt": peer.saved_at_ms
+        "savedAt": peer.saved_at_ms,
+        "identityHex": peer.identity_hex,
+        "lxmfDestinationHex": peer.lxmf_destination_hex,
+        "appData": peer.app_data,
+        "displayName": peer.display_name,
+        "lastRouteSeenAtMs": peer.last_route_seen_at_ms,
+        "lastHops": peer.last_hops
     })
 }
 
@@ -1555,6 +1836,28 @@ fn eam_team_summary_json(summary: &crate::types::EamTeamSummaryRecord) -> serde_
     })
 }
 
+fn eam_readiness_summary_json(
+    summary: &crate::types::EamReadinessSummaryRecord,
+) -> serde_json::Value {
+    json!({
+        "activeTotal": summary.active_total,
+        "updatedAt": summary.updated_at_ms,
+        "statusMetrics": summary.status_metrics.iter().map(|metric| json!({
+            "field": metric.field,
+            "label": metric.label,
+            "score": metric.score,
+            "band": metric.band,
+            "ringColor": metric.ring_color
+        })).collect::<Vec<_>>(),
+        "messages": summary.messages.iter().map(|message| json!({
+            "callsign": message.callsign,
+            "overallScore": message.overall_score,
+            "overallBand": message.overall_band,
+            "overallRingColor": message.overall_ring_color
+        })).collect::<Vec<_>>()
+    })
+}
+
 fn operational_summary_json(summary: &crate::types::OperationalSummary) -> serde_json::Value {
     json!({
         "running": summary.running,
@@ -1601,14 +1904,6 @@ fn send_mode_from_input(send_mode: Option<&str>, use_propagation_node: bool) -> 
         "DirectOnly" => SendMode::DirectOnly {},
         "PropagationOnly" => SendMode::PropagationOnly {},
         _ => SendMode::Auto {},
-    }
-}
-
-fn send_mode_to_str(mode: SendMode) -> &'static str {
-    match mode {
-        SendMode::Auto {} => "Auto",
-        SendMode::DirectOnly {} => "DirectOnly",
-        SendMode::PropagationOnly {} => "PropagationOnly",
     }
 }
 
@@ -1703,6 +1998,7 @@ fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
         ProjectionScope::Wearables {} => "Wearables",
+        ProjectionScope::Plugins {} => "Plugins",
         ProjectionScope::Sos {} => "Sos",
     }
 }
@@ -1937,6 +2233,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
+    let plugin_android_abi = input.plugin_android_abi.clone();
     let config = parse_node_config(input);
 
     let mut guard = match bridge_state().lock() {
@@ -1946,6 +2243,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
 
     let subscription = {
         let node = ensure_node(&mut guard);
+        if let Err(err) = node.set_plugin_android_abi(plugin_android_abi.as_deref()) {
+            set_last_node_error(err);
+            return RESULT_ERR;
+        }
         if let Err(err) = node.start(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -1995,6 +2296,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
+    let plugin_android_abi = input.plugin_android_abi.clone();
     let config = parse_node_config(input);
 
     let mut guard = match bridge_state().lock() {
@@ -2004,6 +2306,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
 
     let subscription = {
         let node = ensure_node(&mut guard);
+        if let Err(err) = node.set_plugin_android_abi(plugin_android_abi.as_deref()) {
+            set_last_node_error(err);
+            return RESULT_ERR;
+        }
         if let Err(err) = node.restart(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -2253,6 +2559,129 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmf
         send_mode: send_mode_from_input(payload.send_mode.as_deref(), payload.use_propagation_node),
     }) {
         Ok(message_id_hex) => ok_json_result(&mut env, &json!({ "messageIdHex": message_id_hex })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendPluginLxmfJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginLxmfSendInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in lxmf payload: {e}"),
+            )
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.send_plugin_lxmf(
+        abi.as_str(),
+        PluginLxmfSendRequest {
+            plugin_id: payload.plugin_id,
+            destination_hex: payload.destination_hex,
+            message_name: payload.message_name,
+            payload: payload.payload,
+            body_utf8: payload.body_utf8,
+            title: payload.title,
+            send_mode: send_mode_from_input(
+                payload.send_mode.as_deref(),
+                payload.use_propagation_node,
+            ),
+        },
+    ) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_decodePluginLxmfFieldsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jstring {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: PluginLxmfDecodeInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in lxmf decode payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let fields_bytes = match BASE64_STANDARD.decode(payload.fields_base64.as_bytes()) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in fields base64: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.receive_plugin_lxmf_fields(abi.as_str(), fields_bytes.as_slice()) {
+        Ok(Some(message)) => ok_json_result(
+            &mut env,
+            &json!({
+                "message": {
+                    "pluginId": message.plugin_id,
+                    "messageName": message.message_name,
+                    "wireType": message.wire_type,
+                    "payload": message.payload,
+                }
+            }),
+        ),
+        Ok(None) => ok_json_result(&mut env, &json!({ "message": Value::Null })),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -2520,6 +2949,168 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnno
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getPluginsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+) -> jstring {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.list_plugins(abi.as_str()) {
+        Ok(report) => ok_json_result(&mut env, &report),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_installPluginPackageJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jstring {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error("InvalidConfig", e);
+            return ptr::null_mut();
+        }
+    };
+    let payload: PluginInstallPackageInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(
+                "InvalidConfig",
+                format!("invalid plug-in install payload: {e}"),
+            );
+            return ptr::null_mut();
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    let Some(package_path) = payload.package_path() else {
+        set_last_error("InvalidConfig", "packagePath is required");
+        return ptr::null_mut();
+    };
+    match node.install_plugin_package_dir(abi.as_str(), package_path) {
+        Ok(report) => ok_json_result(&mut env, &report),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setPluginEnabledJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginEnabledInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in enabled payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.set_plugin_enabled(abi.as_str(), payload.plugin_id.as_str(), payload.enabled) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_grantPluginPermissionsJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    android_abi: JString,
+    request_json: JString,
+) -> jint {
+    let abi = match jstring_to_rust(&mut env, android_abi) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: PluginPermissionsGrantInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid plug-in permissions payload: {e}"),
+            )
+        }
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.grant_plugin_permissions(
+        abi.as_str(),
+        payload.plugin_id.as_str(),
+        payload.permissions.into(),
+    ) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }
@@ -3018,7 +3609,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
             return ptr::null_mut();
         }
     };
-    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+    let payload: ChecklistDeleteInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
             set_last_error(
@@ -3251,7 +3842,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let payload: ChecklistUidInput = match serde_json::from_str(&raw) {
+    let payload: ChecklistDeleteInput = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
             return err_result(
@@ -3265,7 +3856,10 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node(&mut guard);
-    match node.delete_checklist(payload.checklist_uid) {
+    match node.delete_checklist(ChecklistDeleteRequest {
+        checklist_uid: payload.checklist_uid,
+        delete_remote: payload.delete_remote,
+    }) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);
@@ -3627,6 +4221,28 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTe
     match node.get_eam_team_summary(payload.team_uid) {
         Ok(Some(summary)) => ok_json_result(&mut env, &eam_team_summary_json(&summary)),
         Ok(None) => ok_json_result(&mut env, &json!({ "summary": null })),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamReadinessSummaryJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node(&mut guard);
+    match node.get_eam_readiness_summary() {
+        Ok(summary) => ok_json_result(&mut env, &eam_readiness_summary_json(&summary)),
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
@@ -4240,6 +4856,34 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosA
         Err(err) => {
             set_last_node_error(err);
             ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordSosAudioJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: SosAudioInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid SOS audio payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.record_sos_audio(to_sos_audio_record(payload)) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
         }
     }
 }

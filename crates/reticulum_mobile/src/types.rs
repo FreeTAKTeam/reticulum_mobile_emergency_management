@@ -306,6 +306,10 @@ string_enum! {
 
 pub const DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES: u32 = 30;
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_checklist_task_due_step_minutes() -> u32 {
     DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES
 }
@@ -322,6 +326,19 @@ impl Default for ChecklistSettingsRecord {
             default_task_due_step_minutes: DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedPluginPublisherRecord {
+    pub publisher: String,
+    pub public_key_base64: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginTrustSettingsRecord {
+    #[serde(default)]
+    pub trusted_publishers: Vec<TrustedPluginPublisherRecord>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -358,8 +375,10 @@ pub enum NodeError {
 pub struct NodeConfig {
     pub name: String,
     pub storage_dir: Option<String>,
+    pub plugin_trusted_publishers: Vec<TrustedPluginPublisherRecord>,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub stale_after_minutes: u32,
     pub announce_capabilities: String,
@@ -368,6 +387,28 @@ pub struct NodeConfig {
     pub hub_api_base_url: Option<String>,
     pub hub_api_key: Option<String>,
     pub hub_refresh_interval_seconds: u32,
+    pub rnode: RnodeSettingsRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RnodeSettingsRecord {
+    pub enabled: bool,
+    pub peripheral_id: String,
+    pub display_name: String,
+    pub region: String,
+    pub profile: String,
+}
+
+impl Default for RnodeSettingsRecord {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            peripheral_id: String::new(),
+            display_name: String::new(),
+            region: "US915".to_string(),
+            profile: "REM-LF-RURAL-v1".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -631,6 +672,8 @@ pub struct AppSettingsRecord {
     pub announce_capabilities: String,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    #[serde(default = "default_true")]
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub telemetry: TelemetrySettingsRecord,
     pub hub: HubSettingsRecord,
@@ -638,6 +681,10 @@ pub struct AppSettingsRecord {
     pub checklists: ChecklistSettingsRecord,
     #[serde(default)]
     pub wearables: WearableSettingsRecord,
+    #[serde(default)]
+    pub plugin_trust: PluginTrustSettingsRecord,
+    #[serde(default)]
+    pub rnode: RnodeSettingsRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -645,6 +692,18 @@ pub struct SavedPeerRecord {
     pub destination_hex: String,
     pub label: Option<String>,
     pub saved_at_ms: u64,
+    #[serde(default)]
+    pub identity_hex: Option<String>,
+    #[serde(default)]
+    pub lxmf_destination_hex: Option<String>,
+    #[serde(default)]
+    pub app_data: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub last_route_seen_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_hops: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -692,6 +751,31 @@ pub struct EamTeamSummaryRecord {
     pub yellow_total: u32,
     pub red_total: u32,
     pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessStatusMetricRecord {
+    pub field: String,
+    pub label: String,
+    pub score: u32,
+    pub band: String,
+    pub ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessMessageRecord {
+    pub callsign: String,
+    pub overall_score: u32,
+    pub overall_band: String,
+    pub overall_ring_color: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EamReadinessSummaryRecord {
+    pub active_total: u32,
+    pub updated_at_ms: u64,
+    pub status_metrics: Vec<EamReadinessStatusMetricRecord>,
+    pub messages: Vec<EamReadinessMessageRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -884,6 +968,12 @@ pub struct ChecklistUpdateRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistDeleteRequest {
+    pub checklist_uid: String,
+    pub delete_remote: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistTaskStatusSetRequest {
     pub checklist_uid: String,
     pub task_uid: String,
@@ -964,6 +1054,7 @@ pub enum ProjectionScope {
     Messages {},
     Telemetry {},
     Wearables {},
+    Plugins {},
     Sos {},
 }
 

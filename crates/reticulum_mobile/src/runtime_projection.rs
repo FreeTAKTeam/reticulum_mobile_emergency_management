@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -14,7 +15,7 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
 };
 
-const PERSIST_FILENAME: &str = "runtime_projection.json";
+pub(crate) const PERSIST_FILENAME: &str = "runtime_projection.json";
 const INVALIDATION_DEBOUNCE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +140,10 @@ mod tests {
         RuntimeProjectionJournal, RuntimeProjectionSnapshot,
     };
     use crate::event_bus::EventBus;
-    use crate::types::{PeerRecord, PeerState, ProjectionScope};
+    use crate::types::{
+        MessageDirection, MessageMethod, MessageRecord, MessageState, PeerRecord, PeerState,
+        ProjectionScope,
+    };
 
     fn build_persisted_peer(
         destination_hex: &str,
@@ -163,6 +167,29 @@ mod tests {
             last_seen_at_ms: 2,
             announce_last_seen_at_ms: Some(2),
             lxmf_last_seen_at_ms: Some(2),
+        }
+    }
+
+    fn build_message(
+        message_id_hex: &str,
+        conversation_id: &str,
+        destination_hex: &str,
+        source_hex: Option<&str>,
+    ) -> MessageRecord {
+        MessageRecord {
+            message_id_hex: message_id_hex.to_string(),
+            conversation_id: conversation_id.to_string(),
+            direction: MessageDirection::Inbound {},
+            destination_hex: destination_hex.to_string(),
+            source_hex: source_hex.map(str::to_string),
+            title: Some("chat".to_string()),
+            body_utf8: format!("body {message_id_hex}"),
+            method: MessageMethod::Direct {},
+            state: MessageState::Received {},
+            detail: None,
+            sent_at_ms: None,
+            received_at_ms: Some(1_700_000_000_000),
+            updated_at_ms: 1_700_000_000_000,
         }
     }
 
@@ -198,6 +225,26 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].destination_hex, "legacy-managed");
         assert!(restored[0].saved);
+    }
+
+    #[test]
+    fn restored_peers_do_not_restore_transport_state() {
+        let mut peer = build_persisted_peer("saved-peer", Some(true), None);
+        peer.active_link = true;
+        peer.state = "connected".to_string();
+        let snapshot = RuntimeProjectionSnapshot {
+            peers: vec![peer],
+            ..RuntimeProjectionSnapshot::default()
+        };
+
+        let restored = snapshot.restored_peers();
+
+        assert_eq!(restored.len(), 1);
+        assert!(!restored[0].active_link);
+        assert!(matches!(restored[0].state, PeerState::Disconnected {}));
+        assert_eq!(restored[0].last_seen_at_ms, 0);
+        assert_eq!(restored[0].announce_last_seen_at_ms, None);
+        assert_eq!(restored[0].lxmf_last_seen_at_ms, None);
     }
 
     #[test]
@@ -285,6 +332,35 @@ mod tests {
             assert_eq!(current.len(), 1);
             assert_eq!(current[0].destination_hex, "saved-peer");
             assert!(current[0].saved);
+            assert!(!current[0].active_link);
+            assert!(matches!(current[0].state, PeerState::Disconnected {}));
+            assert_eq!(current[0].last_seen_at_ms, 0);
+            assert_eq!(current[0].announce_last_seen_at_ms, None);
+            assert_eq!(current[0].lxmf_last_seen_at_ms, None);
+        });
+    }
+
+    #[test]
+    fn remove_conversation_messages_removes_alias_matches_from_snapshot() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let journal = RuntimeProjectionJournal::new(None, EventBus::new());
+            let deleted_message =
+                build_message("delete-message", "identity", "lxmfdest", Some("appdest"));
+            assert!(journal.record_message(deleted_message, Some("test"),));
+            assert!(journal.record_message(
+                build_message("keep-message", "other", "other", None),
+                Some("test"),
+            ));
+
+            assert!(journal.remove_conversation_messages(
+                ["appdest", "lxmfdest", "identity"],
+                Some("conversation-deleted"),
+            ));
+            journal.flush_now().await;
+
+            let messages = journal.current_messages().expect("current messages");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id_hex, "keep-message");
         });
     }
 }
@@ -300,17 +376,17 @@ fn persisted_peer_from_runtime(record: &PeerRecord) -> Option<PersistedPeerRecor
         lxmf_destination_hex: record.lxmf_destination_hex.clone(),
         display_name: record.display_name.clone(),
         app_data: record.app_data.clone(),
-        state: peer_state_to_string(record.state),
+        state: peer_state_to_string(PeerState::Disconnected {}),
         saved: Some(record.saved),
         management_state: None,
         stale: record.stale,
-        active_link: record.active_link,
+        active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error.clone(),
-        last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_seen_at_ms: record.last_seen_at_ms,
-        announce_last_seen_at_ms: record.announce_last_seen_at_ms,
-        lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+        last_resolution_attempt_at_ms: None,
+        last_seen_at_ms: 0,
+        announce_last_seen_at_ms: None,
+        lxmf_last_seen_at_ms: None,
     })
 }
 
@@ -358,7 +434,7 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
         lxmf_destination_hex: record.lxmf_destination_hex,
         display_name: record.display_name,
         app_data: record.app_data,
-        state: peer_state_from_string(record.state).unwrap_or(PeerState::Disconnected {}),
+        state: PeerState::Disconnected {},
         saved: record.saved.unwrap_or_else(|| {
             record
                 .management_state
@@ -366,13 +442,13 @@ fn runtime_peer_from_persisted(record: PersistedPeerRecord) -> PeerRecord {
                 .is_some_and(|value| value == "managed")
         }),
         stale: record.stale,
-        active_link: record.active_link,
+        active_link: false,
         hub_derived: record.hub_derived,
         last_resolution_error: record.last_resolution_error,
-        last_resolution_attempt_at_ms: record.last_resolution_attempt_at_ms,
-        last_seen_at_ms: record.last_seen_at_ms,
-        announce_last_seen_at_ms: record.announce_last_seen_at_ms,
-        lxmf_last_seen_at_ms: record.lxmf_last_seen_at_ms,
+        last_resolution_attempt_at_ms: None,
+        last_seen_at_ms: 0,
+        announce_last_seen_at_ms: None,
+        lxmf_last_seen_at_ms: None,
     }
 }
 
@@ -411,15 +487,6 @@ fn peer_state_to_string(state: PeerState) -> String {
         PeerState::Connecting {} => "connecting".to_string(),
         PeerState::Connected {} => "connected".to_string(),
         PeerState::Disconnected {} => "disconnected".to_string(),
-    }
-}
-
-fn peer_state_from_string(value: String) -> Option<PeerState> {
-    match value.as_str() {
-        "connecting" => Some(PeerState::Connecting {}),
-        "connected" => Some(PeerState::Connected {}),
-        "disconnected" => Some(PeerState::Disconnected {}),
-        _ => None,
     }
 }
 
@@ -520,6 +587,26 @@ fn message_matches(a: &MessageRecord, b: &MessageRecord) -> bool {
         .ok()
         .zip(serde_json::to_string(b).ok())
         .is_some_and(|(left, right)| left == right)
+}
+
+fn normalize_message_key(value: impl AsRef<str>) -> String {
+    value.as_ref().trim().to_ascii_lowercase()
+}
+
+fn message_key_matches(keys: &HashSet<String>, value: &str) -> bool {
+    keys.contains(normalize_message_key(value).as_str())
+}
+
+fn message_matches_conversation_keys(
+    message: &PersistedMessageRecord,
+    keys: &HashSet<String>,
+) -> bool {
+    message_key_matches(keys, message.conversation_id.as_str())
+        || message_key_matches(keys, message.destination_hex.as_str())
+        || message
+            .source_hex
+            .as_deref()
+            .is_some_and(|source_hex| message_key_matches(keys, source_hex))
 }
 
 fn peers_match(left: &[PeerRecord], right: &[PersistedPeerRecord]) -> bool {
@@ -651,13 +738,46 @@ impl RuntimeProjectionJournal {
         true
     }
 
-    pub(crate) fn current_sync_status(&self) -> Option<SyncStatus> {
-        self.snapshot
-            .lock()
-            .ok()
-            .map(|snapshot| runtime_sync_from_persisted(snapshot.sync_status.clone()))
+    pub(crate) fn remove_conversation_messages<'a, I>(
+        &self,
+        conversation_keys: I,
+        reason: Option<&str>,
+    ) -> bool
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let keys = conversation_keys
+            .into_iter()
+            .map(normalize_message_key)
+            .filter(|key| !key.is_empty())
+            .collect::<HashSet<_>>();
+        if keys.is_empty() {
+            return false;
+        }
+
+        let mut guard = match self.snapshot.lock() {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        let original_len = guard.messages.len();
+        guard
+            .messages
+            .retain(|message| !message_matches_conversation_keys(message, &keys));
+        if guard.messages.len() == original_len {
+            return false;
+        }
+        guard.updated_at_ms = now_ms();
+        drop(guard);
+
+        self.invalidate(
+            ProjectionScope::Messages {},
+            None,
+            reason.unwrap_or("conversation-deleted"),
+        );
+        true
     }
 
+    #[cfg(test)]
     pub(crate) fn current_peers(&self) -> Option<Vec<PeerRecord>> {
         self.snapshot.lock().ok().map(|snapshot| {
             snapshot
@@ -669,6 +789,7 @@ impl RuntimeProjectionJournal {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn current_messages(&self) -> Option<Vec<MessageRecord>> {
         self.snapshot.lock().ok().map(|snapshot| {
             snapshot

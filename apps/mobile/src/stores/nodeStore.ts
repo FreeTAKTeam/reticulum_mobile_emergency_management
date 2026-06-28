@@ -2,9 +2,13 @@ import {
   type AppSettingsRecord,
   DEFAULT_NODE_CONFIG,
   type AnnounceRecord,
+  type InstalledPluginRecord,
   type PeerRecord,
+  type PluginCatalogDiagnostic,
+  type PluginLxmfSendRequest,
+  type PluginLxmfMessageRecord,
+  type PluginPermissionsRecord,
   type ProjectionInvalidationEvent,
-  type ProjectionScope,
   type SendMode,
   type SavedPeerRecord,
   type SyncStatus,
@@ -19,7 +23,11 @@ import {
   type NodeStatus,
   type PeerChangedEvent,
   type ReticulumNodeClient,
+  type SosAudioRecord,
   type StatusChangedEvent,
+  type WatchStatusServerSettings,
+  type WatchStatusServerState,
+  generateDefaultCallSign,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 import { defineStore } from "pinia";
@@ -38,6 +46,7 @@ import {
   type HubRegistryLinkage,
 } from "../services/hubRegistryBootstrap";
 import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
+import { syncInstalledPluginSettingsSections } from "../plugins/pluginSettings";
 import {
   buildLegacyProjectionState,
   clearLegacyProjectionStorage,
@@ -58,31 +67,42 @@ import type {
 import {
   createPeerListV1,
   ensureRequiredAnnounceCapabilities,
-  extractAnnounceCapabilityText,
   extractAnnouncedName,
   formatAnnounceAppData,
   hasCapability,
   isValidDestinationHex,
   normalizeDisplayName,
   normalizeDestinationHex,
-  parseCapabilityTokens,
   parsePeerListV1,
 } from "../utils/peers";
+import { peerHasRemAnnounceEvidence } from "../utils/announceEvidence";
 import { runtimeProfile } from "../utils/runtimeProfile";
 import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   normalizeTcpCommunityClients,
 } from "../utils/tcpCommunityServers";
+import {
+  DEFAULT_RNODE_SETTINGS,
+  normalizeRnodeSettings,
+} from "../utils/rnodeProfiles";
+import {
+  hasConfiguredNonTcpInterface,
+  logIndicatesReadinessError,
+  logIndicatesTcpInterfaceReadinessError,
+  nodeErrorIndicatesTcpInterfaceReadinessError,
+  nodeErrorIndicatesReadinessError,
+} from "../utils/readinessErrors";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 const PEER_PRESENCE_TICK_MS = 15_000;
 const EMPTY_BYTES = new Uint8Array(0);
 const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
-const STARTUP_AUTO_CONNECT_FRESHNESS_MS = 30_000;
-const AUTO_CONNECT_SERIAL_DELAY_MS = 300;
+const NODE_START_TIMEOUT_MS = 15_000;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
+const REMOVED_PEERS_STORAGE_KEY = "reticulum.mobile.removedPeers.v1";
+const NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY = "reticulum.mobile.nodeConfigRestartRequired.v1";
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -90,6 +110,7 @@ const EMPTY_STATUS: NodeStatus = {
   identityHex: "",
   appDestinationHex: "",
   lxmfDestinationHex: "",
+  lastError: undefined,
 };
 
 const EMPTY_SYNC_STATUS: SyncStatus = {
@@ -111,6 +132,15 @@ const EMPTY_OPERATIONAL_SUMMARY = {
   updatedAtMs: 0,
 };
 
+const DEFAULT_WATCH_STATUS_SERVER: WatchStatusServerState = {
+  enabled: true,
+  port: 29_863,
+  url: "http://localhost:29863/info.json",
+  currentUrl: "http://localhost:29863/info.json",
+  running: false,
+  bindError: "",
+};
+
 interface HubRegistrationSnapshot {
   status: HubRegistrationStatus;
   linkage?: HubRegistryLinkage;
@@ -124,17 +154,20 @@ interface HubAnnounceCandidate {
   label: string;
 }
 
+const LEGACY_DEFAULT_DISPLAY_NAME = "emergency-ops-mobile";
+
 const DEFAULT_SETTINGS: NodeUiSettings = {
   displayName: DEFAULT_NODE_CONFIG.name,
   clientMode: "auto",
-  autoConnectSaved: true,
+  autoConnectSaved: false,
   announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
   tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
+  transportNodeEnabled: DEFAULT_NODE_CONFIG.transportNodeEnabled,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   telemetry: {
     enabled: false,
-    publishIntervalSeconds: 60,
+    publishIntervalSeconds: 360,
     accuracyThresholdMeters: undefined,
     staleAfterMinutes: 30,
     expireAfterMinutes: 180,
@@ -147,6 +180,10 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   checklists: {
     defaultTaskDueStepMinutes: 30,
   },
+  pluginTrust: {
+    trustedPublishers: [],
+  },
+  rnode: { ...DEFAULT_RNODE_SETTINGS },
   hub: {
     mode: "Autonomous",
     identityHash: "",
@@ -155,11 +192,15 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
     refreshIntervalSeconds: 3600,
   },
 };
-
+const RCH_HUB_DIRECTORY_ENABLED = false;
 interface UiLogLine {
   at: number;
   level: string;
   message: string;
+}
+
+export interface PluginLxmfMessageLogEntry extends PluginLxmfMessageRecord {
+  receivedAt: number;
 }
 
 type DedicatedFields = Record<string, string>;
@@ -172,7 +213,6 @@ type EventPeerRoute = {
   sendMode: SendMode;
 };
 type PacketSendOptions = {
-  dedicatedFields?: DedicatedFields;
   fieldsBase64?: string;
   sendMode?: SendMode;
 };
@@ -182,7 +222,7 @@ function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
     return true;
   }
 
-  if (!peer.sources.includes("announce") && !peer.sources.includes("hub")) {
+  if (!hasActualRemAnnounce(peer) && !peer.sources.includes("hub")) {
     return false;
   }
 
@@ -190,8 +230,23 @@ function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
   return seenAt > 0 && (nowMs() - seenAt) <= PEER_VISIBLE_UNSAVED_MAX_AGE_MS;
 }
 
+function hasActualRemAnnounce(peer: DiscoveredPeer): boolean {
+  return peer.sources.includes("announce")
+    && typeof peer.announceLastSeenAt === "number"
+    && Number.isFinite(peer.announceLastSeenAt)
+    && peer.announceLastSeenAt > 0
+    && peerHasRemAnnounceEvidence(peer);
+}
+
 function nowMs(): number {
   return Date.now();
+}
+
+function advancePresenceNow(currentValue: number, candidateValue?: number): number {
+  const candidate = typeof candidateValue === "number" && Number.isFinite(candidateValue)
+    ? candidateValue
+    : nowMs();
+  return Math.max(currentValue, candidate);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -200,17 +255,34 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timerId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timerId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+    }
+  });
+}
+
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
 function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
+  const lastError = asTrimmedString(value?.lastError);
   return {
     running: Boolean(value?.running),
     name: typeof value?.name === "string" ? value.name : "",
     identityHex: typeof value?.identityHex === "string" ? value.identityHex : "",
     appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
     lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
+    lastError: lastError || undefined,
   };
 }
 
@@ -245,54 +317,6 @@ function peerSortRank(peer: Pick<DiscoveredPeer, "saved" | "activeLink" | "lastS
   return rank;
 }
 
-function peerExposesPropagationCapability(appData?: string): boolean {
-  return parseCapabilityTokens(appData ?? "").some(
-    (token) => token === "hub" || token.endsWith("hub"),
-  );
-}
-
-function connectionRank(state: PeerConnectionState): number {
-  switch (state) {
-    case "connected":
-      return 2;
-    case "connecting":
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-function comparePropagationCandidates(
-  left: DiscoveredPeer,
-  right: DiscoveredPeer,
-  preferredDestination?: string,
-): number {
-  const leftPreferred = preferredDestination && left.destination === preferredDestination ? 1 : 0;
-  const rightPreferred = preferredDestination && right.destination === preferredDestination ? 1 : 0;
-  if (leftPreferred !== rightPreferred) {
-    return rightPreferred - leftPreferred;
-  }
-
-  const byConnection = connectionRank(right.state) - connectionRank(left.state);
-  if (byConnection !== 0) {
-    return byConnection;
-  }
-
-  const leftHops = typeof left.hops === "number" ? left.hops : Number.MAX_SAFE_INTEGER;
-  const rightHops = typeof right.hops === "number" ? right.hops : Number.MAX_SAFE_INTEGER;
-  if (leftHops !== rightHops) {
-    return leftHops - rightHops;
-  }
-
-  const leftSeenAt = Math.max(left.announceLastSeenAt ?? 0, left.lxmfLastSeenAt ?? 0);
-  const rightSeenAt = Math.max(right.announceLastSeenAt ?? 0, right.lxmfLastSeenAt ?? 0);
-  if (leftSeenAt !== rightSeenAt) {
-    return rightSeenAt - leftSeenAt;
-  }
-
-  return left.destination.localeCompare(right.destination);
-}
-
 function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
   const requested = value === "capacitor" ? "capacitor" : "auto";
   if (requested === "capacitor" && Capacitor.getPlatform() === "web") {
@@ -302,7 +326,11 @@ function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
 }
 
 function normalizeStoredDisplayName(value: unknown): string {
-  return normalizeDisplayName(typeof value === "string" ? value : "") ?? DEFAULT_SETTINGS.displayName;
+  const normalized = normalizeDisplayName(typeof value === "string" ? value : "");
+  if (!normalized || normalized.toLowerCase() === LEGACY_DEFAULT_DISPLAY_NAME) {
+    return generateDefaultCallSign();
+  }
+  return normalized;
 }
 
 function normalizeTelemetrySettings(
@@ -321,9 +349,9 @@ function normalizeTelemetrySettings(
   return {
     ...base,
     ...telemetry,
-    publishIntervalSeconds: Math.min(
-      60,
-      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds)),
+    publishIntervalSeconds: Math.max(
+      1,
+      Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds),
     ),
     accuracyThresholdMeters:
       telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
@@ -368,6 +396,10 @@ function normalizeWearableSettings(
 }
 
 function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
+  if (!RCH_HUB_DIRECTORY_ENABLED) {
+    return "Autonomous";
+  }
+
   switch (String(value ?? "").trim()) {
     case "Connected":
       return "Connected";
@@ -399,7 +431,11 @@ function cloneDefaultSettings(): NodeUiSettings {
       devices: DEFAULT_SETTINGS.wearables.devices.map((device) => ({ ...device })),
     },
     checklists: { ...DEFAULT_SETTINGS.checklists },
+    pluginTrust: {
+      trustedPublishers: [...DEFAULT_SETTINGS.pluginTrust.trustedPublishers],
+    },
     hub: { ...DEFAULT_SETTINGS.hub },
+    rnode: { ...DEFAULT_SETTINGS.rnode },
   };
 }
 
@@ -410,6 +446,7 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
     announceCapabilities: settings.announceCapabilities,
     tcpClients: [...settings.tcpClients],
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     telemetry: {
       enabled: settings.telemetry.enabled,
@@ -431,6 +468,12 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
         sensorType: "heart_rate_bpm",
       })),
     },
+    pluginTrust: {
+      trustedPublishers: settings.pluginTrust.trustedPublishers.map((publisher) => ({
+        publisher: publisher.publisher,
+        publicKeyBase64: publisher.publicKeyBase64,
+      })),
+    },
     hub: {
       mode: settings.hub.mode,
       identityHash: settings.hub.identityHash,
@@ -438,7 +481,44 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
       apiKey: settings.hub.apiKey,
       refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
     },
+    rnode: normalizeRnodeSettings(settings.rnode),
   };
+}
+
+function hubModeWasCoerced(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.hub.mode !== right.hub.mode;
+}
+
+function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
+}
+
+function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function nodeConfigsEqual(left: NodeConfig, right: NodeConfig): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function loadNodeConfigRestartRequired(): boolean {
+  try {
+    return window.localStorage.getItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeNodeConfigRestartRequired(required: boolean): void {
+  try {
+    if (required) {
+      window.localStorage.setItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY, "1");
+    } else {
+      window.localStorage.removeItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY);
+    }
+  } catch {
+    // Local storage can be unavailable in restricted webviews; the in-memory flag still applies.
+  }
 }
 
 function toUiSettingsProjection(
@@ -453,20 +533,28 @@ function normalizeAppSettingsRecord(
   runtimeSettings: AppSettingsRecord,
   uiSettings: NodeUiPreferences,
   tcpFallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
+  allowEmptyTcpClients = false,
 ): NodeUiSettings {
   return {
     ...cloneDefaultSettings(),
     ...runtimeSettings,
     displayName: normalizeStoredDisplayName(runtimeSettings.displayName),
     clientMode: normalizeClientMode(uiSettings.clientMode),
+    autoConnectSaved: false,
     announceCapabilities: ensureRequiredAnnounceCapabilities(runtimeSettings.announceCapabilities),
     tcpClients: normalizeTcpCommunityClients(
       runtimeSettings.tcpClients,
       tcpFallback,
+      allowEmptyTcpClients,
     ),
+    transportNodeEnabled: runtimeSettings.transportNodeEnabled ?? DEFAULT_SETTINGS.transportNodeEnabled,
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     wearables: normalizeWearableSettings(runtimeSettings.wearables),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
+    pluginTrust: {
+      trustedPublishers: [...(runtimeSettings.pluginTrust?.trustedPublishers ?? [])],
+    },
+    rnode: normalizeRnodeSettings(runtimeSettings.rnode),
     hub: {
       ...DEFAULT_SETTINGS.hub,
       ...runtimeSettings.hub,
@@ -480,6 +568,20 @@ function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): SavedPeerRec
     destination: normalizeDestinationHex(peer.destination),
     label: peer.label?.trim() || undefined,
     savedAt: Number(peer.savedAt ?? nowMs()),
+    identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+      ? normalizeDestinationHex(peer.identityHex ?? "")
+      : undefined,
+    lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+      ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+      : undefined,
+    appData: peer.appData?.trim() || undefined,
+    displayName: peer.displayName?.trim() || undefined,
+    lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+      ? peer.lastRouteSeenAtMs
+      : undefined,
+    lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+      ? peer.lastHops
+      : undefined,
   }));
 }
 
@@ -494,18 +596,67 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
       destination,
       label: peer.label?.trim() || undefined,
       savedAt: Number(peer.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+        ? normalizeDestinationHex(peer.identityHex ?? "")
+        : undefined,
+      lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+        ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+        : undefined,
+      appData: peer.appData?.trim() || undefined,
+      displayName: peer.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+        ? peer.lastRouteSeenAtMs
+        : undefined,
+      lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+        ? peer.lastHops
+        : undefined,
     };
   }
   return out;
 }
 
+function loadRemovedPeerDestinations(): Record<string, number> {
+  try {
+    const raw = window.localStorage.getItem(REMOVED_PEERS_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [destinationRaw, removedAtRaw] of Object.entries(parsed)) {
+      const destination = normalizeDestinationHex(destinationRaw);
+      if (!isValidDestinationHex(destination)) {
+        continue;
+      }
+      const removedAt = Number(removedAtRaw);
+      out[destination] = Number.isFinite(removedAt) ? removedAt : nowMs();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function storeRemovedPeerDestinations(destinations: Record<string, number>): void {
+  try {
+    window.localStorage.setItem(REMOVED_PEERS_STORAGE_KEY, JSON.stringify(destinations));
+  } catch {
+    // Local storage can be unavailable in restricted webviews; native removal still applies.
+  }
+}
+
 function toNodeConfig(settings: NodeUiSettings): NodeConfig {
-  const displayName = normalizeDisplayName(settings.displayName) ?? DEFAULT_NODE_CONFIG.name;
+  const displayName = normalizeStoredDisplayName(settings.displayName);
   return {
     name: displayName,
     storageDir: "reticulum-mobile",
-    tcpClients: normalizeTcpCommunityClients(settings.tcpClients),
+    pluginTrustedPublishers: settings.pluginTrust.trustedPublishers.map((publisher) => ({
+      publisher: publisher.publisher,
+      publicKeyBase64: publisher.publicKeyBase64,
+    })),
+    tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
     announceCapabilities: formatAnnounceAppData(
@@ -517,15 +668,18 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,
     hubApiKey: settings.hub.apiKey || undefined,
     hubRefreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
+    rnode: normalizeRnodeSettings(settings.rnode),
   };
 }
 
 export const useNodeStore = defineStore("node", () => {
   const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
+  const nodeConfigRestartRequired = ref(loadNodeConfigRestartRequired());
   const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>({});
+  const removedByDestination = reactive<Record<string, number>>(loadRemovedPeerDestinations());
   const appDestinationByIdentity = reactive<Record<string, string>>({});
   const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
   const livePresenceByDestination = reactive<Record<string, number>>({});
@@ -533,9 +687,11 @@ export const useNodeStore = defineStore("node", () => {
   const logs = ref<UiLogLine[]>([]);
   const nodeControlEntries = ref<UiLogLine[]>([]);
   const lastError = ref<string>("");
+  const readinessError = ref<string>("");
   const lastHubRefreshAt = ref<number>(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
+  const watchStatusServer = reactive<WatchStatusServerState>({ ...DEFAULT_WATCH_STATUS_SERVER });
   const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
   const telemetryDestinations = ref<string[]>([]);
   const hubRegistration = reactive<HubRegistrationSnapshot>({
@@ -548,22 +704,23 @@ export const useNodeStore = defineStore("node", () => {
 
   const client = shallowRef<ReticulumNodeClient | null>(null);
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
-  const identityResolutionInFlight = new Set<string>();
-  const autoConnectInFlight = new Set<string>();
-  const autoConnectQueue: string[] = [];
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
-  let propagationSelectionInFlight = false;
   let presenceTickerId: number | null = null;
   let refreshMessagingStatePromise: Promise<void> | null = null;
   let refreshSettingsPromise: Promise<void> | null = null;
+  let refreshPluginsPromise: Promise<void> | null = null;
   let refreshSavedPeersPromise: Promise<void> | null = null;
   let refreshOperationalSummaryPromise: Promise<void> | null = null;
+  let refreshWatchStatusServerPromise: Promise<void> | null = null;
   let refreshOperationalSummaryTimerId: number | null = null;
   let refreshOperationalSummaryQueued = false;
   let refreshOperationalSummaryLastRunAt = 0;
   let initPromise: Promise<void> | null = null;
   const startupSettling = ref(false);
   const autoConnectQueueActive = ref(false);
+  const installedPlugins = ref<InstalledPluginRecord[]>([]);
+  const pluginCatalogErrors = ref<PluginCatalogDiagnostic[]>([]);
+  const pluginLxmfMessages = ref<PluginLxmfMessageLogEntry[]>([]);
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
 
@@ -579,6 +736,25 @@ export const useNodeStore = defineStore("node", () => {
 
   function appendNodeControlEntry(level: string, message: string, at = nowMs()): void {
     nodeControlEntries.value = [{ at, level, message }, ...nodeControlEntries.value].slice(0, 120);
+  }
+
+  function recordPluginLxmfReceived(message: PluginLxmfMessageRecord): void {
+    pluginLxmfMessages.value = [
+      {
+        ...message,
+        receivedAt: nowMs(),
+      },
+      ...pluginLxmfMessages.value,
+    ].slice(0, 50);
+    appendLog(
+      "Debug",
+      `Plug-in LXMF message received plugin=${message.pluginId} message=${message.messageName}.`,
+    );
+  }
+
+  function setNodeConfigRestartRequired(required: boolean): void {
+    nodeConfigRestartRequired.value = required;
+    storeNodeConfigRestartRequired(required);
   }
 
   function toPluginLogLevel(level: string): LogLevel {
@@ -636,6 +812,33 @@ export const useNodeStore = defineStore("node", () => {
     lastError.value = "";
   }
 
+  function clearReadinessError(): void {
+    readinessError.value = "";
+  }
+
+  function setReadinessError(message: string, at = nowMs()): void {
+    const trimmed = asTrimmedString(message);
+    if (!trimmed) {
+      return;
+    }
+    const wasReady = !asTrimmedString(readinessError.value);
+    readinessError.value = trimmed;
+    lastError.value = trimmed;
+    if (wasReady) {
+      appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
+    }
+  }
+
+  function tcpInterfaceFailureCanFallBackToConfiguredInterface(message: string): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && logIndicatesTcpInterfaceReadinessError(message);
+  }
+
+  function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
+    return hasConfiguredNonTcpInterface(settings)
+      && nodeErrorIndicatesTcpInterfaceReadinessError(event);
+  }
+
   function errorMessage(error: unknown): string {
     if (error instanceof Error) {
       return error.message;
@@ -650,6 +853,13 @@ export const useNodeStore = defineStore("node", () => {
     console.error(`[ui][Error] ${message}`);
     appendLog("Error", message);
     return error instanceof Error ? error : new Error(message);
+  }
+
+  function captureRuntimeActionError(action: string, error: unknown): Error {
+    const message = `${action}: ${errorMessage(error)}`;
+    const captured = captureActionError(action, error);
+    setReadinessError(message);
+    return captured;
   }
 
   function upsertDiscovered(
@@ -690,6 +900,8 @@ export const useNodeStore = defineStore("node", () => {
       announcedName: patch.announcedName ?? base.announcedName,
       label: patch.label ?? base.label,
       appData: patch.appData ?? base.appData,
+      latestAnnounceKind: patch.latestAnnounceKind ?? base.latestAnnounceKind,
+      latestAnnounceClass: patch.latestAnnounceClass ?? base.latestAnnounceClass,
       hops: patch.hops ?? base.hops,
       interfaceHex: patch.interfaceHex ?? base.interfaceHex,
       saved: patch.saved ?? base.saved,
@@ -808,66 +1020,116 @@ export const useNodeStore = defineStore("node", () => {
 
   function upsertResolvedPeer(peer: PeerRecord): void {
     const destination = normalizeDestinationHex(peer.destinationHex);
-    if (!isValidDestinationHex(destination) || isLocalDestinationIdentityPair(destination, peer.identityHex)) {
+    const identityHex = normalizeDestinationHex(peer.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
+    const canonicalDestination = isValidDestinationHex(lxmfDestinationHex)
+      ? lxmfDestinationHex
+      : destination;
+    if (
+      !isValidDestinationHex(canonicalDestination)
+      || isLocalDestinationIdentityPair(canonicalDestination, peer.identityHex)
+    ) {
       return;
     }
 
-    const identityHex = normalizeDestinationHex(peer.identityHex ?? "");
-    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-    if (isValidDestinationHex(identityHex)) {
+    if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
       appDestinationByIdentity[identityHex] = destination;
     }
-    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
-      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
+    if (isValidDestinationHex(identityHex)) {
+      lxmfDestinationByIdentity[identityHex] = canonicalDestination;
     }
 
-    const saved = savedByDestination[destination];
+    const saved = nativeSavedPeerForCanonicalDestination(
+      canonicalDestination,
+      identityHex,
+      peer.saved,
+      peer.displayName,
+    );
+    const hasCanonicalRemAnnounce = peer.lxmfLastSeenAtMs
+      ? peerHasRemAnnounceEvidence({
+        appData: peer.appData,
+        latestAnnounceKind: "lxmf_delivery",
+        latestAnnounceClass: "LxmfDelivery",
+      })
+      : false;
     upsertDiscovered(
-      destination,
+      canonicalDestination,
       {
         identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex)
-          ? lxmfDestinationHex
-          : undefined,
+        lxmfDestinationHex: canonicalDestination,
         announcedName: peer.displayName?.trim() || undefined,
         label: saved?.label ?? undefined,
         appData: peer.appData,
+        latestAnnounceKind: peer.lxmfLastSeenAtMs ? "lxmf_delivery" : undefined,
+        latestAnnounceClass: peer.lxmfLastSeenAtMs ? "LxmfDelivery" : undefined,
         announceLastSeenAt: peer.announceLastSeenAtMs,
         lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
         lastSeenAt: peer.lastSeenAtMs,
         state: toUiPeerState(peer.state),
-        saved: peer.saved,
+        saved: Boolean(saved) || peer.saved,
         stale: peer.stale,
         activeLink: peer.activeLink,
         lastError: peer.lastResolutionError,
         lastResolutionError: peer.lastResolutionError,
         lastResolutionAttemptAt: peer.lastResolutionAttemptAtMs,
       },
-      peer.hubDerived ? "hub" : "announce",
+      peer.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "native peer route profile");
   }
 
   function applyPeerChanged(change: PeerChangedEvent["change"]): void {
     const destination = normalizeDestinationHex(change.destinationHex);
-    if (!isValidDestinationHex(destination) || isLocalDestinationIdentityPair(destination, change.identityHex)) {
+    const identityHex = normalizeDestinationHex(change.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(change.lxmfDestinationHex ?? "");
+    const canonicalDestination = isValidDestinationHex(lxmfDestinationHex)
+      ? lxmfDestinationHex
+      : destination;
+    if (
+      !isValidDestinationHex(canonicalDestination)
+      || isLocalDestinationIdentityPair(canonicalDestination, change.identityHex)
+    ) {
       return;
     }
 
-    const saved = savedByDestination[destination];
+    if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
+      appDestinationByIdentity[identityHex] = destination;
+    }
+    if (isValidDestinationHex(identityHex)) {
+      lxmfDestinationByIdentity[identityHex] = canonicalDestination;
+    }
+
+    const saved = nativeSavedPeerForCanonicalDestination(
+      canonicalDestination,
+      identityHex,
+      change.saved,
+      change.displayName,
+    );
+    const hasCanonicalRemAnnounce = change.lxmfLastSeenAtMs
+      ? peerHasRemAnnounceEvidence({
+        appData: change.appData ?? discoveredByDestination[canonicalDestination]?.appData,
+        latestAnnounceKind: "lxmf_delivery",
+        latestAnnounceClass: "LxmfDelivery",
+      })
+      : false;
     upsertDiscovered(
-      destination,
+      canonicalDestination,
       {
-        identityHex: isValidDestinationHex(change.identityHex ?? "")
-          ? normalizeDestinationHex(change.identityHex ?? "")
+        identityHex: isValidDestinationHex(identityHex)
+          ? identityHex
           : undefined,
-        lxmfDestinationHex: isValidDestinationHex(change.lxmfDestinationHex ?? "")
-          ? normalizeDestinationHex(change.lxmfDestinationHex ?? "")
-          : undefined,
+        lxmfDestinationHex: canonicalDestination,
         announcedName: change.displayName?.trim() || undefined,
-        label: saved?.label ?? discoveredByDestination[destination]?.label,
-        appData: change.appData ?? discoveredByDestination[destination]?.appData,
+        label: saved?.label ?? discoveredByDestination[canonicalDestination]?.label,
+        appData: change.appData ?? discoveredByDestination[canonicalDestination]?.appData,
+        latestAnnounceKind: change.lxmfLastSeenAtMs
+          ? "lxmf_delivery"
+          : discoveredByDestination[canonicalDestination]?.latestAnnounceKind,
+        latestAnnounceClass: change.lxmfLastSeenAtMs
+          ? "LxmfDelivery"
+          : discoveredByDestination[canonicalDestination]?.latestAnnounceClass,
         state: change.state ? toUiPeerState(change.state) : undefined,
-        saved: change.saved,
+        saved: Boolean(saved) || change.saved,
         stale: change.stale,
         activeLink: change.activeLink,
         lastError: change.lastError,
@@ -877,14 +1139,19 @@ export const useNodeStore = defineStore("node", () => {
         announceLastSeenAt: change.announceLastSeenAtMs,
         lxmfLastSeenAt: change.lxmfLastSeenAtMs,
       },
-      change.hubDerived ? "hub" : "announce",
+      change.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "peer change route profile");
   }
 
   function reconcileNativePeerSnapshot(peers: PeerRecord[]): void {
     const nativeDestinations = new Set(
       peers
-        .map((peer) => normalizeDestinationHex(peer.destinationHex))
+        .map((peer) => {
+          const destination = normalizeDestinationHex(peer.destinationHex);
+          const lxmfDestination = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
+          return isValidDestinationHex(lxmfDestination) ? lxmfDestination : destination;
+        })
         .filter((destination) => isValidDestinationHex(destination)),
     );
 
@@ -906,6 +1173,8 @@ export const useNodeStore = defineStore("node", () => {
         lxmfDestinationHex: undefined,
         announceLastSeenAt: undefined,
         lxmfLastSeenAt: undefined,
+        latestAnnounceKind: undefined,
+        latestAnnounceClass: undefined,
         state: peer.saved ? "connecting" : "disconnected",
         stale: false,
         activeLink: false,
@@ -920,8 +1189,9 @@ export const useNodeStore = defineStore("node", () => {
     if (!isValidDestinationHex(destination) || isLocalPeerDestination(destination)) {
       return;
     }
+    const currentlySaved = Boolean(savedByDestination[destination] || discoveredByDestination[destination]?.saved);
     upsertDiscovered(destination, {
-      saved: managed,
+      saved: managed ? true : currentlySaved,
       state: managed ? "connecting" : "disconnected",
       activeLink: managed ? discoveredByDestination[destination]?.activeLink : false,
       lastError: undefined,
@@ -986,6 +1256,7 @@ export const useNodeStore = defineStore("node", () => {
     settings.announceCapabilities = next.announceCapabilities;
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
+    settings.transportNodeEnabled = next.transportNodeEnabled;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
     settings.telemetry = { ...next.telemetry };
     settings.wearables = {
@@ -994,6 +1265,7 @@ export const useNodeStore = defineStore("node", () => {
     };
     settings.checklists = { ...next.checklists };
     settings.hub = { ...next.hub };
+    settings.rnode = normalizeRnodeSettings(next.rnode);
     applyUiSettingsProjection(toUiSettingsProjection(next));
   }
 
@@ -1024,6 +1296,11 @@ export const useNodeStore = defineStore("node", () => {
         continue;
       }
       peer.sources = peer.sources.filter((source) => source !== "import");
+      peer.saved = false;
+      peer.activeLink = false;
+      peer.state = "disconnected";
+      peer.lastError = undefined;
+      peer.lastResolutionError = undefined;
     }
   }
 
@@ -1062,13 +1339,17 @@ export const useNodeStore = defineStore("node", () => {
     refreshSettingsPromise = (async () => {
       const record = await client.value!.getAppSettings();
       if (record) {
-        applySettingsProjection(
-          normalizeAppSettingsRecord(
-            record,
-            loadUiSettingsProjection(DEFAULT_SETTINGS),
-            defaultsWithTcpFallback(),
-          ),
+        const normalizedSettings = normalizeAppSettingsRecord(
+          record,
+          loadUiSettingsProjection(DEFAULT_SETTINGS),
+          defaultsWithTcpFallback(),
+          true,
         );
+        applySettingsProjection(normalizedSettings);
+        const normalizedRecord = toAppSettingsRecord(normalizedSettings);
+        if (settingsRecordWasNormalized(record, normalizedRecord)) {
+          await client.value!.setAppSettings(normalizedRecord);
+        }
       }
     })()
       .catch((error: unknown) => {
@@ -1078,6 +1359,90 @@ export const useNodeStore = defineStore("node", () => {
         refreshSettingsPromise = null;
       });
     return refreshSettingsPromise;
+  }
+
+  async function refreshPluginsProjection(): Promise<void> {
+    if (!client.value) {
+      installedPlugins.value = [];
+      pluginCatalogErrors.value = [];
+      syncInstalledPluginSettingsSections([]);
+      return;
+    }
+    if (refreshPluginsPromise) {
+      return refreshPluginsPromise;
+    }
+    refreshPluginsPromise = (async () => {
+      const report = await client.value!.listPlugins();
+      installedPlugins.value = [...report.items];
+      pluginCatalogErrors.value = [...report.errors];
+      syncInstalledPluginSettingsSections(report.items);
+      if (report.errors.length > 0) {
+        appendLog(
+          "Warn",
+          `Plugin catalog loaded with ${report.errors.length} diagnostic${report.errors.length === 1 ? "" : "s"}.`,
+        );
+      }
+    })()
+      .catch((error: unknown) => {
+        installedPlugins.value = [];
+        pluginCatalogErrors.value = [];
+        syncInstalledPluginSettingsSections([]);
+        appendLog("Debug", `Plugin catalog refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshPluginsPromise = null;
+      });
+    return refreshPluginsPromise;
+  }
+
+  async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      await client.value.setPluginEnabled(pluginId, enabled);
+      await refreshPluginsProjection();
+      appendLog("Info", `Plug-in ${pluginId} ${enabled ? "enabled" : "disabled"}.`);
+    } catch (error: unknown) {
+      throw captureActionError("Set plug-in enabled state", error);
+    }
+  }
+
+  async function grantPluginPermissions(
+    pluginId: string,
+    permissions: PluginPermissionsRecord,
+  ): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      await client.value.grantPluginPermissions(pluginId, permissions);
+      await refreshPluginsProjection();
+      appendLog("Info", `Plug-in ${pluginId} permissions updated.`);
+    } catch (error: unknown) {
+      throw captureActionError("Grant plug-in permissions", error);
+    }
+  }
+
+  async function installPluginArchive(filename: string, archiveBytes: Uint8Array): Promise<void> {
+    if (!client.value) {
+      throw new Error("Node client is not initialized.");
+    }
+    try {
+      const report = await client.value.installPluginArchive(filename, archiveBytes);
+      installedPlugins.value = [...report.items];
+      pluginCatalogErrors.value = [...report.errors];
+      syncInstalledPluginSettingsSections(report.items);
+      appendLog("Info", `Plug-in archive ${filename} installed disabled by default.`);
+      if (report.errors.length > 0) {
+        appendLog(
+          "Warn",
+          `Plug-in install completed with ${report.errors.length} diagnostic${report.errors.length === 1 ? "" : "s"}.`,
+        );
+      }
+    } catch (error: unknown) {
+      throw captureActionError("Install plug-in archive", error);
+    }
   }
 
   async function refreshSavedPeersProjection(): Promise<void> {
@@ -1119,6 +1484,35 @@ export const useNodeStore = defineStore("node", () => {
         refreshOperationalSummaryPromise = null;
       });
     return refreshOperationalSummaryPromise;
+  }
+
+  async function refreshWatchStatusServerSettings(): Promise<void> {
+    if (!client.value) {
+      Object.assign(watchStatusServer, DEFAULT_WATCH_STATUS_SERVER);
+      return;
+    }
+    if (refreshWatchStatusServerPromise) {
+      return refreshWatchStatusServerPromise;
+    }
+    refreshWatchStatusServerPromise = (async () => {
+      Object.assign(watchStatusServer, await client.value!.getWatchStatusServerSettings());
+    })()
+      .catch((error: unknown) => {
+        appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
+      })
+      .finally(() => {
+        refreshWatchStatusServerPromise = null;
+      });
+    return refreshWatchStatusServerPromise;
+  }
+
+  async function updateWatchStatusServerSettings(settingsRecord: WatchStatusServerSettings): Promise<void> {
+    await init();
+    if (!client.value) {
+      return;
+    }
+    await client.value.setWatchStatusServerSettings(settingsRecord);
+    Object.assign(watchStatusServer, await client.value.getWatchStatusServerState());
   }
 
   function scheduleOperationalSummaryRefresh(delayMs = PROJECTION_REFRESH_DEBOUNCE_MS): void {
@@ -1164,7 +1558,23 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     applySettingsProjection(nextSettings);
-    await client.value.setAppSettings(toAppSettingsRecord(nextSettings));
+    const requestedRecord = toAppSettingsRecord(nextSettings);
+    await client.value.setAppSettings(requestedRecord);
+    const persistedRecord = await client.value.getAppSettings();
+    if (!persistedRecord) {
+      throw new Error("Native app settings save did not return persisted settings.");
+    }
+    const persistedSettings = normalizeAppSettingsRecord(
+      persistedRecord,
+      normalizedUiSettings,
+      defaultsWithTcpFallback(),
+      true,
+    );
+    const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
+    if (!settingsRecordsEqual(requestedRecord, normalizedPersistedRecord)) {
+      throw new Error("Native app settings save verification failed.");
+    }
+    applySettingsProjection(persistedSettings);
     await refreshOperationalSummaryProjection();
   }
 
@@ -1240,6 +1650,12 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     if (destinationKind === "lxmf_delivery") {
+      if (isValidDestinationHex(destinationHex)) {
+        livePresenceByDestination[destinationHex] = Math.max(
+          livePresenceByDestination[destinationHex] ?? 0,
+          receivedAtMs,
+        );
+      }
       if (isValidDestinationHex(identityHex ?? "")) {
         const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
         liveLxmfPresenceByIdentity[normalizedIdentity] = Math.max(
@@ -1276,99 +1692,155 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function shouldAutoConnectSavedPeer(destination: string): boolean {
-    return autoConnectSavedPeerSkipReason(destination) === undefined;
+  function migrateSavedPeerAlias(
+    aliasDestinationRaw: string | undefined,
+    canonicalDestinationRaw: string,
+  ): SavedPeer | undefined {
+    const aliasDestination = normalizeDestinationHex(aliasDestinationRaw ?? "");
+    const canonicalDestination = normalizeDestinationHex(canonicalDestinationRaw);
+    if (
+      !isValidDestinationHex(aliasDestination)
+      || !isValidDestinationHex(canonicalDestination)
+      || aliasDestination === canonicalDestination
+    ) {
+      return savedByDestination[canonicalDestination];
+    }
+
+    const aliasPeer = savedByDestination[aliasDestination];
+    if (!aliasPeer) {
+      return savedByDestination[canonicalDestination];
+    }
+
+    const existingPeer = savedByDestination[canonicalDestination];
+    const migratedPeer: SavedPeer = {
+      ...aliasPeer,
+      ...existingPeer,
+      destination: canonicalDestination,
+      label: existingPeer?.label ?? aliasPeer.label,
+      savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
+      identityHex: existingPeer?.identityHex ?? aliasPeer.identityHex,
+      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex ?? canonicalDestination,
+      appData: existingPeer?.appData ?? aliasPeer.appData,
+      displayName: existingPeer?.displayName ?? aliasPeer.displayName,
+      lastRouteSeenAtMs: existingPeer?.lastRouteSeenAtMs ?? aliasPeer.lastRouteSeenAtMs,
+      lastHops: existingPeer?.lastHops ?? aliasPeer.lastHops,
+    };
+    delete savedByDestination[aliasDestination];
+    savedByDestination[canonicalDestination] = migratedPeer;
+    if (discoveredByDestination[aliasDestination]) {
+      delete discoveredByDestination[aliasDestination];
+    }
+    void persistSavedPeersProjection(
+      { ...savedByDestination },
+      `canonical saved peer ${canonicalDestination}`,
+    );
+    return migratedPeer;
   }
 
-  function autoConnectSavedPeerSkipReason(destination: string): string | undefined {
-    const normalizedDestination = normalizeDestinationHex(destination);
-    if (!settings.autoConnectSaved || !status.value.running) {
-      return "auto-connect disabled or node not running";
-    }
-    if (isLocalPeerDestination(normalizedDestination) || !savedByDestination[normalizedDestination]) {
-      return "peer is local or not saved";
-    }
-    const peer = discoveredByDestination[normalizedDestination];
-    if (peer?.state === "connecting") {
-      return "peer is already connecting";
-    }
-    if (peer?.activeLink) {
-      return "peer already has an active link";
-    }
-    if (autoConnectInFlight.has(normalizedDestination)) {
-      return "connect already in flight";
-    }
-    return undefined;
+  function savedPeerProfileFromDiscovered(
+    destinationRaw: string,
+    discovered?: DiscoveredPeer,
+    fallback?: Partial<SavedPeer>,
+  ): SavedPeer {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const identityHex = normalizeDestinationHex(discovered?.identityHex ?? fallback?.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(
+      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? destination,
+    );
+    const routeSeenAt = Math.max(
+      discovered?.lxmfLastSeenAt ?? 0,
+      discovered?.announceLastSeenAt ?? 0,
+      discovered?.lastSeenAt ?? 0,
+      fallback?.lastRouteSeenAtMs ?? 0,
+    );
+    const hops = typeof discovered?.hops === "number" && Number.isFinite(discovered.hops)
+      ? discovered.hops
+      : fallback?.lastHops;
+
+    return {
+      destination,
+      label: discovered?.label ?? fallback?.label,
+      savedAt: Number(fallback?.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+      lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
+      appData: discovered?.appData?.trim() || fallback?.appData?.trim() || undefined,
+      displayName: discovered?.announcedName?.trim() || fallback?.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: routeSeenAt > 0 ? routeSeenAt : undefined,
+      lastHops: typeof hops === "number" && Number.isFinite(hops) ? hops : undefined,
+    };
   }
 
-  function scheduleSavedPeerAutoConnect(destination: string, reason: string): void {
-    const normalizedDestination = normalizeDestinationHex(destination);
-    const skipReason = autoConnectSavedPeerSkipReason(normalizedDestination);
-    if (skipReason) {
-      appendLog(
-        "Debug",
-        `[peers] auto-connect not scheduled destination=${normalizedDestination} reason=${reason}: ${skipReason}.`,
-      );
+  function sameSavedPeerProfile(left: SavedPeer, right: SavedPeer): boolean {
+    return left.destination === right.destination
+      && left.label === right.label
+      && left.savedAt === right.savedAt
+      && left.identityHex === right.identityHex
+      && left.lxmfDestinationHex === right.lxmfDestinationHex
+      && left.appData === right.appData
+      && left.displayName === right.displayName
+      && left.lastRouteSeenAtMs === right.lastRouteSeenAtMs
+      && left.lastHops === right.lastHops;
+  }
+
+  function refreshSavedPeerProfile(destinationRaw: string, reason: string): void {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const saved = savedByDestination[destination];
+    const discovered = discoveredByDestination[destination];
+    if (!saved || !discovered) {
       return;
     }
-    autoConnectInFlight.add(normalizedDestination);
-    if (!autoConnectQueue.includes(normalizedDestination)) {
-      autoConnectQueue.push(normalizedDestination);
-    }
-    void drainAutoConnectQueue(reason);
-  }
 
-  async function drainAutoConnectQueue(reason: string): Promise<void> {
-    if (autoConnectQueueActive.value) {
+    const next = savedPeerProfileFromDiscovered(destination, discovered, saved);
+    if (sameSavedPeerProfile(saved, next)) {
       return;
     }
-    autoConnectQueueActive.value = true;
-    try {
-      while (autoConnectQueue.length > 0) {
-        const nextDestination = autoConnectQueue.shift();
-        if (!nextDestination) {
-          continue;
-        }
-        const skipReason = autoConnectSavedPeerSkipReason(nextDestination);
-        if (skipReason) {
-          appendLog(
-            "Debug",
-            `[peers] auto-connect cancelled destination=${nextDestination} reason=${reason}: ${skipReason}.`,
-          );
-          autoConnectInFlight.delete(nextDestination);
-          continue;
-        }
-        await sleep(AUTO_CONNECT_SERIAL_DELAY_MS);
-        try {
-          await connectPeer(nextDestination);
-          appendLog("Debug", `[peers] auto-connected saved peer ${nextDestination} after ${reason}.`);
-        } catch (error: unknown) {
-          appendLog(
-            "Debug",
-            `[peers] auto-connect skipped destination=${nextDestination} after ${reason}: ${errorMessage(error)}.`,
-          );
-        } finally {
-          autoConnectInFlight.delete(nextDestination);
-        }
-      }
-    } finally {
-      autoConnectQueueActive.value = false;
-    }
+    savedByDestination[destination] = next;
+    void persistSavedPeersProjection(
+      { ...savedByDestination },
+      `${reason} ${destination}`,
+    );
   }
 
-  function queueEligibleSavedPeerAutoConnects(reason: string): void {
-    for (const peer of Object.values(savedByDestination)) {
-      if (savedByDestination[peer.destination]) {
-        scheduleSavedPeerAutoConnect(peer.destination, reason);
-      }
+  function nativeSavedPeerForCanonicalDestination(
+    canonicalDestinationRaw: string,
+    identityHexRaw: string | undefined,
+    nativeSaved: boolean,
+    displayName?: string,
+  ): SavedPeer | undefined {
+    const canonicalDestination = normalizeDestinationHex(canonicalDestinationRaw);
+    if (!isValidDestinationHex(canonicalDestination)) {
+      return undefined;
     }
+
+    const identityHex = normalizeDestinationHex(identityHexRaw ?? "");
+    const aliasDestination = isValidDestinationHex(identityHex)
+      ? appDestinationByIdentity[identityHex]
+      : undefined;
+    const saved = migrateSavedPeerAlias(aliasDestination, canonicalDestination)
+      ?? savedByDestination[canonicalDestination];
+    if (saved || !nativeSaved) {
+      return saved;
+    }
+
+    const existing = peerByAnyKnownDestination(discoveredByDestination, canonicalDestination);
+    const adoptedPeer = savedPeerProfileFromDiscovered(canonicalDestination, existing, {
+      label: displayName?.trim() || undefined,
+      displayName: displayName?.trim() || undefined,
+      savedAt: nowMs(),
+    });
+    savedByDestination[canonicalDestination] = adoptedPeer;
+    void persistSavedPeersProjection(
+      { ...savedByDestination },
+      `native saved peer ${canonicalDestination}`,
+    );
+    return adoptedPeer;
   }
 
   function applyAnnounceUpdate(
     event: AnnounceReceivedEvent | AnnounceRecord,
     source: "live" | "snapshot" = "live",
   ): void {
-    presenceNow.value = event.receivedAtMs;
+    presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
     const identityHex = normalizeDestinationHex(event.identityHex ?? "");
     if (isLocalDestinationIdentityPair(event.destinationHex, identityHex)) {
       return;
@@ -1385,55 +1857,45 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
     if (event.destinationKind === "lxmf_delivery") {
+      const destination = normalizeDestinationHex(event.destinationHex);
+      const announcedName = ("displayName" in event && typeof event.displayName === "string"
+        ? event.displayName.trim()
+        : undefined) ?? extractAnnouncedName(event.appData);
       if (isValidDestinationHex(identityHex)) {
-        lxmfDestinationByIdentity[identityHex] = event.destinationHex;
-        const appDestinationHex = appDestinationByIdentity[identityHex];
-        if (isValidDestinationHex(appDestinationHex)) {
-          upsertDiscovered(appDestinationHex, {
-            identityHex,
-            lxmfDestinationHex: event.destinationHex,
-            lxmfLastSeenAt: event.receivedAtMs,
-            lastSeenAt: event.receivedAtMs,
-          });
-        }
+        lxmfDestinationByIdentity[identityHex] = destination;
       }
+      if (!peerHasRemAnnounceEvidence({
+        appData: event.appData,
+        latestAnnounceKind: event.destinationKind,
+        latestAnnounceClass: event.announceClass,
+      })) {
+        return;
+      }
+      const aliasDestination = isValidDestinationHex(identityHex)
+        ? appDestinationByIdentity[identityHex]
+        : undefined;
+      const saved = migrateSavedPeerAlias(aliasDestination, destination)
+        ?? savedByDestination[destination];
+      upsertDiscovered(destination, {
+        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+        lxmfDestinationHex: destination,
+        lxmfLastSeenAt: event.receivedAtMs,
+        announceLastSeenAt: event.receivedAtMs,
+        lastSeenAt: event.receivedAtMs,
+        announcedName,
+        appData: event.appData,
+        hops: event.hops,
+        interfaceHex: event.interfaceHex,
+        latestAnnounceKind: event.destinationKind,
+        latestAnnounceClass: event.announceClass,
+        label: saved?.label,
+        saved: Boolean(saved),
+      }, "announce");
       return;
     }
 
-    const saved = savedByDestination[event.destinationHex];
-    const announcedName = extractAnnouncedName(event.appData)
-      ?? ("displayName" in event && typeof event.displayName === "string"
-        ? event.displayName.trim()
-        : undefined);
-    const capabilityText = extractAnnounceCapabilityText(event.appData);
-    const knownLxmfDestination = isValidDestinationHex(identityHex)
-      ? lxmfDestinationByIdentity[identityHex]
-      : undefined;
     if (isValidDestinationHex(identityHex)) {
       appDestinationByIdentity[identityHex] = event.destinationHex;
-    }
-    upsertDiscovered(
-      event.destinationHex,
-      {
-        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-        lxmfDestinationHex: isValidDestinationHex(knownLxmfDestination ?? "")
-          ? knownLxmfDestination
-          : undefined,
-        lxmfLastSeenAt: isValidDestinationHex(knownLxmfDestination ?? "")
-          ? event.receivedAtMs
-          : undefined,
-        announcedName,
-        appData: capabilityText || undefined,
-        hops: event.hops,
-        interfaceHex: event.interfaceHex,
-        label: saved?.label,
-        announceLastSeenAt: event.receivedAtMs,
-        lastSeenAt: event.receivedAtMs,
-      },
-      "announce",
-    );
-    if (source === "live") {
-      scheduleSavedPeerAutoConnect(event.destinationHex, `${event.destinationKind} announce`);
     }
   }
 
@@ -1452,17 +1914,7 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function scheduleDiscoveryRefresh(reason: string, delayMs = 2_000): void {
-    window.setTimeout(() => {
-      void refreshAnnounceState()
-        .then(() => {
-          appendLog("Debug", `[announce] refreshed discovery after ${reason}.`);
-        })
-        .catch(() => undefined);
-    }, delayMs);
-  }
-
-  async function settleStartupDiscovery(reason: string): Promise<void> {
+  async function settleStartupDiscovery(): Promise<void> {
     if (!status.value.running) {
       return;
     }
@@ -1470,55 +1922,10 @@ export const useNodeStore = defineStore("node", () => {
     try {
       await sleep(STARTUP_ANNOUNCE_SETTLE_MS);
       await refreshMessagingState();
-      queueEligibleSavedPeerAutoConnects(`${reason} settle`);
       await refreshMessagingState();
     } finally {
       startupSettling.value = false;
     }
-  }
-
-  async function resolvePeerIdentityIfNeeded(
-    destinationRaw: string,
-    reason: string,
-  ): Promise<void> {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!client.value || !status.value.running || !isValidDestinationHex(destination)) {
-      return;
-    }
-    if (isLocalPeerDestination(destination) || identityResolutionInFlight.has(destination)) {
-      return;
-    }
-
-    const peer = discoveredByDestination[destination];
-    if (
-      peer
-      && isValidDestinationHex(peer.identityHex ?? "")
-      && isValidDestinationHex(peer.lxmfDestinationHex ?? "")
-    ) {
-      return;
-    }
-
-    identityResolutionInFlight.add(destination);
-    try {
-      logUi("Debug", `[peers] requesting identity destination=${destination} reason=${reason}.`);
-      await client.value.requestPeerIdentity(destination);
-      await Promise.allSettled([refreshMessagingState(), refreshAnnounceState()]);
-    } catch (error: unknown) {
-      appendLog(
-        "Debug",
-        `[peers] identity request failed destination=${destination} reason=${reason}: ${errorMessage(error)}.`,
-      );
-    } finally {
-      identityResolutionInFlight.delete(destination);
-    }
-  }
-
-  async function resolveSavedPeerIdentities(reason: string): Promise<void> {
-    await Promise.allSettled(
-      Object.values(savedByDestination).map((peer) =>
-        resolvePeerIdentityIfNeeded(peer.destination, reason),
-      ),
-    );
   }
 
   function buildClient(): ReticulumNodeClient {
@@ -1726,18 +2133,28 @@ export const useNodeStore = defineStore("node", () => {
     unsubscribeClientEvents.value = [
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
+        const statusError = asTrimmedString(status.value.lastError);
+        if (statusError && logIndicatesReadinessError(statusError)) {
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(statusError)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(statusError);
+          }
+        } else if (event.status.running && !statusError) {
+          clearReadinessError();
+        }
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        presenceNow.value = event.receivedAtMs;
         upsertNativeAnnounceRecord(event);
+        applyAnnounceUpdate(event, "live");
       }),
       nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
         const destination = normalizeDestinationHex(event.change.destinationHex);
         if (isLocalDestinationIdentityPair(destination, event.change.identityHex)) {
           return;
         }
-        presenceNow.value = nowMs();
+        presenceNow.value = advancePresenceNow(presenceNow.value);
         applyPeerChanged(event.change);
       }),
       nodeClient.on("peerResolved", (peer: PeerRecord) => {
@@ -1745,11 +2162,11 @@ export const useNodeStore = defineStore("node", () => {
         if (isLocalDestinationIdentityPair(destination, peer.identityHex)) {
           return;
         }
-        presenceNow.value = peer.lastSeenAtMs;
+        presenceNow.value = advancePresenceNow(presenceNow.value, peer.lastSeenAtMs);
         upsertResolvedPeer(peer);
       }),
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
-        presenceNow.value = event.receivedAtMs;
+        presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
         hubDirectorySnapshot.value = {
           effectiveConnectedMode: event.effectiveConnectedMode,
           receivedAtMs: event.receivedAtMs,
@@ -1764,6 +2181,9 @@ export const useNodeStore = defineStore("node", () => {
       nodeClient.on("operationalNotice", (event) => {
         appendNodeControlEntry(event.level, event.message, event.atMs);
       }),
+      nodeClient.on("pluginLxmfReceived", (message: PluginLxmfMessageRecord) => {
+        recordPluginLxmfReceived(message);
+      }),
       nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
         switch (event.scope) {
           case "AppSettings":
@@ -1774,6 +2194,9 @@ export const useNodeStore = defineStore("node", () => {
             break;
           case "OperationalSummary":
             scheduleOperationalSummaryRefresh();
+            break;
+          case "Plugins":
+            void refreshPluginsProjection();
             break;
           default:
             break;
@@ -1792,9 +2215,23 @@ export const useNodeStore = defineStore("node", () => {
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
         appendLog(event.level, event.message);
+        if (logIndicatesReadinessError(event.message)) {
+          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(event.message)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(event.message);
+          }
+        }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
         lastError.value = `${event.code}: ${event.message}`;
+        if (nodeErrorIndicatesReadinessError(event)) {
+          if (nodeErrorCanFallBackToConfiguredInterface(event)) {
+            clearReadinessError();
+          } else {
+            setReadinessError(lastError.value);
+          }
+        }
         appendNodeControlEntry("Error", lastError.value);
       }),
     ];
@@ -1892,8 +2329,10 @@ export const useNodeStore = defineStore("node", () => {
       await importLegacyProjectionState();
       await Promise.all([
         refreshSettingsProjection(),
+        refreshPluginsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
+        refreshWatchStatusServerSettings(),
       ]);
       await syncRuntimeSnapshot("client init");
       if (presenceTickerId === null) {
@@ -1919,13 +2358,19 @@ export const useNodeStore = defineStore("node", () => {
       }
 
       clearLastError();
-      await client.value.start(toNodeConfig(settings));
+      clearReadinessError();
+      await withTimeout(
+        client.value.start(toNodeConfig(settings)),
+        NODE_START_TIMEOUT_MS,
+        `node runtime start timed out after ${NODE_START_TIMEOUT_MS}ms`,
+      );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
-      await settleStartupDiscovery("startup");
+      await settleStartupDiscovery();
       await refreshHubRegistrationState(true);
       appendNodeControlEntry("Info", "Node started.");
 
@@ -1935,7 +2380,7 @@ export const useNodeStore = defineStore("node", () => {
         });
       }
     } catch (error: unknown) {
-      throw captureActionError("Start node failed", error);
+      throw captureRuntimeActionError("Start node failed", error);
     }
   }
 
@@ -1945,6 +2390,7 @@ export const useNodeStore = defineStore("node", () => {
         return;
       }
       clearLastError();
+      clearReadinessError();
       await client.value.stop();
       appendNodeControlEntry("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
@@ -1967,13 +2413,19 @@ export const useNodeStore = defineStore("node", () => {
         return;
       }
       clearLastError();
-      await client.value.restart(toNodeConfig(settings));
+      clearReadinessError();
+      await withTimeout(
+        client.value.restart(toNodeConfig(settings)),
+        NODE_START_TIMEOUT_MS,
+        `node runtime restart timed out after ${NODE_START_TIMEOUT_MS}ms`,
+      );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
-      await settleStartupDiscovery("restart");
+      await settleStartupDiscovery();
       await refreshHubRegistrationState(true);
       appendNodeControlEntry("Info", "Node restarted with updated settings.");
 
@@ -1983,7 +2435,7 @@ export const useNodeStore = defineStore("node", () => {
         });
       }
     } catch (error: unknown) {
-      throw captureActionError("Restart node failed", error);
+      throw captureRuntimeActionError("Restart node failed", error);
     }
   }
 
@@ -2011,10 +2463,11 @@ export const useNodeStore = defineStore("node", () => {
       throw new Error(message);
     }
     const savedPeer = savedByDestination[destination];
-    const existingPeer = discoveredByDestination[destination];
-    if (!savedPeer && !existingPeer?.saved) {
+    if (!savedPeer) {
       throw new Error(`Save peer ${destination} before connecting.`);
     }
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
+    clearPeerRemoved(destination, discovered);
 
     try {
       clearLastError();
@@ -2121,6 +2574,7 @@ export const useNodeStore = defineStore("node", () => {
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     await init();
     await persistSettingsProjection(nextSettings);
@@ -2130,7 +2584,10 @@ export const useNodeStore = defineStore("node", () => {
     }
     try {
       clearLastError();
-      await client.value.setAnnounceCapabilities(settings.announceCapabilities);
+      await client.value.setAnnounceCapabilities(formatAnnounceAppData(
+        ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
+        settings.displayName,
+      ));
     } catch (error: unknown) {
       throw captureActionError("Set announce capabilities failed", error);
     }
@@ -2138,20 +2595,51 @@ export const useNodeStore = defineStore("node", () => {
 
   async function savePeer(destinationRaw: string): Promise<void> {
     await init();
+    const requestedDestination = normalizeDestinationHex(destinationRaw);
+    if (!isValidDestinationHex(requestedDestination)) {
+      return;
+    }
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, requestedDestination);
+    const destination = normalizeDestinationHex(discovered?.lxmfDestinationHex ?? discovered?.destination ?? requestedDestination);
+    if (!isValidDestinationHex(destination)) {
+      return;
+    }
+    clearPeerRemoved(requestedDestination, discovered);
+    clearPeerRemoved(destination, discovered);
+    const nextSavedPeers = {
+      ...savedByDestination,
+      [destination]: savedPeerProfileFromDiscovered(destination, discovered, {
+        label: discovered?.label,
+        savedAt: nowMs(),
+      }),
+    };
+    if (requestedDestination !== destination) {
+      delete nextSavedPeers[requestedDestination];
+    }
+    await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
+  }
+
+  async function removePeer(destinationRaw: string): Promise<void> {
+    await init();
     const destination = normalizeDestinationHex(destinationRaw);
     if (!isValidDestinationHex(destination)) {
       return;
     }
-    const discovered = discoveredByDestination[destination];
-    const nextSavedPeers = {
-      ...savedByDestination,
-      [destination]: {
-        destination,
-        label: discovered?.label,
-        savedAt: nowMs(),
-      },
-    };
-    await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
+    const removedDestinations = markPeerRemoved(destination, discovered);
+    const nextSavedPeers = { ...savedByDestination };
+    for (const removedDestination of removedDestinations) {
+      delete nextSavedPeers[removedDestination];
+      delete discoveredByDestination[removedDestination];
+    }
+    await persistSavedPeersProjection(nextSavedPeers, `explicit remove ${destination}`);
+    if (client.value && status.value.running) {
+      try {
+        await client.value.disconnectPeer(destination);
+      } catch (error: unknown) {
+        appendLog("Debug", `[peers] remove disconnect skipped destination=${destination}: ${errorMessage(error)}`);
+      }
+    }
   }
 
   async function unsavePeer(destinationRaw: string): Promise<void> {
@@ -2159,6 +2647,11 @@ export const useNodeStore = defineStore("node", () => {
     const destination = normalizeDestinationHex(destinationRaw);
     const nextSavedPeers = { ...savedByDestination };
     delete nextSavedPeers[destination];
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
+    const canonicalDestination = normalizeDestinationHex(discovered?.lxmfDestinationHex ?? discovered?.destination ?? "");
+    if (isValidDestinationHex(canonicalDestination)) {
+      delete nextSavedPeers[canonicalDestination];
+    }
     await persistSavedPeersProjection(nextSavedPeers, `explicit unsave ${destination}`);
   }
 
@@ -2181,9 +2674,10 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  function updateSettings(next: Partial<NodeUiSettings>): void {
+  async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
+    const previousNodeConfig = toNodeConfig(settings);
     if (next.displayName !== undefined) {
       settings.displayName = normalizeStoredDisplayName(next.displayName);
     }
@@ -2191,17 +2685,18 @@ export const useNodeStore = defineStore("node", () => {
       settings.clientMode = next.clientMode;
       uiSettingsChanged = true;
     }
-    if (typeof next.autoConnectSaved === "boolean") {
-      settings.autoConnectSaved = next.autoConnectSaved;
-    }
+    settings.autoConnectSaved = false;
     if (next.announceCapabilities !== undefined) {
       settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
     }
     if (next.tcpClients !== undefined) {
-      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback());
+      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback(), true);
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
+    }
+    if (typeof next.transportNodeEnabled === "boolean") {
+      settings.transportNodeEnabled = next.transportNodeEnabled;
     }
     if (next.announceIntervalSeconds !== undefined) {
       settings.announceIntervalSeconds = next.announceIntervalSeconds;
@@ -2231,37 +2726,59 @@ export const useNodeStore = defineStore("node", () => {
         clearHubDirectoryState();
       }
     }
+    if (next.pluginTrust) {
+      settings.pluginTrust = {
+        trustedPublishers: next.pluginTrust.trustedPublishers.map((publisher) => ({
+          publisher: publisher.publisher.trim(),
+          publicKeyBase64: publisher.publicKeyBase64.trim(),
+        })).filter((publisher) => publisher.publisher && publisher.publicKeyBase64),
+      };
+    }
+    if (next.rnode) {
+      settings.rnode = normalizeRnodeSettings({
+        ...settings.rnode,
+        ...next.rnode,
+      });
+    }
     const nextSettings = normalizeAppSettingsRecord(
       toAppSettingsRecord(settings),
       toUiSettingsProjection(settings),
       defaultsWithTcpFallback(),
+      true,
     );
     if (uiSettingsChanged) {
       storeUiSettingsProjection(toUiSettingsProjection(settings));
     }
-    void init()
-      .then(() => persistSettingsProjection(nextSettings))
-      .then(() => {
-        if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
-          return;
-        }
-        if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-          if (settings.hub.mode === "Connected") {
-            const message =
-              "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
-            lastError.value = message;
-            appendLog("Warn", message);
-          }
-          return;
-        }
-        appendLog(
-          "Info",
-          "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
-        );
-      })
-      .catch((error: unknown) => {
-        appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
-      });
+    await init();
+    try {
+      await persistSettingsProjection(nextSettings);
+    } catch (error: unknown) {
+      appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
+      throw error;
+    }
+    const nodeConfigChanged = !nodeConfigsEqual(previousNodeConfig, toNodeConfig(settings));
+    if (status.value.running && nodeConfigChanged) {
+      setNodeConfigRestartRequired(true);
+      appendLog("Info", "Node interface settings changed. Restart the app or node to apply them.");
+    }
+    if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+      if (settings.hub.mode === "Connected") {
+        const message =
+          "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
+        lastError.value = message;
+        appendLog("Warn", message);
+      }
+      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      return;
+    }
+    appendLog(
+      "Info",
+      "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
+    );
     void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
   }
 
@@ -2288,6 +2805,7 @@ export const useNodeStore = defineStore("node", () => {
         destination,
         label: peer.label?.trim() || undefined,
         savedAt: nowMs(),
+        lxmfDestinationHex: destination,
       };
       upsertDiscovered(
         destination,
@@ -2340,20 +2858,13 @@ export const useNodeStore = defineStore("node", () => {
     peer: Pick<DiscoveredPeer, "destination" | "saved">,
     savedDestinations: Set<string>,
   ): boolean {
-    return peer.saved || savedDestinations.has(peer.destination);
-  }
-
-  function peerHasConnectedSession(
-    peer: Pick<DiscoveredPeer, "destination" | "activeLink" | "saved">,
-    savedDestinations: Set<string>,
-  ): boolean {
-    return peerIsSaved(peer, savedDestinations) && peer.activeLink;
+    return savedDestinations.has(peer.destination) || peer.saved;
   }
 
   function peerPresenceState(
-    peer: Pick<DiscoveredPeer, "activeLink">,
+    peer: Pick<DiscoveredPeer, "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
   ): "online" | "offline" {
-    return peer.activeLink ? "online" : "offline";
+    return hasFreshPresence(peerCachedPresenceTimestamp(peer)) ? "online" : "offline";
   }
 
   function peerHasKnownLxmfRoute(
@@ -2362,8 +2873,7 @@ export const useNodeStore = defineStore("node", () => {
     const appDestinationHex = normalizeDestinationHex(peer.destination);
     const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
     return isValidDestinationHex(appDestinationHex)
-      && isValidDestinationHex(lxmfDestinationHex)
-      && appDestinationHex !== lxmfDestinationHex;
+      && isValidDestinationHex(lxmfDestinationHex);
   }
 
   function peerByAnyKnownDestination(
@@ -2381,9 +2891,50 @@ export const useNodeStore = defineStore("node", () => {
     );
   }
 
+  function knownDestinationsForPeer(
+    destinationRaw: string,
+    peer?: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
+  ): string[] {
+    const destinations = [
+      destinationRaw,
+      peer?.destination,
+      peer?.lxmfDestinationHex,
+      peer?.identityHex,
+    ]
+      .map((value) => normalizeDestinationHex(value ?? ""))
+      .filter(isValidDestinationHex);
+    return [...new Set(destinations)];
+  }
+
+  function peerIsRemoved(
+    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
+  ): boolean {
+    return knownDestinationsForPeer(peer.destination, peer).some((destination) =>
+      removedByDestination[destination] !== undefined,
+    );
+  }
+
+  function markPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): string[] {
+    const destinations = knownDestinationsForPeer(destinationRaw, peer);
+    const removedAt = nowMs();
+    for (const destination of destinations) {
+      removedByDestination[destination] = removedAt;
+    }
+    storeRemovedPeerDestinations({ ...removedByDestination });
+    return destinations;
+  }
+
+  function clearPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): void {
+    for (const destination of knownDestinationsForPeer(destinationRaw, peer)) {
+      delete removedByDestination[destination];
+    }
+    storeRemovedPeerDestinations({ ...removedByDestination });
+  }
+
   const discoveredPeers = computed(() =>
     Object.values(discoveredByDestination)
       .filter((peer) => shouldDisplayDiscoveredPeer(peer))
+      .filter((peer) => !peerIsRemoved(peer))
       .filter((peer) => !isLocalPeer(peer))
       .sort((a, b) => {
         const byRank = peerSortRank(b) - peerSortRank(a);
@@ -2394,6 +2945,14 @@ export const useNodeStore = defineStore("node", () => {
       }),
   );
   const allPeers = discoveredPeers;
+
+  const remAnnouncedPeers = computed(() =>
+    Object.values(discoveredByDestination)
+      .filter((peer) => !isLocalPeer(peer))
+      .filter((peer) => !peerIsRemoved(peer))
+      .filter((peer) => hasActualRemAnnounce(peer))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
+  );
 
   const autoFanoutPeers = computed(() =>
     Object.values(discoveredByDestination)
@@ -2413,12 +2972,27 @@ export const useNodeStore = defineStore("node", () => {
         identityHex: peer.identityHex,
         label: peer.label,
         announcedName: peer.announcedName,
-        sendMode: "Auto",
+        sendMode: "PropagationOnly",
       })),
   );
 
+  function savedPeerLastSeenAt(peer: SavedPeer): number {
+    const discovered = peerByAnyKnownDestination(discoveredByDestination, peer.destination);
+    return discovered ? peerCachedPresenceTimestamp(discovered) ?? 0 : 0;
+  }
+
   const savedPeers = computed(() =>
-    Object.values(savedByDestination).sort((a, b) => b.savedAt - a.savedAt),
+    Object.values(savedByDestination).sort((a, b) => {
+      const byLastSeen = savedPeerLastSeenAt(b) - savedPeerLastSeenAt(a);
+      if (byLastSeen !== 0) {
+        return byLastSeen;
+      }
+      const bySavedAt = b.savedAt - a.savedAt;
+      if (bySavedAt !== 0) {
+        return bySavedAt;
+      }
+      return a.destination.localeCompare(b.destination);
+    }),
   );
 
   const savedVisiblePeers = computed(() =>
@@ -2427,6 +3001,12 @@ export const useNodeStore = defineStore("node", () => {
 
   const connectedPeers = computed(() =>
     savedVisiblePeers.value.filter((peer) => peer.activeLink),
+  );
+
+  const reachablePeers = computed(() =>
+    savedVisiblePeers.value.filter((peer) =>
+      hasFreshPresence(peerCachedPresenceTimestamp(peer)),
+    ),
   );
 
   const connectedDestinations = computed(() =>
@@ -2455,13 +3035,9 @@ export const useNodeStore = defineStore("node", () => {
   );
 
   const visiblePeerCount = computed(() => discoveredPeers.value.length);
-  const savedPeerCount = computed(() => savedVisiblePeers.value.length);
+  const savedPeerCount = computed(() => savedPeers.value.length);
   const connectedPeerCount = computed(() => connectedPeers.value.length);
-  const propagationCandidateDestinations = computed(() =>
-    activePropagationNodeHex(syncStatus.value)
-      ? [activePropagationNodeHex(syncStatus.value)!]
-      : [],
-  );
+  const reachablePeerCount = computed(() => reachablePeers.value.length);
   const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
   const hubDirectoryPeers = computed(() => hubDirectorySnapshot.value?.items ?? []);
   const effectiveConnectedMode = computed(() => Boolean(hubDirectorySnapshot.value?.effectiveConnectedMode));
@@ -2496,7 +3072,8 @@ export const useNodeStore = defineStore("node", () => {
   });
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
-  const ready = computed(() => status.value.running);
+  const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
+  const ready = computed(() => status.value.running && !readinessErrorMessage.value);
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(
     () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),
@@ -2524,11 +3101,10 @@ export const useNodeStore = defineStore("node", () => {
     }
   });
 
-  async function syncAutoPropagationNode(reason: string): Promise<void> {
-    void reason;
-  }
-
   function notReadyMessage(action: string): string {
+    if (readinessErrorMessage.value) {
+      return `Cannot ${action} while the node is not ready: ${readinessErrorMessage.value}`;
+    }
     return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
   }
 
@@ -2540,7 +3116,7 @@ export const useNodeStore = defineStore("node", () => {
     const message = notReadyMessage(action);
     logUi(
       "Debug",
-      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value}.`,
+      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value} readiness_error=${readinessErrorMessage.value || "none"}.`,
     );
     lastError.value = message;
     logUi("Warn", message);
@@ -2562,9 +3138,8 @@ export const useNodeStore = defineStore("node", () => {
   }
 
   function destinationHasCapability(destinationRaw: string, capability: string): boolean {
-    const destination = normalizeDestinationHex(destinationRaw);
-    const peer = discoveredByDestination[destination];
-    if (!peer || !peer.sources.includes("announce")) {
+    const peer = peerByAnyKnownDestination(discoveredByDestination, destinationRaw);
+    if (!peer || !hasActualRemAnnounce(peer)) {
       return false;
     }
     return hasCapability(peer.appData ?? "", capability);
@@ -2575,6 +3150,7 @@ export const useNodeStore = defineStore("node", () => {
       throw captureActionError("Broadcast failed", new Error("Node client is not initialized."));
     }
     try {
+      assertReadyForOutbound("broadcast traffic");
       logUi(
         "Debug",
         `Broadcast requested bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
@@ -2598,6 +3174,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertReadyForOutbound("send traffic");
       assertHubRoutingReadyForOutbound("send traffic");
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
       const sendMode = options?.sendMode ?? "Auto";
@@ -2631,6 +3208,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertReadyForOutbound("send traffic");
       assertHubRoutingReadyForOutbound("send traffic");
       logUi(
         "Debug",
@@ -2662,6 +3240,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertReadyForOutbound("send traffic");
       assertHubRoutingReadyForOutbound("send traffic");
       logUi(
         "Debug",
@@ -2696,6 +3275,7 @@ export const useNodeStore = defineStore("node", () => {
       );
     }
     try {
+      assertReadyForOutbound("send LXMF");
       assertHubRoutingReadyForOutbound("send LXMF");
       const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
       const sendMode = options?.sendMode ?? "Auto";
@@ -2710,7 +3290,42 @@ export const useNodeStore = defineStore("node", () => {
         sendMode,
       });
     } catch (error: unknown) {
-      throw captureActionError(`LXMF send failed (${destinationHex})`, error);
+      const captured = captureActionError(`LXMF send failed (${destinationHex})`, error);
+      throw captured;
+    }
+  }
+
+  async function sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    const nodeClient = client.value;
+    if (!nodeClient) {
+      throw captureActionError(
+        `Plug-in LXMF send failed (${request.pluginId})`,
+        new Error("Node client is not initialized."),
+      );
+    }
+    try {
+      assertReadyForOutbound("send plug-in LXMF");
+      assertHubRoutingReadyForOutbound("send plug-in LXMF");
+      const destinationHex = normalizeDestinationHex(request.destinationHex);
+      if (!isValidDestinationHex(destinationHex)) {
+        throw new Error("Plug-in LXMF destination must be a 32-character destination hex.");
+      }
+      const bodyUtf8 = asTrimmedString(request.bodyUtf8);
+      if (!bodyUtf8) {
+        throw new Error("Plug-in LXMF body cannot be empty.");
+      }
+      await nodeClient.sendPluginLxmf({
+        ...request,
+        destinationHex,
+        bodyUtf8,
+        sendMode: request.sendMode ?? "Auto",
+      });
+      logUi(
+        "Info",
+        `Plug-in LXMF sent plugin=${request.pluginId} message=${request.messageName} destination=${destinationHex}.`,
+      );
+    } catch (error: unknown) {
+      throw captureActionError(`Plug-in LXMF send failed (${request.pluginId})`, error);
     }
   }
 
@@ -2768,6 +3383,10 @@ export const useNodeStore = defineStore("node", () => {
     return requireClient("List SOS audio failed").listSosAudio();
   }
 
+  async function recordSosAudio(audio: SosAudioRecord) {
+    return requireClient("Record SOS audio failed").recordSosAudio(audio);
+  }
+
   async function announceNow(): Promise<void> {
     if (!client.value) {
       return;
@@ -2812,23 +3431,23 @@ export const useNodeStore = defineStore("node", () => {
     }
   }
 
-  async function broadcastJson(payload: unknown, dedicatedFields?: DedicatedFields): Promise<void> {
+  async function broadcastJson(payload: unknown): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await broadcastBytes(body, { dedicatedFields });
+    await broadcastBytes(body);
   }
 
   async function sendJson(
     destinationHex: string,
     payload: unknown,
-    dedicatedFields?: DedicatedFields,
   ): Promise<void> {
     const body = new TextEncoder().encode(JSON.stringify(payload));
-    await sendBytes(destinationHex, body, { dedicatedFields });
+    await sendBytes(destinationHex, body);
   }
 
   async function reinitializeClient(): Promise<void> {
     try {
       clearLastError();
+      clearReadinessError();
       if (client.value) {
         await client.value.dispose().catch(() => undefined);
       }
@@ -2839,6 +3458,7 @@ export const useNodeStore = defineStore("node", () => {
       clearAnnounceState();
       await Promise.all([
         refreshSettingsProjection(),
+        refreshPluginsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
       ]);
@@ -2851,6 +3471,8 @@ export const useNodeStore = defineStore("node", () => {
 
   return {
     settings,
+    nodeConfigRestartRequired,
+    watchStatusServer,
     status,
     syncStatus,
     operationalSummary,
@@ -2867,14 +3489,17 @@ export const useNodeStore = defineStore("node", () => {
     logs,
     nodeControlEntries,
     lastError,
+    readinessError: readinessErrorMessage,
     lastHubRefreshAt,
     discoveredByDestination,
     savedByDestination,
     allPeers,
     discoveredPeers,
+    remAnnouncedPeers,
     savedPeers,
     savedVisiblePeers,
     connectedPeers,
+    reachablePeers,
     propagationEligibleEventPeerRoutes,
     connectedDestinations,
     intentionalPeerDestinations,
@@ -2883,10 +3508,15 @@ export const useNodeStore = defineStore("node", () => {
     visiblePeerCount,
     savedPeerCount,
     connectedPeerCount,
+    reachablePeerCount,
     startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,
+    installedPlugins,
+    pluginCatalogErrors,
+    pluginLxmfMessages,
     savedDestinations,
+    initialized,
     ready,
     peerDisplayState,
     peerPresenceTimestamp,
@@ -2901,14 +3531,21 @@ export const useNodeStore = defineStore("node", () => {
     connectAllSaved,
     disconnectAllSaved,
     refreshHubDirectory,
+    refreshPluginsProjection,
+    setPluginEnabled,
+    grantPluginPermissions,
+    installPluginArchive,
     refreshHubRegistrationState,
     bootstrapHubRegistration,
     forgetHubRegistryLinkage,
     setAnnounceCapabilities,
     savePeer,
+    removePeer,
     unsavePeer,
     setPeerLabel,
     updateSettings,
+    refreshWatchStatusServerSettings,
+    updateWatchStatusServerSettings,
     getSavedPeerList,
     importPeerList,
     parsePeerListText,
@@ -2919,6 +3556,7 @@ export const useNodeStore = defineStore("node", () => {
     sendBytesDirect,
     sendBytesViaPropagation,
     sendLxmf,
+    sendPluginLxmf,
     onClientEvent,
     getSosSettings,
     setSosSettings,
@@ -2930,6 +3568,7 @@ export const useNodeStore = defineStore("node", () => {
     listSosAlerts,
     listSosLocations,
     listSosAudio,
+    recordSosAudio,
     setActivePropagationNode,
     requestLxmfSync,
     broadcastBytes,

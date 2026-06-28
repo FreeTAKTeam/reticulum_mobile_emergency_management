@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from "vue";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
@@ -10,7 +10,7 @@ import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 import type { DiscoveredPeer } from "../types/domain";
-import { getMessageOverallScore, getOverallStatusBand } from "../utils/actionMessageStatus";
+import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 
 const messagingStore = useMessagingStore();
@@ -23,6 +23,8 @@ const router = useRouter();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 const isPeerPickerVisible = shallowRef(false);
+let visualMockRefreshInterval: number | undefined;
+let unregisterBackNavigationHandler: (() => void) | undefined;
 
 interface ConnectedPeerOption {
   value: string;
@@ -57,18 +59,22 @@ function isDraftConversationId(value: string): boolean {
   return safeLower(value).startsWith("draft:");
 }
 
+function isVisualMockMode(): boolean {
+  return import.meta.env.DEV && route.query.mockChat === "1";
+}
+
 const selectedConversation = computed(() => messagingStore.selectedConversation);
 const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
 const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
   const seen = new Set<string>();
-  return nodeStore.discoveredPeers
-    .filter((peer) => peer.activeLink)
-    .filter((peer) => peer.saved || nodeStore.savedDestinations.has(peer.destination))
+  return nodeStore.reachablePeers
+    .filter((peer) => nodeStore.savedDestinations.has(peer.destination))
     .map((peer) => {
       const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
-      const displayName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
+      const baseName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
+      const displayName = peer.activeLink ? `${baseName} (Connected)` : `${baseName} (Reachable)`;
       return { value, displayName };
     })
     .filter((option) => {
@@ -114,15 +120,16 @@ const selectedPeer = computed(() => {
   return nodeStore.discoveredByDestination[destinationHex]
     ?? Object.values(nodeStore.discoveredByDestination).find((peer) =>
       safeLower(peer.destination) === destinationHex
-      || safeLower(peer.lxmfDestinationHex) === destinationHex,
+      || safeLower(peer.lxmfDestinationHex) === destinationHex
+      || safeLower(peer.identityHex) === destinationHex,
     )
     ?? null;
 });
 const selectedPeerDisplayName = computed(() =>
   safeTrim(selectedPeer.value?.announcedName)
-  || safeTrim(selectedPeer.value?.label)
   || safeTrim(selectedConversation.value?.displayName)
   || safeTrim(activeThreadConversation.value?.displayName)
+  || safeTrim(selectedPeer.value?.label)
   || selectedDestinationHex.value,
 );
 function findConversationForSelection(
@@ -199,7 +206,7 @@ const targetStatusLabel = computed(() => {
   if (!message) {
     return "Unknown";
   }
-  return message.overallStatus ?? getOverallStatusBand(getMessageOverallScore(message));
+  return message.overallStatus ?? messagesStore.eamReadinessForCallsign(message.callsign)?.overallBand ?? "Unknown";
 });
 const targetTeamLabel = computed(() => {
   const message = selectedTargetMessage.value;
@@ -225,12 +232,6 @@ const targetTelemetryPosition = computed(() => {
   return null;
 });
 
-const syncStatusLabel = computed(() => {
-  const status = nodeStore.syncStatus;
-  const detail = safeTrim(status.detail);
-  return detail ? `${status.phase}: ${detail}` : status.phase;
-});
-
 function formatCoordinate(value: number, positiveLabel: string, negativeLabel: string): string {
   const hemisphere = value >= 0 ? positiveLabel : negativeLabel;
   return `${Math.abs(value).toFixed(2)}° ${hemisphere}`;
@@ -246,6 +247,26 @@ const targetLongitudeLabel = computed(() =>
     ? formatCoordinate(targetTelemetryPosition.value.lon, "E", "W")
     : "",
 );
+const targetEamHref = computed(() => {
+  const callsign = safeTrim(selectedTargetMessage.value?.callsign) || safeTrim(selectedPeerDisplayName.value);
+  if (!callsign) {
+    return "";
+  }
+  const params = new URLSearchParams({ callsign });
+  return `/messages?${params.toString()}`;
+});
+const targetMapHref = computed(() => {
+  const position = targetTelemetryPosition.value;
+  if (!position) {
+    return "";
+  }
+  const params = new URLSearchParams({
+    callsign: position.callsign,
+    lat: String(position.lat),
+    lon: String(position.lon),
+  });
+  return `/telemetry?${params.toString()}`;
+});
 
 function handleSelectConversation(conversationId: string): void {
   messagingStore.selectConversation(conversationId);
@@ -274,6 +295,18 @@ function showConversationList(): void {
   mobilePane.value = "list";
 }
 
+function handleAndroidBackNavigation(): boolean {
+  if (isPeerPickerVisible.value) {
+    isPeerPickerVisible.value = false;
+    return true;
+  }
+  if (mobilePane.value === "detail") {
+    showConversationList();
+    return true;
+  }
+  return false;
+}
+
 function togglePeerPicker(): void {
   isPeerPickerVisible.value = !isPeerPickerVisible.value;
 }
@@ -295,6 +328,10 @@ function handleThreadDestinationSelected(event: Event): void {
 async function send(bodyUtf8: string): Promise<void> {
   const destinationHex = selectedDestinationHex.value;
   if (!destinationHex) {
+    return;
+  }
+  if (isVisualMockMode()) {
+    messagingStore.appendVisualMockOutboundMessage(destinationHex, bodyUtf8);
     return;
   }
   await messagingStore.sendMessage(destinationHex, bodyUtf8);
@@ -337,27 +374,66 @@ watch(
   },
   { immediate: true },
 );
+
+onMounted(() => {
+  unregisterBackNavigationHandler = registerBackNavigationHandler(handleAndroidBackNavigation);
+  if (isVisualMockMode()) {
+    messagingStore.applyVisualMockChatData();
+    visualMockRefreshInterval = window.setInterval(() => {
+      messagingStore.applyVisualMockChatData();
+    }, 2000);
+  }
+});
+
+onUnmounted(() => {
+  unregisterBackNavigationHandler?.();
+  unregisterBackNavigationHandler = undefined;
+  if (visualMockRefreshInterval !== undefined) {
+    window.clearInterval(visualMockRefreshInterval);
+  }
+});
 </script>
 
 <template>
   <section class="view" :class="`pane-${mobilePane}`">
     <header class="view-header">
-      <div class="view-heading">
-        <h1 class="view-title">Inbox</h1>
-        <p class="sync-line header-sync-line">
-          Sync status: <strong>{{ syncStatusLabel }}</strong>
-        </p>
-      </div>
       <div class="header-actions">
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6h16" />
+            <path d="M4 12h16" />
+            <path d="M4 18h16" />
+          </svg>
+          <span>{{ conversationCount }} Threads</span>
+        </span>
         <button
-          class="create-toggle"
+          class="utility-chip peer-chip"
           type="button"
-          aria-label="Select connected peer"
+          aria-label="Select reachable peer"
           :aria-expanded="isPeerPickerVisible"
-          title="Select connected peer"
+          title="Select reachable peer"
           @click="togglePeerPicker"
         >
-          +
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
+            <circle cx="9.5" cy="7" r="3" />
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a3 3 0 0 1 0 5.74" />
+          </svg>
+          <span>Reachable Peers</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
+        <button
+          class="create-toggle utility-new"
+          type="button"
+          aria-label="Select reachable peer"
+          :aria-expanded="isPeerPickerVisible"
+          title="Select reachable peer"
+          @click="togglePeerPicker"
+        >
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </header>
@@ -369,12 +445,12 @@ watch(
     >
       <select
         :value="selectedDestinationHex"
-        aria-label="Select connected peer"
+        aria-label="Select reachable peer"
         class="thread-picker-select"
         :disabled="threadDestinationOptions.length === 0"
         @change="handleThreadDestinationSelected"
       >
-        <option value="">Select connected peer</option>
+        <option value="">Select reachable peer</option>
         <option
           v-for="option in threadDestinationOptions"
           :key="option.value"
@@ -384,20 +460,12 @@ watch(
         </option>
       </select>
       <p v-if="threadDestinationOptions.length === 0" class="peer-picker-empty">
-        No connected saved peers available.
+        No reachable saved peers available.
       </p>
     </form>
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">
       <section class="panel inbox-panel list-panel">
-        <header class="inbox-panel-header">
-          <div>
-            <p class="panel-kicker">Conversations</p>
-          </div>
-        </header>
-        <p class="panel-copy">
-          {{ conversationCount }} conversation{{ conversationCount === 1 ? "" : "s" }} available.
-        </p>
         <ConversationList
           :items="messagingStore.conversations"
           :selected-conversation-id="activeConversationId"
@@ -416,6 +484,8 @@ watch(
           :target-team="targetTeamLabel"
           :target-latitude="targetLatitudeLabel"
           :target-longitude="targetLongitudeLabel"
+          :target-eam-href="targetEamHref"
+          :target-map-href="targetMapHref"
           :target-message-id="messagingStore.selectedTargetMessageId"
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
@@ -439,10 +509,7 @@ watch(
 }
 
 .view-header {
-  align-items: baseline;
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
+  display: block;
 }
 
 .view-heading {
@@ -454,9 +521,10 @@ watch(
 
 .header-actions {
   align-items: center;
-  display: flex;
+  display: grid;
   flex-shrink: 0;
   gap: 0.55rem;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.34fr) minmax(3.2rem, 0.34fr);
 }
 
 .view-title,
@@ -486,40 +554,56 @@ watch(
   color: #94add3;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 48%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.74rem, 1.8vw, 0.92rem);
+  font-weight: 700;
+  gap: 0.46rem;
+  justify-content: flex-start;
+  min-height: 2.75rem;
+  min-width: 0;
+  padding: 0.42rem 0.62rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.08rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.08rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.peer-chip {
+  cursor: pointer;
+}
+
+.peer-chip .chevron {
+  margin-left: auto;
+}
+
 .inbox-panel {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.65rem;
   min-height: 0;
-}
-
-.inbox-panel-header {
-  align-items: start;
-  display: flex;
-  gap: 0.85rem;
-  justify-content: space-between;
-}
-
-.inbox-panel-header > div {
-  min-width: 0;
-}
-
-.panel-kicker,
-.panel-copy {
-  margin: 0;
-}
-
-.panel-kicker {
-  color: #60d8ff;
-  font-family: var(--font-ui);
-  font-size: 0.72rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.panel-copy {
-  color: #8ea8d1;
-  font-family: var(--font-body);
-  font-size: 0.92rem;
 }
 
 .inbox-layout {
@@ -557,6 +641,19 @@ watch(
   line-height: 1;
   min-width: 2.3rem;
   padding: 0;
+}
+
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2vw, 0.98rem);
+  gap: 0.46rem;
+  height: auto;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 3.2rem;
+  padding: 0.42rem;
 }
 
 .peer-picker-form {
@@ -623,6 +720,24 @@ watch(
 
   .view-header {
     align-items: center;
+  }
+
+  .header-actions {
+    gap: 0.42rem;
+    grid-template-columns: minmax(0, 0.98fr) minmax(0, 1.32fr) minmax(2.8rem, 0.38fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.68rem;
+    gap: 0.32rem;
+    min-height: 2.48rem;
+    padding-inline: 0.38rem;
+  }
+
+  .utility-chip svg {
+    height: 0.92rem;
+    width: 0.92rem;
   }
 
   .peer-picker-form {

@@ -3,38 +3,6 @@ import { expect, test } from "@playwright/test";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINT } from "../apps/mobile/src/utils/tcpCommunityServers";
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
 
-async function seedAnnouncedPeers(
-  page: import("@playwright/test").Page,
-  peers: Array<{
-    destination: string;
-    appData: string;
-    label?: string;
-    announcedName?: string;
-  }>,
-): Promise<void> {
-  await page.evaluate(async (entries) => {
-    const mod = await import("/src/stores/nodeStore.ts");
-    const store = mod.useNodeStore();
-    const now = Date.now();
-    for (const entry of entries) {
-      store.discoveredByDestination[entry.destination] = {
-        destination: entry.destination,
-        label: entry.label,
-        announcedName: entry.announcedName,
-        appData: entry.appData,
-        lastSeenAt: now,
-        announceLastSeenAt: now,
-        lxmfLastSeenAt: now,
-        sources: ["announce"],
-        state: "disconnected",
-        saved: false,
-        stale: false,
-        activeLink: false,
-      };
-    }
-  }, peers);
-}
-
 async function seedHubDirectorySnapshot(
   page: import("@playwright/test").Page,
   snapshot: {
@@ -65,7 +33,7 @@ test("fresh installs default to the first TCP community server", async ({ page }
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
@@ -75,17 +43,11 @@ test("fresh installs default to the first TCP community server", async ({ page }
     .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
 
   await expect(firstServer.getByRole("checkbox")).toBeChecked();
-
-  await page.getByRole("button", { name: "Save" }).click();
-
-  const storedSettings = await page.evaluate(() =>
-    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
-  );
-
-  expect(storedSettings.tcpClients).toEqual([DEFAULT_TCP_COMMUNITY_ENDPOINT]);
+  await expect(runtimePanel.getByLabel("Transport node forwarding")).toBeChecked();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
-test("legacy placeholder TCP selection normalizes to the first community server", async ({ page }) => {
+test("rmap TCP selection is preserved as a community server", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -96,25 +58,28 @@ test("legacy placeholder TCP selection normalizes to the first community server"
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
 
-  const firstServer = page
-    .locator("label.server-option")
-    .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
+  const rmapServer = page.locator("label.server-option").filter({ hasText: "rmap.world:4242" });
 
-  await expect(firstServer.getByRole("checkbox")).toBeChecked();
-  await expect(page.getByText("rmap.world:4242")).toHaveCount(0);
+  await expect(rmapServer.getByRole("checkbox")).toBeChecked();
+  await expect(page.getByText(DEFAULT_TCP_COMMUNITY_ENDPOINT)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 
-  await page.getByRole("button", { name: "Save" }).click();
+  const runtimeSettings = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().settings;
+  });
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
   );
 
-  expect(storedSettings.tcpClients).toEqual([DEFAULT_TCP_COMMUNITY_ENDPOINT]);
+  expect(runtimeSettings.tcpClients).toEqual(["rmap.world:4242"]);
+  expect(storedSettings.tcpClients).toEqual(["rmap.world:4242"]);
 });
 
 test("operators can update runtime settings and persist TCP endpoints", async ({ page }) => {
@@ -128,77 +93,122 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   await gotoApp(page, "/settings");
 
   const runtimePanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "Runtime" }),
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
 
   await runtimePanel.locator("summary").click();
   await runtimePanel.getByLabel("Call Sign").fill("Atlas-7");
-  await runtimePanel.getByPlaceholder("Add custom endpoint (host:port)").fill("mesh.example.org:5151");
+  await runtimePanel.getByLabel("Transport node forwarding").uncheck();
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("mesh.example.org:5151");
   await runtimePanel.getByRole("button", { name: "Add" }).click();
 
   await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
 
-  await runtimePanel.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save" }).click();
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
   );
 
   expect(storedSettings.displayName).toBe("Atlas-7");
+  expect(storedSettings.transportNodeEnabled).toBe(false);
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 
-test("hub selector only lists RCH-capable announce peers and persists the selected hub", async ({ page }) => {
+test("operators can add Reticulum-style TCP URLs as custom endpoints", async ({ page }) => {
   await seedAppStorage(page, {
-    settings: {
-      ...defaultSettings,
-      hub: {
-        ...defaultSettings.hub,
-        mode: "SemiAutonomous",
-      },
-    },
+    settings: defaultSettings,
   });
 
   await gotoApp(page, "/settings");
-  await seedAnnouncedPeers(page, [
-    {
-      destination: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      appData: "R3AKT,topic_broker,name=Relay%20Hub",
-      announcedName: "Relay Hub",
-    },
-    {
-      destination: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      appData: "R3AKT,Telemetry,name=Telemetry%20Peer",
-      announcedName: "Telemetry Peer",
-    },
-  ]);
 
-  const hubPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
   });
-  await hubPanel.locator("summary").click();
 
-  const hubSelect = hubPanel.getByLabel("Hub from announces (RCH servers)");
-  await expect(hubSelect.locator("option")).toHaveCount(2);
-  await expect(hubSelect).toContainText("Relay Hub");
-  await expect(hubSelect).not.toContainText("Telemetry Peer");
+  await runtimePanel.locator("summary").click();
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("tcp://mesh.example.org:5151");
+  await runtimePanel.getByRole("button", { name: "Add" }).click();
 
-  await hubSelect.selectOption("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  await hubPanel.getByRole("button", { name: "Save Hub Settings" }).click();
+  await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
+  await page.getByRole("button", { name: "Save" }).click();
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
   );
 
-  expect(storedSettings.hub.identityHash).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-  expect(storedSettings.hub.mode).toBe("SemiAutonomous");
-
-  await page.reload();
-  await expect(page).toHaveURL(/\/settings$/);
-  await expect(hubPanel).toContainText("aaaaaaaaaa...");
+  expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 
-test("hub summary shows cached peer count, connected override, and missing connected hub state", async ({ page }) => {
+test("operators can save manual RNode LoRa configuration", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
+  });
+
+  await runtimePanel.locator("summary").click();
+  await runtimePanel.getByLabel("Enable RNode Bluetooth LoRa").check();
+  await runtimePanel.getByLabel("RNode device id").fill("AA:BB:CC:DD:EE:FF");
+  await runtimePanel.getByLabel("RNode display name").fill("Field RNode");
+  await runtimePanel.getByLabel("Region").selectOption("EU868");
+  await runtimePanel.getByLabel("REM LoRa profile").selectOption("REM-LM-EXTREME-v1");
+
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
+  expect(storedSettings.rnode).toEqual({
+    enabled: true,
+    peripheralId: "AA:BB:CC:DD:EE:FF",
+    displayName: "Field RNode",
+    region: "EU868",
+    profile: "REM-LM-EXTREME-v1",
+  });
+});
+
+test("telemetry publish interval above 60 seconds activates save and persists", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      telemetry: {
+        ...defaultSettings.telemetry,
+        publishIntervalSeconds: 10,
+      },
+    },
+  });
+
+  await gotoApp(page, "/settings");
+
+  const telemetryPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Telemetry" }),
+  });
+
+  await telemetryPanel.locator("summary").click();
+  await telemetryPanel.getByLabel("Telemetry publish interval (seconds)").fill("120");
+
+  await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
+  expect(storedSettings.telemetry.publishIntervalSeconds).toBe(120);
+});
+
+test("RCH hub directory is disabled and coerces persisted mode to autonomous", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -211,6 +221,44 @@ test("hub summary shows cached peer count, connected override, and missing conne
   });
 
   await gotoApp(page, "/settings");
+  const hubPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  });
+  await hubPanel.locator("summary").click();
+
+  await expect(hubPanel.getByLabel("Mode")).toBeDisabled();
+  await expect(hubPanel.getByLabel("Mode")).toHaveValue("Autonomous");
+  await expect(hubPanel.getByLabel("Hub from announces (RCH servers)")).toBeDisabled();
+  await expect(hubPanel.getByLabel("Hub identity hash")).toBeDisabled();
+  await expect(hubPanel.getByLabel("Refresh interval seconds")).toBeDisabled();
+  await expect(hubPanel.getByRole("button", { name: "Refresh Now" })).toBeDisabled();
+  await expect(hubPanel.getByRole("button", { name: "Register Team Member" })).toBeDisabled();
+  await expect(hubPanel.getByRole("button", { name: "Clear Registration" })).toBeDisabled();
+
+  const runtimeHub = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().settings.hub;
+  });
+  expect(runtimeHub.mode).toBe("Autonomous");
+});
+
+test("disabled RCH hub directory does not expose connected routing states", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      hub: {
+        ...defaultSettings.hub,
+        mode: "SemiAutonomous",
+        identityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    },
+  });
+
+  await gotoApp(page, "/settings");
+  const hubPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  });
+  await hubPanel.locator("summary").click();
   await seedHubDirectorySnapshot(page, {
     effectiveConnectedMode: true,
     receivedAtMs: Date.now(),
@@ -228,23 +276,70 @@ test("hub summary shows cached peer count, connected override, and missing conne
     ],
   });
 
-  const hubPanel = page.locator("details").filter({
-    has: page.getByRole("heading", { name: "RCH Hub Directory" }),
+  await expect(hubPanel.getByLabel("Mode")).toBeDisabled();
+  await expect(hubPanel.getByLabel("Mode")).toHaveValue("Autonomous");
+  await expect(hubPanel).toContainText("Autonomous");
+  await expect(hubPanel).not.toContainText("server forcing connected routing");
+  await expect(hubPanel).not.toContainText("outbound blocked");
+});
+
+test("plugin settings sections can register after Settings is mounted", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
   });
-  await expect(hubPanel).toContainText("1 cached peers");
-  await expect(hubPanel).toContainText("server forcing connected routing");
+
+  await gotoApp(page, "/settings");
 
   await page.evaluate(async () => {
-    const mod = await import("/src/stores/nodeStore.ts");
-    const store = mod.useNodeStore();
-    store.updateSettings({
-      hub: {
-        ...store.settings.hub,
-        mode: "Connected",
-        identityHash: "",
-      },
+    const mod = await import("/src/plugins/pluginSettings.ts");
+    mod.registerPluginSettingsSection({
+      pluginId: "rem.plugin.example_status",
+      name: "Example Status Plugin",
+      version: "0.1.0",
+      state: "Enabled",
+      description: "Host-rendered settings for the example plug-in.",
+      fields: [
+        {
+          id: "destinationHex",
+          label: "Destination",
+          type: "text",
+          defaultValue: "",
+          placeholder: "Reticulum destination",
+        },
+        {
+          id: "statusMessage",
+          label: "Status message",
+          type: "text",
+          defaultValue: "Status test from example plug-in",
+        },
+      ],
+      actions: [],
     });
   });
 
-  await expect(hubPanel).toContainText("No hub selected | outbound blocked");
+  const pluginPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Plugin" }),
+  });
+  await pluginPanel.locator("summary").click();
+
+  await expect(pluginPanel).toContainText("1 configurable");
+  await expect(pluginPanel.getByRole("heading", { name: "Example Status Plugin" })).toBeVisible();
+  await expect(pluginPanel.getByText("No plug-ins are installed or enabled")).toHaveCount(0);
+
+  await pluginPanel.getByLabel("Destination").fill("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  await pluginPanel.getByLabel("Status message").fill("Field report ready");
+  await pluginPanel.getByRole("button", { name: "Save Plug-in" }).click();
+
+  const saved = await page.evaluate(() =>
+    JSON.parse(
+      window.localStorage.getItem(
+        "reticulum.mobile.pluginSettings.v1.rem.plugin.example_status",
+      ) ?? "{}",
+    ),
+  );
+
+  expect(saved).toEqual({
+    destinationHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    statusMessage: "Field report ready",
+  });
 });

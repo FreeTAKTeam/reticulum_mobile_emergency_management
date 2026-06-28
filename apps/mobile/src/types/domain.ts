@@ -228,6 +228,8 @@ export interface DiscoveredPeer {
   hops?: number;
   interfaceHex?: string;
   appData?: string;
+  latestAnnounceKind?: string;
+  latestAnnounceClass?: string;
   sources: PeerSource[];
   state: PeerConnectionState;
   saved: boolean;
@@ -242,6 +244,12 @@ export interface SavedPeer {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
@@ -283,6 +291,17 @@ export interface HubSettings {
   refreshIntervalSeconds: number;
 }
 
+export type RnodeRegion = "US915" | "EU868";
+export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
+
+export interface RnodeSettings {
+  enabled: boolean;
+  peripheralId: string;
+  displayName: string;
+  region: RnodeRegion;
+  profile: RnodeProfileId;
+}
+
 export interface NodeUiSettings {
   displayName: string;
   clientMode: "auto" | "capacitor";
@@ -290,6 +309,7 @@ export interface NodeUiSettings {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: {
     enabled: boolean;
@@ -309,8 +329,15 @@ export interface NodeUiSettings {
     }>;
   };
   hub: HubSettings;
+  rnode: RnodeSettings;
   checklists: {
     defaultTaskDueStepMinutes: number;
+  };
+  pluginTrust: {
+    trustedPublishers: Array<{
+      publisher: string;
+      publicKeyBase64: string;
+    }>;
   };
 }
 

@@ -5,25 +5,178 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fs_err as fs;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 
 use crate::runtime::now_ms;
+use crate::sos_fields::sos_kind_from_text;
 use crate::types::{
-    AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-    ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest, ChecklistMode,
-    ChecklistOriginType, ChecklistRecord, ChecklistSyncState, ChecklistTaskCellSetRequest,
-    ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
-    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
-    ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord, ChecklistUpdateRequest,
-    ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, LegacyImportPayload, MessageDirection, MessageRecord, NodeError,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
-    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
-    WearableSensorType, WearableSettingsRecord, WearableStatusRecord,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
+    ChecklistColumnType, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
+    ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSyncState,
+    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
+    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
+    ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
+    EamReadinessMessageRecord, EamReadinessStatusMetricRecord, EamReadinessSummaryRecord,
+    EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, MessageDirection,
+    MessageRecord, NodeError, ProjectionInvalidation, ProjectionScope, SavedPeerRecord,
+    SosAlertRecord, SosAudioRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord,
+    TelemetryPositionRecord, WearableSensorType, WearableStatusRecord,
     DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
 };
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
+const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const EAM_STATUS_FIELDS: [(&str, &str); 6] = [
+    ("securityStatus", "Security"),
+    ("capabilityStatus", "Capability"),
+    ("preparednessStatus", "Preparedness"),
+    ("medicalStatus", "Medical"),
+    ("mobilityStatus", "Mobility"),
+    ("commsStatus", "Comms"),
+];
+
+fn eam_status_score(status: &str) -> u32 {
+    match status {
+        "Green" => 100,
+        "Yellow" => 50,
+        "Red" => 25,
+        _ => 0,
+    }
+}
+
+fn clamp_score(value: f64) -> u32 {
+    value.round().clamp(0.0, 100.0) as u32
+}
+
+fn readiness_band(score: u32) -> &'static str {
+    if score >= 75 {
+        "Green"
+    } else if score >= 50 {
+        "Yellow"
+    } else if score >= 25 {
+        "Orange"
+    } else {
+        "Red"
+    }
+}
+
+fn blend_hex_color(start: &str, end: &str, ratio: f64) -> String {
+    let safe_ratio = ratio.clamp(0.0, 1.0);
+    let start = parse_hex_color(start).unwrap_or([0, 0, 0]);
+    let end = parse_hex_color(end).unwrap_or(start);
+    let mixed = [0, 1, 2].map(|index| {
+        let start_value = f64::from(start[index]);
+        let end_value = f64::from(end[index]);
+        (start_value + ((end_value - start_value) * safe_ratio)).round() as u8
+    });
+    format!("#{:02x}{:02x}{:02x}", mixed[0], mixed[1], mixed[2])
+}
+
+fn parse_hex_color(value: &str) -> Option<[u8; 3]> {
+    let hex = value.strip_prefix('#').unwrap_or(value);
+    if hex.len() != 6 {
+        return None;
+    }
+    Some([
+        u8::from_str_radix(&hex[0..2], 16).ok()?,
+        u8::from_str_radix(&hex[2..4], 16).ok()?,
+        u8::from_str_radix(&hex[4..6], 16).ok()?,
+    ])
+}
+
+fn readiness_ring_color(score: u32) -> String {
+    let safe_score = score.min(100);
+    if safe_score >= 75 {
+        blend_hex_color("#16ce79", "#3df58f", f64::from(safe_score - 75) / 25.0)
+    } else if safe_score >= 50 {
+        blend_hex_color("#f5cc19", "#16ce79", f64::from(safe_score - 50) / 25.0)
+    } else if safe_score >= 25 {
+        blend_hex_color("#ff9f1c", "#f5cc19", f64::from(safe_score - 25) / 25.0)
+    } else {
+        blend_hex_color("#ff3648", "#ff9f1c", f64::from(safe_score) / 25.0)
+    }
+}
+
+fn eam_status_value<'a>(record: &'a EamProjectionRecord, field: &str) -> &'a str {
+    match field {
+        "securityStatus" => record.security_status.as_str(),
+        "capabilityStatus" => record.capability_status.as_str(),
+        "preparednessStatus" => record.preparedness_status.as_str(),
+        "medicalStatus" => record.medical_status.as_str(),
+        "mobilityStatus" => record.mobility_status.as_str(),
+        "commsStatus" => record.comms_status.as_str(),
+        _ => "",
+    }
+}
+
+fn readiness_metric(field: &str, label: &str, score: u32) -> EamReadinessStatusMetricRecord {
+    EamReadinessStatusMetricRecord {
+        field: field.to_string(),
+        label: label.to_string(),
+        score,
+        band: readiness_band(score).to_string(),
+        ring_color: readiness_ring_color(score),
+    }
+}
+
+fn eam_overall_readiness_score(record: &EamProjectionRecord) -> u32 {
+    let total: u32 = EAM_STATUS_FIELDS
+        .iter()
+        .map(|(field, _)| eam_status_score(eam_status_value(record, field)))
+        .sum();
+    clamp_score(f64::from(total) / EAM_STATUS_FIELDS.len() as f64)
+}
+
+fn build_eam_readiness_summary(records: Vec<EamProjectionRecord>) -> EamReadinessSummaryRecord {
+    let updated_at_ms = records
+        .iter()
+        .map(|record| record.updated_at_ms)
+        .max()
+        .unwrap_or(0);
+    let active_records: Vec<EamProjectionRecord> = records
+        .into_iter()
+        .filter(|record| record.deleted_at_ms.is_none())
+        .collect();
+    let active_total = active_records.len() as u32;
+
+    let status_metrics = EAM_STATUS_FIELDS
+        .iter()
+        .map(|(field, label)| {
+            let score = if active_records.is_empty() {
+                0
+            } else {
+                let total: u32 = active_records
+                    .iter()
+                    .map(|record| eam_status_score(eam_status_value(record, field)))
+                    .sum();
+                clamp_score(f64::from(total) / active_records.len() as f64)
+            };
+            readiness_metric(field, label, score)
+        })
+        .collect();
+
+    let messages = active_records
+        .iter()
+        .map(|record| {
+            let score = eam_overall_readiness_score(record);
+            EamReadinessMessageRecord {
+                callsign: record.callsign.clone(),
+                overall_score: score,
+                overall_band: readiness_band(score).to_string(),
+                overall_ring_color: readiness_ring_color(score),
+            }
+        })
+        .collect();
+
+    EamReadinessSummaryRecord {
+        active_total,
+        updated_at_ms,
+        status_metrics,
+        messages,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppStateStore {
@@ -119,22 +272,29 @@ impl AppStateStore {
         Ok(store)
     }
 
+    pub(crate) fn storage_dir(&self) -> PathBuf {
+        self.db_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_STORAGE_DIR))
+    }
+
     fn connect(&self) -> Result<Connection, NodeError> {
         let connection = Connection::open(&self.db_path).map_err(|_| NodeError::IoError {})?;
         connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(|_| NodeError::IoError {})?;
-        connection
-            .pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|_| NodeError::IoError {})?;
-        connection
-            .busy_timeout(std::time::Duration::from_secs(5))
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
             .map_err(|_| NodeError::IoError {})?;
         Ok(connection)
     }
 
     fn initialize(&self) -> Result<(), NodeError> {
         let connection = self.connect()?;
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .map_err(|_| NodeError::IoError {})?;
+        connection
+            .pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|_| NodeError::IoError {})?;
         connection
             .execute_batch(
                 "
@@ -146,6 +306,10 @@ impl AppStateStore {
                 CREATE TABLE IF NOT EXISTS saved_peers (
                     destination_hex TEXT PRIMARY KEY,
                     json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ignored_peers (
+                    destination_hex TEXT PRIMARY KEY,
                     updated_at_ms INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS eams (
@@ -180,6 +344,18 @@ impl AppStateStore {
                     message_id_hex TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL,
                     updated_at_ms INTEGER NOT NULL,
+                    json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS announces (
+                    destination_hex TEXT PRIMARY KEY,
+                    identity_hex TEXT NOT NULL,
+                    destination_kind TEXT NOT NULL,
+                    announce_class TEXT NOT NULL,
+                    app_data TEXT NOT NULL,
+                    display_name TEXT,
+                    hops INTEGER NOT NULL,
+                    interface_hex TEXT NOT NULL,
+                    received_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS telemetry_positions (
@@ -231,6 +407,13 @@ impl AppStateStore {
                     revision INTEGER NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS plugin_storage (
+                    plugin_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY (plugin_id, key)
+                );
                 CREATE TABLE IF NOT EXISTS metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -239,6 +422,46 @@ impl AppStateStore {
             )
             .map_err(|_| NodeError::IoError {})?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
+        Ok(())
+    }
+
+    pub(crate) fn get_plugin_storage_value(
+        &self,
+        plugin_id: &str,
+        key: &str,
+    ) -> Result<Option<JsonValue>, NodeError> {
+        validate_plugin_storage_key(plugin_id, key)?;
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2",
+                params![plugin_id, key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
+    }
+
+    pub(crate) fn set_plugin_storage_value(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        value: &JsonValue,
+    ) -> Result<(), NodeError> {
+        validate_plugin_storage_key(plugin_id, key)?;
+        let json = serialize_json(value)?;
+        let connection = self.connect()?;
+        connection
+            .execute(
+                "INSERT INTO plugin_storage (plugin_id, key, json, updated_at_ms)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(plugin_id, key) DO UPDATE SET
+                    json = excluded.json,
+                    updated_at_ms = excluded.updated_at_ms",
+                params![plugin_id, key, json, now_ms() as i64],
+            )
+            .map_err(|_| NodeError::IoError {})?;
         Ok(())
     }
 
@@ -416,6 +639,197 @@ impl AppStateStore {
         Ok(invalidation)
     }
 
+    pub(crate) fn get_ignored_peer_destinations(&self) -> Result<Vec<String>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare("SELECT destination_hex FROM ignored_peers ORDER BY updated_at_ms DESC")
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| NodeError::IoError {})?;
+        let mut destinations = Vec::new();
+        for row in rows {
+            destinations.push(row.map_err(|_| NodeError::IoError {})?);
+        }
+        Ok(destinations)
+    }
+
+    pub(crate) fn add_ignored_peer_destinations(
+        &self,
+        destinations: &[String],
+    ) -> Result<(), NodeError> {
+        if destinations.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        let updated_at_ms = now_ms() as i64;
+        for destination in destinations {
+            let normalized = destination.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            transaction
+                .execute(
+                    "INSERT INTO ignored_peers (destination_hex, updated_at_ms)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(destination_hex) DO UPDATE SET
+                        updated_at_ms = excluded.updated_at_ms",
+                    params![normalized, updated_at_ms],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_ignored_peer_destinations(
+        &self,
+        destinations: &[String],
+    ) -> Result<(), NodeError> {
+        if destinations.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| NodeError::IoError {})?;
+        for destination in destinations {
+            let normalized = destination.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            transaction
+                .execute(
+                    "DELETE FROM ignored_peers WHERE destination_hex = ?1",
+                    params![normalized],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn upsert_announce(&self, record: &AnnounceRecord) -> Result<(), NodeError> {
+        let destination_hex = record.destination_hex.trim().to_ascii_lowercase();
+        if destination_hex.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let connection = self.connect()?;
+        let existing: Option<(i64, Option<String>)> = connection
+            .query_row(
+                "SELECT received_at_ms, display_name FROM announces WHERE destination_hex = ?1",
+                params![destination_hex],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        if existing
+            .as_ref()
+            .is_some_and(|(received_at_ms, _)| *received_at_ms > record.received_at_ms as i64)
+        {
+            return Ok(());
+        }
+
+        let mut normalized = record.clone();
+        normalized.destination_hex = destination_hex;
+        normalized.identity_hex = record.identity_hex.trim().to_ascii_lowercase();
+        normalized.destination_kind = record.destination_kind.trim().to_ascii_lowercase();
+        normalized.interface_hex = record.interface_hex.trim().to_ascii_lowercase();
+        normalized.display_name = normalize_optional_string(record.display_name.as_deref())
+            .or_else(|| {
+                existing.as_ref().and_then(|(_, display_name)| {
+                    normalize_optional_string(display_name.as_deref())
+                })
+            });
+        let announce_class = announce_class_name(normalized.announce_class);
+        let json = serialize_json(&normalized)?;
+        connection
+            .execute(
+                "INSERT INTO announces (
+                    destination_hex,
+                    identity_hex,
+                    destination_kind,
+                    announce_class,
+                    app_data,
+                    display_name,
+                    hops,
+                    interface_hex,
+                    received_at_ms,
+                    json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(destination_hex) DO UPDATE SET
+                    identity_hex = excluded.identity_hex,
+                    destination_kind = excluded.destination_kind,
+                    announce_class = excluded.announce_class,
+                    app_data = excluded.app_data,
+                    display_name = excluded.display_name,
+                    hops = excluded.hops,
+                    interface_hex = excluded.interface_hex,
+                    received_at_ms = excluded.received_at_ms,
+                    json = excluded.json",
+                params![
+                    normalized.destination_hex,
+                    normalized.identity_hex,
+                    normalized.destination_kind,
+                    announce_class,
+                    normalized.app_data,
+                    normalized.display_name,
+                    i64::from(normalized.hops),
+                    normalized.interface_hex,
+                    normalized.received_at_ms as i64,
+                    json,
+                ],
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        Ok(())
+    }
+
+    pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    destination_hex,
+                    identity_hex,
+                    destination_kind,
+                    announce_class,
+                    app_data,
+                    display_name,
+                    hops,
+                    interface_hex,
+                    received_at_ms
+                 FROM announces
+                 ORDER BY received_at_ms DESC, destination_hex ASC",
+            )
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| {
+                let announce_class: String = row.get(3)?;
+                let hops: i64 = row.get(6)?;
+                let received_at_ms: i64 = row.get(8)?;
+                Ok(AnnounceRecord {
+                    destination_hex: row.get(0)?,
+                    identity_hex: row.get(1)?,
+                    destination_kind: row.get(2)?,
+                    announce_class: announce_class_from_name(announce_class.as_str()),
+                    app_data: row.get(4)?,
+                    display_name: row.get(5)?,
+                    hops: hops.clamp(0, u8::MAX as i64) as u8,
+                    interface_hex: row.get(7)?,
+                    received_at_ms: received_at_ms.max(0) as u64,
+                })
+            })
+            .map_err(|_| NodeError::IoError {})?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row.map_err(|_| NodeError::IoError {})?);
+        }
+        Ok(records)
+    }
+
     pub fn get_eams(&self) -> Result<Vec<EamProjectionRecord>, NodeError> {
         query_json_records(
             &self.connect()?,
@@ -524,6 +938,10 @@ impl AppStateStore {
         Ok(Some(summary))
     }
 
+    pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
+        Ok(build_eam_readiness_summary(self.get_eams()?))
+    }
+
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
         query_json_records(
             &self.connect()?,
@@ -589,7 +1007,7 @@ impl AppStateStore {
             "SELECT json FROM checklists ORDER BY updated_at_ms DESC, uid ASC",
         )?
         .into_iter()
-        .filter_map(|record| sanitize_active_checklist(record))
+        .filter_map(sanitize_active_checklist)
         .collect())
     }
 
@@ -869,6 +1287,7 @@ impl AppStateStore {
         Ok(invalidations)
     }
 
+    #[cfg(test)]
     pub fn delete_checklist(
         &self,
         checklist_uid: &str,
@@ -1267,6 +1686,7 @@ impl AppStateStore {
         Ok(records)
     }
 
+    #[cfg(test)]
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
         self.list_conversations_resolved(&ConversationPeerResolver::default())
     }
@@ -1368,12 +1788,19 @@ impl AppStateStore {
         ids.push(canonical_id.clone());
         ids.sort();
         ids.dedup();
+        let normalized_ids = ids
+            .iter()
+            .map(|id| normalize_message_peer_key(id.as_str()))
+            .filter(|id| !id.is_empty())
+            .collect::<Vec<_>>();
 
         let mut connection = self.connect()?;
         self.repair_message_conversations(&connection, resolver)?;
         let transaction = connection
             .transaction()
             .map_err(|_| NodeError::IoError {})?;
+        let removed_sos =
+            self.delete_sos_records_for_conversations_tx(&transaction, normalized_ids.as_slice())?;
         for id in &ids {
             transaction
                 .execute(
@@ -1394,8 +1821,22 @@ impl AppStateStore {
             None,
             Some("conversation-deleted".to_string()),
         )?;
+        let sos = if removed_sos {
+            Some(self.bump_projection_revision_tx(
+                &transaction,
+                ProjectionScope::Sos {},
+                None,
+                Some("conversation-deleted".to_string()),
+            )?)
+        } else {
+            None
+        };
         transaction.commit().map_err(|_| NodeError::IoError {})?;
-        Ok(vec![messages, conversations])
+        let mut invalidations = vec![messages, conversations];
+        if let Some(invalidation) = sos {
+            invalidations.push(invalidation);
+        }
+        Ok(invalidations)
     }
 
     pub fn get_telemetry_positions(&self) -> Result<Vec<TelemetryPositionRecord>, NodeError> {
@@ -1553,10 +1994,56 @@ impl AppStateStore {
     }
 
     pub fn list_sos_alerts(&self) -> Result<Vec<SosAlertRecord>, NodeError> {
-        query_json_records(
-            &self.connect()?,
+        let connection = self.connect()?;
+        let records: Vec<SosAlertRecord> = query_json_records(
+            &connection,
             "SELECT json FROM sos_alerts ORDER BY updated_at_ms DESC, incident_id ASC",
-        )
+        )?;
+        let mut filtered = Vec::new();
+        for alert in records {
+            if alert.active {
+                if matches!(
+                    sos_kind_from_text(alert.body_utf8.as_str()),
+                    Some(crate::types::SosMessageKind::Cancelled {})
+                ) {
+                    continue;
+                }
+                if !conversation_has_messages(&connection, alert.conversation_id.as_str())?
+                    || conversation_has_sos_cancellation(
+                        &connection,
+                        alert.conversation_id.as_str(),
+                        alert.updated_at_ms,
+                    )?
+                {
+                    continue;
+                }
+            }
+            filtered.push(alert);
+        }
+        Ok(filtered)
+    }
+
+    pub(crate) fn latest_active_sos_alert_for_source(
+        &self,
+        source_hex: &str,
+    ) -> Result<Option<SosAlertRecord>, NodeError> {
+        let normalized = source_hex.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return Ok(None);
+        }
+        let connection = self.connect()?;
+        let raw: Option<String> = connection
+            .query_row(
+                "SELECT json FROM sos_alerts
+                 WHERE source_hex = ?1 AND active = 1
+                 ORDER BY updated_at_ms DESC, incident_id ASC
+                 LIMIT 1",
+                params![normalized],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| NodeError::IoError {})?;
+        raw.map(|value| deserialize_json(&value)).transpose()
     }
 
     pub fn upsert_sos_alert(
@@ -2012,6 +2499,51 @@ impl AppStateStore {
         Ok(())
     }
 
+    fn delete_sos_records_for_conversations_tx(
+        &self,
+        transaction: &Transaction<'_>,
+        conversation_ids: &[String],
+    ) -> Result<bool, NodeError> {
+        if conversation_ids.is_empty() {
+            return Ok(false);
+        }
+
+        let mut statement = transaction
+            .prepare("SELECT json FROM sos_alerts")
+            .map_err(|_| NodeError::IoError {})?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| NodeError::IoError {})?;
+        let mut records_to_delete = Vec::<(String, String)>::new();
+        for row in rows {
+            let alert: SosAlertRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+            let alert_conversation = normalize_message_peer_key(alert.conversation_id.as_str());
+            if conversation_ids.iter().any(|id| id == &alert_conversation) {
+                records_to_delete.push((alert.incident_id, alert.source_hex));
+            }
+        }
+        drop(statement);
+
+        records_to_delete.sort();
+        records_to_delete.dedup();
+        for (incident_id, source_hex) in &records_to_delete {
+            transaction
+                .execute(
+                    "DELETE FROM sos_locations WHERE incident_id = ?1 AND source_hex = ?2",
+                    params![incident_id, source_hex],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+            transaction
+                .execute(
+                    "DELETE FROM sos_alerts WHERE incident_id = ?1 AND source_hex = ?2",
+                    params![incident_id, source_hex],
+                )
+                .map_err(|_| NodeError::IoError {})?;
+        }
+
+        Ok(!records_to_delete.is_empty())
+    }
+
     fn bump_projection_revision_tx(
         &self,
         transaction: &Transaction<'_>,
@@ -2077,6 +2609,35 @@ fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, No
     serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
 }
 
+fn validate_plugin_storage_key(plugin_id: &str, key: &str) -> Result<(), NodeError> {
+    if plugin_id.trim().is_empty() || key.trim().is_empty() {
+        return Err(NodeError::InvalidConfig {});
+    }
+    Ok(())
+}
+
+fn announce_class_name(class: AnnounceClass) -> &'static str {
+    match class {
+        AnnounceClass::PeerApp {} => "PeerApp",
+        AnnounceClass::RchHubServer {} => "RchHubServer",
+        AnnounceClass::PropagationNode {} => "PropagationNode",
+        AnnounceClass::LxmfDelivery {} => "LxmfDelivery",
+        AnnounceClass::Other {} => "Other",
+    }
+}
+
+fn announce_class_from_name(value: &str) -> AnnounceClass {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "peerapp" | "peer_app" | "peer-app" => AnnounceClass::PeerApp {},
+        "rchhubserver" | "rch_hub_server" | "rch-hub-server" => AnnounceClass::RchHubServer {},
+        "propagationnode" | "propagation_node" | "propagation-node" => {
+            AnnounceClass::PropagationNode {}
+        }
+        "lxmfdelivery" | "lxmf_delivery" | "lxmf-delivery" => AnnounceClass::LxmfDelivery {},
+        _ => AnnounceClass::Other {},
+    }
+}
+
 pub(crate) fn canonicalize_chat_message(message: &MessageRecord) -> MessageRecord {
     canonicalize_chat_message_with_resolver(message, &ConversationPeerResolver::default())
 }
@@ -2116,6 +2677,60 @@ fn canonical_message_peer_key(message: &MessageRecord) -> String {
 
 fn normalize_message_peer_key(value: &str) -> String {
     value.trim().to_ascii_lowercase()
+}
+
+fn conversation_has_messages(
+    connection: &Connection,
+    conversation_id: &str,
+) -> Result<bool, NodeError> {
+    let normalized = normalize_message_peer_key(conversation_id);
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(1) FROM messages WHERE conversation_id = ?1 LIMIT 1",
+            params![normalized],
+            |row| row.get(0),
+        )
+        .map_err(|_| NodeError::IoError {})?;
+    Ok(count > 0)
+}
+
+fn conversation_has_sos_cancellation(
+    connection: &Connection,
+    conversation_id: &str,
+    since_ms: u64,
+) -> Result<bool, NodeError> {
+    let normalized = normalize_message_peer_key(conversation_id);
+    if normalized.is_empty() {
+        return Ok(false);
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT json FROM messages
+             WHERE conversation_id = ?1 AND updated_at_ms >= ?2
+             ORDER BY updated_at_ms DESC, message_id_hex ASC",
+        )
+        .map_err(|_| NodeError::IoError {})?;
+    let rows = statement
+        .query_map(params![normalized, since_ms as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| NodeError::IoError {})?;
+    for row in rows {
+        let message: MessageRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+        let detail = message.detail.as_deref().unwrap_or("").to_ascii_lowercase();
+        if detail.contains("sos:cancelled")
+            || matches!(
+                sos_kind_from_text(message.body_utf8.as_str()),
+                Some(crate::types::SosMessageKind::Cancelled {})
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn truncate_preview(value: &str) -> Option<String> {
@@ -2677,6 +3292,7 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Messages {} => "Messages",
         ProjectionScope::Telemetry {} => "Telemetry",
         ProjectionScope::Wearables {} => "Wearables",
+        ProjectionScope::Plugins {} => "Plugins",
         ProjectionScope::Sos {} => "Sos",
     }
 }
@@ -2971,15 +3587,18 @@ mod tests {
 
     use super::*;
     use crate::types::{
-        AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-        ChecklistCreateFromTemplateRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
-        ChecklistSettingsRecord, ChecklistStatusCounts, ChecklistSystemColumnKey,
-        ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
-        ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
-        ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch,
-        ChecklistUpdateRequest, ChecklistUserTaskStatus, HubMode, HubSettingsRecord,
-        MessageDirection, MessageMethod, MessageState, ProjectionScope, TelemetrySettingsRecord,
+        AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord,
+        ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
+        ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSettingsRecord,
+        ChecklistStatusCounts, ChecklistSystemColumnKey, ChecklistTaskCellSetRequest,
+        ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
+        ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
+        ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
+        ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
+        MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
+        TelemetrySettingsRecord,
     };
+    use serde_json::json;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -2993,6 +3612,136 @@ mod tests {
         path
     }
 
+    fn readiness_eam(
+        callsign: &str,
+        statuses: [&str; 6],
+        updated_at_ms: u64,
+        deleted_at_ms: Option<u64>,
+    ) -> EamProjectionRecord {
+        EamProjectionRecord {
+            callsign: callsign.to_string(),
+            group_name: "Yellow".to_string(),
+            security_status: statuses[0].to_string(),
+            capability_status: statuses[1].to_string(),
+            preparedness_status: statuses[2].to_string(),
+            medical_status: statuses[3].to_string(),
+            mobility_status: statuses[4].to_string(),
+            comms_status: statuses[5].to_string(),
+            notes: None,
+            updated_at_ms,
+            deleted_at_ms,
+            eam_uid: None,
+            team_member_uid: None,
+            team_uid: Some("team-yellow".to_string()),
+            reported_at: None,
+            reported_by: None,
+            overall_status: None,
+            confidence: None,
+            ttl_seconds: None,
+            source: None,
+            sync_state: None,
+            sync_error: None,
+            draft_created_at_ms: None,
+            last_synced_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn eam_readiness_score_bands_and_colors_match_dashboard_contract() {
+        assert_eq!(eam_status_score("Green"), 100);
+        assert_eq!(eam_status_score("Yellow"), 50);
+        assert_eq!(eam_status_score("Red"), 25);
+        assert_eq!(eam_status_score("Unknown"), 0);
+        assert_eq!(eam_status_score("Offline"), 0);
+
+        assert_eq!(readiness_band(75), "Green");
+        assert_eq!(readiness_band(74), "Yellow");
+        assert_eq!(readiness_band(50), "Yellow");
+        assert_eq!(readiness_band(49), "Orange");
+        assert_eq!(readiness_band(25), "Orange");
+        assert_eq!(readiness_band(24), "Red");
+
+        assert_eq!(readiness_ring_color(0), "#ff3648");
+        assert_eq!(readiness_ring_color(25), "#ff9f1c");
+        assert_eq!(readiness_ring_color(50), "#f5cc19");
+        assert_eq!(readiness_ring_color(75), "#16ce79");
+        assert_eq!(readiness_ring_color(100), "#3df58f");
+    }
+
+    #[test]
+    fn eam_readiness_summary_derives_per_message_scores_in_rust() {
+        let record = readiness_eam(
+            "Atlas",
+            ["Green", "Yellow", "Red", "Unknown", "Green", "Yellow"],
+            100,
+            None,
+        );
+
+        let summary = build_eam_readiness_summary(vec![record]);
+
+        assert_eq!(summary.active_total, 1);
+        assert_eq!(summary.messages.len(), 1);
+        assert_eq!(summary.messages[0].callsign, "Atlas");
+        assert_eq!(summary.messages[0].overall_score, 54);
+        assert_eq!(summary.messages[0].overall_band, "Yellow");
+        assert!(!summary.messages[0].overall_ring_color.is_empty());
+    }
+
+    #[test]
+    fn eam_readiness_summary_aggregates_active_records_and_excludes_deleted() {
+        let green = readiness_eam(
+            "Green-1",
+            ["Green", "Green", "Green", "Green", "Green", "Green"],
+            100,
+            None,
+        );
+        let mixed = readiness_eam(
+            "Mixed-1",
+            ["Red", "Yellow", "Unknown", "Green", "Yellow", "Red"],
+            200,
+            None,
+        );
+        let deleted = readiness_eam(
+            "Deleted-1",
+            ["Red", "Red", "Red", "Red", "Red", "Red"],
+            300,
+            Some(300),
+        );
+
+        let summary = build_eam_readiness_summary(vec![green, mixed, deleted]);
+
+        assert_eq!(summary.active_total, 2);
+        assert_eq!(summary.updated_at_ms, 300);
+        assert_eq!(summary.messages.len(), 2);
+        assert!(summary
+            .messages
+            .iter()
+            .all(|message| message.callsign != "Deleted-1"));
+        assert_eq!(summary.status_metrics[0].field, "securityStatus");
+        assert_eq!(summary.status_metrics[0].score, 63);
+        assert_eq!(summary.status_metrics[1].field, "capabilityStatus");
+        assert_eq!(summary.status_metrics[1].score, 75);
+        assert_eq!(summary.status_metrics[2].field, "preparednessStatus");
+        assert_eq!(summary.status_metrics[2].score, 50);
+        assert_eq!(summary.status_metrics[5].field, "commsStatus");
+        assert_eq!(summary.status_metrics[5].score, 63);
+    }
+
+    #[test]
+    fn eam_readiness_summary_returns_neutral_metrics_when_empty() {
+        let summary = build_eam_readiness_summary(Vec::new());
+
+        assert_eq!(summary.active_total, 0);
+        assert_eq!(summary.updated_at_ms, 0);
+        assert!(summary.messages.is_empty());
+        assert_eq!(summary.status_metrics.len(), 6);
+        for metric in summary.status_metrics {
+            assert_eq!(metric.score, 0);
+            assert_eq!(metric.band, "Red");
+            assert_eq!(metric.ring_color, "#ff3648");
+        }
+    }
+
     fn app_settings_with_due_step(default_task_due_step_minutes: u32) -> AppSettingsRecord {
         AppSettingsRecord {
             display_name: "Test Operator".to_string(),
@@ -3000,6 +3749,7 @@ mod tests {
             announce_capabilities: "R3AKT,EMergencyMessages".to_string(),
             tcp_clients: Vec::new(),
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 1800,
             telemetry: TelemetrySettingsRecord {
                 enabled: false,
@@ -3018,8 +3768,64 @@ mod tests {
             checklists: ChecklistSettingsRecord {
                 default_task_due_step_minutes,
             },
-            wearables: WearableSettingsRecord::default(),
+            wearables: crate::types::WearableSettingsRecord::default(),
+            plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
+            rnode: crate::types::RnodeSettingsRecord::default(),
         }
+    }
+
+    #[test]
+    fn plugin_storage_round_trips_across_store_reopen() {
+        let storage_dir = test_storage_dir("plugin-storage-round-trip");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        store
+            .set_plugin_storage_value("rem.plugin.example_status", "counter", &json!({"value": 3}))
+            .expect("write plugin storage");
+
+        let restarted =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("reopen store");
+
+        assert_eq!(
+            restarted
+                .get_plugin_storage_value("rem.plugin.example_status", "counter")
+                .expect("read plugin storage"),
+            Some(json!({"value": 3}))
+        );
+    }
+
+    #[test]
+    fn ignored_peer_destinations_persist_and_can_be_cleared() {
+        let storage_dir = test_storage_dir("ignored-peers");
+        let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+        let destinations = vec![
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        ];
+
+        store
+            .add_ignored_peer_destinations(destinations.as_slice())
+            .expect("add ignored peers");
+        store
+            .add_ignored_peer_destinations(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()])
+            .expect("dedupe ignored peer");
+
+        let restored = AppStateStore::new(storage_dir.to_str())
+            .expect("restored store")
+            .get_ignored_peer_destinations()
+            .expect("ignored peers");
+        assert_eq!(restored.len(), 2);
+        assert!(restored.contains(&"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()));
+        assert!(restored.contains(&"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()));
+
+        store
+            .remove_ignored_peer_destinations(&["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()])
+            .expect("remove ignored peer");
+        let remaining = store
+            .get_ignored_peer_destinations()
+            .expect("remaining ignored peers");
+        assert_eq!(remaining, vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
     }
 
     fn message(
@@ -3044,6 +3850,65 @@ mod tests {
             sent_at_ms: Some(updated_at_ms),
             received_at_ms: None,
             updated_at_ms,
+        }
+    }
+
+    fn announce(
+        destination_hex: &str,
+        display_name: Option<&str>,
+        received_at_ms: u64,
+    ) -> AnnounceRecord {
+        AnnounceRecord {
+            destination_hex: destination_hex.to_string(),
+            identity_hex: "11112222333344445555666677778888".to_string(),
+            destination_kind: "app".to_string(),
+            announce_class: AnnounceClass::PeerApp {},
+            app_data: "R3AKT,EMergencyMessages".to_string(),
+            display_name: display_name.map(str::to_string),
+            hops: 2,
+            interface_hex: "aabbccdd".to_string(),
+            received_at_ms,
+        }
+    }
+
+    fn sos_alert(
+        incident_id: &str,
+        source_hex: &str,
+        conversation_id: &str,
+        active: bool,
+        updated_at_ms: u64,
+    ) -> SosAlertRecord {
+        SosAlertRecord {
+            incident_id: incident_id.to_string(),
+            source_hex: source_hex.to_string(),
+            conversation_id: conversation_id.to_string(),
+            state: if active {
+                SosMessageKind::Active {}
+            } else {
+                SosMessageKind::Cancelled {}
+            },
+            active,
+            body_utf8: "SOS".to_string(),
+            lat: Some(44.6488),
+            lon: Some(-63.5752),
+            battery_percent: None,
+            audio_id: None,
+            message_id_hex: Some(format!("message-{incident_id}")),
+            received_at_ms: updated_at_ms,
+            updated_at_ms,
+        }
+    }
+
+    fn sos_location(incident_id: &str, source_hex: &str, recorded_at_ms: u64) -> SosLocationRecord {
+        SosLocationRecord {
+            incident_id: incident_id.to_string(),
+            source_hex: source_hex.to_string(),
+            lat: 44.6488,
+            lon: -63.5752,
+            alt: None,
+            accuracy: None,
+            battery_percent: None,
+            recorded_at_ms,
         }
     }
 
@@ -3203,6 +4068,65 @@ mod tests {
     }
 
     #[test]
+    fn latest_announce_is_one_row_per_destination_and_preserves_display_name() {
+        let storage_dir = test_storage_dir("latest-announce");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+
+        store
+            .upsert_announce(&announce(
+                "aaaabbbbccccddddeeeeffff00001111",
+                Some("Alpha Peer"),
+                1_000,
+            ))
+            .expect("insert announce");
+        store
+            .upsert_announce(&announce("aaaabbbbccccddddeeeeffff00001111", None, 2_000))
+            .expect("update announce");
+        store
+            .upsert_announce(&announce(
+                "aaaabbbbccccddddeeeeffff00001111",
+                Some("Stale Name"),
+                1_500,
+            ))
+            .expect("ignore older announce");
+
+        let announces = store.list_announces().expect("list announces");
+        assert_eq!(announces.len(), 1);
+        assert_eq!(
+            announces[0].destination_hex,
+            "aaaabbbbccccddddeeeeffff00001111"
+        );
+        assert_eq!(announces[0].received_at_ms, 2_000);
+        assert_eq!(announces[0].display_name.as_deref(), Some("Alpha Peer"));
+    }
+
+    #[test]
+    fn announces_are_available_after_store_restart() {
+        let storage_dir = test_storage_dir("restart-announces");
+        let storage_dir_str = storage_dir.to_string_lossy();
+        let store = AppStateStore::new(Some(storage_dir_str.as_ref())).expect("create store");
+        store
+            .upsert_announce(&announce(
+                "bbbbccccddddeeeeffff000011112222",
+                Some("Offline Peer"),
+                3_000,
+            ))
+            .expect("insert announce");
+        drop(store);
+
+        let restarted = AppStateStore::new(Some(storage_dir_str.as_ref())).expect("reopen store");
+        let announces = restarted.list_announces().expect("list announces");
+        assert_eq!(announces.len(), 1);
+        assert_eq!(
+            announces[0].destination_hex,
+            "bbbbccccddddeeeeffff000011112222"
+        );
+        assert_eq!(announces[0].display_name.as_deref(), Some("Offline Peer"));
+        assert_eq!(announces[0].received_at_ms, 3_000);
+    }
+
+    #[test]
     fn peer_identity_aliases_fold_existing_split_threads() {
         let storage_dir = test_storage_dir("identity-alias-thread");
         let store =
@@ -3315,6 +4239,131 @@ mod tests {
             .expect("list remaining messages");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id_hex, "delete-unrelated");
+    }
+
+    #[test]
+    fn active_sos_alert_requires_existing_conversation_messages() {
+        let storage_dir = test_storage_dir("sos-alert-orphan");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let alert = sos_alert(
+            "incident-orphan",
+            "source-orphan",
+            "orphan-thread",
+            true,
+            10,
+        );
+
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        assert!(store
+            .list_sos_alerts()
+            .expect("list orphan sos alerts")
+            .is_empty());
+
+        let message = message(
+            "sos-message",
+            "orphan-thread",
+            MessageDirection::Inbound {},
+            "LOCAL",
+            Some("orphan-thread"),
+            11,
+        );
+        store.upsert_message(&message).expect("persist sos message");
+        assert_eq!(
+            store
+                .list_sos_alerts()
+                .expect("list attached sos alerts")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn active_sos_alert_is_hidden_after_legacy_cancel_message() {
+        let storage_dir = test_storage_dir("sos-alert-legacy-cancel");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let active_message = message(
+            "sos-active-message",
+            "legacy-thread",
+            MessageDirection::Outbound {},
+            "legacy-thread",
+            Some("LOCAL"),
+            10,
+        );
+        let mut cancel_message = message(
+            "sos-cancel-message",
+            "legacy-thread",
+            MessageDirection::Outbound {},
+            "legacy-thread",
+            Some("LOCAL"),
+            12,
+        );
+        cancel_message.body_utf8 = "SOS Cancelled - I am safe.".to_string();
+        let alert = sos_alert("incident-legacy", "legacypeer", "legacy-thread", true, 11);
+
+        store
+            .upsert_message(&active_message)
+            .expect("persist active message");
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        assert_eq!(store.list_sos_alerts().expect("list active alert").len(), 1);
+
+        store
+            .upsert_message(&cancel_message)
+            .expect("persist cancel message");
+        assert!(store
+            .list_sos_alerts()
+            .expect("list after legacy cancel")
+            .is_empty());
+        assert_eq!(
+            store
+                .latest_active_sos_alert_for_source("legacypeer")
+                .expect("latest active")
+                .expect("active row remains for runtime reconciliation")
+                .incident_id,
+            "incident-legacy"
+        );
+    }
+
+    #[test]
+    fn delete_conversation_removes_sos_alert_and_locations() {
+        let storage_dir = test_storage_dir("sos-delete-conversation");
+        let store =
+            AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+        let message = message(
+            "sos-delete-message",
+            "sos-thread",
+            MessageDirection::Outbound {},
+            "sos-thread",
+            Some("LOCAL"),
+            20,
+        );
+        let alert = sos_alert("incident-delete", "sospeer", "sos-thread", true, 21);
+        let location = sos_location("incident-delete", "sospeer", 22);
+
+        store.upsert_message(&message).expect("persist sos message");
+        store.upsert_sos_alert(&alert).expect("persist sos alert");
+        store
+            .upsert_sos_location(&location)
+            .expect("persist sos location");
+        assert_eq!(store.list_sos_alerts().expect("list alerts").len(), 1);
+        assert_eq!(store.list_sos_locations().expect("list locations").len(), 1);
+
+        let invalidations = store
+            .delete_conversation_resolved("sos-thread", &ConversationPeerResolver::default())
+            .expect("delete sos conversation");
+
+        assert!(invalidations
+            .iter()
+            .any(|invalidation| matches!(invalidation.scope, ProjectionScope::Sos {})));
+        assert!(store
+            .list_sos_alerts()
+            .expect("list alerts after delete")
+            .is_empty());
+        assert!(store
+            .list_sos_locations()
+            .expect("list locations after delete")
+            .is_empty());
     }
 
     #[test]

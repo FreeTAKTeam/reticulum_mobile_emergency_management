@@ -1,13 +1,38 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
+import { computed, onMounted, reactive, ref, useTemplateRef, watch } from "vue";
+import { useRouter } from "vue-router";
 
+import type { PluginPermissionsRecord, TrustedPluginPublisherRecord } from "@reticulum/node-client";
+import PluginLxmfMessageLog from "../components/plugins/PluginLxmfMessageLog.vue";
+import PluginManagementCard from "../components/plugins/PluginManagementCard.vue";
+import PluginSettingsSection from "../components/plugins/PluginSettingsSection.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
+import {
+  loadPluginSettingsValues,
+  pluginSettingsSections,
+  savePluginSettingsValues,
+  type PluginSettingsAction,
+  type PluginSettingsValues,
+} from "../plugins/pluginSettings";
 import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
 import { useWearablesStore } from "../stores/wearablesStore";
+import { appVersion } from "../utils/appVersion";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
+import {
+  RNODE_PROFILE_SPECS,
+  normalizeRnodeSettings,
+  rnodeProfileSummary,
+} from "../utils/rnodeProfiles";
+import {
+  listPairedRnodeBluetoothDevices,
+  scanRnodeBleDevices,
+  pairRnodeBleDevice,
+  type RnodeBleDeviceRecord,
+} from "../services/rnodeBluetooth";
+import { requestRnodeBluetoothPermission } from "../services/setupPermissions";
 
 interface KnownTcpServerOption {
   name: string;
@@ -16,19 +41,19 @@ interface KnownTcpServerOption {
 }
 
 const nodeStore = useNodeStore();
+const router = useRouter();
 const telemetryStore = useTelemetryStore();
 const wearablesStore = useWearablesStore();
 const sosCardRef = useTemplateRef<{
   saveSettings: () => Promise<void>;
   hasUnsavedChanges: () => boolean;
 }>("sosCard");
-const appVersion = import.meta.env.VITE_APP_VERSION ?? "0.0.0";
 const savingSettings = ref(false);
 
 const aboutItems = [
   {
     label: "Application name",
-    value: "R.E.M. (Reticulum Emergency Messages)",
+    value: "R.E.M. (Reticulum Emergency Manager)",
   },
   {
     label: "Description",
@@ -48,11 +73,16 @@ const repositoryUrl = "https://github.com/FreeTAKTeam/reticulum_mobile_emergency
 const form = reactive({
   displayName: nodeStore.settings.displayName,
   clientMode: nodeStore.settings.clientMode,
-  autoConnectSaved: nodeStore.settings.autoConnectSaved,
   announceCapabilities: ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities),
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  transportNodeEnabled: nodeStore.settings.transportNodeEnabled,
+  rnodeEnabled: nodeStore.settings.rnode.enabled,
+  rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
+  rnodeDisplayName: nodeStore.settings.rnode.displayName,
+  rnodeRegion: nodeStore.settings.rnode.region,
+  rnodeProfile: nodeStore.settings.rnode.profile,
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
@@ -66,6 +96,11 @@ const form = reactive({
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
   hubApiKey: nodeStore.settings.hub.apiKey,
   hubRefreshIntervalSeconds: nodeStore.settings.hub.refreshIntervalSeconds,
+  pluginTrustedPublishers: formatTrustedPluginPublishers(
+    nodeStore.settings.pluginTrust.trustedPublishers,
+  ),
+  watchStatusServerEnabled: nodeStore.watchStatusServer.enabled,
+  watchStatusServerPort: nodeStore.watchStatusServer.port,
 });
 
 const importText = ref("");
@@ -73,13 +108,26 @@ const importMode = ref<"merge" | "replace">("merge");
 const importFeedback = ref("");
 const runtimeFeedback = ref("");
 const customTcpEndpoint = ref("");
+const rnodeScanFeedback = ref("");
+const rnodePairedLoading = ref(false);
+const rnodePairedDevices = ref<RnodeBleDeviceRecord[]>([]);
+const rnodeScanning = ref(false);
+const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
-
-onMounted(() => {
-  void wearablesStore.init();
-});
+const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
+
+function formatLogTimestamp(at: number): string {
+  if (!Number.isFinite(at) || at <= 0) {
+    return "--:--:--";
+  }
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
   TCP_COMMUNITY_SERVERS.map((server) => ({
@@ -104,11 +152,24 @@ const activePropagationNodeHex = computed(
   () => nodeStore.syncStatus.activePropagationNodeHex?.trim() ?? "",
 );
 
+const rchHubDirectoryDisabled = true;
+
 const runtimeSummary = computed(() => {
   const endpointCount = normalizedTcpClients.value.length;
   const endpointLabel = endpointCount === 1 ? "endpoint" : "endpoints";
-  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}`;
+  const rnodeLabel = form.rnodeEnabled ? ` | RNode ${form.rnodeProfile}` : "";
+  return `${form.clientMode} mode | ${endpointCount} TCP ${endpointLabel}${rnodeLabel}`;
 });
+
+const normalizedRnodeSettings = computed(() =>
+  normalizeRnodeSettings({
+    enabled: form.rnodeEnabled,
+    peripheralId: form.rnodePeripheralId,
+    displayName: form.rnodeDisplayName,
+    region: form.rnodeRegion,
+    profile: form.rnodeProfile,
+  }),
+);
 
 const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 
@@ -132,9 +193,64 @@ const hubSummary = computed(() => {
 });
 const hubRegistrationSummary = computed(() => nodeStore.hubRegistrationSummary);
 const peerListSummary = computed(() => `${nodeStore.savedPeers.length} saved peers`);
+
+function formatTrustedPluginPublishers(publishers: TrustedPluginPublisherRecord[]): string {
+  return publishers
+    .map((publisher) => `${publisher.publisher}=${publisher.publicKeyBase64}`)
+    .join("\n");
+}
+
+function parseTrustedPluginPublishers(value: string): TrustedPluginPublisherRecord[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0 || separatorIndex === line.length - 1) {
+        throw new Error("Trusted plug-in publishers must use Publisher=base64PublicKey lines.");
+      }
+      const publisher = line.slice(0, separatorIndex).trim();
+      const publicKeyBase64 = line.slice(separatorIndex + 1).trim();
+      if (!publisher || !publicKeyBase64) {
+        throw new Error("Trusted plug-in publisher names and keys are required.");
+      }
+      return { publisher, publicKeyBase64 };
+    });
+}
+
+const normalizedTrustedPluginPublishers = computed(() => {
+  try {
+    return parseTrustedPluginPublishers(form.pluginTrustedPublishers);
+  } catch {
+    return [];
+  }
+});
 const nodeControlSummary = computed(() =>
   nodeStore.status.running ? "Node is running" : "Node is stopped",
 );
+const pluginArchiveFileInput = useTemplateRef<HTMLInputElement>("pluginArchiveFileInput");
+const pluginSettingsValues = reactive<Record<string, PluginSettingsValues>>({});
+const pluginSettingsFeedback = ref("");
+const pluginSettingsRefreshing = ref(false);
+const pluginArchiveInstalling = ref(false);
+const pendingPluginActions = reactive<Record<string, boolean>>({});
+const pluginSettingsSummary = computed(() => {
+  const pluginCount = nodeStore.installedPlugins.length;
+  const configurableCount = pluginSettingsSections.value.length;
+  const trustedPublisherCount = normalizedTrustedPluginPublishers.value.length;
+  const trustSummary = trustedPublisherCount === 0
+    ? ""
+    : ` | ${trustedPublisherCount} trusted publisher${trustedPublisherCount === 1 ? "" : "s"}`;
+  if (pluginCount === 0) {
+    return configurableCount === 0
+      ? `No installed plug-ins${trustSummary}`
+      : `${configurableCount} configurable${trustSummary}`;
+  }
+  const enabledCount = nodeStore.installedPlugins.filter((plugin) => plugin.state !== "Disabled").length;
+  return `${enabledCount}/${pluginCount} enabled | ${configurableCount} configurable${trustSummary}`;
+});
+const recentPluginLxmfMessages = computed(() => nodeStore.pluginLxmfMessages.slice(0, 5));
 const activePropagationNodeLabel = computed(() => {
   if (!activePropagationNodeHex.value) {
     return "None";
@@ -203,6 +319,26 @@ const wearablePermissionText = computed(() =>
       : "Not requested",
 );
 
+const normalizedWatchStatusServerPort = computed(() => {
+  const parsed = Number(form.watchStatusServerPort);
+  return Number.isInteger(parsed) && parsed >= 1024 && parsed <= 65535 ? parsed : 29863;
+});
+
+const watchStatusServerSettingsChanged = computed(() =>
+  form.watchStatusServerEnabled !== nodeStore.watchStatusServer.enabled
+  || normalizedWatchStatusServerPort.value !== nodeStore.watchStatusServer.port,
+);
+
+const watchStatusServerSummary = computed(() => {
+  if (!form.watchStatusServerEnabled) {
+    return "Disabled";
+  }
+  if (nodeStore.watchStatusServer.bindError) {
+    return `Error | ${nodeStore.watchStatusServer.bindError}`;
+  }
+  return `${nodeStore.watchStatusServer.running ? "Running" : "Ready"} | ${nodeStore.watchStatusServer.currentUrl}`;
+});
+
 const persistedTcpClients = computed(() =>
   [
     ...new Set(
@@ -213,16 +349,22 @@ const persistedTcpClients = computed(() =>
   ],
 );
 
+function normalizeTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
+  const parsed = Number(value ?? 60);
+  return Number.isFinite(parsed) ? Math.max(1, parsed) : 60;
+}
+
 const hasMainSettingsChanges = computed(() =>
   form.displayName !== nodeStore.settings.displayName
   || form.clientMode !== nodeStore.settings.clientMode
-  || form.autoConnectSaved !== nodeStore.settings.autoConnectSaved
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
+  || form.transportNodeEnabled !== nodeStore.settings.transportNodeEnabled
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
+  || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
-  || Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60)))
+  || normalizeTelemetryPublishIntervalSeconds(form.telemetryPublishIntervalSeconds)
     !== nodeStore.settings.telemetry.publishIntervalSeconds
   || (
     form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
@@ -244,15 +386,39 @@ const hasMainSettingsChanges = computed(() =>
   || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
   || form.hubApiKey.trim() !== nodeStore.settings.hub.apiKey
   || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
-    !== nodeStore.settings.hub.refreshIntervalSeconds,
+    !== nodeStore.settings.hub.refreshIntervalSeconds
+  || form.pluginTrustedPublishers.trim()
+    !== formatTrustedPluginPublishers(nodeStore.settings.pluginTrust.trustedPublishers).trim()
+  || watchStatusServerSettingsChanged.value,
 );
 
 const hasUnsavedSettings = computed(
   () => hasMainSettingsChanges.value || Boolean(sosCardRef.value?.hasUnsavedChanges()),
 );
+const unsavedSettingsCount = computed(() =>
+  Number(hasMainSettingsChanges.value) + Number(Boolean(sosCardRef.value?.hasUnsavedChanges())),
+);
+
+watch(
+  pluginSettingsSections,
+  (sections) => {
+    const activePluginIds = new Set(sections.map((section) => section.pluginId));
+    for (const section of sections) {
+      if (!pluginSettingsValues[section.pluginId]) {
+        pluginSettingsValues[section.pluginId] = loadPluginSettingsValues(section);
+      }
+    }
+    for (const pluginId of Object.keys(pluginSettingsValues)) {
+      if (!activePluginIds.has(pluginId)) {
+        delete pluginSettingsValues[pluginId];
+      }
+    }
+  },
+  { immediate: true },
+);
 
 function normalizeTcpEndpoint(value: string): string | undefined {
-  const candidate = value.trim();
+  const candidate = value.trim().replace(/^tcp:\/\//i, "");
   if (!candidate) {
     return undefined;
   }
@@ -297,7 +463,7 @@ function toggleKnownTcpEndpoint(endpoint: string, selected: boolean): void {
 function addCustomTcpEndpoint(): void {
   const normalized = normalizeTcpEndpoint(customTcpEndpoint.value);
   if (!normalized) {
-    runtimeFeedback.value = "Invalid endpoint. Use host:port or [ipv6]:port.";
+    runtimeFeedback.value = "Invalid endpoint. Use host:port, tcp://host:port, or [ipv6]:port.";
     return;
   }
   const next = new Set(normalizedTcpClients.value);
@@ -311,10 +477,142 @@ function removeTcpEndpoint(endpoint: string): void {
   form.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
 }
 
+function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+  const parts = [device.address];
+  if (typeof device.rssi === "number") {
+    parts.push(`RSSI ${device.rssi}`);
+  }
+  parts.push(device.paired ? "Paired" : "Not paired");
+  return parts.join(" | ");
+}
+
+async function loadPairedRnodeDevices(): Promise<void> {
+  if (rnodePairedLoading.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodePairedLoading.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodePairedDevices.value = await listPairedRnodeBluetoothDevices();
+    if (rnodePairedDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No paired Bluetooth devices found on this Android phone.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodePairedLoading.value = false;
+  }
+}
+
+async function scanRnodeDevices(): Promise<void> {
+  if (rnodeScanning.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodeScanning.value = true;
+  rnodeScanFeedback.value = "";
+  try {
+    rnodeDevices.value = await scanRnodeBleDevices();
+    if (rnodeDevices.value.length === 0) {
+      rnodeScanFeedback.value = "No RNode BLE devices found.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodeScanning.value = false;
+  }
+}
+
+async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
+  const permission = await requestRnodeBluetoothPermission();
+  if (permission === "granted") {
+    return true;
+  }
+  rnodeScanFeedback.value = "Bluetooth permission is required for RNode device selection.";
+  return false;
+}
+
+async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
+  const deviceId = device.id || device.address;
+  if (!device.paired) {
+    try {
+      const pairResult = await pairRnodeBleDevice(deviceId);
+      if (!pairResult.paired && !pairResult.bondingStarted) {
+        rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
+        return;
+      }
+      if (!pairResult.paired) {
+        form.rnodeEnabled = false;
+        form.rnodePeripheralId = "";
+        rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
+        rnodeScanFeedback.value = "Bluetooth pairing started. Confirm the Android pairing prompt, then select the RNode from paired devices before saving.";
+        return;
+      }
+      rnodeScanFeedback.value = "RNode is already paired.";
+      form.rnodePeripheralId = pairResult.id || pairResult.address || deviceId;
+    } catch (error: unknown) {
+      rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+      return;
+    }
+  } else {
+    rnodeScanFeedback.value = "";
+    form.rnodePeripheralId = deviceId;
+  }
+  form.rnodeEnabled = true;
+  form.rnodeDisplayName = device.name || device.address;
+}
+
 function onHubCandidateSelected(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   form.hubIdentityHash = value.trim();
 }
+
+function syncWatchStatusServerForm(): void {
+  form.watchStatusServerEnabled = nodeStore.watchStatusServer.enabled;
+  form.watchStatusServerPort = nodeStore.watchStatusServer.port;
+}
+
+function syncSettingsForm(): void {
+  form.displayName = nodeStore.settings.displayName;
+  form.clientMode = nodeStore.settings.clientMode;
+  form.announceCapabilities = ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities);
+  form.announceIntervalSeconds = nodeStore.settings.announceIntervalSeconds;
+  form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.broadcast = nodeStore.settings.broadcast;
+  form.transportNodeEnabled = nodeStore.settings.transportNodeEnabled;
+  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
+  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
+  form.rnodeRegion = nodeStore.settings.rnode.region;
+  form.rnodeProfile = nodeStore.settings.rnode.profile;
+  form.telemetryEnabled = nodeStore.settings.telemetry.enabled;
+  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
+  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
+  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
+  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  form.wearablesEnabled = nodeStore.settings.wearables.enabled;
+  form.wearableStaleTimeoutSeconds = nodeStore.settings.wearables.staleTimeoutSeconds;
+  form.wearableMappings = nodeStore.settings.wearables.devices.map((device) => ({ ...device }));
+  form.hubMode = nodeStore.settings.hub.mode;
+  form.hubIdentityHash = nodeStore.settings.hub.identityHash;
+  form.hubApiBaseUrl = nodeStore.settings.hub.apiBaseUrl;
+  form.hubApiKey = nodeStore.settings.hub.apiKey;
+  form.hubRefreshIntervalSeconds = nodeStore.settings.hub.refreshIntervalSeconds;
+  syncWatchStatusServerForm();
+}
+
+onMounted(() => {
+  void wearablesStore.init();
+  void nodeStore.init()
+    .then(() => nodeStore.refreshWatchStatusServerSettings())
+    .then(syncSettingsForm)
+    .catch(() => undefined);
+});
 
 async function applySettings(): Promise<void> {
   if (!hasUnsavedSettings.value || savingSettings.value) {
@@ -323,19 +621,28 @@ async function applySettings(): Promise<void> {
   const previousDisplayName = nodeStore.settings.displayName;
   const previousHubMode = nodeStore.settings.hub.mode;
   const previousHubIdentityHash = nodeStore.settings.hub.identityHash;
+  const previousRnode = normalizeRnodeSettings(nodeStore.settings.rnode);
+  const nextRnode = normalizedRnodeSettings.value;
+  const rnodeChangedBeforeSave = JSON.stringify(previousRnode) !== JSON.stringify(nextRnode);
+  let rnodeApplyError = "";
+  let rnodeAppliedToRuntime = false;
   savingSettings.value = true;
   try {
-    nodeStore.updateSettings({
+    const trustedPublishers = parseTrustedPluginPublishers(form.pluginTrustedPublishers);
+    await nodeStore.updateSettings({
       displayName: form.displayName,
       clientMode: form.clientMode,
-      autoConnectSaved: form.autoConnectSaved,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
+      transportNodeEnabled: form.transportNodeEnabled,
+      rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
-        publishIntervalSeconds: Math.min(60, Math.max(5, Number(form.telemetryPublishIntervalSeconds || 60))),
+        publishIntervalSeconds: normalizeTelemetryPublishIntervalSeconds(
+          form.telemetryPublishIntervalSeconds,
+        ),
         accuracyThresholdMeters:
           form.telemetryAccuracyThresholdMeters === undefined || form.telemetryAccuracyThresholdMeters === null || form.telemetryAccuracyThresholdMeters === 0
             ? undefined
@@ -363,8 +670,29 @@ async function applySettings(): Promise<void> {
         apiKey: form.hubApiKey.trim(),
         refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
       },
+      pluginTrust: {
+        trustedPublishers,
+      },
     });
+    if (watchStatusServerSettingsChanged.value) {
+      await nodeStore.updateWatchStatusServerSettings({
+        enabled: form.watchStatusServerEnabled,
+        port: normalizedWatchStatusServerPort.value,
+      });
+    }
     await sosCardRef.value?.saveSettings();
+    if (rnodeChangedBeforeSave) {
+      try {
+        if (nodeStore.status.running) {
+          await nodeStore.restartNode();
+        } else {
+          await nodeStore.startNode();
+        }
+        rnodeAppliedToRuntime = true;
+      } catch (error: unknown) {
+        rnodeApplyError = error instanceof Error ? error.message : String(error);
+      }
+    }
   } catch (error: unknown) {
     runtimeFeedback.value = error instanceof Error ? error.message : String(error);
     return;
@@ -372,24 +700,20 @@ async function applySettings(): Promise<void> {
     savingSettings.value = false;
   }
 
-  form.displayName = nodeStore.settings.displayName;
-  form.announceCapabilities = nodeStore.settings.announceCapabilities;
-  form.tcpClients = [...nodeStore.settings.tcpClients];
-  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
-  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
-  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
-  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
-  form.wearablesEnabled = nodeStore.settings.wearables.enabled;
-  form.wearableStaleTimeoutSeconds = nodeStore.settings.wearables.staleTimeoutSeconds;
-  form.wearableMappings = nodeStore.settings.wearables.devices.map((device) => ({ ...device }));
-  runtimeFeedback.value =
-    nodeStore.settings.displayName !== previousDisplayName
+  syncSettingsForm();
+  const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
+  const hubRoutingChanged =
+    nodeStore.settings.hub.mode !== previousHubMode
+    || nodeStore.settings.hub.identityHash !== previousHubIdentityHash;
+  runtimeFeedback.value = rnodeApplyError
+    ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
+    : rnodeChangedBeforeSave && rnodeAppliedToRuntime
+      ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : nodeStore.nodeConfigRestartRequired
+        ? "Settings saved. Restart the app or node to apply updated interface configuration."
+      : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
-      : nodeStore.status.running
-          && (
-            nodeStore.settings.hub.mode !== previousHubMode
-            || nodeStore.settings.hub.identityHash !== previousHubIdentityHash
-          )
+      : nodeStore.status.running && hubRoutingChanged
         ? "Hub settings saved. Restart the node to apply updated hub routing."
       : "Settings saved.";
 }
@@ -461,7 +785,7 @@ async function exportPeerList(): Promise<void> {
   try {
     const payload = JSON.stringify(nodeStore.getSavedPeerList(), null, 2);
     await copyToClipboard(payload);
-    await shareText("PeerListV1", payload);
+    await shareText("Saved peer list", payload);
     importFeedback.value = "Peer list exported to clipboard/share.";
   } catch (error: unknown) {
     importFeedback.value = error instanceof Error ? error.message : String(error);
@@ -485,6 +809,22 @@ function openPeerListFilePicker(): void {
   peerListFileInput.value?.click();
 }
 
+async function runSetupWizard(): Promise<void> {
+  await router.push({
+    path: "/setup",
+    query: { source: "settings" },
+  });
+}
+
+function openNodeControlPanel(): void {
+  const panel = nodeControlPanel.value;
+  if (!panel) {
+    return;
+  }
+  panel.open = true;
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function onPeerListFileSelected(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -493,24 +833,206 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
   }
   importText.value = await file.text();
 }
+
+function updatePluginSettings(pluginId: string, values: PluginSettingsValues): void {
+  pluginSettingsValues[pluginId] = values;
+  pluginSettingsFeedback.value = "";
+}
+
+function savePluginSettings(pluginId: string): void {
+  const section = pluginSettingsSections.value.find((entry) => entry.pluginId === pluginId);
+  if (!section) {
+    pluginSettingsFeedback.value = "Plug-in settings section is no longer registered.";
+    return;
+  }
+  savePluginSettingsValues(pluginId, pluginSettingsValues[pluginId] ?? {});
+  pluginSettingsFeedback.value = `${section.name} settings saved.`;
+}
+
+async function runPluginSettingsAction(
+  pluginId: string,
+  action: PluginSettingsAction,
+): Promise<void> {
+  const values = pluginSettingsValues[pluginId] ?? {};
+  const destinationHex = String(values[action.destinationField] ?? "").trim();
+  const bodyUtf8 = String(values[action.bodyField] ?? "").trim();
+  const payload = Object.fromEntries(
+    Object.entries(action.payloadFields).map(([payloadKey, fieldId]) => [
+      payloadKey,
+      values[fieldId],
+    ]),
+  );
+  await withPluginAction(pluginId, action.id, async () => {
+    await nodeStore.sendPluginLxmf({
+      pluginId,
+      destinationHex,
+      messageName: action.messageName,
+      payload,
+      bodyUtf8,
+      title: action.label,
+      sendMode: "Auto",
+    });
+    pluginSettingsFeedback.value = `${action.label} sent.`;
+  });
+}
+
+function openPluginArchiveFilePicker(): void {
+  pluginArchiveFileInput.value?.click();
+}
+
+async function onPluginArchiveSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) {
+    return;
+  }
+  if (!file.name.endsWith(".remplugin")) {
+    pluginSettingsFeedback.value = "Select a .remplugin archive.";
+    return;
+  }
+  if (pluginArchiveInstalling.value) {
+    return;
+  }
+  pluginArchiveInstalling.value = true;
+  pluginSettingsFeedback.value = "";
+  try {
+    const archiveBytes = new Uint8Array(await file.arrayBuffer());
+    await nodeStore.installPluginArchive(file.name, archiveBytes);
+    pluginSettingsFeedback.value = `${file.name} installed disabled by default.`;
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    pluginArchiveInstalling.value = false;
+  }
+}
+
+function pluginActionKey(pluginId: string, action: string): string {
+  return `${pluginId}:${action}`;
+}
+
+function isPluginActionPending(pluginId: string): boolean {
+  return Object.entries(pendingPluginActions).some(
+    ([key, pending]) => pending && key.startsWith(`${pluginId}:`),
+  );
+}
+
+async function withPluginAction(
+  pluginId: string,
+  action: string,
+  handler: () => Promise<void>,
+): Promise<void> {
+  const key = pluginActionKey(pluginId, action);
+  if (pendingPluginActions[key]) {
+    return;
+  }
+  pendingPluginActions[key] = true;
+  pluginSettingsFeedback.value = "";
+  try {
+    await handler();
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    delete pendingPluginActions[key];
+  }
+}
+
+async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+  await withPluginAction(pluginId, "enabled", async () => {
+    await nodeStore.setPluginEnabled(pluginId, enabled);
+    pluginSettingsFeedback.value = `Plug-in ${enabled ? "enabled" : "disabled"}.`;
+  });
+}
+
+async function grantPluginPermissions(
+  pluginId: string,
+  permissions: PluginPermissionsRecord,
+): Promise<void> {
+  await withPluginAction(pluginId, "permissions", async () => {
+    await nodeStore.grantPluginPermissions(pluginId, permissions);
+    pluginSettingsFeedback.value = "Plug-in permissions updated.";
+  });
+}
+
+async function refreshPluginSettings(): Promise<void> {
+  if (pluginSettingsRefreshing.value) {
+    return;
+  }
+  pluginSettingsRefreshing.value = true;
+  try {
+    await nodeStore.refreshPluginsProjection();
+    pluginSettingsFeedback.value = "Plug-in catalog refreshed.";
+  } catch (error: unknown) {
+    pluginSettingsFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    pluginSettingsRefreshing.value = false;
+  }
+}
 </script>
 
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Settings</h1>
-        <p>Node runtime, saved peers, and directory source controls.</p>
-      </div>
       <div class="header-actions">
-        <span class="badge">{{ nodeStore.status.running ? "Node Active" : "Node Offline" }}</span>
-        <button type="button" :disabled="!hasUnsavedSettings || savingSettings" @click="applySettings">
-          Save
+        <span class="settings-chip unsaved-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 4h6" />
+            <path d="M9 4a2 2 0 0 0-2 2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2a2 2 0 0 0-2-2" />
+            <path d="M8 11h8" />
+            <path d="M8 15h6" />
+          </svg>
+          <span>Unsaved: {{ unsavedSettingsCount }}</span>
+        </span>
+        <button
+          type="button"
+          class="settings-chip node-control-chip"
+          aria-label="Open Node Control"
+          @click="openNodeControlPanel"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+          </svg>
+          <span>Node Control</span>
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m7 10 5 5 5-5" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="settings-chip setup-chip"
+          aria-label="Run setup wizard"
+          @click="runSetupWizard"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 3v5" />
+            <path d="M12 16v5" />
+            <path d="M4 12h5" />
+            <path d="M15 12h5" />
+            <path d="M7.8 7.8l2.2 2.2" />
+            <path d="M14 14l2.2 2.2" />
+            <path d="M16.2 7.8 14 10" />
+            <path d="M10 14l-2.2 2.2" />
+          </svg>
+          <span>Setup Wizard</span>
+        </button>
+        <button
+          type="button"
+          class="settings-save"
+          :disabled="!hasUnsavedSettings || savingSettings"
+          @click="applySettings"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 4h12l2 2v14H5V4Z" />
+            <path d="M8 4v6h8V4" />
+            <path d="M8 20v-6h8v6" />
+          </svg>
+          <span>{{ savingSettings ? "Saving" : "Save" }}</span>
         </button>
       </div>
     </header>
 
-    <details class="panel fold-panel">
+    <details ref="nodeControlPanel" class="panel fold-panel">
       <summary class="panel-summary">
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
@@ -521,7 +1043,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
               <path d="M9 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" transform="translate(0 2)" />
             </svg>
           </span>
-          <h2>Runtime</h2>
+          <h2>Node Config</h2>
           <p>{{ runtimeSummary }}</p>
         </div>
         <span class="chevron" aria-hidden="true">&#9662;</span>
@@ -552,62 +1074,150 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             <input v-model.number="form.announceIntervalSeconds" type="number" min="5" />
           </label>
           <label class="checkbox">
-            <input v-model="form.autoConnectSaved" type="checkbox" />
-            Auto connect saved peers on startup
-          </label>
-          <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />
             Broadcast enabled
           </label>
-        </div>
-
-        <p class="section-note">
-          TCP interfaces: choose from known community servers (Columba list) or add custom
-          host:port endpoints.
-        </p>
-
-        <div class="server-list">
-          <label
-            v-for="server in knownTcpServers"
-            :key="server.endpoint"
-            class="server-option"
-          >
-            <input
-              type="checkbox"
-              :checked="selectedTcpEndpointSet.has(server.endpoint)"
-              @change="
-                toggleKnownTcpEndpoint(
-                  server.endpoint,
-                  ($event.target as HTMLInputElement).checked,
-                )
-              "
-            />
-            <div class="server-option-body">
-              <p class="server-name">{{ server.name }}</p>
-              <p class="server-endpoint">{{ server.endpoint }}</p>
-            </div>
-            <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
+          <label class="checkbox">
+            <input v-model="form.transportNodeEnabled" type="checkbox" />
+            Transport node forwarding
           </label>
         </div>
 
-        <div class="tcp-custom-row">
-          <input
-            v-model="customTcpEndpoint"
-            type="text"
-            placeholder="Add custom endpoint (host:port)"
-          />
-          <button type="button" @click="addCustomTcpEndpoint">Add</button>
-        </div>
+        <section class="config-section" aria-labelledby="tcp-interfaces-heading">
+          <div class="config-section-header">
+            <h3 id="tcp-interfaces-heading">TCP Interfaces</h3>
+            <p>Known community servers and custom host:port endpoints.</p>
+          </div>
 
-        <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
-          <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
-            <span>{{ endpoint }}</span>
-            <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
-              Remove
+          <div class="server-list">
+            <label
+              v-for="server in knownTcpServers"
+              :key="server.endpoint"
+              class="server-option"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedTcpEndpointSet.has(server.endpoint)"
+                @change="
+                  toggleKnownTcpEndpoint(
+                    server.endpoint,
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />
+              <div class="server-option-body">
+                <p class="server-name">{{ server.name }}</p>
+                <p class="server-endpoint">{{ server.endpoint }}</p>
+              </div>
+              <span v-if="server.isBootstrap" class="bootstrap-badge">Bootstrap</span>
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
+            <input
+              v-model="customTcpEndpoint"
+              type="text"
+              placeholder="Add custom endpoint (host:port or tcp://host:port)"
+            />
+            <button type="button" @click="addCustomTcpEndpoint">Add</button>
+          </div>
+
+          <div v-if="normalizedTcpClients.length > 0" class="active-endpoints">
+            <article v-for="endpoint in normalizedTcpClients" :key="endpoint" class="active-endpoint">
+              <span>{{ endpoint }}</span>
+              <button type="button" class="inline-remove" @click="removeTcpEndpoint(endpoint)">
+                Remove
+              </button>
+            </article>
+          </div>
+          <p v-else class="section-note">No TCP endpoints configured.</p>
+        </section>
+
+        <section class="config-section" aria-labelledby="lora-interface-heading">
+          <div class="config-section-header">
+            <h3 id="lora-interface-heading">LoRa / RNode</h3>
+            <p>Paired Android Bluetooth device and REM radio profile.</p>
+          </div>
+
+          <div class="grid">
+            <label class="checkbox">
+              <input v-model="form.rnodeEnabled" type="checkbox" />
+              Enable RNode Bluetooth LoRa
+            </label>
+            <label>
+              RNode device id
+              <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
+            </label>
+            <label>
+              RNode display name
+              <input v-model="form.rnodeDisplayName" type="text" placeholder="Optional label" />
+            </label>
+            <label>
+              Region
+              <select v-model="form.rnodeRegion">
+                <option value="US915">US915</option>
+                <option value="EU868">EU868</option>
+              </select>
+            </label>
+            <label>
+              REM LoRa profile
+              <select v-model="form.rnodeProfile">
+                <option v-for="profile in RNODE_PROFILE_SPECS" :key="profile.id" :value="profile.id">
+                  {{ profile.id }} - {{ profile.label }}
+                </option>
+              </select>
+            </label>
+            <label>
+              Reticulum syntax
+              <input :value="rnodeProfileSummary(form.rnodeProfile)" class="readonly-input" type="text" readonly />
+            </label>
+          </div>
+
+          <div class="tcp-custom-row">
+            <button type="button" :disabled="rnodePairedLoading" @click="loadPairedRnodeDevices">
+              {{ rnodePairedLoading ? "Loading paired" : "Show paired Bluetooth" }}
             </button>
-          </article>
-        </div>
-        <p v-else class="section-note">No TCP endpoints configured.</p>
+            <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
+              {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+            </button>
+          </div>
+          <div v-if="rnodePairedDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodePairedDevices"
+              :key="`paired-${device.id}`"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">Paired</span>
+            </button>
+          </div>
+          <div v-if="rnodeDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodeDevices"
+              :key="device.id"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.name || device.address }}</p>
+                <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">RNode</span>
+            </button>
+          </div>
+          <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
+        </section>
+
+        <p class="section-note">
+          Save TCP or LoRa changes, then restart REM before validating interface traffic.
+          When TCP and LoRa are both active, Reticulum selects the route.
+        </p>
 
         <div class="grid propagation-grid">
           <label>
@@ -627,6 +1237,63 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
     <details class="panel fold-panel">
       <summary class="panel-summary">
         <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
+              />
+              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
+            </svg>
+          </span>
+          <h2>Telemetry</h2>
+          <p>{{ telemetrySummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <div class="grid">
+          <label class="checkbox">
+            <input v-model="form.telemetryEnabled" type="checkbox" />
+            Enable telemetry sharing
+          </label>
+          <label>
+            Telemetry publish interval (seconds)
+            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry accuracy threshold (meters, optional)
+            <input
+              v-model.number="form.telemetryAccuracyThresholdMeters"
+              type="number"
+              min="0"
+              placeholder="Unset"
+            />
+          </label>
+          <label>
+            Telemetry goes stale after (minutes)
+            <input v-model.number="form.telemetryStaleAfterMinutes" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry disappears after (minutes)
+            <input v-model.number="form.telemetryExpireAfterMinutes" type="number" min="1" />
+          </label>
+          <label>
+            Telemetry status
+            <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
+          </label>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M19 14c1.5-1.5 2-4 0-6-2.2-2.2-5-1-6 1-1-2-3.8-3.2-6-1-2 2-1.5 4.5 0 6l6 6 6-6Z" />
+              <path d="M7 13h3l1.5-3 2 5 1.5-2h2" />
+            </svg>
+          </span>
           <h2>Wearables</h2>
           <p>{{ wearableSummary }}</p>
         </div>
@@ -676,7 +1343,11 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </article>
         </div>
         <div v-if="wearablesStore.wearableStatus.length" class="stack-list">
-          <article v-for="status in wearablesStore.wearableStatus" :key="`${status.deviceId}:${status.sensorType}`" class="compact-card">
+          <article
+            v-for="status in wearablesStore.wearableStatus"
+            :key="`${status.deviceId}:${status.sensorType}`"
+            class="compact-card"
+          >
             <div>
               <strong>{{ status.deviceName || "Generic BLE Heart Rate Device" }}</strong>
               <span>{{ status.value }} {{ status.unit || "bpm" }} | {{ status.status }}</span>
@@ -693,47 +1364,39 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="summary-copy">
           <span class="summary-icon" aria-hidden="true">
             <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M12 20.5s5-4.7 5-9.1a5 5 0 1 0-10 0c0 4.4 5 9.1 5 9.1Z"
-              />
-              <path d="M12 13.2a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8Z" />
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M4 17h10" />
+              <circle cx="18" cy="17" r="2" />
             </svg>
           </span>
-          <h2>Telemetry</h2>
-          <p>{{ telemetrySummary }}</p>
+          <h2>Watch Status Server</h2>
+          <p>{{ watchStatusServerSummary }}</p>
         </div>
         <span class="chevron" aria-hidden="true">&#9662;</span>
       </summary>
       <div class="panel-body">
         <div class="grid">
           <label class="checkbox">
-            <input v-model="form.telemetryEnabled" type="checkbox" />
-            Enable telemetry sharing
+            <input v-model="form.watchStatusServerEnabled" type="checkbox" />
+            Enable watch status server
           </label>
           <label>
-            Telemetry publish interval (seconds)
-            <input v-model.number="form.telemetryPublishIntervalSeconds" type="number" min="5" max="60" />
+            Port
+            <input v-model.number="form.watchStatusServerPort" type="number" min="1024" max="65535" />
           </label>
           <label>
-            Telemetry accuracy threshold (meters, optional)
+            Endpoint URL
+            <input :value="nodeStore.watchStatusServer.currentUrl" class="readonly-input" type="text" readonly />
+          </label>
+          <label>
+            Bind status
             <input
-              v-model.number="form.telemetryAccuracyThresholdMeters"
-              type="number"
-              min="0"
-              placeholder="Unset"
+              :value="nodeStore.watchStatusServer.bindError || (nodeStore.watchStatusServer.running ? 'Listening' : 'Idle')"
+              class="readonly-input"
+              type="text"
+              readonly
             />
-          </label>
-          <label>
-            Telemetry goes stale after (minutes)
-            <input v-model.number="form.telemetryStaleAfterMinutes" type="number" min="1" />
-          </label>
-          <label>
-            Telemetry disappears after (minutes)
-            <input v-model.number="form.telemetryExpireAfterMinutes" type="number" min="1" />
-          </label>
-          <label>
-            Telemetry status
-            <input :value="telemetryStatusText" class="readonly-input" type="text" readonly />
           </label>
         </div>
       </div>
@@ -765,7 +1428,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="grid">
           <label>
             Mode
-            <select v-model="form.hubMode">
+            <select v-model="form.hubMode" :disabled="rchHubDirectoryDisabled">
               <option value="Autonomous">Autonomous</option>
               <option value="SemiAutonomous">Semi-autonomous</option>
               <option value="Connected">Connected</option>
@@ -773,7 +1436,11 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub from announces (RCH servers)
-            <select :value="form.hubIdentityHash" @change="onHubCandidateSelected">
+            <select
+              :value="form.hubIdentityHash"
+              :disabled="rchHubDirectoryDisabled"
+              @change="onHubCandidateSelected"
+            >
               <option value="">Manual / none</option>
               <option
                 v-for="candidate in hubAnnounceCandidates"
@@ -786,11 +1453,16 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           </label>
           <label>
             Hub identity hash
-            <input v-model="form.hubIdentityHash" type="text" />
+            <input v-model="form.hubIdentityHash" type="text" :disabled="rchHubDirectoryDisabled" />
           </label>
           <label>
             Refresh interval seconds
-            <input v-model.number="form.hubRefreshIntervalSeconds" type="number" min="30" />
+            <input
+              v-model.number="form.hubRefreshIntervalSeconds"
+              type="number"
+              min="30"
+              :disabled="rchHubDirectoryDisabled"
+            />
           </label>
         </div>
 
@@ -804,18 +1476,21 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <div class="actions">
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub refresh requested.')"
           >
             Refresh Now
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.bootstrapHubRegistration(true), 'Hub registration requested.')"
           >
             Register Team Member
           </button>
           <button
             type="button"
+            :disabled="rchHubDirectoryDisabled"
             @click="runNodeAction(() => nodeStore.forgetHubRegistryLinkage(), 'Hub registration cleared.')"
           >
             Clear Registration
@@ -847,7 +1522,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
       </summary>
       <div class="panel-body">
         <p class="section-note">
-          Peer List Exchange (PeerListV1) lets you export or import saved peer lists.
+          Saved peer list JSON lets you export or import saved peers.
         </p>
         <input
           ref="peerListFileInput"
@@ -862,7 +1537,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
         <label class="full">
           Import JSON
-          <textarea v-model="importText" rows="7" placeholder="Paste PeerListV1 JSON here"></textarea>
+          <textarea v-model="importText" rows="7" placeholder="Paste saved peer list JSON here"></textarea>
         </label>
         <div class="actions">
           <label class="radio">
@@ -880,6 +1555,101 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
     </details>
 
     <SosEmergencyCard ref="sosCard" />
+
+    <details class="panel fold-panel">
+      <summary class="panel-summary">
+        <div class="summary-copy">
+          <span class="summary-icon" aria-hidden="true">
+            <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+              <path d="M8 8h8" />
+              <path d="M8 12h5" />
+              <path d="M5 4h14v16H5z" />
+              <path d="M16.5 15.5h2" />
+              <path d="M17.5 14.5v2" />
+            </svg>
+          </span>
+          <h2>Plugin</h2>
+          <p>{{ pluginSettingsSummary }}</p>
+        </div>
+        <span class="chevron" aria-hidden="true">&#9662;</span>
+      </summary>
+      <div class="panel-body">
+        <p class="section-note">
+          Installed plug-ins can be enabled, granted declared permissions, and configured here.
+        </p>
+        <label class="full">
+          Trusted publishers
+          <textarea
+            v-model="form.pluginTrustedPublishers"
+            rows="4"
+            placeholder="FreeTAKTeam=base64-ed25519-public-key"
+          ></textarea>
+        </label>
+        <input
+          ref="pluginArchiveFileInput"
+          type="file"
+          accept=".remplugin,application/zip"
+          class="hidden-input"
+          @change="onPluginArchiveSelected"
+        />
+        <div class="actions">
+          <button
+            type="button"
+            :disabled="pluginArchiveInstalling"
+            @click="openPluginArchiveFilePicker"
+          >
+            {{ pluginArchiveInstalling ? "Installing" : "Install .remplugin" }}
+          </button>
+          <button
+            type="button"
+            :disabled="pluginSettingsRefreshing"
+            @click="refreshPluginSettings"
+          >
+            {{ pluginSettingsRefreshing ? "Refreshing" : "Refresh Plug-ins" }}
+          </button>
+        </div>
+        <p
+          v-for="diagnostic in nodeStore.pluginCatalogErrors"
+          :key="`${diagnostic.path}:${diagnostic.message}`"
+          class="feedback"
+        >
+          {{ diagnostic.path ? `${diagnostic.path}: ` : "" }}{{ diagnostic.message }}
+        </p>
+        <div v-if="nodeStore.installedPlugins.length > 0" class="plugin-settings-list">
+          <PluginManagementCard
+            v-for="plugin in nodeStore.installedPlugins"
+            :key="plugin.id"
+            :plugin="plugin"
+            :pending="isPluginActionPending(plugin.id)"
+            @set-enabled="setPluginEnabled"
+            @grant-permissions="grantPluginPermissions"
+          />
+        </div>
+        <div v-if="pluginSettingsSections.length > 0" class="plugin-settings-list plugin-config-list">
+          <PluginSettingsSection
+            v-for="section in pluginSettingsSections"
+            :key="section.pluginId"
+            :section="section"
+            :values="pluginSettingsValues[section.pluginId] ?? {}"
+            :pending="isPluginActionPending(section.pluginId)"
+            @update="updatePluginSettings"
+            @save="savePluginSettings"
+            @run-action="runPluginSettingsAction"
+          />
+        </div>
+        <PluginLxmfMessageLog
+          v-if="recentPluginLxmfMessages.length > 0"
+          :messages="recentPluginLxmfMessages"
+        />
+        <p
+          v-if="nodeStore.installedPlugins.length === 0 && pluginSettingsSections.length === 0"
+          class="section-note"
+        >
+          No plug-ins are installed or enabled for configuration yet.
+        </p>
+        <p v-if="pluginSettingsFeedback" class="feedback">{{ pluginSettingsFeedback }}</p>
+      </div>
+    </details>
 
     <details class="panel fold-panel">
       <summary class="panel-summary">
@@ -935,7 +1705,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
         <div class="log-list">
           <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
-            {{ entry.level }} | {{ entry.message }}
+            <time :datetime="new Date(entry.at).toISOString()">{{ formatLogTimestamp(entry.at) }}</time>
+            <span>{{ entry.level }}</span>
+            <span>{{ entry.message }}</span>
           </p>
         </div>
       </div>
@@ -988,14 +1760,14 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: space-between;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.72rem;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr) minmax(0, 1.12fr) minmax(6.8rem, 0.9fr);
 }
 
 h1 {
@@ -1022,6 +1794,93 @@ h1 {
   letter-spacing: 0.08em;
   padding: 0.42rem 0.75rem;
   text-transform: uppercase;
+}
+
+.settings-chip,
+.settings-save {
+  align-items: center;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 18px rgb(33 153 255 / 7%);
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.78rem, 1.9vw, 0.96rem);
+  font-weight: 700;
+  gap: 0.54rem;
+  justify-content: center;
+  min-height: 2.95rem;
+  min-width: 0;
+  padding: 0.46rem 0.72rem;
+  text-transform: none;
+}
+
+.settings-chip svg,
+.settings-save svg {
+  flex: 0 0 auto;
+  height: 1.14rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.14rem;
+}
+
+.settings-chip span,
+.settings-save span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unsaved-chip {
+  background: rgb(45 27 4 / 82%);
+  border: 1px solid rgb(251 161 38 / 74%);
+  color: #ffb13d;
+}
+
+.node-control-chip {
+  --btn-bg: rgb(7 25 54 / 84%);
+  --btn-border: rgb(73 173 255 / 52%);
+  --btn-color: #a7c7ee;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 52%);
+  color: #a7c7ee;
+  cursor: pointer;
+}
+
+.setup-chip {
+  --btn-bg: rgb(8 39 74 / 84%);
+  --btn-border: rgb(92 205 255 / 50%);
+  --btn-color: #8ee6ff;
+  background: rgb(8 39 74 / 84%);
+  border: 1px solid rgb(92 205 255 / 50%);
+  color: #8ee6ff;
+  cursor: pointer;
+}
+
+.node-control-chip .chevron {
+  margin-left: auto;
+}
+
+.settings-save {
+  --btn-bg: linear-gradient(180deg, rgb(31 118 225 / 88%), rgb(17 72 167 / 92%));
+  --btn-border: rgb(73 173 255 / 66%);
+  --btn-color: #e3f5ff;
+  background: linear-gradient(180deg, rgb(31 118 225 / 88%), rgb(17 72 167 / 92%));
+  border: 1px solid rgb(73 173 255 / 66%);
+  color: #e3f5ff;
+  cursor: pointer;
+}
+
+.settings-save:disabled {
+  background: linear-gradient(180deg, rgb(33 111 214 / 55%), rgb(17 72 167 / 56%));
+  border-color: rgb(73 173 255 / 42%);
+  color: rgb(184 215 244 / 56%);
+  cursor: not-allowed;
+  opacity: 1;
+  transform: none;
 }
 
 .panel {
@@ -1116,6 +1975,35 @@ h1 {
   margin: 0.65rem 0 0.8rem;
 }
 
+.config-section {
+  border-top: 1px solid rgb(80 125 190 / 36%);
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+}
+
+.config-section-header {
+  border-left: 3px solid rgb(93 213 255 / 72%);
+  display: grid;
+  gap: 0.18rem;
+  padding-left: 0.62rem;
+}
+
+.config-section-header h3 {
+  color: #d9efff;
+  font-family: var(--font-headline);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.config-section-header p {
+  color: #90aad4;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
 .grid {
   display: grid;
   gap: 0.6rem;
@@ -1187,6 +2075,13 @@ textarea {
   padding: 0.55rem 0.65rem;
 }
 
+.device-option {
+  color: inherit;
+  grid-template-columns: 1fr auto;
+  text-align: left;
+  width: 100%;
+}
+
 .server-option-body {
   display: grid;
   gap: 0.1rem;
@@ -1237,6 +2132,15 @@ textarea {
 .active-endpoints {
   display: grid;
   gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+
+.plugin-settings-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.plugin-config-list {
   margin-top: 0.65rem;
 }
 
@@ -1303,48 +2207,6 @@ button:disabled {
   margin: 0.58rem 0 0;
 }
 
-.action-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.7rem;
-}
-
-.stack-list {
-  display: grid;
-  gap: 0.55rem;
-  margin-top: 0.7rem;
-}
-
-.compact-card {
-  align-items: end;
-  background: rgb(7 20 44 / 72%);
-  border: 1px solid rgb(67 106 165 / 30%);
-  border-radius: 8px;
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: minmax(0, 1.2fr) minmax(12rem, 1fr) auto;
-  padding: 0.62rem 0.72rem;
-}
-
-.compact-card strong,
-.compact-card span,
-.compact-card small {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.compact-card strong {
-  color: #d5eaff;
-  font-family: var(--font-ui);
-}
-
-.compact-card span,
-.compact-card small {
-  color: #96afd5;
-  font-family: var(--font-body);
-}
-
 .hidden-input {
   display: none;
 }
@@ -1361,10 +2223,21 @@ button:disabled {
 }
 
 .log {
+  align-items: baseline;
   color: #88a4d0;
+  display: grid;
   font-family: var(--font-body);
+  gap: 0.4rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
   margin: 0.28rem 0 0;
   overflow-wrap: anywhere;
+}
+
+.log time,
+.log span:first-of-type {
+  color: #5de7ff;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
 }
 
 .about-list {
@@ -1409,14 +2282,26 @@ button:disabled {
 
 @media (max-width: 760px) {
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.48rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-chip,
+  .settings-save {
+    font-size: 0.72rem;
+    gap: 0.34rem;
+    min-height: 2.62rem;
+    padding-inline: 0.42rem;
+  }
+
+  .settings-chip svg,
+  .settings-save svg {
+    height: 0.98rem;
+    width: 0.98rem;
   }
 
   .server-option {
@@ -1426,10 +2311,6 @@ button:disabled {
   .bootstrap-badge {
     justify-self: start;
     margin-left: 1.55rem;
-  }
-
-  .compact-card {
-    grid-template-columns: 1fr;
   }
 }
 </style>

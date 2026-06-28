@@ -47,6 +47,7 @@ Treat these as generated or disposable unless the task explicitly targets them:
 - `tmp/`
 - `apps/tmp-playwright-ui.err`
 - `apps/mobile/tmp-playwright-ui.err`
+- `apps/mobile/tmp-playwright-ui.out`
 - `apps/mobile/android/app/build/`
 - `apps/mobile/android/app/src/main/jniLibs/`
 - `apps/mobile/android/uniffi/`
@@ -121,11 +122,13 @@ Run the narrowest command set that proves the change:
 - Builds:
   - `npm run web:build`
   - `npm run mobile:build`
+  - `npm run node-client:build`
   - `npm --workspace packages/node-client run build`
 - Capacitor native workflow:
   - `npm --workspace apps/mobile run sync`
   - `npm --workspace apps/mobile run android`
   - `npm --workspace apps/mobile run ios`
+  - Current project release work does not target iOS compilation. For Android packaging, prefer `npx cap sync android` from `apps/mobile` instead of full `npm --workspace apps/mobile run sync`, because full sync also tries the iOS CocoaPods step.
 - Type checking:
   - `npm --workspace apps/mobile run typecheck`
 - E2E:
@@ -140,6 +143,8 @@ Run the narrowest command set that proves the change:
   - PowerShell: `./tools/codegen/generate-uniffi-bindings.ps1 -Language swift`
   - Shell: `./tools/codegen/generate-uniffi-bindings.sh kotlin`
   - Shell: `./tools/codegen/generate-uniffi-bindings.sh swift`
+  - The PowerShell script falls back to the workspace `tools/uniffi-bindgen` crate when `uniffi-bindgen` is not on `PATH`.
+  - The shell script does not have the same fallback: it skips Kotlin binding generation without `uniffi-bindgen` on `PATH` and fails for Swift.
 - Android release artifacts:
   - From `apps/mobile/android`: `cmd /c gradlew.bat assembleRelease bundleRelease`
 
@@ -163,6 +168,7 @@ There is no dedicated root lint script at the moment. For most app changes, `typ
 
 - `crates/reticulum_mobile/Cargo.toml` currently points `lxmf` and `lxmf-sdk` to local path dependencies. Do not replace those paths casually; they reflect this workspace's current development setup.
 - Android signing uses local, ignored configuration under `apps/mobile/android/keystore.properties`.
+- This project currently does not try to compile for iOS. Do not treat iOS build or CocoaPods failures as release blockers unless the user explicitly asks for iOS work.
 - Root Playwright config starts the web app and exercises the app through the browser at `/dashboard`.
 
 ## Definition Of Done

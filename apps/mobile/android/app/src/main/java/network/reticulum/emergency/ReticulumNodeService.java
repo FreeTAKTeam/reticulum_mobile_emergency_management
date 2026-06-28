@@ -1,19 +1,27 @@
 package network.reticulum.emergency;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.Activity;
+import android.app.Application;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -27,6 +35,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -61,6 +71,8 @@ public final class ReticulumNodeService extends Service {
     private static final String PREF_DESIRED_RUNNING = "desiredRunning";
     private static final String PREF_LAST_CONFIG = "lastConfig";
     private static final String PREF_LAST_BOOT_COUNT = "lastBootCount";
+    private static final String PREF_WATCH_STATUS_SERVER_ENABLED = "watchStatusServerEnabled";
+    private static final String PREF_WATCH_STATUS_SERVER_PORT = "watchStatusServerPort";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     private static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
     private static final String RUNTIME_CHANNEL_ID = "mesh-runtime";
@@ -69,11 +81,15 @@ public final class ReticulumNodeService extends Service {
     private static final int FOREGROUND_NOTIFICATION_ID = 41001;
     private static final int SOS_NOTIFICATION_ID = 41002;
     private static final int BACKGROUND_NOTIFICATION_BASE_ID = 47000;
+    private static final long RUNTIME_RESTORE_TIMEOUT_MS = 15_000L;
 
     private final IBinder binder = new LocalBinder();
     private final CopyOnWriteArraySet<ServiceEventListener> listeners = new CopyOnWriteArraySet<>();
+    private final AtomicBoolean appUiForeground = new AtomicBoolean(false);
     private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
     private final ExecutorService pollerExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService restoreExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final WearableSensorListener wearableEventListener = new WearableSensorListener() {
         @Override
@@ -116,6 +132,48 @@ public final class ReticulumNodeService extends Service {
             dispatchEventToListeners("wearableError", payload);
         }
     };
+    private final Application.ActivityLifecycleCallbacks activityLifecycleCallbacks =
+        new Application.ActivityLifecycleCallbacks() {
+            @Override
+            public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
+            }
+
+            @Override
+            public void onActivityStarted(Activity activity) {
+            }
+
+            @Override
+            public void onActivityResumed(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(true);
+                }
+            }
+
+            @Override
+            public void onActivityPaused(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+
+            @Override
+            public void onActivityStopped(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+
+            @Override
+            public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
+            }
+
+            @Override
+            public void onActivityDestroyed(Activity activity) {
+                if (activity instanceof MainActivity) {
+                    setAppUiForeground(false);
+                }
+            }
+        };
 
     private SharedPreferences preferences;
     private String storageDir = "";
@@ -124,12 +182,15 @@ public final class ReticulumNodeService extends Service {
     private String latestStatusJson = "";
     private String latestSyncStatusJson = "";
     private String latestSosStatusJson = "";
+    private String latestRuntimeErrorJson = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
     private BleWearableManager wearableManager;
+    private RemWatchStatusServer watchStatusServer;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenChecklistKeys = new HashSet<>();
     private final Set<String> seenMessageIds = new HashSet<>();
+    private final Set<String> seenMissionPacketNotificationKeys = new HashSet<>();
     private int nextBackgroundNotificationId = BACKGROUND_NOTIFICATION_BASE_ID;
 
     @Override
@@ -141,11 +202,13 @@ public final class ReticulumNodeService extends Service {
         createNotificationChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
         wearableManager = new BleWearableManager(this, wearableEventListener);
+        watchStatusServer = new RemWatchStatusServer();
+        getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
         latestSosStatusJson = safeSosStatusJson();
         applyCurrentSosPlatformSettings();
-        maybeRestoreAfterProcessRecreation();
+        applyWatchStatusServerSettings();
     }
 
     @Override
@@ -155,12 +218,12 @@ public final class ReticulumNodeService extends Service {
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
-            maybeRestoreAfterBoot();
+            scheduleRuntimeRestore("boot");
             return START_STICKY;
         }
 
-        if (shouldBeRunning() && !isNodeRunning()) {
-            maybeRestoreAfterProcessRecreation();
+        if (shouldBeRunning()) {
+            scheduleRuntimeRestore("process recreation");
         }
         return START_STICKY;
     }
@@ -178,12 +241,17 @@ public final class ReticulumNodeService extends Service {
     @Override
     public void onDestroy() {
         stopPoller();
+        if (watchStatusServer != null) {
+            watchStatusServer.stop();
+        }
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
         }
         if (wearableManager != null) {
             wearableManager.close();
         }
+        getApplication().unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks);
+        restoreExecutor.shutdownNow();
         pollerExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -191,6 +259,16 @@ public final class ReticulumNodeService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
+    }
+
+    @Override
+    public void onTimeout(int startId) {
+        handleForegroundServiceTimeout(startId, 0);
+    }
+
+    @Override
+    public void onTimeout(int startId, int foregroundServiceType) {
+        handleForegroundServiceTimeout(startId, foregroundServiceType);
     }
 
     public void addListener(ServiceEventListener listener) {
@@ -209,6 +287,16 @@ public final class ReticulumNodeService extends Service {
             return;
         }
         listeners.remove(listener);
+    }
+
+    public void setAppUiForeground(boolean foreground) {
+        if (appUiForeground.getAndSet(foreground) != foreground) {
+            Log.i(TAG, "appUiForeground=" + foreground);
+        }
+    }
+
+    public boolean isAppUiForeground() {
+        return appUiForeground.get();
     }
 
     public synchronized int startNode(String configJson) {
@@ -233,7 +321,7 @@ public final class ReticulumNodeService extends Service {
                 promoteServiceForRuntime();
                 final int startResult = ReticulumBridge.start(resolved.resolvedJson);
                 if (startResult != 0) {
-                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    cleanupFailedRuntimeStart();
                     return startResult;
                 }
             }
@@ -241,6 +329,7 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
+            clearRuntimeReadinessFailure();
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
@@ -250,6 +339,11 @@ public final class ReticulumNodeService extends Service {
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to start node", ex);
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime failed during start: " + ex.getMessage()
+            );
+            cleanupFailedRuntimeStart();
             return -1;
         }
     }
@@ -258,6 +352,7 @@ public final class ReticulumNodeService extends Service {
         stopPoller();
         final int result = ReticulumBridge.stop();
         clearDesiredRunning();
+        clearRuntimeReadinessFailure();
         refreshLatestRuntimeState();
         emitCachedStateToAll();
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -277,6 +372,7 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
+            clearRuntimeReadinessFailure();
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
@@ -286,12 +382,16 @@ public final class ReticulumNodeService extends Service {
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to restart node", ex);
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime failed during restart: " + ex.getMessage()
+            );
             return -1;
         }
     }
 
     public synchronized String getStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getStatusJson(), "{}");
+        return ReticulumBridge.getStatusJson();
     }
 
     public synchronized int connectPeer(String destinationHex) {
@@ -315,7 +415,15 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String sendLxmfJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.sendLxmfJson(payloadJson), "");
+        return ReticulumBridge.sendLxmfJson(payloadJson);
+    }
+
+    public synchronized int sendPluginLxmfJson(String payloadJson) {
+        return ReticulumBridge.sendPluginLxmfJson(primaryAndroidAbi(), payloadJson);
+    }
+
+    public synchronized String decodePluginLxmfFieldsJson(String payloadJson) {
+        return ReticulumBridge.decodePluginLxmfFieldsJson(primaryAndroidAbi(), payloadJson);
     }
 
     public synchronized int retryLxmfJson(String payloadJson) {
@@ -339,19 +447,68 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String listAnnouncesJson() {
-        return nonEmptyJson(ReticulumBridge.listAnnouncesJson(), "{\"items\":[]}");
+        return ReticulumBridge.listAnnouncesJson();
+    }
+
+    public synchronized String getPluginsJson() {
+        return nonEmptyJson(ReticulumBridge.getPluginsJson(primaryAndroidAbi()), "{\"items\":[],\"errors\":[]}");
+    }
+
+    public synchronized String installPluginPackageJson(String payloadJson) {
+        return ReticulumBridge.installPluginPackageJson(primaryAndroidAbi(), payloadJson);
+    }
+
+    public synchronized String installPluginArchiveBase64Json(String payloadJson) throws JSONException {
+        final JSONObject payload = new JSONObject(payloadJson == null ? "{}" : payloadJson);
+        final String filename = sanitizePluginArchiveFilename(payload.optString("filename", "plugin.remplugin"));
+        final String archiveBase64 = payload.optString("archiveBase64", "");
+        if (archiveBase64.isEmpty()) {
+            return null;
+        }
+        try {
+            final byte[] archiveBytes = Base64.decode(archiveBase64, Base64.DEFAULT);
+            final File stagingDir = new File(storageDir, "plugin-packages");
+            if (!stagingDir.exists() && !stagingDir.mkdirs()) {
+                return null;
+            }
+            final File archiveFile = new File(stagingDir, filename);
+            try (FileOutputStream output = new FileOutputStream(archiveFile, false)) {
+                output.write(archiveBytes);
+            }
+            final JSONObject installPayload = new JSONObject();
+            installPayload.put("packagePath", archiveFile.getAbsolutePath());
+            final String result = installPluginPackageJson(installPayload.toString());
+            if (result != null && !result.isEmpty()) {
+                // The native installer copies validated content into plugins/.
+                // The staged upload is no longer needed after a successful install.
+                //noinspection ResultOfMethodCallIgnored
+                archiveFile.delete();
+            }
+            return result;
+        } catch (IllegalArgumentException | java.io.IOException ex) {
+            Logger.error(TAG, "Failed to stage plug-in archive.", ex);
+            return null;
+        }
+    }
+
+    public synchronized int setPluginEnabledJson(String payloadJson) {
+        return ReticulumBridge.setPluginEnabledJson(primaryAndroidAbi(), payloadJson);
+    }
+
+    public synchronized int grantPluginPermissionsJson(String payloadJson) {
+        return ReticulumBridge.grantPluginPermissionsJson(primaryAndroidAbi(), payloadJson);
     }
 
     public synchronized String listPeersJson() {
-        return nonEmptyJson(ReticulumBridge.listPeersJson(), "{\"items\":[]}");
+        return ReticulumBridge.listPeersJson();
     }
 
     public synchronized String listConversationsJson() {
-        return nonEmptyJson(ReticulumBridge.listConversationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listConversationsJson();
     }
 
     public synchronized String listMessagesJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.listMessagesJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.listMessagesJson(payloadJson);
     }
 
     public synchronized int deleteConversationJson(String payloadJson) {
@@ -359,15 +516,15 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getLxmfSyncStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
+        return ReticulumBridge.getLxmfSyncStatusJson();
     }
 
     public synchronized String listTelemetryDestinationsJson() {
-        return nonEmptyJson(ReticulumBridge.listTelemetryDestinationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listTelemetryDestinationsJson();
     }
 
     public synchronized String legacyImportCompletedJson() {
-        return nonEmptyJson(ReticulumBridge.legacyImportCompletedJson(), "{\"completed\":false}");
+        return ReticulumBridge.legacyImportCompletedJson();
     }
 
     public synchronized int importLegacyStateJson(String payloadJson) {
@@ -375,15 +532,51 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getAppSettingsJson() {
-        return nonEmptyJson(ReticulumBridge.getAppSettingsJson(), "{}");
+        return ReticulumBridge.getAppSettingsJson();
     }
 
     public synchronized int setAppSettingsJson(String payloadJson) {
         return ReticulumBridge.setAppSettingsJson(payloadJson);
     }
 
+    public synchronized String getWatchStatusServerSettingsJson() {
+        try {
+            return currentWatchStatusServerStateJson().toString();
+        } catch (JSONException ex) {
+            return "{}";
+        }
+    }
+
+    public synchronized int setWatchStatusServerSettingsJson(String payloadJson) {
+        try {
+            final JSONObject payload = new JSONObject(nonEmptyJson(payloadJson, "{}"));
+            final RemWatchStatusServerSettings current = readWatchStatusServerSettings();
+            final boolean enabled = payload.has("enabled") ? payload.optBoolean("enabled", current.enabled) : current.enabled;
+            final int requestedPort = payload.has("port") ? payload.optInt("port", current.port) : current.port;
+            final RemWatchStatusServerSettings next = RemWatchStatusServerSettings.normalize(enabled, requestedPort);
+            preferences
+                .edit()
+                .putBoolean(PREF_WATCH_STATUS_SERVER_ENABLED, next.enabled)
+                .putInt(PREF_WATCH_STATUS_SERVER_PORT, next.port)
+                .apply();
+            applyWatchStatusServerSettings();
+            return 0;
+        } catch (JSONException ex) {
+            Logger.error(TAG, "Failed to parse watch status server settings", ex);
+            return -1;
+        }
+    }
+
+    public synchronized String getWatchStatusServerStateJson() {
+        try {
+            return currentWatchStatusServerStateJson().toString();
+        } catch (JSONException ex) {
+            return "{}";
+        }
+    }
+
     public synchronized String getSavedPeersJson() {
-        return nonEmptyJson(ReticulumBridge.getSavedPeersJson(), "{\"items\":[]}");
+        return ReticulumBridge.getSavedPeersJson();
     }
 
     public synchronized int setSavedPeersJson(String payloadJson) {
@@ -391,23 +584,23 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getOperationalSummaryJson() {
-        return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
+        return ReticulumBridge.getOperationalSummaryJson();
     }
 
     public synchronized String getChecklistsJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistsJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.getChecklistsJson(payloadJson);
     }
 
     public synchronized String getChecklistJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistJson(payloadJson), "{}");
+        return ReticulumBridge.getChecklistJson(payloadJson);
     }
 
     public synchronized String getChecklistTemplatesJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getChecklistTemplatesJson(payloadJson), "{\"items\":[]}");
+        return ReticulumBridge.getChecklistTemplatesJson(payloadJson);
     }
 
     public synchronized String importChecklistTemplateCsvJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.importChecklistTemplateCsvJson(payloadJson), "{}");
+        return ReticulumBridge.importChecklistTemplateCsvJson(payloadJson);
     }
 
     public synchronized int createChecklistFromTemplateJson(String payloadJson) {
@@ -455,7 +648,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getEamsJson() {
-        return nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getEamsJson();
     }
 
     public synchronized int upsertEamJson(String payloadJson) {
@@ -467,11 +660,15 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getEamTeamSummaryJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.getEamTeamSummaryJson(payloadJson), "{}");
+        return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
+    }
+
+    public synchronized String getEamReadinessSummaryJson() {
+        return ReticulumBridge.getEamReadinessSummaryJson();
     }
 
     public synchronized String getEventsJson() {
-        return nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getEventsJson();
     }
 
     public synchronized int upsertEventJson(String payloadJson) {
@@ -483,7 +680,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getTelemetryPositionsJson() {
-        return nonEmptyJson(ReticulumBridge.getTelemetryPositionsJson(), "{\"items\":[]}");
+        return ReticulumBridge.getTelemetryPositionsJson();
     }
 
     public synchronized int recordLocalTelemetryFixJson(String payloadJson) {
@@ -527,7 +724,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getSosSettingsJson() {
-        return nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}");
+        return ReticulumBridge.getSosSettingsJson();
     }
 
     public synchronized int setSosSettingsJson(String payloadJson) {
@@ -543,18 +740,18 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String getSosStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getSosStatusJson(), "{}");
+        return ReticulumBridge.getSosStatusJson();
     }
 
     public synchronized String triggerSosJson(String payloadJson) {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.submitTelemetrySnapshot();
         }
-        return nonEmptyJson(ReticulumBridge.triggerSosJson(payloadJson), "{}");
+        return ReticulumBridge.triggerSosJson(payloadJson);
     }
 
     public synchronized String deactivateSosJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.deactivateSosJson(payloadJson), "{}");
+        return ReticulumBridge.deactivateSosJson(payloadJson);
     }
 
     public synchronized int submitSosTelemetryJson(String payloadJson) {
@@ -562,23 +759,27 @@ public final class ReticulumNodeService extends Service {
     }
 
     public synchronized String submitSosAccelerometerJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.submitSosAccelerometerJson(payloadJson), "{\"triggered\":false}");
+        return ReticulumBridge.submitSosAccelerometerJson(payloadJson);
     }
 
     public synchronized String submitSosScreenEventJson(String payloadJson) {
-        return nonEmptyJson(ReticulumBridge.submitSosScreenEventJson(payloadJson), "{\"triggered\":false}");
+        return ReticulumBridge.submitSosScreenEventJson(payloadJson);
     }
 
     public synchronized String listSosAlertsJson() {
-        return nonEmptyJson(ReticulumBridge.listSosAlertsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosAlertsJson();
     }
 
     public synchronized String listSosLocationsJson() {
-        return nonEmptyJson(ReticulumBridge.listSosLocationsJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosLocationsJson();
     }
 
     public synchronized String listSosAudioJson() {
-        return nonEmptyJson(ReticulumBridge.listSosAudioJson(), "{\"items\":[]}");
+        return ReticulumBridge.listSosAudioJson();
+    }
+
+    public synchronized int recordSosAudioJson(String payloadJson) {
+        return ReticulumBridge.recordSosAudioJson(payloadJson);
     }
 
     public synchronized int setAnnounceCapabilities(String capabilityString) {
@@ -597,7 +798,7 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.takeLastErrorJson();
     }
 
-    private void maybeRestoreAfterProcessRecreation() {
+    private void scheduleRuntimeRestore(String reason) {
         if (!shouldBeRunning()) {
             return;
         }
@@ -607,17 +808,51 @@ public final class ReticulumNodeService extends Service {
             return;
         }
 
-        if (isNodeRunning()) {
-            ensurePoller();
-            refreshLatestRuntimeState();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+        if (!restoreRunning.compareAndSet(false, true)) {
             return;
         }
 
-        final int result = startNode(persistedConfig);
-        if (result != 0) {
-            Log.e(TAG, "Failed to restore node after process recreation");
-        }
+        promoteServiceForRuntime();
+        final AtomicBoolean restoreCompleted = new AtomicBoolean(false);
+        mainHandler.postDelayed(() -> {
+            if (restoreCompleted.get() || !restoreRunning.get()) {
+                return;
+            }
+            reportRuntimeReadinessFailure(
+                "InternalError",
+                "node runtime restore timed out after " + RUNTIME_RESTORE_TIMEOUT_MS + "ms"
+            );
+        }, RUNTIME_RESTORE_TIMEOUT_MS);
+        restoreExecutor.execute(() -> {
+            try {
+                if (isNodeRunning()) {
+                    ensurePoller();
+                    clearRuntimeReadinessFailure();
+                    refreshLatestRuntimeState();
+                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+                    emitCachedStateToAll();
+                    emitProjectionRefreshSweepToAll();
+                    return;
+                }
+
+                final int result = startNode(persistedConfig);
+                if (result != 0) {
+                    reportRuntimeReadinessFailure(
+                        "InternalError",
+                        "node runtime failed to restore after " + reason
+                    );
+                }
+            } catch (Exception ex) {
+                Logger.error(TAG, "Failed to restore node after " + reason, ex);
+                reportRuntimeReadinessFailure(
+                    "InternalError",
+                    "node runtime failed to restore after " + reason + ": " + ex.getMessage()
+                );
+            } finally {
+                restoreCompleted.set(true);
+                restoreRunning.set(false);
+            }
+        });
     }
 
     private boolean shouldBeRunning() {
@@ -652,6 +887,93 @@ public final class ReticulumNodeService extends Service {
             .apply();
         lastResolvedConfigJson = "";
         lastCanonicalConfigJson = "";
+    }
+
+    private void cleanupFailedRuntimeStart() {
+        stopPoller();
+        try {
+            ReticulumBridge.stop();
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to stop native runtime after start failure", ex);
+        }
+        clearDesiredRunning();
+        refreshLatestRuntimeState();
+        emitCachedStateToAll();
+        stopForegroundAndSelf(0);
+    }
+
+    private synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
+        reportRuntimeReadinessFailure(
+            "InternalError",
+            "node runtime foreground service timed out; stopping Reticulum node service. type="
+                + foregroundServiceType
+        );
+        stopPoller();
+        try {
+            ReticulumBridge.stop();
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to stop native runtime after foreground service timeout", ex);
+        }
+        clearDesiredRunning();
+        refreshLatestRuntimeState();
+        emitCachedStateToAll();
+        stopForegroundAndSelf(startId);
+    }
+
+    private void clearRuntimeReadinessFailure() {
+        latestRuntimeErrorJson = "";
+    }
+
+    private void reportRuntimeReadinessFailure(String code, String message) {
+        final String safeCode = code == null || code.trim().isEmpty() ? "InternalError" : code;
+        final String safeMessage =
+            message == null || message.trim().isEmpty() ? "node runtime failed" : message;
+        Log.e(TAG, safeMessage);
+        final JSObject errorPayload = new JSObject();
+        errorPayload.put("code", safeCode);
+        errorPayload.put("message", safeMessage);
+        latestRuntimeErrorJson = errorPayload.toString();
+        latestStatusJson = statusJsonWithLastError(safeMessage);
+        dispatchEventToListeners("error", errorPayload);
+        final JSObject statusPayload = new JSObject();
+        try {
+            statusPayload.put("status", new JSObject(nonEmptyJson(latestStatusJson, "{}")));
+        } catch (JSONException ignored) {
+            statusPayload.put("status", new JSObject());
+        }
+        dispatchEventToListeners("statusChanged", statusPayload);
+        updateForegroundNotification();
+    }
+
+    private String statusJsonWithLastError(String message) {
+        try {
+            final JSONObject status = new JSONObject(nonEmptyJson(ReticulumBridge.getStatusJson(), "{}"));
+            status.put("running", false);
+            status.put("lastError", message);
+            return status.toString();
+        } catch (JSONException ex) {
+            final JSONObject status = new JSONObject();
+            try {
+                status.put("running", false);
+                status.put("lastError", message);
+            } catch (JSONException ignored) {
+                return "{\"running\":false}";
+            }
+            return status.toString();
+        }
+    }
+
+    private void stopForegroundAndSelf(int startId) {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to remove foreground notification", ex);
+        }
+        if (startId > 0) {
+            stopSelf(startId);
+        } else {
+            stopSelf();
+        }
     }
 
     private void initializeBridgeStorage(String resolvedStorageDir) {
@@ -711,7 +1033,10 @@ public final class ReticulumNodeService extends Service {
         mirrorEventToLogcat(eventName, payload);
         updateCachedState(eventName, payload);
         dispatchEventToListeners(eventName, payload);
-        if (listeners.isEmpty()) {
+        final boolean uiForeground = isAppUiForeground();
+        if ("sosAlertChanged".equals(eventName)) {
+            maybeNotifySosAlert(payload, !uiForeground);
+        } else if (!uiForeground) {
             maybeNotifyInboundUpdate(eventName, payload);
         }
         if ("sosTelemetryRequested".equals(eventName) && sosPlatformCoordinator != null) {
@@ -768,20 +1093,6 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    private void maybeRestoreAfterBoot() {
-        if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
-            return;
-        }
-        final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
-        if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return;
-        }
-        final int result = startNode(persistedConfig);
-        if (result != 0) {
-            Log.e(TAG, "Failed to restore node after boot");
-        }
-    }
-
     private void dispatchEventToListeners(String eventName, JSObject payload) {
         for (ServiceEventListener listener : listeners) {
             mainHandler.post(() -> listener.onNodeEvent(eventName, payload));
@@ -813,6 +1124,17 @@ public final class ReticulumNodeService extends Service {
         } catch (JSONException ignored) {
             listener.onNodeEvent("sosStatusChanged", new JSObject());
         }
+
+        if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {
+            try {
+                listener.onNodeEvent("error", new JSObject(latestRuntimeErrorJson));
+            } catch (JSONException ignored) {
+                final JSObject fallback = new JSObject();
+                fallback.put("code", "InternalError");
+                fallback.put("message", "node runtime failed");
+                listener.onNodeEvent("error", fallback);
+            }
+        }
     }
 
     private void emitCachedStateToAll() {
@@ -839,6 +1161,7 @@ public final class ReticulumNodeService extends Service {
             "Conversations",
             "Messages",
             "Telemetry",
+            "Plugins",
             "Sos",
         }) {
             final JSObject payload = new JSObject();
@@ -878,6 +1201,98 @@ public final class ReticulumNodeService extends Service {
     private void applyCurrentSosPlatformSettings() {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.applySettingsJson(nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}"));
+        }
+    }
+
+    private RemWatchStatusServerSettings readWatchStatusServerSettings() {
+        if (preferences == null) {
+            return RemWatchStatusServerSettings.defaults();
+        }
+        return RemWatchStatusServerSettings.normalize(
+            preferences.getBoolean(
+                PREF_WATCH_STATUS_SERVER_ENABLED,
+                RemWatchStatusServerSettings.DEFAULT_ENABLED
+            ),
+            preferences.getInt(
+                PREF_WATCH_STATUS_SERVER_PORT,
+                RemWatchStatusServerSettings.DEFAULT_PORT
+            )
+        );
+    }
+
+    private void applyWatchStatusServerSettings() {
+        if (watchStatusServer == null) {
+            return;
+        }
+        watchStatusServer.apply(readWatchStatusServerSettings(), this::buildWatchStatusJson);
+    }
+
+    private JSONObject currentWatchStatusServerStateJson() throws JSONException {
+        if (watchStatusServer == null) {
+            return readWatchStatusServerSettings().toJson(false, "");
+        }
+        return watchStatusServer.stateJson();
+    }
+
+    private String buildWatchStatusJson() {
+        try {
+            return RemWatchStatusPayload.build(
+                safeStatusJson(),
+                safeOperationalSummaryJson(),
+                safeEamReadinessSummaryJson(),
+                safeEventsJson(),
+                safeTelemetryPositionsJson(),
+                System.currentTimeMillis()
+            );
+        } catch (Exception ex) {
+            Logger.error(TAG, "Failed to build watch status payload", ex);
+            try {
+                final JSONObject fallbackStatus = new JSONObject();
+                fallbackStatus.put("running", false);
+                fallbackStatus.put("lastError", ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                return RemWatchStatusPayload.build(
+                    fallbackStatus.toString(),
+                    "{}",
+                    "{}",
+                    "{\"items\":[]}",
+                    "{\"items\":[]}",
+                    System.currentTimeMillis()
+                );
+            } catch (JSONException jsonException) {
+                return "{\"type\":\"rem.watch.status\",\"version\":1,\"connection_state\":\"ERROR\",\"operator_name\":\"REM\",\"operator_status\":\"ERROR\",\"operator_eam\":\"UNKNOWN\",\"team\":\"REM\",\"team_status\":\"UNKNOWN\",\"last_sync_epoch_ms\":0,\"last_sync_age_seconds\":0,\"active_events\":0,\"highest_priority\":\"ERROR\",\"alert_state\":\"ERROR\"}";
+            }
+        }
+    }
+
+    private String safeOperationalSummaryJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
+        } catch (Exception ex) {
+            return "{}";
+        }
+    }
+
+    private String safeEamReadinessSummaryJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getEamReadinessSummaryJson(), "{}");
+        } catch (Exception ex) {
+            return "{}";
+        }
+    }
+
+    private String safeEventsJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
+        } catch (Exception ex) {
+            return "{\"items\":[]}";
+        }
+    }
+
+    private String safeTelemetryPositionsJson() {
+        try {
+            return nonEmptyJson(ReticulumBridge.getTelemetryPositionsJson(), "{\"items\":[]}");
+        } catch (Exception ex) {
+            return "{\"items\":[]}";
         }
     }
 
@@ -990,8 +1405,12 @@ public final class ReticulumNodeService extends Service {
     }
 
     private void maybeNotifyInboundUpdate(String eventName, JSObject payload) {
-        if ("sosAlertChanged".equals(eventName)) {
-            maybeNotifySosAlert(payload);
+        if ("log".equals(eventName)) {
+            maybeNotifyInboundMissionLog(payload);
+            return;
+        }
+        if ("packetReceived".equals(eventName)) {
+            maybeNotifyInboundMissionPacket(payload);
             return;
         }
         if ("messageReceived".equals(eventName) || "messageUpdated".equals(eventName)) {
@@ -1010,13 +1429,70 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    private void maybeNotifySosAlert(JSObject payload) {
+    private void maybeNotifyInboundMissionPacket(JSObject payload) {
+        final String fieldsBase64 = payload.getString("fieldsBase64", "");
+        if (fieldsBase64.isEmpty()) {
+            return;
+        }
+        final String fieldsText = decodeBase64Text(fieldsBase64);
+        final String sourceHex = payload.getString("sourceHex", "").trim().toLowerCase(Locale.US);
+        final String destinationHex = payload.getString("destinationHex", "").trim().toLowerCase(Locale.US);
+        final String key = sourceHex + ":" + destinationHex + ":" + Integer.toHexString(fieldsBase64.hashCode());
+        if (!seenMissionPacketNotificationKeys.add(key)) {
+            return;
+        }
+
+        final String body = truncate(decodeBase64Text(payload.getString("bytesBase64", "")).trim());
+        if (fieldsText.contains("mission.registry.eam.upsert")) {
+            postBackgroundNotification("EAM from mesh", body.isEmpty() ? "Action Emergency Message updated" : body);
+        } else if (fieldsText.contains("mission.registry.log_entry.upsert")) {
+            postBackgroundNotification("Event from mesh", body.isEmpty() ? "Event updated" : body);
+        } else if (fieldsText.contains("checklist.task.status.set")) {
+            postBackgroundNotification("Checklist updated", body.isEmpty() ? "Checklist task status changed" : body);
+        }
+    }
+
+    private void maybeNotifyInboundMissionLog(JSObject payload) {
+        final String message = payload.getString("message", "");
+        if (!message.contains("[lxmf][mission] received kind=command")) {
+            return;
+        }
+        if (message.contains("name=mission.registry.eam.upsert")) {
+            scheduleBackgroundNotificationRefresh("Eams");
+        } else if (message.contains("name=mission.registry.log_entry.upsert")) {
+            scheduleBackgroundNotificationRefresh("Events");
+        } else if (message.contains("name=checklist.task.status.set")) {
+            scheduleBackgroundNotificationRefresh("Checklists");
+        }
+    }
+
+    private void scheduleBackgroundNotificationRefresh(String scope) {
+        mainHandler.postDelayed(() -> restoreExecutor.execute(() -> {
+            if (isAppUiForeground()) {
+                return;
+            }
+            if ("Eams".equals(scope)) {
+                maybeNotifyInboundEams();
+            } else if ("Events".equals(scope)) {
+                maybeNotifyInboundEvents();
+            } else if ("Checklists".equals(scope)) {
+                maybeNotifyInboundChecklists();
+            }
+        }), 1_500L);
+    }
+
+    private void maybeNotifySosAlert(JSObject payload, boolean postUserVisibleNotification) {
         final JSONObject nestedAlert = payload.optJSONObject("alert");
         final JSONObject alert = nestedAlert == null ? payload : nestedAlert;
         final boolean active = alert.optBoolean("active", true);
         if (!active) {
             NotificationManagerCompat.from(this).cancel(SOS_NOTIFICATION_ID);
-            postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
+            if (postUserVisibleNotification) {
+                postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
+            }
+            return;
+        }
+        if (!postUserVisibleNotification) {
             return;
         }
         final String source = alert.optString("sourceHex", "Unknown");
@@ -1032,7 +1508,15 @@ public final class ReticulumNodeService extends Service {
         }
         final String peer = payload.getString("sourceHex", payload.getString("destinationHex", "Unknown"));
         final String body = truncate(payload.getString("bodyUtf8", "(empty message)"));
+        if (isSosMessageBody(body)) {
+            return;
+        }
         postBackgroundNotification("Message from " + peer, body);
+    }
+
+    private boolean isSosMessageBody(String body) {
+        final String normalized = body == null ? "" : body.trim().toLowerCase(Locale.US);
+        return normalized.startsWith("sos!") || normalized.startsWith("sos cancelled");
     }
 
     private void maybeNotifyInboundEams() {
@@ -1251,6 +1735,7 @@ public final class ReticulumNodeService extends Service {
 
     private void primeOperationalNotificationState() {
         seenMessageIds.clear();
+        seenMissionPacketNotificationKeys.clear();
         maybePrimeEamKeys();
         maybePrimeEventKeys();
         maybePrimeChecklistKeys();
@@ -1357,6 +1842,17 @@ public final class ReticulumNodeService extends Service {
         return item.optString(camelKey, item.optString(snakeKey, ""));
     }
 
+    private String decodeBase64Text(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return "";
+        }
+        try {
+            return new String(Base64.decode(raw, Base64.DEFAULT), StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException ex) {
+            return "";
+        }
+    }
+
     private int optIntAny(JSONObject item, String camelKey, String snakeKey, int fallback) {
         if (item == null) {
             return fallback;
@@ -1368,13 +1864,113 @@ public final class ReticulumNodeService extends Service {
         final JSONObject config = rawConfigJson == null || rawConfigJson.trim().isEmpty()
             ? new JSONObject()
             : new JSONObject(rawConfigJson);
+        repairRnodeConfig(config);
         final File resolvedStorageDir = resolveStorageDir(config.optString("storageDir", ""));
         config.put("storageDir", resolvedStorageDir.getAbsolutePath());
+        config.put("pluginAndroidAbi", primaryAndroidAbi());
         return new ResolvedConfig(
             config.toString(),
             canonicalize(config),
             resolvedStorageDir.getAbsolutePath()
         );
+    }
+
+    private void repairRnodeConfig(JSONObject config) throws JSONException {
+        final JSONObject rnode = config.optJSONObject("rnode");
+        if (rnode == null || !rnode.optBoolean("enabled", false)) {
+            return;
+        }
+        final String configuredId = rnode.optString("peripheralId", "").trim();
+        if (configuredId.isEmpty() || !hasBluetoothConnectPermission()) {
+            return;
+        }
+        final BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            return;
+        }
+
+        BluetoothDevice singleRnode = null;
+        int rnodeCount = 0;
+        try {
+            for (BluetoothDevice device : adapter.getBondedDevices()) {
+                if (deviceMatchesId(device, configuredId)) {
+                    return;
+                }
+                if (isRnodeBluetoothDevice(device)) {
+                    singleRnode = device;
+                    rnodeCount += 1;
+                }
+            }
+        } catch (SecurityException ex) {
+            return;
+        }
+
+        if (rnodeCount != 1 || singleRnode == null) {
+            return;
+        }
+        final String address = singleRnode.getAddress();
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        String name = "";
+        try {
+            name = singleRnode.getName();
+        } catch (SecurityException ignored) {
+        }
+        rnode.put("peripheralId", address);
+        rnode.put("displayName", name == null || name.trim().isEmpty() ? address : name.trim());
+        Log.i(
+            TAG,
+            "RNode config repaired from stale peripheral " + configuredId
+                + " to bonded " + address
+        );
+    }
+
+    private boolean hasBluetoothConnectPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+        }
+        return checkSelfPermission(Manifest.permission.BLUETOOTH)
+            == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isRnodeBluetoothDevice(BluetoothDevice device) {
+        if (device == null || device.getBondState() != BluetoothDevice.BOND_BONDED) {
+            return false;
+        }
+        try {
+            final String name = device.getName();
+            return name != null && name.toLowerCase(Locale.US).contains("rnode");
+        } catch (SecurityException ex) {
+            return false;
+        }
+    }
+
+    private boolean deviceMatchesId(BluetoothDevice device, String configuredId) {
+        if (device == null) {
+            return false;
+        }
+        final String target = normalizeBluetoothId(configuredId);
+        if (target.isEmpty()) {
+            return false;
+        }
+        final String address = device.getAddress();
+        if (normalizeBluetoothId(address).equals(target)) {
+            return true;
+        }
+        try {
+            return normalizeBluetoothId(device.getName()).equals(target);
+        } catch (SecurityException ex) {
+            return false;
+        }
+    }
+
+    private String normalizeBluetoothId(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim().replace(":", "").replace("-", "").toLowerCase(Locale.US);
     }
 
     private File resolveStorageDir(String rawStorageDir) {
@@ -1425,6 +2021,28 @@ public final class ReticulumNodeService extends Service {
             return value;
         }
         return value.substring(0, maxLength) + "...";
+    }
+
+    private static String sanitizePluginArchiveFilename(String rawFilename) {
+        final String normalized = rawFilename == null ? "" : rawFilename.trim();
+        final String basename = normalized.replace('\\', '/');
+        final int slash = basename.lastIndexOf('/');
+        final String leaf = slash >= 0 ? basename.substring(slash + 1) : basename;
+        String safe = leaf.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safe.isEmpty()) {
+            safe = "plugin.remplugin";
+        }
+        if (!safe.endsWith(".remplugin")) {
+            safe = safe + ".remplugin";
+        }
+        return safe;
+    }
+
+    private String primaryAndroidAbi() {
+        if (Build.SUPPORTED_ABIS == null || Build.SUPPORTED_ABIS.length == 0) {
+            return "";
+        }
+        return Build.SUPPORTED_ABIS[0];
     }
 
     private void writeLogcat(String level, String message) {

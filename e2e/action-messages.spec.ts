@@ -56,11 +56,11 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
   const rotatedUpdatedAt = await updatedAtFor("Bravo-2");
   expect(rotatedUpdatedAt).toBeGreaterThan(editedUpdatedAt);
 
-  await page.getByRole("button", { name: "Open status color help" }).click();
+  await page.getByRole("link", { name: "Open status color help" }).click();
   await expect(page).toHaveURL(/\/messages\/help$/);
-  await expect(page.getByRole("heading", { name: "Help - Status Color Indicators" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Status Help" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Back to Messages" }).click();
+  await page.getByRole("link", { name: "Messages" }).click();
   await messageCard.getByRole("button", { name: "Delete Bravo-2" }).click();
   await expect(page.getByRole("heading", { name: "Bravo-2" })).toHaveCount(0);
 });
@@ -110,4 +110,67 @@ test("synced inbound action messages are visible but read-only", async ({ page }
   const securityStatusButton = messageCard.locator(".pill-button").filter({ hasText: "Security" });
   await expect(securityStatusButton).toBeDisabled();
   await expect(securityStatusButton).toContainText("Red");
+});
+
+test("operators can filter action messages by team color", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+    messages: [
+      {
+        callsign: "Alpha-1",
+        groupName: "BLUE",
+        securityStatus: "Green",
+        capabilityStatus: "Green",
+        preparednessStatus: "Green",
+        medicalStatus: "Green",
+        mobilityStatus: "Green",
+        commsStatus: "Green",
+        updatedAt: 1_710_000_000_000,
+      },
+      {
+        callsign: "Bravo-2",
+        groupName: "RED",
+        securityStatus: "Yellow",
+        capabilityStatus: "Yellow",
+        preparednessStatus: "Yellow",
+        medicalStatus: "Yellow",
+        mobilityStatus: "Yellow",
+        commsStatus: "Yellow",
+        updatedAt: 1_710_000_000_500,
+      },
+      {
+        callsign: "Charlie-3",
+        groupName: "YELLOW",
+        securityStatus: "Unknown",
+        capabilityStatus: "Unknown",
+        preparednessStatus: "Unknown",
+        medicalStatus: "Unknown",
+        mobilityStatus: "Unknown",
+        commsStatus: "Unknown",
+        updatedAt: 1_710_000_001_000,
+      },
+    ],
+  });
+
+  await gotoApp(page, "/messages");
+
+  await expect(page.locator("article.item:visible")).toHaveCount(3);
+  await expect(page.getByText("3 MSG")).toBeVisible();
+
+  await page.getByLabel("Team color filter").selectOption("BLUE");
+  await expect(page.locator(".filter-chip").getByText("Team: Blue")).toBeVisible();
+  await expect(page.getByText("1/3 MSG")).toBeVisible();
+  await expect(page.locator("article.item:visible")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "Alpha-1" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Bravo-2" })).toHaveCount(0);
+
+  await page.getByLabel("Team color filter").selectOption("RED");
+  await expect(page.locator(".filter-chip").getByText("Team: Red")).toBeVisible();
+  await expect(page.locator("article.item:visible")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "Bravo-2" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Alpha-1" })).toHaveCount(0);
+
+  await page.getByLabel("Team color filter").selectOption("ALL");
+  await expect(page.locator(".filter-chip").getByText("Team: All")).toBeVisible();
+  await expect(page.locator("article.item:visible")).toHaveCount(3);
 });

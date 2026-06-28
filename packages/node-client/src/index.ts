@@ -2,6 +2,8 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
+export type RnodeRegion = "US915" | "EU868";
+export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
@@ -45,6 +47,7 @@ export type ProjectionScope =
   | "Messages"
   | "Telemetry"
   | "Wearables"
+  | "Plugins"
   | "Checklists"
   | "ChecklistDetail"
   | "Sos";
@@ -60,11 +63,39 @@ export type SosTriggerSource =
   | "Remote";
 export type SosMessageKind = "Active" | "Update" | "Cancelled";
 
+export interface RnodeSettingsRecord {
+  enabled: boolean;
+  peripheralId: string;
+  displayName: string;
+  region: RnodeRegion;
+  profile: RnodeProfileId;
+}
+
+export interface RnodeBleDeviceRecord {
+  id: string;
+  address: string;
+  name: string;
+  rssi?: number;
+  paired: boolean;
+  bondState?: string;
+}
+
+export interface RnodeBlePairResult {
+  id: string;
+  address: string;
+  paired: boolean;
+  bondingStarted: boolean;
+  bondState: string;
+}
+
 export interface NodeConfig {
   name: string;
   storageDir?: string;
+  pluginAndroidAbi?: string;
+  pluginTrustedPublishers?: TrustedPluginPublisherRecord[];
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   staleAfterMinutes: number;
   announceCapabilities: string;
@@ -73,6 +104,7 @@ export interface NodeConfig {
   hubApiBaseUrl?: string;
   hubApiKey?: string;
   hubRefreshIntervalSeconds: number;
+  rnode: RnodeSettingsRecord;
 }
 
 export interface NodeStatus {
@@ -81,6 +113,7 @@ export interface NodeStatus {
   identityHex: string;
   appDestinationHex: string;
   lxmfDestinationHex: string;
+  lastError?: string;
 }
 
 export interface PeerChange {
@@ -138,12 +171,10 @@ export interface PacketReceivedEvent {
   destinationHex: string;
   sourceHex?: string;
   bytes: Uint8Array;
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
 }
 
 export interface PacketSendOptions {
-  dedicatedFields?: Record<string, string>;
   fieldsBase64?: string;
   sendMode?: SendMode;
 }
@@ -240,6 +271,23 @@ export interface SendLxmfRequest {
   bodyUtf8: string;
   title?: string;
   sendMode?: SendMode;
+}
+
+export interface PluginLxmfSendRequest {
+  pluginId: string;
+  destinationHex: string;
+  messageName: string;
+  payload: unknown;
+  bodyUtf8: string;
+  title?: string;
+  sendMode?: SendMode;
+}
+
+export interface PluginLxmfMessageRecord {
+  pluginId: string;
+  messageName: string;
+  wireType: string;
+  payload: unknown;
 }
 
 export interface HubSettingsRecord {
@@ -398,23 +446,100 @@ export interface WearableSettingsRecord {
   devices: WearableDeviceConfigRecord[];
 }
 
+export interface TrustedPluginPublisherRecord {
+  publisher: string;
+  publicKeyBase64: string;
+}
+
+export interface PluginTrustSettingsRecord {
+  trustedPublishers: TrustedPluginPublisherRecord[];
+}
+
 export interface AppSettingsRecord {
   displayName: string;
   autoConnectSaved: boolean;
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
   checklists: ChecklistSettingsRecord;
   wearables: WearableSettingsRecord;
+  pluginTrust: PluginTrustSettingsRecord;
+  rnode: RnodeSettingsRecord;
+}
+
+export type PluginState =
+  | "Discovered"
+  | "Disabled"
+  | "Enabled"
+  | "Loaded"
+  | "Initialized"
+  | "Running"
+  | "Stopped"
+  | "Failed";
+
+export type PluginMessageDirection = "send" | "receive";
+
+export interface PluginPermissionsRecord {
+  storagePlugin: boolean;
+  storageShared: boolean;
+  messagesRead: boolean;
+  messagesWrite: boolean;
+  lxmfSend: boolean;
+  lxmfReceive: boolean;
+  notificationsRaise: boolean;
+}
+
+export interface PluginMessageDescriptorRecord {
+  name: string;
+  version: string;
+  direction: PluginMessageDirection[];
+  schema: string;
+}
+
+export interface InstalledPluginSettingsDescriptor {
+  schemaPath: string;
+  schema: unknown;
+}
+
+export interface InstalledPluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  remApiVersion: string;
+  pluginType: string;
+  state: PluginState;
+  libraryPath: string;
+  settings?: InstalledPluginSettingsDescriptor;
+  permissions: PluginPermissionsRecord;
+  grantedPermissions: PluginPermissionsRecord;
+  messages: PluginMessageDescriptorRecord[];
+}
+
+export interface PluginCatalogDiagnostic {
+  pluginId?: string;
+  path: string;
+  message: string;
+}
+
+export interface PluginCatalogReport {
+  items: InstalledPluginRecord[];
+  errors: PluginCatalogDiagnostic[];
 }
 
 export interface SavedPeerRecord {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export interface EamSourceRecord {
@@ -459,6 +584,28 @@ export interface EamTeamSummaryRecord {
   yellowTotal: number;
   redTotal: number;
   updatedAt: number;
+}
+
+export interface EamReadinessStatusMetricRecord {
+  field: string;
+  label: string;
+  score: number;
+  band: string;
+  ringColor: string;
+}
+
+export interface EamReadinessMessageRecord {
+  callsign: string;
+  overallScore: number;
+  overallBand: string;
+  overallRingColor: string;
+}
+
+export interface EamReadinessSummaryRecord {
+  activeTotal: number;
+  updatedAt: number;
+  statusMetrics: EamReadinessStatusMetricRecord[];
+  messages: EamReadinessMessageRecord[];
 }
 
 export interface EventProjectionRecord {
@@ -664,6 +811,18 @@ export interface OperationalSummary {
   updatedAtMs: number;
 }
 
+export interface WatchStatusServerSettings {
+  enabled: boolean;
+  port: number;
+}
+
+export interface WatchStatusServerState extends WatchStatusServerSettings {
+  url: string;
+  currentUrl: string;
+  running: boolean;
+  bindError?: string;
+}
+
 export interface HubDirectoryUpdatedEvent {
   effectiveConnectedMode: boolean;
   items: HubDirectoryPeerRecord[];
@@ -692,6 +851,7 @@ export interface NodeClientEvents {
   peerChanged: PeerChangedEvent;
   peerResolved: PeerRecord;
   packetReceived: PacketReceivedEvent;
+  pluginLxmfReceived: PluginLxmfMessageRecord;
   packetSent: PacketSentEvent;
   lxmfDelivery: LxmfDeliveryEvent;
   messageReceived: MessageRecord;
@@ -714,23 +874,39 @@ export interface NodeClientEvents {
   error: NodeErrorEvent;
 }
 
+export type ChecklistDeleteOptions = {
+  deleteRemote?: boolean;
+};
+
 export interface ReticulumNodeClient {
   start(config: NodeConfig): Promise<void>;
   stop(): Promise<void>;
   restart(config: NodeConfig): Promise<void>;
   getStatus(): Promise<NodeStatus>;
+  checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }>;
+  listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]>;
+  scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
+  pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
   announceNow(): Promise<void>;
   requestPeerIdentity(destinationHex: string): Promise<void>;
   sendBytes(destinationHex: string, bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   sendLxmf(request: SendLxmfRequest): Promise<string>;
+  sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void>;
+  decodePluginLxmfFields(fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined>;
   retryLxmf(messageIdHex: string): Promise<void>;
   cancelLxmf(messageIdHex: string): Promise<void>;
   broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void>;
   setActivePropagationNode(destinationHex?: string): Promise<void>;
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
+  listPlugins(): Promise<PluginCatalogReport>;
+  installPluginArchive(filename: string, archiveBytes: Uint8Array): Promise<PluginCatalogReport>;
+  installPluginPackage(packagePath: string): Promise<PluginCatalogReport>;
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
+  grantPluginPermissions(pluginId: string, permissions: PluginPermissionsRecord): Promise<void>;
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;
@@ -741,6 +917,9 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getWatchStatusServerSettings(): Promise<WatchStatusServerState>;
+  setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void>;
+  getWatchStatusServerState(): Promise<WatchStatusServerState>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;
@@ -784,7 +963,7 @@ export interface ReticulumNodeClient {
       startTime?: string;
     };
   }): Promise<void>;
-  deleteChecklist(checklistUid: string): Promise<void>;
+  deleteChecklist(checklistUid: string, options?: ChecklistDeleteOptions): Promise<void>;
   joinChecklist(checklistUid: string): Promise<void>;
   uploadChecklist(checklistUid: string): Promise<void>;
   setChecklistTaskStatus(input: {
@@ -824,6 +1003,7 @@ export interface ReticulumNodeClient {
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
+  getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
@@ -849,6 +1029,7 @@ export interface ReticulumNodeClient {
   listSosAlerts(): Promise<SosAlertRecord[]>;
   listSosLocations(): Promise<SosLocationRecord[]>;
   listSosAudio(): Promise<SosAudioRecord[]>;
+  recordSosAudio(audio: SosAudioRecord): Promise<void>;
   setAnnounceCapabilities(capabilityString: string): Promise<void>;
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
@@ -861,18 +1042,60 @@ export interface ReticulumNodeClient {
 }
 
 export interface ReticulumNodeClientFactoryOptions {
-  mode?: "auto" | "capacitor" | "web";
+  mode?: "auto" | "capacitor" | "mock" | "web";
+}
+
+const GREEK_CALLSIGN_PREFIXES = [
+  "Alpha",
+  "Beta",
+  "Gamma",
+  "Delta",
+  "Epsilon",
+  "Zeta",
+  "Eta",
+  "Theta",
+  "Iota",
+  "Kappa",
+  "Lambda",
+  "Mu",
+  "Nu",
+  "Xi",
+  "Omicron",
+  "Pi",
+  "Rho",
+  "Sigma",
+  "Tau",
+  "Upsilon",
+  "Phi",
+  "Chi",
+  "Psi",
+  "Omega",
+] as const;
+
+export function generateDefaultCallSign(): string {
+  const prefix = GREEK_CALLSIGN_PREFIXES[Math.floor(Math.random() * GREEK_CALLSIGN_PREFIXES.length)];
+  const suffix = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
+  return `${prefix}${suffix}`;
 }
 
 export const DEFAULT_NODE_CONFIG: NodeConfig = {
-  name: "emergency-ops-mobile",
+  name: generateDefaultCallSign(),
+  pluginTrustedPublishers: [],
   tcpClients: [],
   broadcast: true,
+  transportNodeEnabled: true,
   announceIntervalSeconds: 1800,
   staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
   hubMode: "Autonomous",
   hubRefreshIntervalSeconds: 3600,
+  rnode: {
+    enabled: false,
+    peripheralId: "",
+    displayName: "",
+    region: "US915",
+    profile: "REM-LF-RURAL-v1",
+  },
 };
 
 export const DEFAULT_SOS_SETTINGS: SosSettingsRecord = {
@@ -947,6 +1170,11 @@ interface ReticulumNodePlugin {
   stopNode(): Promise<void>;
   restartNode(options: { config: Record<string, unknown> }): Promise<void>;
   getStatus(): Promise<Record<string, unknown>>;
+  checkRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  requestRnodeBluetoothPermissions(): Promise<Record<string, unknown>>;
+  listPairedRnodeBluetoothDevices(): Promise<{ items?: RnodeBleDeviceRecord[] }>;
+  scanRnodeBleDevices(options?: { timeoutMs?: number }): Promise<{ items?: RnodeBleDeviceRecord[] }>;
+  pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
   announceNow(): Promise<void>;
@@ -954,7 +1182,6 @@ interface ReticulumNodePlugin {
   send(options: {
     destinationHex: string;
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
     sendMode?: SendMode;
   }): Promise<void>;
@@ -964,16 +1191,44 @@ interface ReticulumNodePlugin {
     title?: string;
     sendMode?: SendMode;
   }): Promise<{ messageIdHex: string }>;
+  sendPluginLxmf(options: {
+    pluginId: string;
+    destinationHex: string;
+    messageName: string;
+    payload: unknown;
+    bodyUtf8: string;
+    title?: string;
+    sendMode?: SendMode;
+  }): Promise<void>;
+  decodePluginLxmfFields(options: {
+    fieldsBase64: string;
+  }): Promise<{ message?: Record<string, unknown> | null }>;
   retryLxmf(options: { messageIdHex: string }): Promise<void>;
   cancelLxmf(options: { messageIdHex: string }): Promise<void>;
   broadcast(options: {
     bytesBase64: string;
-    dedicatedFields?: Record<string, string>;
     fieldsBase64?: string;
   }): Promise<void>;
   setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
+  getPlugins(): Promise<{ items: Record<string, unknown>[]; errors?: Record<string, unknown>[] }>;
+  installPluginArchive(options: {
+    filename: string;
+    archiveBase64: string;
+  }): Promise<{
+    items: Record<string, unknown>[];
+    errors?: Record<string, unknown>[];
+  }>;
+  installPluginPackage(options: { packagePath: string }): Promise<{
+    items: Record<string, unknown>[];
+    errors?: Record<string, unknown>[];
+  }>;
+  setPluginEnabled(options: { pluginId: string; enabled: boolean }): Promise<void>;
+  grantPluginPermissions(options: {
+    pluginId: string;
+    permissions: Record<string, unknown>;
+  }): Promise<void>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
@@ -984,6 +1239,9 @@ interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getWatchStatusServerSettings(): Promise<Record<string, unknown>>;
+  setWatchStatusServerSettings(options: { enabled: boolean; port: number }): Promise<void>;
+  getWatchStatusServerState(): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;
@@ -1021,7 +1279,7 @@ interface ReticulumNodePlugin {
     checklistUid: string;
     patch: Record<string, unknown>;
   }): Promise<void>;
-  deleteChecklist(options: { checklistUid: string }): Promise<void>;
+  deleteChecklist(options: { checklistUid: string; deleteRemote?: boolean }): Promise<void>;
   joinChecklist(options: { checklistUid: string }): Promise<void>;
   uploadChecklist(options: { checklistUid: string }): Promise<void>;
   setChecklistTaskStatus(options: {
@@ -1061,6 +1319,7 @@ interface ReticulumNodePlugin {
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
+  getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
@@ -1086,6 +1345,7 @@ interface ReticulumNodePlugin {
   listSosAlerts(): Promise<{ items: Record<string, unknown>[] }>;
   listSosLocations(): Promise<{ items: Record<string, unknown>[] }>;
   listSosAudio(): Promise<{ items: Record<string, unknown>[] }>;
+  recordSosAudio(options: Record<string, unknown>): Promise<void>;
   setAnnounceCapabilities(options: { capabilityString: string }): Promise<void>;
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
@@ -1176,6 +1436,12 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
     lxmfDestinationHex: String(
       raw.lxmfDestinationHex ?? raw.lxmf_destination_hex ?? "",
     ),
+    lastError:
+      typeof raw.lastError === "string"
+        ? raw.lastError
+        : typeof raw.last_error === "string"
+          ? raw.last_error
+          : undefined,
   };
 }
 
@@ -1417,23 +1683,6 @@ function toPeerRecord(raw: Record<string, unknown>): PeerRecord {
 }
 
 
-function toDedicatedFields(raw: unknown): Record<string, string> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof value === "string") {
-      out[String(key)] = value;
-      continue;
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      out[String(key)] = String(value);
-    }
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 function toPacketReceivedEvent(
   raw: Record<string, unknown>,
 ): PacketReceivedEvent {
@@ -1447,13 +1696,23 @@ function toPacketReceivedEvent(
         ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
         : undefined,
     bytes: encoded ? decodeBase64ToBytes(encoded) : new Uint8Array(0),
-    dedicatedFields: toDedicatedFields(raw.dedicatedFields ?? raw.dedicated_fields),
     fieldsBase64:
       typeof raw.fieldsBase64 === "string"
         ? raw.fieldsBase64
         : typeof raw.fields_base64 === "string"
           ? raw.fields_base64
           : undefined,
+  };
+}
+
+function toPluginLxmfMessageRecord(
+  raw: Record<string, unknown>,
+): PluginLxmfMessageRecord {
+  return {
+    pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+    messageName: String(raw.messageName ?? raw.message_name ?? ""),
+    wireType: String(raw.wireType ?? raw.wire_type ?? ""),
+    payload: raw.payload,
   };
 }
 
@@ -1803,6 +2062,142 @@ function toErrorEvent(raw: Record<string, unknown>): NodeErrorEvent {
   };
 }
 
+function toPluginPermissionsRecord(raw: Record<string, unknown>): PluginPermissionsRecord {
+  return {
+    storagePlugin: Boolean(raw.storagePlugin ?? raw.storage_plugin),
+    storageShared: Boolean(raw.storageShared ?? raw.storage_shared),
+    messagesRead: Boolean(raw.messagesRead ?? raw.messages_read),
+    messagesWrite: Boolean(raw.messagesWrite ?? raw.messages_write),
+    lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),
+    lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
+    notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
+  };
+}
+
+function pluginPermissionsRecordToPlugin(
+  permissions: PluginPermissionsRecord,
+): Record<string, unknown> {
+  return {
+    storagePlugin: permissions.storagePlugin,
+    storageShared: permissions.storageShared,
+    messagesRead: permissions.messagesRead,
+    messagesWrite: permissions.messagesWrite,
+    lxmfSend: permissions.lxmfSend,
+    lxmfReceive: permissions.lxmfReceive,
+    notificationsRaise: permissions.notificationsRaise,
+  };
+}
+
+function toPluginMessageDirection(value: unknown): PluginMessageDirection | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "send" || normalized === "receive" ? normalized : undefined;
+}
+
+function toPluginMessageDescriptorRecord(
+  raw: Record<string, unknown>,
+): PluginMessageDescriptorRecord {
+  return {
+    name: String(raw.name ?? ""),
+    version: String(raw.version ?? ""),
+    direction: Array.isArray(raw.direction)
+      ? raw.direction.flatMap((entry) => {
+          const direction = toPluginMessageDirection(entry);
+          return direction ? [direction] : [];
+        })
+      : [],
+    schema: String(raw.schema ?? ""),
+  };
+}
+
+function toPluginState(value: unknown): PluginState {
+  const normalized = String(value ?? "");
+  switch (normalized) {
+    case "Discovered":
+    case "Enabled":
+    case "Loaded":
+    case "Initialized":
+    case "Running":
+    case "Stopped":
+    case "Failed":
+      return normalized;
+    case "Disabled":
+    default:
+      return "Disabled";
+  }
+}
+
+function toInstalledPluginRecord(raw: Record<string, unknown>): InstalledPluginRecord {
+  const settings =
+    raw.settings && typeof raw.settings === "object"
+      ? raw.settings as Record<string, unknown>
+      : undefined;
+  return {
+    id: String(raw.id ?? ""),
+    name: String(raw.name ?? ""),
+    version: String(raw.version ?? ""),
+    remApiVersion: String(raw.remApiVersion ?? raw.rem_api_version ?? ""),
+    pluginType: String(raw.pluginType ?? raw.plugin_type ?? "native"),
+    state: toPluginState(raw.state),
+    libraryPath: String(raw.libraryPath ?? raw.library_path ?? ""),
+    settings: settings
+      ? {
+          schemaPath: String(settings.schemaPath ?? settings.schema_path ?? ""),
+          schema: settings.schema,
+        }
+      : undefined,
+    permissions: toPluginPermissionsRecord(
+      raw.permissions && typeof raw.permissions === "object"
+        ? raw.permissions as Record<string, unknown>
+        : {},
+    ),
+    grantedPermissions: toPluginPermissionsRecord(
+      raw.grantedPermissions && typeof raw.grantedPermissions === "object"
+        ? raw.grantedPermissions as Record<string, unknown>
+        : raw.granted_permissions && typeof raw.granted_permissions === "object"
+          ? raw.granted_permissions as Record<string, unknown>
+          : {},
+    ),
+    messages: Array.isArray(raw.messages)
+      ? raw.messages
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toPluginMessageDescriptorRecord)
+      : [],
+  };
+}
+
+function toPluginCatalogDiagnostic(raw: Record<string, unknown>): PluginCatalogDiagnostic {
+  return {
+    pluginId: typeof raw.pluginId === "string"
+      ? raw.pluginId
+      : typeof raw.plugin_id === "string"
+        ? raw.plugin_id
+        : undefined,
+    path: String(raw.path ?? ""),
+    message: String(raw.message ?? ""),
+  };
+}
+
+function toPluginCatalogReport(raw: Record<string, unknown>): PluginCatalogReport {
+  return {
+    items: Array.isArray(raw.items)
+      ? raw.items
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toInstalledPluginRecord)
+      : [],
+    errors: Array.isArray(raw.errors)
+      ? raw.errors
+          .filter((entry): entry is Record<string, unknown> =>
+            Boolean(entry && typeof entry === "object"),
+          )
+          .map(toPluginCatalogDiagnostic)
+      : [],
+  };
+}
+
 function toProjectionInvalidationEvent(raw: Record<string, unknown>): ProjectionInvalidationEvent {
   return {
     scope: String(raw.scope ?? "Peers") as ProjectionScope,
@@ -1890,6 +2285,35 @@ function toWearableSettingsRecord(raw: Record<string, unknown>): WearableSetting
   };
 }
 
+function normalizeRnodeRegion(value: unknown): RnodeRegion {
+  return String(value ?? "").trim().toUpperCase() === "EU868" ? "EU868" : "US915";
+}
+
+function normalizeRnodeProfile(value: unknown): RnodeProfileId {
+  switch (String(value ?? "").trim()) {
+    case "REM-MF-URBAN-v1":
+      return "REM-MF-URBAN-v1";
+    case "REM-LM-EXTREME-v1":
+      return "REM-LM-EXTREME-v1";
+    case "REM-LF-RURAL-v1":
+    default:
+      return "REM-LF-RURAL-v1";
+  }
+}
+
+function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    enabled: Boolean(raw.enabled),
+    peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
+    displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
+    region: normalizeRnodeRegion(raw.region),
+    profile: normalizeRnodeProfile(raw.profile),
+  };
+}
+
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
   if (!raw || Object.keys(raw).length === 0) {
     return null;
@@ -1905,17 +2329,20 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
   const hub = (raw.hub ?? {}) as Record<string, unknown>;
   const checklists = (raw.checklists ?? {}) as Record<string, unknown>;
   const wearables = (raw.wearables ?? {}) as Record<string, unknown>;
+  const pluginTrust = (raw.pluginTrust ?? raw.plugin_trust ?? {}) as Record<string, unknown>;
   const defaultTaskDueStepMinutes = Math.trunc(Number(checklists.defaultTaskDueStepMinutes ?? 30));
+  const rnode = normalizeRnodeSettings(raw.rnode);
   return {
     displayName: String(raw.displayName ?? ""),
     autoConnectSaved: Boolean(raw.autoConnectSaved),
     announceCapabilities: String(raw.announceCapabilities ?? ""),
     tcpClients: Array.isArray(raw.tcpClients) ? raw.tcpClients.map((entry) => String(entry)) : [],
     broadcast: Boolean(raw.broadcast),
+    transportNodeEnabled: Boolean(raw.transportNodeEnabled ?? raw.transport_node_enabled ?? true),
     announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
     telemetry: {
       enabled: Boolean(telemetry.enabled),
-      publishIntervalSeconds: Number(telemetry.publishIntervalSeconds ?? 10),
+      publishIntervalSeconds: Number(telemetry.publishIntervalSeconds ?? 360),
       accuracyThresholdMeters: toOptionalNumber(telemetry.accuracyThresholdMeters),
       staleAfterMinutes: Number(telemetry.staleAfterMinutes ?? 30),
       expireAfterMinutes: Number(telemetry.expireAfterMinutes ?? 180),
@@ -1933,7 +2360,35 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
         : 30,
     },
     wearables: toWearableSettingsRecord(wearables),
+    pluginTrust: {
+      trustedPublishers: normalizeTrustedPluginPublishers(
+        pluginTrust.trustedPublishers ?? pluginTrust.trusted_publishers,
+      ),
+    },
+    rnode,
   };
+}
+
+function normalizeTrustedPluginPublishers(value: unknown): TrustedPluginPublisherRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return undefined;
+      }
+      const record = entry as Record<string, unknown>;
+      const publisher = String(record.publisher ?? "").trim();
+      const publicKeyBase64 = String(
+        record.publicKeyBase64 ?? record.public_key_base64 ?? "",
+      ).trim();
+      if (!publisher || !publicKeyBase64) {
+        return undefined;
+      }
+      return { publisher, publicKeyBase64 };
+    })
+    .filter((entry): entry is TrustedPluginPublisherRecord => Boolean(entry));
 }
 
 function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
@@ -1941,6 +2396,20 @@ function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
     destination: normalizeHex(raw.destination ?? raw.destinationHex ?? ""),
     label: typeof raw.label === "string" ? raw.label : undefined,
     savedAt: Number(raw.savedAt ?? raw.saved_at_ms ?? raw.savedAtMs ?? Date.now()),
+    identityHex: toOptionalHex(raw.identityHex ?? raw.identity_hex),
+    lxmfDestinationHex: toOptionalHex(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex),
+    appData: typeof raw.appData === "string"
+      ? raw.appData
+      : typeof raw.app_data === "string"
+        ? raw.app_data
+        : undefined,
+    displayName: typeof raw.displayName === "string"
+      ? raw.displayName
+      : typeof raw.display_name === "string"
+        ? raw.display_name
+        : undefined,
+    lastRouteSeenAtMs: toOptionalNumber(raw.lastRouteSeenAtMs ?? raw.last_route_seen_at_ms),
+    lastHops: toOptionalNumber(raw.lastHops ?? raw.last_hops),
   };
 }
 
@@ -2073,6 +2542,54 @@ function toEamTeamSummaryRecord(raw: Record<string, unknown>): EamTeamSummaryRec
     yellowTotal: Number(source.yellowTotal ?? 0),
     redTotal: Number(source.redTotal ?? 0),
     updatedAt: Number(source.updatedAt ?? Date.now()),
+  };
+}
+
+function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
+  return {
+    activeTotal: 0,
+    updatedAt: 0,
+    statusMetrics: [],
+    messages: [],
+  };
+}
+
+function toEamReadinessStatusMetricRecord(raw: Record<string, unknown>): EamReadinessStatusMetricRecord {
+  return {
+    field: String(raw.field ?? ""),
+    label: String(raw.label ?? ""),
+    score: Number(raw.score ?? 0),
+    band: String(raw.band ?? "Red"),
+    ringColor: String(raw.ringColor ?? raw.ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessMessageRecord(raw: Record<string, unknown>): EamReadinessMessageRecord {
+  return {
+    callsign: String(raw.callsign ?? ""),
+    overallScore: Number(raw.overallScore ?? raw.overall_score ?? 0),
+    overallBand: String(raw.overallBand ?? raw.overall_band ?? "Unknown"),
+    overallRingColor: String(raw.overallRingColor ?? raw.overall_ring_color ?? "#ff3648"),
+  };
+}
+
+function toEamReadinessSummaryRecord(raw: Record<string, unknown>): EamReadinessSummaryRecord {
+  const statusMetrics = Array.isArray(raw.statusMetrics)
+    ? raw.statusMetrics
+    : Array.isArray(raw.status_metrics)
+      ? raw.status_metrics
+      : [];
+  const messages = Array.isArray(raw.messages) ? raw.messages : [];
+  return {
+    activeTotal: Number(raw.activeTotal ?? raw.active_total ?? 0),
+    updatedAt: Number(raw.updatedAt ?? raw.updated_at_ms ?? raw.updated_at ?? 0),
+    statusMetrics: statusMetrics
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessStatusMetricRecord),
+    messages: messages
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map(toEamReadinessMessageRecord)
+      .filter((entry) => entry.callsign.length > 0),
   };
 }
 
@@ -3097,6 +3614,18 @@ function toSosAudioRecord(raw: Record<string, unknown>): SosAudioRecord {
   };
 }
 
+function sosAudioToPlugin(audio: SosAudioRecord): Record<string, unknown> {
+  return {
+    audioId: audio.audioId,
+    incidentId: audio.incidentId,
+    sourceHex: audio.sourceHex,
+    path: audio.path,
+    mimeType: audio.mimeType,
+    durationSeconds: audio.durationSeconds,
+    createdAtMs: audio.createdAtMs,
+  };
+}
+
 function sosSettingsToPlugin(settings: SosSettingsRecord): Record<string, unknown> {
   return {
     enabled: settings.enabled,
@@ -3231,12 +3760,45 @@ function toWearablePermissionState(raw: Record<string, unknown>): WearablePermis
   };
 }
 
+function normalizeWatchStatusPort(value: unknown): number {
+  const parsed = Number(value ?? 29_863);
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
+    ? parsed
+    : 29_863;
+}
+
+function toWatchStatusServerState(raw: Record<string, unknown> = {}): WatchStatusServerState {
+  const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
+  const port = normalizeWatchStatusPort(raw.port);
+  const url = String(
+    raw.url
+      ?? raw.currentUrl
+      ?? raw.current_url
+      ?? `http://localhost:${port}/info.json`,
+  );
+
+  return {
+    enabled,
+    port,
+    url,
+    currentUrl: String(raw.currentUrl ?? raw.current_url ?? url),
+    running: Boolean(raw.running),
+    bindError: String(raw.bindError ?? raw.bind_error ?? ""),
+  };
+}
+
 function configToPlugin(config: NodeConfig): Record<string, unknown> {
   return {
     name: config.name,
     storageDir: config.storageDir,
+    pluginAndroidAbi: config.pluginAndroidAbi,
+    pluginTrustedPublishers: (config.pluginTrustedPublishers ?? []).map((publisher) => ({
+      publisher: publisher.publisher,
+      publicKeyBase64: publisher.publicKeyBase64,
+    })),
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
+    transportNodeEnabled: config.transportNodeEnabled,
     announceIntervalSeconds: config.announceIntervalSeconds,
     staleAfterMinutes: config.staleAfterMinutes,
     announceCapabilities: config.announceCapabilities,
@@ -3245,6 +3807,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     hubApiBaseUrl: config.hubApiBaseUrl,
     hubApiKey: config.hubApiKey,
     hubRefreshIntervalSeconds: config.hubRefreshIntervalSeconds,
+    rnode: config.rnode,
   };
 }
 
@@ -3285,11 +3848,33 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
         this.listenerHandles.push(handle);
       };
 
+      const registerPacketReceived = async () => {
+        if (generation !== this.generation) {
+          return;
+        }
+        const handle = await Promise.resolve(
+          this.plugin.addListener("packetReceived", (payload: unknown) => {
+            const objectPayload =
+              payload && typeof payload === "object"
+                ? (payload as Record<string, unknown>)
+                : {};
+            const packet = toPacketReceivedEvent(objectPayload);
+            this.emitter.emit("packetReceived", packet);
+            void this.emitPluginLxmfReceived(packet, generation);
+          }),
+        );
+        if (generation !== this.generation) {
+          await handle.remove().catch(() => undefined);
+          return;
+        }
+        this.listenerHandles.push(handle);
+      };
+
       await register("statusChanged", toStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);
       await register("peerResolved", toPeerRecord);
-      await register("packetReceived", toPacketReceivedEvent);
+      await registerPacketReceived();
       await register("packetSent", toPacketSentEvent);
       await register("lxmfDelivery", toLxmfDeliveryEvent);
       await register("messageReceived", toMessageRecord);
@@ -3324,6 +3909,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return this.attachPromise;
   }
 
+  private async emitPluginLxmfReceived(
+    packet: PacketReceivedEvent,
+    generation: number,
+  ): Promise<void> {
+    if (!packet.fieldsBase64 || generation !== this.generation) {
+      return;
+    }
+    try {
+      const message = await this.decodePluginLxmfFields(packet.fieldsBase64);
+      if (message && generation === this.generation) {
+        this.emitter.emit("pluginLxmfReceived", message);
+      }
+    } catch {
+      // Plugin packets are optional overlays on raw packet events; malformed or
+      // ungranted plug-in fields should not break normal packet delivery.
+    }
+  }
+
   private async ready(): Promise<void> {
     await this.attachListeners();
   }
@@ -3347,6 +3950,42 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const status = await this.plugin.getStatus();
     return toNodeStatus(status);
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.checkRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    await this.ready();
+    const result = await this.plugin.requestRnodeBluetoothPermissions();
+    return { bluetooth: String(result.bluetooth ?? "unavailable") };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPairedRnodeBluetoothDevices();
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.scanRnodeBleDevices({ timeoutMs });
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    await this.ready();
+    const result = await this.plugin.pairRnodeBleDevice({ id });
+    return {
+      id: String(result.id ?? id),
+      address: String(result.address ?? result.id ?? id),
+      paired: Boolean(result.paired),
+      bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
+      bondState: String(result.bondState ?? result.bond_state ?? "none"),
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -3378,7 +4017,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.send({
       destinationHex: normalizeHex(destinationHex),
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
       sendMode: options?.sendMode,
     });
@@ -3395,6 +4033,28 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return normalizeHex(String(result.messageIdHex ?? ""));
   }
 
+  async sendPluginLxmf(request: PluginLxmfSendRequest): Promise<void> {
+    await this.ready();
+    await this.plugin.sendPluginLxmf({
+      pluginId: request.pluginId.trim(),
+      destinationHex: normalizeHex(request.destinationHex),
+      messageName: request.messageName,
+      payload: request.payload ?? {},
+      bodyUtf8: request.bodyUtf8,
+      title: request.title,
+      sendMode: request.sendMode,
+    });
+  }
+
+  async decodePluginLxmfFields(fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    await this.ready();
+    const result = await this.plugin.decodePluginLxmfFields({ fieldsBase64 });
+    if (!result.message || typeof result.message !== "object" || Array.isArray(result.message)) {
+      return undefined;
+    }
+    return toPluginLxmfMessageRecord(result.message as Record<string, unknown>);
+  }
+
   async retryLxmf(messageIdHex: string): Promise<void> {
     await this.ready();
     await this.plugin.retryLxmf({ messageIdHex: normalizeHex(messageIdHex) });
@@ -3409,7 +4069,6 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     await this.plugin.broadcast({
       bytesBase64: encodeBytesToBase64(bytes),
-      dedicatedFields: options?.dedicatedFields,
       fieldsBase64: options?.fieldsBase64,
     });
   }
@@ -3430,6 +4089,43 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const result = await this.plugin.listAnnounces();
     return Array.isArray(result.items) ? result.items.map(toAnnounceRecord) : [];
+  }
+
+  async listPlugins(): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.getPlugins());
+  }
+
+  async installPluginArchive(
+    filename: string,
+    archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.installPluginArchive({
+      filename,
+      archiveBase64: encodeBytesToBase64(archiveBytes),
+    }));
+  }
+
+  async installPluginPackage(packagePath: string): Promise<PluginCatalogReport> {
+    await this.ready();
+    return toPluginCatalogReport(await this.plugin.installPluginPackage({ packagePath }));
+  }
+
+  async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    await this.ready();
+    await this.plugin.setPluginEnabled({ pluginId, enabled });
+  }
+
+  async grantPluginPermissions(
+    pluginId: string,
+    permissions: PluginPermissionsRecord,
+  ): Promise<void> {
+    await this.ready();
+    await this.plugin.grantPluginPermissions({
+      pluginId,
+      permissions: pluginPermissionsRecordToPlugin(permissions),
+    });
   }
 
   async listPeers(): Promise<PeerRecord[]> {
@@ -3485,6 +4181,24 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async setAppSettings(settings: AppSettingsRecord): Promise<void> {
     await this.ready();
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
+  }
+
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerSettings());
+  }
+
+  async setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void> {
+    await this.ready();
+    await this.plugin.setWatchStatusServerSettings({
+      enabled: Boolean(settings.enabled),
+      port: normalizeWatchStatusPort(settings.port),
+    });
+  }
+
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> {
+    await this.ready();
+    return toWatchStatusServerState(await this.plugin.getWatchStatusServerState());
   }
 
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
@@ -3580,9 +4294,12 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.updateChecklist(input);
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, options: ChecklistDeleteOptions = {}): Promise<void> {
     await this.ready();
-    await this.plugin.deleteChecklist({ checklistUid });
+    await this.plugin.deleteChecklist({
+      checklistUid,
+      deleteRemote: options.deleteRemote ?? false,
+    });
   }
 
   async joinChecklist(checklistUid: string): Promise<void> {
@@ -3667,6 +4384,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
+  }
+
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> {
+    await this.ready();
+    return toEamReadinessSummaryRecord(await this.plugin.getEamReadinessSummary());
   }
 
   async getEvents(): Promise<EventProjectionRecord[]> {
@@ -3817,6 +4539,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     return Array.isArray(result.items) ? result.items.map(toSosAudioRecord) : [];
   }
 
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    await this.ready();
+    await this.plugin.recordSosAudio(sosAudioToPlugin(audio));
+  }
+
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
     await this.ready();
     await this.plugin.setAnnounceCapabilities({ capabilityString });
@@ -3858,13 +4585,17 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
 
 class WebReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  private status: NodeStatus = {
-    running: false,
-    name: "",
-    identityHex: randomHex32(),
-    appDestinationHex: randomHex32(),
-    lxmfDestinationHex: randomHex32(),
-  };
+  private status: NodeStatus = (() => {
+    const lxmfDestinationHex = randomHex32();
+    return {
+      running: false,
+      name: "",
+      identityHex: randomHex32(),
+      appDestinationHex: lxmfDestinationHex,
+      lxmfDestinationHex,
+    };
+  })();
+  private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
   private readonly connected = new Set<string>();
   private readonly savedPeers = new Map<string, SavedPeerRecord>();
   private readonly checklists: ChecklistRecord[] = [];
@@ -3881,15 +4612,33 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       ...this.connected.values(),
     ]);
     const now = Date.now();
-    return [...destinations].map((destinationHex) => ({
-      destinationHex,
-      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
-      saved: this.savedPeers.has(destinationHex),
-      stale: false,
-      activeLink: this.connected.has(destinationHex),
-      hubDerived: false,
-      lastSeenAtMs: now,
-    }));
+    return [...destinations].map((destinationHex) => {
+      const activeLink = this.connected.has(destinationHex);
+      return {
+        destinationHex,
+        lxmfDestinationHex: destinationHex,
+        state: activeLink ? "Connected" : "Disconnected",
+        saved: this.savedPeers.has(destinationHex),
+        stale: false,
+        activeLink,
+        hubDerived: false,
+        lastSeenAtMs: activeLink ? now : 0,
+      };
+    });
+  }
+
+  private emitLocalAnnounce(): void {
+    this.emitter.emit("announceReceived", {
+      destinationHex: this.status.lxmfDestinationHex,
+      identityHex: this.status.identityHex,
+      destinationKind: "lxmf_delivery",
+      announceClass: "LxmfDelivery",
+      appData: this.capabilities,
+      displayName: this.status.name,
+      hops: 1,
+      interfaceHex: randomHex32(),
+      receivedAtMs: Date.now(),
+    });
   }
 
   async start(config: NodeConfig): Promise<void> {
@@ -3911,7 +4660,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
         change: {
           destinationHex,
           state: "Disconnected",
-          saved: false,
+          saved: this.savedPeers.has(destinationHex),
           stale: false,
           activeLink: false,
           hubDerived: false,
@@ -3933,6 +4682,32 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
 
   async getStatus(): Promise<NodeStatus> {
     return { ...this.status };
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -3969,7 +4744,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        saved: false,
+        saved: this.savedPeers.has(normalized),
         stale: false,
         activeLink: false,
         hubDerived: false,
@@ -3978,7 +4753,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     });
   }
 
-  async announceNow(): Promise<void> {}
+  async announceNow(): Promise<void> {
+    this.emitLocalAnnounce();
+  }
 
   async requestPeerIdentity(_destinationHex: string): Promise<void> {}
 
@@ -4011,6 +4788,14 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return messageIdHex;
   }
 
+  async sendPluginLxmf(_request: PluginLxmfSendRequest): Promise<void> {
+    throw new Error("Plug-in LXMF sends require the native REM plug-in host.");
+  }
+
+  async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    return undefined;
+  }
+
   async retryLxmf(_messageIdHex: string): Promise<void> {}
 
   async cancelLxmf(_messageIdHex: string): Promise<void> {}
@@ -4025,7 +4810,10 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     }
   }
 
-  async setAnnounceCapabilities(_capabilityString: string): Promise<void> {}
+  async setAnnounceCapabilities(capabilityString: string): Promise<void> {
+    this.capabilities = capabilityString;
+    this.emitLocalAnnounce();
+  }
 
   async setLogLevel(level: LogLevel): Promise<void> {
     this.emitter.emit("log", {
@@ -4046,6 +4834,28 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async listAnnounces(): Promise<AnnounceRecord[]> {
     return [];
   }
+
+  async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginArchive(
+    _filename: string,
+    _archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginPackage(_packagePath: string): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+
+  async grantPluginPermissions(
+    _pluginId: string,
+    _permissions: PluginPermissionsRecord,
+  ): Promise<void> {}
 
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
@@ -4080,6 +4890,9 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -4098,7 +4911,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     }
   }
   async getOperationalSummary(): Promise<OperationalSummary> {
-    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
+    const connectedPeerCount = countConnectedSavedPeers(this.connected, this.savedPeers);
     return {
       running: this.status.running,
       peerCountTotal: this.currentPeerRecords().length,
@@ -4117,6 +4930,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
@@ -4194,7 +5008,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "webChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -4267,6 +5081,14 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
@@ -4343,15 +5165,25 @@ function randomHex32(): string {
   return out;
 }
 
+function countConnectedSavedPeers(
+  connected: Set<string>,
+  savedPeers: Map<string, SavedPeerRecord>,
+): number {
+  return [...connected].filter((destination) => savedPeers.has(destination)).length;
+}
+
 class MockReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  private status: NodeStatus = {
-    running: false,
-    name: "mock-node",
-    identityHex: randomHex32(),
-    appDestinationHex: randomHex32(),
-    lxmfDestinationHex: randomHex32(),
-  };
+  private status: NodeStatus = (() => {
+    const lxmfDestinationHex = randomHex32();
+    return {
+      running: false,
+      name: "mock-node",
+      identityHex: randomHex32(),
+      appDestinationHex: lxmfDestinationHex,
+      lxmfDestinationHex,
+    };
+  })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
   private announceTimer: number | null = null;
   private readonly connected = new Set<string>();
@@ -4370,23 +5202,27 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       ...this.connected.values(),
     ]);
     const now = Date.now();
-    return [...destinations].map((destinationHex) => ({
-      destinationHex,
-      state: this.connected.has(destinationHex) ? "Connected" : "Disconnected",
-      saved: this.savedPeers.has(destinationHex),
-      stale: false,
-      activeLink: this.connected.has(destinationHex),
-      hubDerived: false,
-      lastSeenAtMs: now,
-    }));
+    return [...destinations].map((destinationHex) => {
+      const activeLink = this.connected.has(destinationHex);
+      return {
+        destinationHex,
+        lxmfDestinationHex: destinationHex,
+        state: activeLink ? "Connected" : "Disconnected",
+        saved: this.savedPeers.has(destinationHex),
+        stale: false,
+        activeLink,
+        hubDerived: false,
+        lastSeenAtMs: activeLink ? now : 0,
+      };
+    });
   }
 
   private emitAnnounce(
     destinationHex: string,
     appData: string,
     identityHex = randomHex32(),
-    destinationKind: AnnounceDestinationKind = "app",
-    announceClass: AnnounceClass = "PeerApp",
+    destinationKind: AnnounceDestinationKind = "lxmf_delivery",
+    announceClass: AnnounceClass = "LxmfDelivery",
   ): void {
     this.emitter.emit("announceReceived", {
       destinationHex,
@@ -4406,10 +5242,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     }
     for (const [index, peer] of MOCK_ANNOUNCED_PEERS.entries()) {
       const identityHex = MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32();
-      this.emitAnnounce(peer, "R3AKT,EMergencyMessages", identityHex, "app");
-      this.emitAnnounce(randomHex32(), "6ac46f686174", identityHex, "lxmf_delivery");
+      this.emitAnnounce(peer, this.capabilities, identityHex);
     }
-    this.emitAnnounce(randomHex32(), "LXMF,Chat", randomHex32(), "other");
+    this.emitAnnounce(randomHex32(), "LXMF,Chat", randomHex32(), "other", "Other");
 
     this.announceTimer = window.setInterval(() => {
       const shuffled = [...MOCK_ANNOUNCED_PEERS.entries()].sort(() => Math.random() - 0.5);
@@ -4418,7 +5253,6 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         destinationHex,
         Math.random() > 0.25 ? this.capabilities : "R3AKT,Other",
         MOCK_ANNOUNCED_IDENTITIES[index] ?? randomHex32(),
-        "app",
       );
     }, 5000);
   }
@@ -4446,6 +5280,19 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async stop(): Promise<void> {
+    for (const destinationHex of this.connected) {
+      this.emitter.emit("peerChanged", {
+        change: {
+          destinationHex,
+          state: "Disconnected",
+          saved: this.savedPeers.has(destinationHex),
+          stale: false,
+          activeLink: false,
+          hubDerived: false,
+          lastSeenAtMs: Date.now(),
+        },
+      });
+    }
     this.status = {
       ...this.status,
       running: false,
@@ -4462,6 +5309,32 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async getStatus(): Promise<NodeStatus> {
     return { ...this.status };
+  }
+
+  async checkRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async requestRnodeBluetoothPermissions(): Promise<{ bluetooth: string }> {
+    return { bluetooth: "unavailable" };
+  }
+
+  async listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async scanRnodeBleDevices(_timeoutMs?: number): Promise<RnodeBleDeviceRecord[]> {
+    return [];
+  }
+
+  async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
+    return {
+      id,
+      address: id,
+      paired: false,
+      bondingStarted: false,
+      bondState: "unavailable",
+    };
   }
 
   async connectPeer(destinationHex: string): Promise<void> {
@@ -4499,7 +5372,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       change: {
         destinationHex: normalized,
         state: "Disconnected",
-        saved: false,
+        saved: this.savedPeers.has(normalized),
         stale: false,
         activeLink: false,
         hubDerived: false,
@@ -4509,7 +5382,11 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   }
 
   async announceNow(): Promise<void> {
-    this.emitAnnounce(this.status.appDestinationHex, this.capabilities, this.status.identityHex, "app");
+    this.emitAnnounce(
+      this.status.lxmfDestinationHex,
+      this.capabilities,
+      this.status.identityHex,
+    );
   }
 
   async requestPeerIdentity(_destinationHex: string): Promise<void> {}
@@ -4556,6 +5433,14 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return messageIdHex;
   }
 
+  async sendPluginLxmf(_request: PluginLxmfSendRequest): Promise<void> {
+    throw new Error("Plug-in LXMF sends require the native REM plug-in host.");
+  }
+
+  async decodePluginLxmfFields(_fieldsBase64: string): Promise<PluginLxmfMessageRecord | undefined> {
+    return undefined;
+  }
+
   async retryLxmf(_messageIdHex: string): Promise<void> {}
 
   async cancelLxmf(_messageIdHex: string): Promise<void> {}
@@ -4572,7 +5457,11 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
 
   async setAnnounceCapabilities(capabilityString: string): Promise<void> {
     this.capabilities = capabilityString;
-    this.emitAnnounce(this.status.appDestinationHex, capabilityString);
+    this.emitAnnounce(
+      this.status.lxmfDestinationHex,
+      capabilityString,
+      this.status.identityHex,
+    );
   }
 
   async setLogLevel(level: LogLevel): Promise<void> {
@@ -4594,6 +5483,28 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listAnnounces(): Promise<AnnounceRecord[]> {
     return [];
   }
+
+  async listPlugins(): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginArchive(
+    _filename: string,
+    _archiveBytes: Uint8Array,
+  ): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async installPluginPackage(_packagePath: string): Promise<PluginCatalogReport> {
+    return { items: [], errors: [] };
+  }
+
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+
+  async grantPluginPermissions(
+    _pluginId: string,
+    _permissions: PluginPermissionsRecord,
+  ): Promise<void> {}
 
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
@@ -4628,6 +5539,9 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
+  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
+  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
+  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }
@@ -4646,7 +5560,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     }
   }
   async getOperationalSummary(): Promise<OperationalSummary> {
-    const connectedPeerCount = [...this.connected].filter((destination) => this.savedPeers.has(destination)).length;
+    const connectedPeerCount = countConnectedSavedPeers(this.connected, this.savedPeers);
     return {
       running: this.status.running,
       peerCountTotal: this.currentPeerRecords().length,
@@ -4665,6 +5579,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
+  async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
@@ -4742,7 +5657,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     emitChecklistInvalidations(this.emitter, input.checklistUid, "mockChecklistUpdate");
   }
 
-  async deleteChecklist(checklistUid: string): Promise<void> {
+  async deleteChecklist(checklistUid: string, _options: ChecklistDeleteOptions = {}): Promise<void> {
     const checklist = findInMemoryChecklist(this.checklists, checklistUid);
     checklist.deletedAt = new Date().toISOString();
     checklist.updatedAt = checklist.deletedAt;
@@ -4815,6 +5730,14 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listSosAlerts(): Promise<SosAlertRecord[]> { return [...this.sosAlerts]; }
   async listSosLocations(): Promise<SosLocationRecord[]> { return [...this.sosLocations]; }
   async listSosAudio(): Promise<SosAudioRecord[]> { return [...this.sosAudio]; }
+  async recordSosAudio(audio: SosAudioRecord): Promise<void> {
+    const index = this.sosAudio.findIndex((candidate) => candidate.audioId === audio.audioId);
+    if (index >= 0) {
+      this.sosAudio[index] = { ...audio };
+      return;
+    }
+    this.sosAudio.unshift({ ...audio });
+  }
 
   async logMessage(level: LogLevel, message: string): Promise<void> {
     this.emitter.emit("log", { level, message });
@@ -4846,6 +5769,9 @@ export function createReticulumNodeClient(
   const mode = options.mode ?? "auto";
   if (mode === "web") {
     return new WebReticulumNodeClient();
+  }
+  if (mode === "mock") {
+    return new MockReticulumNodeClient();
   }
   if (mode === "capacitor") {
     return new CapacitorReticulumNodeClient();

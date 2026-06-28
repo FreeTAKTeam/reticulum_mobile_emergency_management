@@ -18,6 +18,8 @@ public final class ReticulumBridge {
     public static native int requestPeerIdentity(String destinationHex);
     public static native int sendJson(String payloadJson);
     public static native String sendLxmfJson(String payloadJson);
+    public static native int sendPluginLxmfJson(String androidAbi, String payloadJson);
+    public static native String decodePluginLxmfFieldsJson(String androidAbi, String payloadJson);
     public static native int retryLxmfJson(String payloadJson);
     public static native int cancelLxmfJson(String payloadJson);
     public static native int broadcastBase64(String bytesBase64);
@@ -56,6 +58,7 @@ public final class ReticulumBridge {
     public static native int upsertEamJson(String payloadJson);
     public static native int deleteEamJson(String payloadJson);
     public static native String getEamTeamSummaryJson(String payloadJson);
+    public static native String getEamReadinessSummaryJson();
     public static native String getEventsJson();
     public static native int upsertEventJson(String payloadJson);
     public static native int deleteEventJson(String payloadJson);
@@ -76,9 +79,14 @@ public final class ReticulumBridge {
     public static native String listSosAlertsJson();
     public static native String listSosLocationsJson();
     public static native String listSosAudioJson();
+    public static native int recordSosAudioJson(String payloadJson);
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();
+    public static native String getPluginsJson(String androidAbi);
+    public static native String installPluginPackageJson(String androidAbi, String payloadJson);
+    public static native int setPluginEnabledJson(String androidAbi, String payloadJson);
+    public static native int grantPluginPermissionsJson(String androidAbi, String payloadJson);
     public static native String nextEventJson(int timeoutMs);
     public static native String takeLastErrorJson();
 }

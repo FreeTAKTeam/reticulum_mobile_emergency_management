@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
@@ -14,14 +14,25 @@ import {
 import {
   DEFAULT_R3AKT_TEAM_COLOR,
   R3AKT_TEAM_COLORS,
+  type R3aktTeamColor,
   formatR3aktTeamColorLabel,
   normalizeR3aktTeamColor,
 } from "../utils/r3akt";
 
+const TEAM_COLOR_FILTER_ALL = "ALL";
+type TeamColorFilter = typeof TEAM_COLOR_FILTER_ALL | R3aktTeamColor;
+
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
-const router = useRouter();
+const route = useRoute();
 
+const teamColorFilterOptions: Array<{ value: TeamColorFilter; label: string }> = [
+  { value: TEAM_COLOR_FILTER_ALL, label: "All teams" },
+  ...R3AKT_TEAM_COLORS.map((value) => ({
+    value,
+    label: formatR3aktTeamColorLabel(value),
+  })),
+];
 const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
   value,
   label: formatR3aktTeamColorLabel(value),
@@ -57,8 +68,31 @@ const createForm = reactive({
 });
 const isCreateFormVisible = shallowRef(false);
 const editingCallsign = shallowRef<string | null>(null);
+const selectedTeamColorFilter = shallowRef<TeamColorFilter>(TEAM_COLOR_FILTER_ALL);
 
 const messages = computed(() => messagesStore.messages);
+const filteredMessages = computed(() => {
+  if (selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL) {
+    return messages.value;
+  }
+  return messages.value.filter((message) =>
+    normalizeR3aktTeamColor(message.groupName) === selectedTeamColorFilter.value,
+  );
+});
+const messageCountLabel = computed(() =>
+  selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL
+    ? `${messagesStore.activeCount} MSG`
+    : `${filteredMessages.value.length}/${messagesStore.activeCount} MSG`,
+);
+const filterStatusLabel = computed(() =>
+  selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL
+    ? "All"
+    : formatR3aktTeamColorLabel(selectedTeamColorFilter.value),
+);
+const selectedCallsign = computed(() => {
+  const value = route.query.callsign;
+  return Array.isArray(value) ? (value[0]?.trim() ?? "") : (value?.trim() ?? "");
+});
 const editableCallsigns = computed(() =>
   messages.value
     .filter((message) => messagesStore.canManageMessage(message))
@@ -94,10 +128,6 @@ function toggleCreateForm(): void {
     resetCreateForm();
   }
   isCreateFormVisible.value = !isCreateFormVisible.value;
-}
-
-function openHelp(): void {
-  router.push("/messages/help").catch(() => undefined);
 }
 
 function copyMessageStatuses(message: Pick<ActionMessage, ActionMessageStatusField>): void {
@@ -186,25 +216,51 @@ function deleteMessage(callsign: string): void {
 <template>
   <section class="view">
     <header class="view-header">
-      <div>
-        <h1>Emergency Action Messages</h1>
-        <p>Status updates from field members.</p>
-      </div>
       <div class="header-actions">
-        <span class="badge"># {{ messagesStore.activeCount }} MSG</span>
-        <span v-if="messagesStore.draftCount > 0" class="badge badge-warning">
-          {{ messagesStore.draftCount }} Draft
+        <span class="utility-chip count-chip">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4 4 8l8 4 8-4-8-4Z" />
+            <path d="M4 12l8 4 8-4" />
+            <path d="M4 16l8 4 8-4" />
+          </svg>
+          <span>{{ messageCountLabel }}</span>
         </span>
-        <button
-          class="help-trigger"
-          type="button"
-          aria-label="Open status color help"
-          @click="openHelp"
+        <label
+          class="utility-chip filter-chip"
+          for="team-color-filter"
         >
-          ?
-        </button>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 5h16l-6 7v5l-4 2v-7L4 5Z" />
+          </svg>
+          <span>Team: {{ filterStatusLabel }}</span>
+          <select
+            id="team-color-filter"
+            v-model="selectedTeamColorFilter"
+            aria-label="Team color filter"
+          >
+            <option
+              v-for="option in teamColorFilterOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <RouterLink
+          class="utility-chip help-trigger"
+          to="/messages/help"
+          aria-label="Open status color help"
+        >
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.75 9a2.25 2.25 0 0 1 4.13 1.25c0 1.5-1.88 1.88-1.88 3.25" />
+            <path d="M12 17h.01" />
+          </svg>
+          <span>Status Help</span>
+        </RouterLink>
         <button
-          class="create-toggle"
+          class="create-toggle utility-new"
           type="button"
           aria-label="Add message"
           :aria-expanded="isCreateFormVisible"
@@ -213,7 +269,7 @@ function deleteMessage(callsign: string): void {
           :title="canManageMessages ? 'Add message' : localSaveHint"
           @click="toggleCreateForm"
         >
-          +
+          <span aria-hidden="true">+</span>
         </button>
       </div>
     </header>
@@ -276,8 +332,9 @@ function deleteMessage(callsign: string): void {
 
     <div class="desktop-only">
       <ActionMessageTable
-        :messages="messages"
+        :messages="filteredMessages"
         :editable-callsigns="editableCallsigns"
+        :selected-callsign="selectedCallsign"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"
@@ -285,8 +342,9 @@ function deleteMessage(callsign: string): void {
     </div>
     <div class="mobile-only">
       <ActionMessageList
-        :messages="messages"
+        :messages="filteredMessages"
         :editable-callsigns="editableCallsigns"
+        :selected-callsign="selectedCallsign"
         @edit="editMessage"
         @delete="deleteMessage"
         @cycle="cycleMessage"
@@ -303,14 +361,14 @@ function deleteMessage(callsign: string): void {
 
 .view-header {
   align-items: center;
-  display: flex;
-  justify-content: space-between;
+  display: block;
 }
 
 .header-actions {
   align-items: center;
-  display: flex;
-  gap: 0.55rem;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.15fr) minmax(0, 1fr) minmax(3.2rem, 0.32fr);
 }
 
 h1 {
@@ -345,6 +403,88 @@ p {
   color: #ffd36e;
 }
 
+.utility-chip {
+  align-items: center;
+  background: rgb(7 25 54 / 84%);
+  border: 1px solid rgb(73 173 255 / 58%);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(183 235 255 / 8%),
+    0 0 20px rgb(33 153 255 / 8%);
+  color: #8fcaff;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
+  font-weight: 700;
+  gap: 0.58rem;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 0;
+  padding: 0.48rem 0.74rem;
+  text-decoration: none;
+}
+
+.utility-chip svg {
+  flex: 0 0 auto;
+  height: 1.22rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1.22rem;
+}
+
+.utility-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count-chip,
+.filter-chip {
+  justify-content: flex-start;
+}
+
+.filter-chip {
+  gap: 0.42rem;
+  padding-right: 0.5rem;
+}
+
+.filter-chip select {
+  appearance: none;
+  background:
+    linear-gradient(135deg, rgb(10 45 83 / 92%), rgb(4 21 46 / 92%)),
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    0 0,
+    calc(100% - 0.76rem) 50%,
+    calc(100% - 0.5rem) 50%;
+  background-repeat: no-repeat;
+  background-size:
+    100% 100%,
+    0.28rem 0.28rem,
+    0.28rem 0.28rem;
+  border: 1px solid rgb(93 171 255 / 40%);
+  border-radius: 8px;
+  color: #d9f4ff;
+  cursor: pointer;
+  flex: 0 1 9.2rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  min-width: 0;
+  padding: 0.36rem 1.05rem 0.36rem 0.48rem;
+  text-transform: uppercase;
+}
+
+.filter-chip select:focus-visible {
+  border-color: rgb(102 219 255 / 78%);
+  outline: 2px solid rgb(111 219 255 / 55%);
+  outline-offset: 2px;
+}
+
 .sync-banner {
   background: rgb(34 45 77 / 62%);
   border: 1px solid rgb(105 141 214 / 35%);
@@ -370,6 +510,19 @@ p {
   padding: 0;
 }
 
+.utility-new {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: clamp(0.9rem, 2.35vw, 1.05rem);
+  gap: 0.58rem;
+  height: auto;
+  justify-content: center;
+  min-height: 3rem;
+  min-width: 3.2rem;
+  padding: 0.48rem;
+}
+
 .create-toggle:disabled,
 .create-form button:disabled,
 .create-form input:disabled,
@@ -387,13 +540,10 @@ p {
   cursor: pointer;
   display: inline-flex;
   font-family: var(--font-headline);
-  font-size: 1.2rem;
+  font-size: clamp(0.82rem, 2.1vw, 1rem);
   font-weight: 700;
-  height: 2.3rem;
   justify-content: center;
   line-height: 1;
-  min-width: 2.3rem;
-  padding: 0;
 }
 
 .help-trigger:hover,
@@ -492,14 +642,42 @@ p {
   }
 
   .view-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
+    align-items: stretch;
   }
 
   .header-actions {
-    align-self: stretch;
-    justify-content: flex-end;
+    gap: 0.55rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(2.8rem, 0.42fr) minmax(2.8rem, 0.35fr);
+  }
+
+  .utility-chip,
+  .utility-new {
+    font-size: 0.78rem;
+    gap: 0.38rem;
+    min-height: 2.7rem;
+    padding-inline: 0.46rem;
+  }
+
+  .utility-chip svg {
+    height: 1rem;
+    width: 1rem;
+  }
+
+  .filter-chip {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-block: 0.34rem;
+  }
+
+  .filter-chip select {
+    flex-basis: auto;
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .help-trigger span {
+    display: none;
   }
 }
 </style>

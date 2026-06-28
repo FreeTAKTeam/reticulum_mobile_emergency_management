@@ -520,7 +520,7 @@ onMounted(() => {
     <section v-else class="detail-panel empty-state detail-empty">
       <h1>Checklist not found.</h1>
       <p>The requested checklist could not be loaded from the current local dataset.</p>
-      <RouterLink class="detail-back-link" to="/checlklist">Return to checklists</RouterLink>
+    <RouterLink class="detail-back-link" to="/checklists">Return to checklists</RouterLink>
     </section>
   </section>
 </template>

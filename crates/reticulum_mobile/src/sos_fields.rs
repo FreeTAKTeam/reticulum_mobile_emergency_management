@@ -1,6 +1,7 @@
 use rmpv::Value as MsgPackValue;
 
 use crate::lxmf_fields::FIELD_COMMANDS;
+use crate::mission_commands::command_wire_value;
 use crate::types::{NodeError, SosDeviceTelemetryRecord, SosMessageKind, SosTriggerSource};
 
 pub(crate) const LXMF_FIELD_TELEMETRY: i64 = 0x02;
@@ -52,11 +53,25 @@ pub(crate) fn parse_sos_fields(fields_bytes: &[u8]) -> Option<SosFields> {
     (parsed.command.is_some() || parsed.telemetry.is_some()).then_some(parsed)
 }
 
-pub(crate) fn looks_like_sos_text(body: &str) -> bool {
+pub(crate) fn sos_kind_from_text(body: &str) -> Option<SosMessageKind> {
     let normalized = body.trim_start().to_ascii_uppercase();
-    normalized.starts_with("SOS")
-        || normalized.starts_with("URGENCE")
-        || normalized.starts_with("EMERGENCY")
+    if !normalized.starts_with("SOS")
+        && !normalized.starts_with("URGENCE")
+        && !normalized.starts_with("EMERGENCY")
+    {
+        return None;
+    }
+    let lower = normalized.to_ascii_lowercase();
+    if lower.contains("cancelled")
+        || lower.contains("canceled")
+        || lower.contains("cancel")
+        || lower.contains("ended")
+        || lower.contains("i am safe")
+        || lower.contains("i'm safe")
+    {
+        return Some(SosMessageKind::Cancelled {});
+    }
+    Some(SosMessageKind::Active {})
 }
 
 pub(crate) fn extract_text_coordinates(body: &str) -> Option<(f64, f64)> {
@@ -87,26 +102,51 @@ pub(crate) fn extract_text_coordinates(body: &str) -> Option<(f64, f64)> {
 }
 
 fn command_to_msgpack(command: &SosCommand) -> MsgPackValue {
+    let state = sos_kind_to_str(command.state);
+    let command_id = format!("sos:{}:{state}:{}", command.incident_id, command.sent_at_ms);
     let mut entries = vec![
         (
-            MsgPackValue::from("sos_state"),
-            MsgPackValue::from(sos_kind_to_str(command.state)),
+            MsgPackValue::from("i"),
+            MsgPackValue::from(command_id.as_str()),
         ),
         (
-            MsgPackValue::from("incident_id"),
+            MsgPackValue::from("c"),
             MsgPackValue::from(command.incident_id.as_str()),
         ),
         (
-            MsgPackValue::from("trigger_source"),
+            MsgPackValue::from("t"),
+            MsgPackValue::from(command_wire_value("sos.status")),
+        ),
+        (MsgPackValue::from("ss"), MsgPackValue::from(state)),
+        (
+            MsgPackValue::from("ii"),
+            MsgPackValue::from(command.incident_id.as_str()),
+        ),
+        (
+            MsgPackValue::from("tr"),
             MsgPackValue::from(trigger_source_to_str(command.trigger_source)),
         ),
         (
-            MsgPackValue::from("sent_at_ms"),
+            MsgPackValue::from("sm"),
             MsgPackValue::from(command.sent_at_ms),
+        ),
+        (
+            MsgPackValue::from("a"),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("ii"),
+                    MsgPackValue::from(command.incident_id.as_str()),
+                ),
+                (MsgPackValue::from("ss"), MsgPackValue::from(state)),
+                (
+                    MsgPackValue::from("tr"),
+                    MsgPackValue::from(trigger_source_to_str(command.trigger_source)),
+                ),
+            ]),
         ),
     ];
     if let Some(audio_id) = command.audio_id.as_deref() {
-        entries.push((MsgPackValue::from("audio_id"), MsgPackValue::from(audio_id)));
+        entries.push((MsgPackValue::from("au"), MsgPackValue::from(audio_id)));
     }
     MsgPackValue::Map(entries)
 }
@@ -158,29 +198,31 @@ fn parse_command_field(value: Option<&MsgPackValue>) -> Option<SosCommand> {
 
 fn parse_command_map(value: &MsgPackValue) -> Option<SosCommand> {
     let entries = msgpack_map_entries(value)?;
-    let state = parse_sos_kind(msgpack_get_named(entries, &["sos_state", "state"])?)?;
-    let incident_id = msgpack_get_named(entries, &["incident_id", "incidentId"])
+    let state = parse_sos_kind(msgpack_get_named(entries, &["sos_state", "state", "ss"])?)?;
+    let incident_id = msgpack_get_named(entries, &["incident_id", "incidentId", "ii"])
         .and_then(msgpack_string)
         .unwrap_or_else(|| {
             format!(
                 "sos-{}",
                 msgpack_u64(
-                    msgpack_get_named(entries, &["sent_at_ms"]).unwrap_or(&MsgPackValue::Nil)
+                    msgpack_get_named(entries, &["sent_at_ms", "sentAtMs", "sm"])
+                        .unwrap_or(&MsgPackValue::Nil)
                 )
                 .unwrap_or(0)
             )
         });
-    let trigger_source = msgpack_get_named(entries, &["trigger_source", "triggerSource"])
+    let trigger_source = msgpack_get_named(entries, &["trigger_source", "triggerSource", "tr"])
         .and_then(parse_trigger_source)
         .unwrap_or(SosTriggerSource::Remote {});
     Some(SosCommand {
         state,
         incident_id,
         trigger_source,
-        sent_at_ms: msgpack_get_named(entries, &["sent_at_ms", "sentAtMs"])
+        sent_at_ms: msgpack_get_named(entries, &["sent_at_ms", "sentAtMs", "sm"])
             .and_then(msgpack_u64)
             .unwrap_or(0),
-        audio_id: msgpack_get_named(entries, &["audio_id", "audioId"]).and_then(msgpack_string),
+        audio_id: msgpack_get_named(entries, &["audio_id", "audioId", "au"])
+            .and_then(msgpack_string),
     })
 }
 
@@ -246,10 +288,10 @@ fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackV
     }
 }
 
-fn msgpack_get_indexed<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
+fn msgpack_get_indexed(
+    entries: &[(MsgPackValue, MsgPackValue)],
     key: i64,
-) -> Option<&'a MsgPackValue> {
+) -> Option<&MsgPackValue> {
     let key_string = key.to_string();
     entries
         .iter()
@@ -354,6 +396,7 @@ pub(crate) fn trigger_source_to_str(value: SosTriggerSource) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mission_sync::parse_mission_sync_metadata;
 
     #[test]
     fn sos_fields_round_trip_command_and_telemetry() {
@@ -377,11 +420,35 @@ mod tests {
         };
 
         let encoded = build_sos_fields(&command, Some(&telemetry)).expect("encoded fields");
+        let field_text = String::from_utf8_lossy(encoded.as_slice());
+        for verbose in [
+            "command_id",
+            "correlation_id",
+            "command_type",
+            "sos.status",
+            "sos_state",
+            "incident_id",
+            "trigger_source",
+            "sent_at_ms",
+            "audio_id",
+        ] {
+            assert!(
+                !field_text.contains(verbose),
+                "compact SOS fields should not contain verbose token {verbose}"
+            );
+        }
         let parsed = parse_sos_fields(&encoded).expect("parsed fields");
         let fields = rmp_serde::from_slice::<MsgPackValue>(&encoded).expect("field map");
         let entries = msgpack_map_entries(&fields).expect("map entries");
 
         assert!(msgpack_get_indexed(entries, FIELD_COMMANDS).is_some());
+        let metadata = parse_mission_sync_metadata(&encoded).expect("mission metadata");
+        assert_eq!(metadata.command_type.as_deref(), Some("sos.status"));
+        assert_eq!(metadata.correlation_id.as_deref(), Some("incident-1"));
+        assert!(metadata
+            .command_id
+            .as_deref()
+            .is_some_and(|value| { value.starts_with("sos:incident-1:active:") }));
         assert_eq!(parsed.command.expect("command"), command);
         let parsed_telemetry = parsed.telemetry.expect("telemetry");
         assert_eq!(parsed_telemetry.lat.expect("lat").round(), 46.0);
@@ -429,10 +496,35 @@ mod tests {
 
     #[test]
     fn text_detection_accepts_legacy_prefixes() {
-        assert!(looks_like_sos_text("SOS! I need help"));
-        assert!(looks_like_sos_text("urgence besoin aide"));
-        assert!(looks_like_sos_text("Emergency at 45.1,-63.2"));
-        assert!(!looks_like_sos_text("normal chat"));
+        assert!(matches!(
+            sos_kind_from_text("SOS! I need help"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("urgence besoin aide"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("Emergency at 45.1,-63.2"),
+            Some(SosMessageKind::Active {})
+        ));
+        assert!(sos_kind_from_text("normal chat").is_none());
+    }
+
+    #[test]
+    fn text_detection_classifies_legacy_cancel_messages() {
+        assert!(matches!(
+            sos_kind_from_text("SOS Cancelled - I am safe."),
+            Some(SosMessageKind::Cancelled {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("SOS ended. I am safe at base."),
+            Some(SosMessageKind::Cancelled {})
+        ));
+        assert!(matches!(
+            sos_kind_from_text("SOS! I need help"),
+            Some(SosMessageKind::Active {})
+        ));
     }
 
     #[test]

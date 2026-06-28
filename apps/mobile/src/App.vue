@@ -1,10 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef, watch } from "vue";
+import { App, type BackButtonListenerEvent } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
+import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import logoUrl from "./assets/rem-logo.png";
+import SplashScreen from "./components/SplashScreen.vue";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
+import {
+  listPairedRnodeBluetoothDevices,
+  type RnodeBleDeviceRecord,
+} from "./services/rnodeBluetooth";
 import { useChecklistsStore } from "./stores/checklistsStore";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagingStore } from "./stores/messagingStore";
@@ -12,6 +19,12 @@ import { useMessagesStore } from "./stores/messagesStore";
 import { useSosStore } from "./stores/sosStore";
 import { useTelemetryStore } from "./stores/telemetryStore";
 import { useNodeStore } from "./stores/nodeStore";
+import {
+  resolveAndroidRouteBackAction,
+  runBackNavigationHandlers,
+} from "./utils/androidBackNavigation";
+import { appVersion } from "./utils/appVersion";
+import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -22,6 +35,54 @@ const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
+
+function normalizedBluetoothId(value: string): string {
+  return value
+    .trim()
+    .replace(/[:-]/g, "")
+    .toLowerCase();
+}
+
+function deviceMatchesId(device: RnodeBleDeviceRecord, configuredId: string): boolean {
+  const target = normalizedBluetoothId(configuredId);
+  return [device.id, device.address]
+    .some((value) => normalizedBluetoothId(value) === target);
+}
+
+function isRnodeDevice(device: RnodeBleDeviceRecord): boolean {
+  return device.paired && /rnode/i.test(device.name);
+}
+
+async function repairStartupRnodeSelection(): Promise<void> {
+  const rnode = nodeStore.settings.rnode;
+  const configuredId = rnode.peripheralId.trim();
+  if (!rnode.enabled || !configuredId) {
+    return;
+  }
+
+  try {
+    const pairedDevices = await listPairedRnodeBluetoothDevices();
+    if (pairedDevices.some((device) => deviceMatchesId(device, configuredId))) {
+      return;
+    }
+
+    const pairedRnodes = pairedDevices.filter(isRnodeDevice);
+    if (pairedRnodes.length !== 1) {
+      return;
+    }
+
+    const [device] = pairedRnodes;
+    await nodeStore.updateSettings({
+      rnode: {
+        ...rnode,
+        peripheralId: device.id || device.address,
+        displayName: device.name || device.address,
+      },
+    });
+  } catch {
+    // RNode selection can still be fixed manually from Settings if Bluetooth is unavailable.
+  }
+}
 
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {
@@ -41,11 +102,24 @@ registerNotificationNavigationHandler(async (target) => {
 });
 
 onMounted(async () => {
+  splashTimer = window.setTimeout(() => {
+    splashMinimumElapsed.value = true;
+  }, 1200);
   try {
-    await initAppNotifications();
+    const setupCompleted = hasCompletedSetupWizard();
+    if (setupCompleted) {
+      await initAppNotifications();
+    }
     await nodeStore.init();
     await messagingStore.init();
-    await nodeStore.startNode();
+    if (setupCompleted) {
+      await repairStartupRnodeSelection();
+      if (nodeStore.status.running && nodeStore.nodeConfigRestartRequired) {
+        await nodeStore.restartNode();
+      } else if (!nodeStore.status.running) {
+        await nodeStore.startNode();
+      }
+    }
     await messagingStore.hydrateStartupHistory();
 
     messagesStore.init();
@@ -58,9 +132,16 @@ onMounted(async () => {
     eventsStore.initReplication();
     checklistsStore.initReplication();
     telemetryStore.initReplication();
-    await telemetryStore.requestStartupPermission();
+    if (setupCompleted && nodeStore.settings.telemetry.enabled) {
+      await telemetryStore.requestStartupPermission();
+    }
+    if (!setupCompleted && route.path !== "/setup") {
+      await router.replace("/setup");
+    }
   } catch (error: unknown) {
     nodeStore.lastError = error instanceof Error ? error.message : String(error);
+  } finally {
+    startupComplete.value = true;
   }
 });
 
@@ -82,11 +163,16 @@ interface NavigationItem {
 }
 
 const menuOpen = shallowRef(false);
+const splashMinimumElapsed = shallowRef(false);
+const startupComplete = shallowRef(false);
+const showSplash = computed(() => !splashMinimumElapsed.value || !startupComplete.value);
+let splashTimer: number | undefined;
+let androidBackButtonListener: { remove: () => Promise<void> } | undefined;
 
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/inbox", label: "Chat", icon: "chat" },
-  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Checklists", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
 ];
 
@@ -94,7 +180,7 @@ const menuItems: NavigationItem[] = [
   { path: "/inbox", label: "Chat", icon: "chat" },
   { path: "/messages", label: "Action Messages", icon: "action-messages" },
   { path: "/events", label: "Events", icon: "events" },
-  { path: "/checlklist", label: "Tasks", icon: "checklists" },
+  { path: "/checklists", label: "Checklists", icon: "checklists" },
   { path: "/telemetry", label: "Map", icon: "map" },
   { path: "/peers", label: "Peers", icon: "peers" },
   { path: "/settings", label: "Settings", icon: "settings" },
@@ -157,14 +243,16 @@ const pageTitle = computed(() => {
     case "dashboard":
       return "Dashboard";
     case "messages":
-      return "Action Messages";
+      return "EAM";
     case "events":
       return "Events";
+    case "event-mecp-help":
+      return "MECP Help";
     case "inbox":
       return "Chat";
-    case "checlklist":
+    case "checklists":
       return "Checklists";
-    case "checlklist-detail":
+    case "checklist-detail":
       return "Checklist Detail";
     case "message-status-help":
       return "Status Help";
@@ -172,6 +260,8 @@ const pageTitle = computed(() => {
       return "Peers";
     case "settings":
       return "Settings";
+    case "setup":
+      return "Setup";
     case "telemetry":
       return "Map";
     default:
@@ -179,28 +269,37 @@ const pageTitle = computed(() => {
   }
 });
 
+const readinessError = computed(() => nodeStore.readinessError.trim());
 const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
-const runningTitle = computed(() =>
-  nodeStore.ready
-    ? "App ready to send and receive events or messages."
-    : "App is still starting. Sending stays blocked until the node is ready.",
-);
+const runningTitle = computed(() => {
+  if (nodeStore.ready) {
+    return "App ready to send and receive events or messages.";
+  }
+  if (readinessError.value) {
+    return `Node is not ready: ${readinessError.value}`;
+  }
+  return "App is still starting. Sending stays blocked until the node is ready.";
+});
 const possiblePeerCount = computed(() => nodeStore.savedPeerCount);
 const connectedPeerCount = computed(() => nodeStore.connectedPeerCount);
+const reachablePeerCount = computed(() => nodeStore.reachablePeerCount);
 const peerCountLabel = computed(
-  () => `${possiblePeerCount.value}/${connectedPeerCount.value}`,
+  () => `${possiblePeerCount.value}/${connectedPeerCount.value}/${reachablePeerCount.value}`,
 );
 const connectedPeerCountTitle = computed(() => {
   const possible = possiblePeerCount.value;
   const connected = connectedPeerCount.value;
+  const reachable = reachablePeerCount.value;
   const possibleLabel = possible === 1 ? "1 saved peer" : `${possible} saved peers`;
-  const connectedLabel = connected === 1 ? "1 saved peer connected" : `${connected} saved peers connected`;
-  return `${possibleLabel}, ${connectedLabel}`;
+  const connectedLabel = connected === 1 ? "1 live link" : `${connected} live links`;
+  const reachableLabel = reachable === 1 ? "1 recently seen peer" : `${reachable} recently seen peers`;
+  return `${possibleLabel}, ${connectedLabel}, ${reachableLabel}`;
 });
 
 function isTabActive(path: string): boolean {
-  if (path === "/checlklist") {
-    return route.path === path || route.path.startsWith(`${path}/`) || route.path === "/checklists";
+  if (path === "/checklists") {
+    return route.path === path
+      || route.path.startsWith(`${path}/`);
   }
   return route.path === path || route.path.startsWith(`${path}/`);
 }
@@ -208,12 +307,14 @@ function isTabActive(path: string): boolean {
 const moreRouteNames = new Set([
   "messages",
   "events",
+  "event-mecp-help",
   "message-status-help",
   "peers",
   "settings",
 ]);
 
 const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")));
+const setupActive = computed(() => route.name === "setup");
 
 function toggleMenu(): void {
   menuOpen.value = !menuOpen.value;
@@ -223,18 +324,59 @@ function closeMenu(): void {
   menuOpen.value = false;
 }
 
+async function handleAndroidBackButton(event: BackButtonListenerEvent): Promise<void> {
+  if (menuOpen.value) {
+    closeMenu();
+    return;
+  }
+  if (await runBackNavigationHandlers()) {
+    return;
+  }
+
+  const action = resolveAndroidRouteBackAction({
+    canGoBack: event.canGoBack,
+    currentPath: route.path,
+  });
+  if (action === "back") {
+    router.back();
+    return;
+  }
+  if (action === "dashboard") {
+    await router.replace("/dashboard");
+  }
+}
+
+async function registerAndroidBackButtonHandler(): Promise<void> {
+  if (Capacitor.getPlatform() !== "android") {
+    return;
+  }
+  androidBackButtonListener = await App.addListener("backButton", (event) => {
+    void handleAndroidBackButton(event);
+  });
+}
+
 watch(
   () => route.fullPath,
   () => {
     closeMenu();
   },
 );
+
+void registerAndroidBackButtonHandler();
+
+onUnmounted(() => {
+  if (splashTimer !== undefined) {
+    window.clearTimeout(splashTimer);
+  }
+  void androidBackButtonListener?.remove();
+  androidBackButtonListener = undefined;
+});
 </script>
 
 <template>
   <div class="app-bg">
-    <div class="app-shell">
-      <header class="masthead">
+    <div class="app-shell" :class="{ 'setup-mode': setupActive }">
+      <header v-if="!setupActive" class="masthead">
         <div class="brand">
           <div class="brand-mark-wrap">
             <img class="brand-mark" :src="logoUrl" alt="R.E.M. logo" />
@@ -246,7 +388,7 @@ watch(
           <span
             class="peer-count"
             data-testid="connected-peer-count"
-            aria-label="Saved peers and connected saved peers"
+            aria-label="Saved peers, live links, and recently seen saved peers"
             :title="connectedPeerCountTitle"
           >
             {{ peerCountLabel }}
@@ -257,39 +399,27 @@ watch(
         </div>
       </header>
 
-      <main class="content">
+      <main class="content" :class="{ 'setup-content': setupActive }">
         <RouterView />
       </main>
 
       <div
-        v-if="menuOpen"
+        v-if="menuOpen && !setupActive"
         class="menu-backdrop"
         aria-hidden="true"
         @click="closeMenu"
       ></div>
 
       <aside
-        v-if="menuOpen"
+        v-if="menuOpen && !setupActive"
         class="tools-menu"
         aria-label="More tools"
       >
-        <div class="tools-rail" aria-hidden="true">
-          <span
-            v-for="item in menuItems.slice(0, 5)"
-            :key="`rail-${item.path}`"
-            class="tools-rail-icon"
-          >
-            <svg class="icon-svg" viewBox="0 0 24 24" fill="none">
-              <path
-                v-for="path in iconPaths[item.icon]"
-                :key="path"
-                :d="path"
-              />
-            </svg>
-          </span>
+        <header class="tools-header">
+          <h2>Tools</h2>
           <button
             type="button"
-            class="tools-close tools-close-rail"
+            class="tools-close"
             aria-label="Close more tools"
             @click="closeMenu"
           >
@@ -298,15 +428,6 @@ watch(
               <path d="M18 6 6 18" />
             </svg>
           </button>
-        </div>
-
-        <header class="tools-header">
-          <h2>Tools</h2>
-          <div class="tools-header-actions" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
         </header>
 
         <div class="tools-grid">
@@ -333,7 +454,7 @@ watch(
         </div>
       </aside>
 
-      <nav class="tabs" aria-label="Primary navigation">
+      <nav v-if="!setupActive" class="tabs" aria-label="Primary navigation">
         <RouterLink
           v-for="tab in footerItems"
           :key="tab.path"
@@ -375,7 +496,8 @@ watch(
           <span class="tab-label">More</span>
         </button>
       </nav>
-      <SosOverlay />
+      <SosOverlay v-if="!setupActive" />
+      <SplashScreen v-if="showSplash" :version="appVersion" />
     </div>
   </div>
 </template>
@@ -416,6 +538,11 @@ watch(
   min-height: 0;
   position: relative;
   z-index: 1;
+}
+
+.app-shell.setup-mode {
+  grid-template-rows: minmax(0, 1fr);
+  max-width: 980px;
 }
 
 .masthead {
@@ -542,6 +669,11 @@ watch(
   scrollbar-gutter: stable both-edges;
 }
 
+.content.setup-content {
+  padding: 0;
+  scrollbar-gutter: stable;
+}
+
 .menu-backdrop {
   background: rgb(0 4 12 / 36%);
   inset: 0;
@@ -568,27 +700,15 @@ watch(
   z-index: 12;
 }
 
-.tools-rail {
-  align-items: center;
-  background: rgb(2 8 18 / 82%);
-  border-bottom: 1px solid rgb(89 126 181 / 26%);
-  display: grid;
-  gap: 0;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  min-height: 3.2rem;
-}
-
-.tools-rail-icon,
 .tools-close {
   align-items: center;
   color: #dff3ff;
   display: inline-flex;
   height: 3.2rem;
   justify-content: center;
-  width: 100%;
+  width: 3.2rem;
 }
 
-.tools-rail-icon .icon-svg,
 .tools-close .icon-svg {
   height: 1.65rem;
   width: 1.65rem;
@@ -625,21 +745,6 @@ watch(
   font-size: 1.45rem;
   letter-spacing: 0;
   margin: 0;
-}
-
-.tools-header-actions {
-  align-items: center;
-  display: inline-flex;
-  gap: 0.58rem;
-}
-
-.tools-header-actions span {
-  background: #b9e9ff;
-  border-radius: 999px;
-  box-shadow: 0 0 12px rgb(100 190 255 / 26%);
-  display: inline-block;
-  height: 0.42rem;
-  width: 0.42rem;
 }
 
 .tools-grid {

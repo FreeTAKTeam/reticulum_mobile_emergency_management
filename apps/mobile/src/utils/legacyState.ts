@@ -30,6 +30,7 @@ import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   normalizeTcpCommunityClients,
 } from "./tcpCommunityServers";
+import { DEFAULT_RNODE_SETTINGS, normalizeRnodeSettings } from "./rnodeProfiles";
 
 export const LEGACY_SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
 export const LEGACY_SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
@@ -135,9 +136,9 @@ function normalizeTelemetrySettings(
   return {
     ...defaults,
     ...telemetry,
-    publishIntervalSeconds: Math.min(
-      60,
-      Math.max(5, Number(telemetry?.publishIntervalSeconds ?? defaults.publishIntervalSeconds)),
+    publishIntervalSeconds: Math.max(
+      1,
+      Number(telemetry?.publishIntervalSeconds ?? defaults.publishIntervalSeconds),
     ),
     accuracyThresholdMeters:
       telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
@@ -155,6 +156,32 @@ function normalizeStringArray(value: unknown): string[] {
   return value
     .map((entry) => asTrimmedString(entry))
     .filter((entry) => entry.length > 0);
+}
+
+function normalizeTrustedPluginPublishers(
+  value: unknown,
+): NodeUiSettings["pluginTrust"]["trustedPublishers"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => {
+      const record = asRecord(entry);
+      if (!record) {
+        return undefined;
+      }
+      const publisher = asTrimmedString(record.publisher);
+      const publicKeyBase64 = asTrimmedString(
+        record.publicKeyBase64 ?? record.public_key_base64,
+      );
+      if (!publisher || !publicKeyBase64) {
+        return undefined;
+      }
+      return { publisher, publicKeyBase64 };
+    })
+    .filter((entry): entry is NodeUiSettings["pluginTrust"]["trustedPublishers"][number] =>
+      Boolean(entry)
+    );
 }
 
 function normalizeUiPreferences(
@@ -175,10 +202,7 @@ function normalizeRuntimeSettings(
     displayName:
       normalizeDisplayName(typeof value.displayName === "string" ? value.displayName : "")
       ?? defaults.displayName,
-    autoConnectSaved:
-      typeof value.autoConnectSaved === "boolean"
-        ? value.autoConnectSaved
-        : defaults.autoConnectSaved,
+    autoConnectSaved: false,
     announceCapabilities: ensureRequiredAnnounceCapabilities(
       typeof value.announceCapabilities === "string"
         ? value.announceCapabilities
@@ -189,6 +213,9 @@ function normalizeRuntimeSettings(
       defaults.tcpClients.length > 0 ? defaults.tcpClients : DEFAULT_TCP_COMMUNITY_ENDPOINTS,
     ),
     broadcast: typeof value.broadcast === "boolean" ? value.broadcast : defaults.broadcast,
+    transportNodeEnabled: typeof value.transportNodeEnabled === "boolean"
+      ? value.transportNodeEnabled
+      : defaults.transportNodeEnabled,
     announceIntervalSeconds: Math.max(
       60,
       Number(value.announceIntervalSeconds ?? defaults.announceIntervalSeconds),
@@ -230,6 +257,12 @@ function normalizeRuntimeSettings(
         ),
       ),
     },
+    pluginTrust: {
+      trustedPublishers: normalizeTrustedPluginPublishers(
+        value.pluginTrust?.trustedPublishers,
+      ),
+    },
+    rnode: normalizeRnodeSettings(value.rnode ?? defaults.rnode ?? DEFAULT_RNODE_SETTINGS),
   };
 }
 

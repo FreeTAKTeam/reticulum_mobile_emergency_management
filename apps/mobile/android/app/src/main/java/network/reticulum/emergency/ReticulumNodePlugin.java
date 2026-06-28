@@ -1,16 +1,29 @@
 package network.reticulum.emergency;
 
 import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.ParcelUuid;
+import android.content.pm.PackageManager;
 import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 import com.getcapacitor.PermissionState;
@@ -23,14 +36,24 @@ import com.getcapacitor.annotation.PermissionCallback;
 
 import org.json.JSONException;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @CapacitorPlugin(
     name = "ReticulumNode",
     permissions = {
+        @Permission(
+            strings = { Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT },
+            alias = ReticulumNodePlugin.RNODE_BLUETOOTH_ALIAS
+        ),
         @Permission(
             strings = { Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT },
             alias = ReticulumNodePlugin.WEARABLE_BLUETOOTH_ALIAS
@@ -43,12 +66,25 @@ import java.util.concurrent.TimeUnit;
 )
 public class ReticulumNodePlugin extends Plugin {
     private static final String TAG = "ReticulumNode";
+    static final String RNODE_BLUETOOTH_ALIAS = "rnodeBluetooth";
+    private static final String RNODE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
     static final String WEARABLE_BLUETOOTH_ALIAS = "wearableBluetooth";
     static final String WEARABLE_LOCATION_ALIAS = "wearableLocation";
+    private static final long DEFAULT_RNODE_SCAN_TIMEOUT_MS = 8_000L;
+
+    private volatile ReticulumNodeService boundService;
+    private volatile boolean serviceBound = false;
+    private volatile boolean serviceListenerRegistered = false;
+    private volatile boolean bridgeForeground = true;
+    private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
 
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
+        final ReticulumNodeService service = boundService;
+        if (service != null && !service.isAppUiForeground()) {
+            return;
+        }
         final JSObject safePayload = payload == null ? new JSObject() : payload;
         mirrorEventToLogcat(eventName, safePayload);
         notifyListeners(eventName, safePayload);
@@ -65,6 +101,7 @@ public class ReticulumNodePlugin extends Plugin {
             final ReticulumNodeService.LocalBinder localBinder = (ReticulumNodeService.LocalBinder) service;
             boundService = localBinder.getService();
             serviceBound = true;
+            boundService.setAppUiForeground(bridgeForeground);
             tryRegisterServiceListener();
             serviceFuture.complete(boundService);
             Logger.info(TAG, "Bound to ReticulumNodeService.");
@@ -98,19 +135,49 @@ public class ReticulumNodePlugin extends Plugin {
         }
     };
 
-    private volatile ReticulumNodeService boundService;
-    private volatile boolean serviceBound = false;
-    private volatile boolean serviceListenerRegistered = false;
-    private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
-
     @Override
     public void load() {
         super.load();
+        bridgeForeground = true;
         Logger.info(TAG, "ReticulumNode plugin loaded.");
     }
 
     @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        bridgeForeground = true;
+        if (boundService != null) {
+            boundService.setAppUiForeground(true);
+        }
+        tryRegisterServiceListener();
+    }
+
+    @Override
+    protected void handleOnPause() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
+        unregisterServiceListener();
+        super.handleOnPause();
+    }
+
+    @Override
+    protected void handleOnStop() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
+        unregisterServiceListener();
+        super.handleOnStop();
+    }
+
+    @Override
     protected void handleOnDestroy() {
+        bridgeForeground = false;
+        if (boundService != null) {
+            boundService.setAppUiForeground(false);
+        }
         unregisterServiceListener();
         unbindFromService();
         bridgeExecutor.shutdownNow();
@@ -171,6 +238,158 @@ public class ReticulumNodePlugin extends Plugin {
             "Native status JSON parse failed.",
             ReticulumNodeService::getStatusJson
         );
+    }
+
+    @PluginMethod
+    public void checkRnodeBluetoothPermissions(PluginCall call) {
+        resolveRnodeBluetoothPermission(call);
+    }
+
+    @PluginMethod
+    public void requestRnodeBluetoothPermissions(PluginCall call) {
+        if (hasRnodeBluetoothPermission()) {
+            resolveRnodeBluetoothPermission(call);
+            return;
+        }
+        requestPermissionForAlias(RNODE_BLUETOOTH_ALIAS, call, "completeRnodeBluetoothPermissionRequest");
+    }
+
+    @PermissionCallback
+    private void completeRnodeBluetoothPermissionRequest(PluginCall call) {
+        resolveRnodeBluetoothPermission(call);
+    }
+
+    @PluginMethod
+    public void listPairedRnodeBluetoothDevices(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null) {
+            call.reject("Bluetooth is unavailable.");
+            return;
+        }
+        try {
+            final Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
+            final JSArray items = new JSArray();
+            for (BluetoothDevice device : bondedDevices) {
+                items.put(rnodeBluetoothDevicePayload(device, null, null));
+            }
+            final JSObject payload = new JSObject();
+            payload.put("items", items);
+            call.resolve(payload);
+        } catch (SecurityException ex) {
+            call.reject("Bluetooth permission denied.", ex);
+        }
+    }
+
+    @PluginMethod
+    public void scanRnodeBleDevices(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            call.reject("Bluetooth is not enabled.");
+            return;
+        }
+        final BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
+        if (scanner == null) {
+            call.reject("Bluetooth LE scanning is unavailable.");
+            return;
+        }
+
+        final long timeoutMs = Math.max(1_000L, call.getLong("timeoutMs", DEFAULT_RNODE_SCAN_TIMEOUT_MS));
+        final Map<String, JSObject> discovered = new LinkedHashMap<>();
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final ScanCallback callback = new ScanCallback() {
+            @Override
+            public void onScanResult(int callbackType, ScanResult result) {
+                addRnodeScanResult(discovered, result);
+            }
+
+            @Override
+            public void onBatchScanResults(List<ScanResult> results) {
+                for (ScanResult result : results) {
+                    addRnodeScanResult(discovered, result);
+                }
+            }
+
+            @Override
+            public void onScanFailed(int errorCode) {
+                if (!finished.compareAndSet(false, true)) {
+                    return;
+                }
+                call.reject("RNode Bluetooth scan failed: " + errorCode);
+            }
+        };
+
+        final List<ScanFilter> filters = new ArrayList<>();
+        filters.add(
+            new ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid.fromString(RNODE_UART_SERVICE_UUID))
+                .build()
+        );
+        final ScanSettings settings = new ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build();
+        scanner.startScan(filters, settings, callback);
+        handler.postDelayed(() -> {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            scanner.stopScan(callback);
+            final JSArray items = new JSArray();
+            for (JSObject item : discovered.values()) {
+                items.put(item);
+            }
+            final JSObject payload = new JSObject();
+            payload.put("items", items);
+            call.resolve(payload);
+        }, timeoutMs);
+    }
+
+    @PluginMethod
+    public void pairRnodeBleDevice(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final String id = call.getString("id", call.getString("address", ""));
+        if (id == null || id.trim().isEmpty()) {
+            call.reject("id is required.");
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null) {
+            call.reject("Bluetooth is unavailable.");
+            return;
+        }
+        try {
+            final BluetoothDevice device = adapter.getRemoteDevice(id.trim());
+            final JSObject payload = new JSObject();
+            payload.put("id", device.getAddress());
+            payload.put("address", device.getAddress());
+            payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                payload.put("bondState", "bonded");
+                call.resolve(payload);
+                return;
+            }
+            final boolean bondingStarted = device.createBond();
+            if (!bondingStarted) {
+                call.reject("Android did not start Bluetooth pairing for this RNode.");
+                return;
+            }
+            payload.put("bondingStarted", true);
+            payload.put("bondState", bondStateLabel(device.getBondState()));
+            call.resolve(payload);
+        } catch (IllegalArgumentException ex) {
+            call.reject("Invalid Bluetooth device id.", ex);
+        }
     }
 
     @PluginMethod
@@ -282,6 +501,70 @@ public class ReticulumNodePlugin extends Plugin {
             "Failed to send LXMF message.",
             "Native LXMF send JSON parse failed.",
             service -> service.sendLxmfJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void sendPluginLxmf(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final String destinationHex = call.getString("destinationHex");
+        final String messageName = call.getString("messageName");
+        final JSObject messagePayload = call.getObject("payload", new JSObject());
+        final String bodyUtf8 = call.getString("bodyUtf8", "");
+        final String title = call.getString("title");
+        final String sendMode = call.getString("sendMode");
+        final boolean usePropagationNode = call.getBoolean("usePropagationNode", false);
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        if (destinationHex == null || destinationHex.isEmpty()) {
+            call.reject("destinationHex is required.");
+            return;
+        }
+        if (messageName == null || messageName.trim().isEmpty()) {
+            call.reject("messageName is required.");
+            return;
+        }
+
+        final JSObject request = new JSObject();
+        request.put("pluginId", pluginId);
+        request.put("destinationHex", destinationHex);
+        request.put("messageName", messageName);
+        request.put("payload", messagePayload);
+        request.put("bodyUtf8", bodyUtf8);
+        if (title != null && !title.isEmpty()) {
+            request.put("title", title);
+        }
+        if (sendMode != null && !sendMode.isEmpty()) {
+            request.put("sendMode", sendMode);
+        }
+        if (usePropagationNode) {
+            request.put("usePropagationNode", true);
+        }
+
+        runIntServiceCall(
+            call,
+            "Failed to send plug-in LXMF message.",
+            service -> service.sendPluginLxmfJson(request.toString())
+        );
+    }
+
+    @PluginMethod
+    public void decodePluginLxmfFields(PluginCall call) {
+        final String fieldsBase64 = call.getString("fieldsBase64");
+        if (fieldsBase64 == null || fieldsBase64.isEmpty()) {
+            call.reject("fieldsBase64 is required.");
+            return;
+        }
+
+        final JSObject payload = new JSObject();
+        payload.put("fieldsBase64", fieldsBase64);
+        runStringServiceCall(
+            call,
+            "Failed to decode plug-in LXMF fields.",
+            "Native plug-in LXMF decode JSON parse failed.",
+            service -> service.decodePluginLxmfFieldsJson(payload.toString())
         );
     }
 
@@ -431,6 +714,88 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getPlugins(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list plug-ins.",
+            "Native plug-in list JSON parse failed.",
+            ReticulumNodeService::getPluginsJson
+        );
+    }
+
+    @PluginMethod
+    public void installPluginPackage(PluginCall call) {
+        final String packagePath = call.getString("packagePath", call.getString("packageDir"));
+        if (packagePath == null || packagePath.trim().isEmpty()) {
+            call.reject("packagePath is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("packagePath", packagePath);
+        runStringServiceCall(
+            call,
+            "Failed to install plug-in package.",
+            "Native plug-in install JSON parse failed.",
+            service -> service.installPluginPackageJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void installPluginArchive(PluginCall call) {
+        final String filename = call.getString("filename", "plugin.remplugin");
+        final String archiveBase64 = call.getString("archiveBase64");
+        if (archiveBase64 == null || archiveBase64.isEmpty()) {
+            call.reject("archiveBase64 is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("filename", filename);
+        payload.put("archiveBase64", archiveBase64);
+        runStringServiceCall(
+            call,
+            "Failed to install plug-in archive.",
+            "Native plug-in archive install JSON parse failed.",
+            service -> service.installPluginArchiveBase64Json(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void setPluginEnabled(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final boolean enabled = call.getBoolean("enabled", false);
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("enabled", enabled);
+        runIntServiceCall(
+            call,
+            "Failed to update plug-in state.",
+            service -> service.setPluginEnabledJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void grantPluginPermissions(PluginCall call) {
+        final String pluginId = call.getString("pluginId");
+        final JSObject permissions = call.getObject("permissions", new JSObject());
+        if (pluginId == null || pluginId.trim().isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("permissions", permissions);
+        runIntServiceCall(
+            call,
+            "Failed to update plug-in permissions.",
+            service -> service.grantPluginPermissionsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void listPeers(PluginCall call) {
         runStringServiceCall(
             call,
@@ -535,6 +900,44 @@ public class ReticulumNodePlugin extends Plugin {
             call,
             "Failed to save app settings.",
             service -> service.setAppSettingsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getWatchStatusServerSettings(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get watch status server settings.",
+            "Native watch status server settings JSON parse failed.",
+            ReticulumNodeService::getWatchStatusServerSettingsJson
+        );
+    }
+
+    @PluginMethod
+    public void setWatchStatusServerSettings(PluginCall call) {
+        final JSObject payload = new JSObject();
+        final Boolean enabled = call.getBoolean("enabled");
+        final Integer port = call.getInt("port");
+        if (enabled != null) {
+            payload.put("enabled", enabled);
+        }
+        if (port != null) {
+            payload.put("port", port);
+        }
+        runIntServiceCall(
+            call,
+            "Failed to save watch status server settings.",
+            service -> service.setWatchStatusServerSettingsJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getWatchStatusServerState(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get watch status server state.",
+            "Native watch status server state JSON parse failed.",
+            ReticulumNodeService::getWatchStatusServerStateJson
         );
     }
 
@@ -683,6 +1086,7 @@ public class ReticulumNodePlugin extends Plugin {
         }
         final JSObject payload = new JSObject();
         payload.put("checklistUid", checklistUid);
+        payload.put("deleteRemote", Boolean.TRUE.equals(call.getBoolean("deleteRemote")));
         runIntServiceCall(
             call,
             "Failed to delete checklist.",
@@ -839,6 +1243,16 @@ public class ReticulumNodePlugin extends Plugin {
             "Failed to get EAM team summary.",
             "Native EAM team summary JSON parse failed.",
             service -> service.getEamTeamSummaryJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void getEamReadinessSummary(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get EAM readiness summary.",
+            "Native EAM readiness summary JSON parse failed.",
+            ReticulumNodeService::getEamReadinessSummaryJson
         );
     }
 
@@ -1096,6 +1510,23 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void recordSosAudio(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("audioId", call.getString("audioId"));
+        payload.put("incidentId", call.getString("incidentId"));
+        payload.put("sourceHex", call.getString("sourceHex"));
+        payload.put("path", call.getString("path"));
+        payload.put("mimeType", call.getString("mimeType"));
+        payload.put("durationSeconds", call.getInt("durationSeconds"));
+        payload.put("createdAtMs", call.getLong("createdAtMs"));
+        runIntServiceCall(
+            call,
+            "Failed to record SOS audio.",
+            service -> service.recordSosAudioJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void removeAllListeners(PluginCall call) {
         call.resolve();
     }
@@ -1140,7 +1571,7 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     private void tryRegisterServiceListener() {
-        if (boundService == null || serviceListenerRegistered) {
+        if (boundService == null || serviceListenerRegistered || !bridgeForeground) {
             return;
         }
         boundService.addListener(serviceEventListener);
@@ -1235,6 +1666,76 @@ public class ReticulumNodePlugin extends Plugin {
                 call.reject(fallbackMessage, ex);
             }
         });
+    }
+
+    private BluetoothAdapter bluetoothAdapter() {
+        final BluetoothManager manager = (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+        return manager == null ? null : manager.getAdapter();
+    }
+
+    private boolean hasRnodeBluetoothPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return true;
+        }
+        return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_SCAN)
+                == PackageManager.PERMISSION_GRANTED
+            && ContextCompat.checkSelfPermission(getContext(), Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void resolveRnodeBluetoothPermission(PluginCall call) {
+        final JSObject payload = new JSObject();
+        final PermissionState state = hasRnodeBluetoothPermission()
+            ? PermissionState.GRANTED
+            : getPermissionState(RNODE_BLUETOOTH_ALIAS);
+        payload.put("bluetooth", state.toString().toLowerCase());
+        call.resolve(payload);
+    }
+
+    private void addRnodeScanResult(Map<String, JSObject> discovered, ScanResult result) {
+        if (result == null || result.getDevice() == null) {
+            return;
+        }
+        final BluetoothDevice device = result.getDevice();
+        final String address = device.getAddress();
+        if (address == null || address.isEmpty()) {
+            return;
+        }
+        String name = null;
+        if (result.getScanRecord() != null) {
+            name = result.getScanRecord().getDeviceName();
+        }
+        discovered.put(address, rnodeBluetoothDevicePayload(device, result.getRssi(), name));
+    }
+
+    private JSObject rnodeBluetoothDevicePayload(BluetoothDevice device, Integer rssi, String scannedName) {
+        final JSObject item = new JSObject();
+        final String address = device.getAddress();
+        item.put("id", address);
+        item.put("address", address);
+        if (rssi != null) {
+            item.put("rssi", rssi);
+        }
+        item.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+        item.put("bondState", bondStateLabel(device.getBondState()));
+        String name = scannedName;
+        if (name == null || name.trim().isEmpty()) {
+            name = device.getName();
+        }
+        item.put("name", name == null ? "" : name);
+        return item;
+    }
+
+    private String bondStateLabel(int state) {
+        switch (state) {
+            case BluetoothDevice.BOND_BONDED:
+                return "bonded";
+            case BluetoothDevice.BOND_BONDING:
+                return "bonding";
+            case BluetoothDevice.BOND_NONE:
+            default:
+                return "none";
+        }
     }
 
     private interface ServiceIntOperation {
