@@ -399,13 +399,11 @@ fn build_runtime_telemetry_destinations(
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => {
-            let app_destination_hex = configured_hub_destination(config)?;
-            Ok(vec![MissionReplicationTarget {
-                app_destination_hex,
-                send_mode: SendMode::Auto {},
-            }])
-        }
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             if config
                 .hub_identity_hash
@@ -1228,6 +1226,24 @@ fn current_replication_send_mode(
     }
 }
 
+fn connected_hub_replication_target(
+    peers: &[PeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    config: &NodeConfigFingerprint,
+) -> Result<MissionReplicationTarget, NodeError> {
+    let app_destination_hex = configured_hub_destination(config)?;
+    let send_mode = current_replication_send_mode(
+        peers,
+        app_destination_hex.as_str(),
+        active_propagation_node_hex,
+    )
+    .unwrap_or(SendMode::PropagationOnly {});
+    Ok(MissionReplicationTarget {
+        app_destination_hex,
+        send_mode,
+    })
+}
+
 fn build_runtime_mission_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],
@@ -1252,10 +1268,11 @@ fn build_runtime_mission_replication_targets(
             saved_peers,
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
-            app_destination_hex: configured_hub_destination(config)?,
-            send_mode: SendMode::Auto {},
-        }]),
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -1400,10 +1417,11 @@ fn build_runtime_event_replication_targets(
             saved_peers,
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
-            app_destination_hex: configured_hub_destination(config)?,
-            send_mode: SendMode::Auto {},
-        }]),
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -7577,7 +7595,10 @@ mod tests {
             destinations[0].app_destination_hex,
             "56565656565656565656565656565656"
         );
-        assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     #[test]
@@ -7600,13 +7621,19 @@ mod tests {
             mission_targets[0].app_destination_hex,
             "56565656565656565656565656565656"
         );
-        assert!(matches!(mission_targets[0].send_mode, SendMode::Auto {}));
+        assert!(matches!(
+            mission_targets[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
         assert_eq!(event_targets.len(), 1);
         assert_eq!(
             event_targets[0].app_destination_hex,
             "56565656565656565656565656565656"
         );
-        assert!(matches!(event_targets[0].send_mode, SendMode::Auto {}));
+        assert!(matches!(
+            event_targets[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     #[test]
