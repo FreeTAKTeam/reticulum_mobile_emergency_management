@@ -23,3 +23,9 @@ crates/reticulum_mobile/reticulum-mobile/app_state.db
 apps/mobile/android/app/src/main/jniLibs/
 apps/mobile/android/uniffi/
 apps/mobile/ios/uniffi/
+
+# Local REM infographic artifacts
+docs/rem-capability-infographic.pdf
+docs/rem-capability-infographic.png
+docs/rem-capability-infographic.svg
+tools/generate-rem-infographic.mjs
