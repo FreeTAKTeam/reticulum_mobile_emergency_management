@@ -1,6 +1,9 @@
 # Building A Native Plug-In
 
-Use `plugins/example-status-plugin` as the template for Android v1.
+Use `plugins/example-status-plugin` as the minimal template for Android v1.
+Use `plugins/example-ble-heart-rate-plugin` as an example of moving
+domain-specific native logic, such as BLE Heart Rate Measurement parsing, into a
+plug-in while keeping transport-specific Android APIs out of the core app.
 
 ## Files
 
@@ -35,6 +38,8 @@ logic/android/<abi>/
 ```powershell
 cargo test --manifest-path plugins/example-status-plugin/rust/Cargo.toml
 cargo clippy --manifest-path plugins/example-status-plugin/rust/Cargo.toml -- -D warnings
+cargo test --manifest-path plugins/example-ble-heart-rate-plugin/rust/Cargo.toml
+cargo clippy --manifest-path plugins/example-ble-heart-rate-plugin/rust/Cargo.toml -- -D warnings
 cargo test --manifest-path tools/rem-plugin-packager/Cargo.toml
 ```
 

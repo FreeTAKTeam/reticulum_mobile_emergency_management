@@ -52,8 +52,23 @@ jobs:
       - name: Lint example plug-in
         run: cargo clippy --manifest-path plugins/example-status-plugin/rust/Cargo.toml -- -D warnings
 
+      - name: Test BLE heart-rate example plug-in
+        run: cargo test --manifest-path plugins/example-ble-heart-rate-plugin/rust/Cargo.toml
+
+      - name: Lint BLE heart-rate example plug-in
+        run: cargo clippy --manifest-path plugins/example-ble-heart-rate-plugin/rust/Cargo.toml -- -D warnings
+
       - name: Build example plug-in for Android arm64-v8a
         working-directory: plugins/example-status-plugin/rust
+        run: >
+          cargo ndk
+          -t arm64-v8a
+          -o ../logic/android
+          build
+          --release
+
+      - name: Build BLE heart-rate example plug-in for Android arm64-v8a
+        working-directory: plugins/example-ble-heart-rate-plugin/rust
         run: >
           cargo ndk
           -t arm64-v8a
@@ -70,8 +85,23 @@ jobs:
           --publisher CI-Test
           --signing-key-base64 "$REM_PLUGIN_TEST_SIGNING_KEY_BASE64"
 
+      - name: Package signed BLE heart-rate example plug-in
+        run: >
+          cargo run --manifest-path tools/rem-plugin-packager/Cargo.toml --
+          plugins/example-ble-heart-rate-plugin
+          target/plugin-artifacts/example-ble-heart-rate.remplugin
+          --allow-missing-libraries
+          --publisher CI-Test
+          --signing-key-base64 "$REM_PLUGIN_TEST_SIGNING_KEY_BASE64"
+
       - name: Upload example plug-in artifact
         uses: actions/upload-artifact@v4
         with:
           name: example-status-remplugin
           path: target/plugin-artifacts/example-status.remplugin
+
+      - name: Upload BLE heart-rate example plug-in artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: example-ble-heart-rate-remplugin
+          path: target/plugin-artifacts/example-ble-heart-rate.remplugin

@@ -1,0 +1,24 @@
+id = "rem.plugin.example_ble_heart_rate"
+name = "Example BLE Heart Rate Plugin"
+version = "0.1.0"
+rem_api_version = ">=1.0.0,<2.0.0"
+plugin_type = "native"
+
+[library.android]
+arm64_v8a = "logic/android/arm64-v8a/libexample_ble_heart_rate_plugin.so"
+armeabi_v7a = "logic/android/armeabi-v7a/libexample_ble_heart_rate_plugin.so"
+x86_64 = "logic/android/x86_64/libexample_ble_heart_rate_plugin.so"
+
+[settings]
+schema = "ui/settings.schema.json"
+
+[permissions]
+storage_plugin = true
+lxmf_send = true
+lxmf_receive = true
+
+[[messages]]
+name = "heart_rate_sample"
+version = "1.0.0"
+direction = ["send", "receive"]
+schema = "schemas/heart_rate_sample.schema.json"

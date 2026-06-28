@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": ["deviceId", "bpm", "sensorType"],
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "bpm": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 240
+    },
+    "sensorType": {
+      "type": "string",
+      "enum": ["ble_heart_rate"]
+    },
+    "contactDetected": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

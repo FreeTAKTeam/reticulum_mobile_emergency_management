@@ -1,0 +1,67 @@
+{
+  "description": "Example BLE heart-rate telemetry payloads sent as plug-in LXMF messages.",
+  "fields": [
+    {
+      "id": "destinationHex",
+      "label": "Destination",
+      "type": "text",
+      "default": "",
+      "placeholder": "32-character destination hex"
+    },
+    {
+      "id": "deviceId",
+      "label": "Device ID",
+      "type": "text",
+      "default": "example-ble-hr"
+    },
+    {
+      "id": "bpm",
+      "label": "Heart rate",
+      "type": "number",
+      "default": 82,
+      "min": 1,
+      "max": 240,
+      "step": 1
+    },
+    {
+      "id": "sensorType",
+      "label": "Sensor type",
+      "type": "select",
+      "default": "ble_heart_rate",
+      "options": [
+        {
+          "label": "BLE heart rate",
+          "value": "ble_heart_rate"
+        }
+      ]
+    },
+    {
+      "id": "contactDetected",
+      "label": "Sensor contact detected",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "body",
+      "label": "Message body",
+      "type": "text",
+      "default": "BLE heart-rate sample"
+    }
+  ],
+  "actions": [
+    {
+      "id": "sendHeartRateSample",
+      "label": "Send sample",
+      "type": "send_lxmf",
+      "messageName": "heart_rate_sample",
+      "destinationField": "destinationHex",
+      "bodyField": "body",
+      "payloadFields": {
+        "deviceId": "deviceId",
+        "bpm": "bpm",
+        "sensorType": "sensorType",
+        "contactDetected": "contactDetected"
+      }
+    }
+  ]
+}
