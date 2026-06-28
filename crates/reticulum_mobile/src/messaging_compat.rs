@@ -928,7 +928,24 @@ impl MessagingStore {
         last_wire_message_id_hex: Option<String>,
         updated_at_ms: u64,
     ) -> Option<MessageRecord> {
-        let record = self.message_records.get_mut(message_id_hex)?;
+        let resolved_message_id_hex = if self.message_records.contains_key(message_id_hex) {
+            message_id_hex.to_string()
+        } else {
+            self.message_records
+                .iter()
+                .find_map(|(stored_message_id_hex, record)| {
+                    record
+                        .last_wire_message_id_hex
+                        .as_deref()
+                        .is_some_and(|wire_message_id_hex| {
+                            wire_message_id_hex.eq_ignore_ascii_case(message_id_hex)
+                        })
+                        .then(|| stored_message_id_hex.clone())
+                })?
+        };
+        let record = self
+            .message_records
+            .get_mut(resolved_message_id_hex.as_str())?;
         if let Some(state) = state {
             record.state = state;
         }
@@ -2271,6 +2288,56 @@ mod tests {
             )
             .expect("message updated");
 
+        assert_eq!(updated.state, MessageState::Delivered);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
+    }
+
+    #[test]
+    fn retry_chat_ack_updates_original_record_by_wire_message_id() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "logical-msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("retry-wire-msg".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "retry-wire-msg",
+                Some(MessageState::Delivered),
+                Some(TransportDeliveryState::TransportDelivered),
+                Some(ApplicationAckState::Accepted),
+                Some("chat delivery ack".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated by wire id");
+
+        assert_eq!(updated.message_id_hex, "logical-msg");
+        assert_eq!(
+            updated.last_wire_message_id_hex.as_deref(),
+            Some("retry-wire-msg")
+        );
         assert_eq!(updated.state, MessageState::Delivered);
         assert_eq!(
             updated.transport_state,
