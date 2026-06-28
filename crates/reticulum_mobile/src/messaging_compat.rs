@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::announce_metadata::supports_mission_traffic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerState {
     Connecting,
@@ -210,7 +212,6 @@ pub struct MessagingStore {
 const DEFAULT_PEER_STALE_AFTER_MINUTES: u32 = 30;
 pub(crate) const DEFAULT_PEER_STALE_AFTER_MS: u64 =
     DEFAULT_PEER_STALE_AFTER_MINUTES as u64 * 60_000;
-const REQUIRED_MISSION_CAPABILITIES: [&str; 2] = ["r3akt", "emergencymessages"];
 
 impl Default for SyncStatus {
     fn default() -> Self {
@@ -1053,23 +1054,6 @@ fn current_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn parse_capability_tokens(app_data: &str) -> Vec<String> {
-    app_data
-        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
-        .map(|token| token.to_ascii_lowercase())
-        .collect()
-}
-
-fn supports_mission_traffic(app_data: Option<&str>) -> bool {
-    let tokens = app_data.map(parse_capability_tokens).unwrap_or_default();
-    REQUIRED_MISSION_CAPABILITIES
-        .iter()
-        .all(|required| tokens.iter().any(|token| token == required))
-}
-
 fn peer_is_stale(
     saved: bool,
     active_link: bool,
@@ -1146,6 +1130,23 @@ fn peer_change_from_record(record: PeerRecord) -> PeerChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mission_capability_check_accepts_msgpack_hex_app_data() {
+        let payload = rmpv::Value::Array(vec![
+            rmpv::Value::from("Msgpack Peer"),
+            rmpv::Value::Map(vec![(
+                rmpv::Value::from("caps"),
+                rmpv::Value::Array(vec![
+                    rmpv::Value::from("R3AKT"),
+                    rmpv::Value::from("EMergencyMessages"),
+                ]),
+            )]),
+        ]);
+        let app_data = hex::encode(rmp_serde::to_vec(&payload).expect("msgpack"));
+
+        assert!(supports_mission_traffic(Some(app_data.as_str())));
+    }
 
     #[test]
     fn legacy_app_alias_projects_canonical_lxmf_peer() {

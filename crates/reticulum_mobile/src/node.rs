@@ -12,6 +12,7 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::mpsc;
 
+use crate::announce_metadata::has_capability_token;
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
 use crate::delivery_policy;
 use crate::event_bus::EventBus;
@@ -245,22 +246,6 @@ fn effective_hub_mode(
             }
         }
     }
-}
-
-fn has_capability_token(app_data: Option<&str>, capability: &str) -> bool {
-    let requested = capability.trim();
-    if requested.is_empty() {
-        return false;
-    }
-
-    app_data.is_some_and(|value| {
-        value
-            .split([';', ','])
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-            .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
-            .any(|token| token.eq_ignore_ascii_case(requested))
-    })
 }
 
 fn telemetry_targets_from_peers(
@@ -6024,6 +6009,41 @@ mod tests {
     static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn node_capability_check_accepts_msgpack_hex_app_data() {
+        let payload = MsgPackValue::Array(vec![
+            MsgPackValue::from("Msgpack Peer"),
+            MsgPackValue::Map(vec![(
+                MsgPackValue::from("caps"),
+                MsgPackValue::Array(vec![
+                    MsgPackValue::from("R3AKT"),
+                    MsgPackValue::from("EMergencyMessages"),
+                    MsgPackValue::from("Telemetry"),
+                ]),
+            )]),
+        ]);
+        let app_data = hex::encode(rmp_serde::to_vec(&payload).expect("msgpack"));
+
+        assert!(has_capability_token(Some(app_data.as_str()), "telemetry"));
+        assert!(peer_supports_mission_traffic(&PeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: None,
+            lxmf_destination_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+            display_name: None,
+            app_data: Some(app_data),
+            state: crate::types::PeerState::Disconnected {},
+            saved: false,
+            stale: false,
+            active_link: false,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: None,
+            last_seen_at_ms: 1,
+            announce_last_seen_at_ms: Some(1),
+            lxmf_last_seen_at_ms: Some(1),
+            hub_derived: false,
+        }));
+    }
 
     struct TcpRelayHandle {
         addr: SocketAddr,

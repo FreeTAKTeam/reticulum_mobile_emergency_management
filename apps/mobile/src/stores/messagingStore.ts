@@ -168,9 +168,7 @@ function hasKnownLxmfRoute(
   const peer = peerForDestination(destinationHex, nodeStore);
   const saved = savedPeerRouteForDestination(destinationHex, nodeStore);
   return isDestinationHash(peer?.lxmfDestinationHex)
-    || isDestinationHash(saved?.lxmfDestinationHex)
-    || isDestinationHash(peer?.destination)
-    || isDestinationHash(saved?.destination);
+    || isDestinationHash(saved?.lxmfDestinationHex);
 }
 
 function canUseRelayChat(
