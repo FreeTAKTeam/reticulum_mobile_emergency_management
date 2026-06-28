@@ -151,6 +151,9 @@ dictionary NodeConfig {
   // Transport broadcast mode (true enables broadcast for discovery/path requests).
   boolean broadcast;
 
+  // Packet retransmit mode (true lets REM act as a Reticulum transport node).
+  boolean transport_node_enabled;
+
   // Periodic announce interval for the app destination.
   u32 announce_interval_seconds;
 
@@ -339,6 +342,7 @@ dictionary AppSettingsRecord {
   string announce_capabilities;
   sequence<string> tcp_clients;
   boolean broadcast;
+  boolean transport_node_enabled;
   u32 announce_interval_seconds;
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;

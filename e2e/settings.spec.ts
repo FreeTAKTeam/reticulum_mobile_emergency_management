@@ -43,6 +43,7 @@ test("fresh installs default to the first TCP community server", async ({ page }
     .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
 
   await expect(firstServer.getByRole("checkbox")).toBeChecked();
+  await expect(runtimePanel.getByLabel("Transport node forwarding")).toBeChecked();
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
@@ -97,6 +98,7 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
 
   await runtimePanel.locator("summary").click();
   await runtimePanel.getByLabel("Call Sign").fill("Atlas-7");
+  await runtimePanel.getByLabel("Transport node forwarding").uncheck();
   await runtimePanel
     .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
     .fill("mesh.example.org:5151");
@@ -111,6 +113,7 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   );
 
   expect(storedSettings.displayName).toBe("Atlas-7");
+  expect(storedSettings.transportNodeEnabled).toBe(false);
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 

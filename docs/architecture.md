@@ -310,7 +310,8 @@ Verification:
 
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
-- Chat sends request `DirectOnly` LXMF delivery. The user flow must announce, connect to the peer, and then send; the UI records outbound chat as `Direct` instead of `Opportunistic`.
+- Chat uses `Auto` for saved peers with a known LXMF route and an active propagation relay, so Reticulum can try direct delivery when available and fall back to propagation instead of failing at the UI direct-link gate. Without a relay-backed saved route, chat keeps the direct connection flow and sends `DirectOnly`.
+- Generic peer chat keeps the selected peer as the LXMF destination in Connected RCH mode. Hub routing is reserved for mission, event, and telemetry replication payloads that are explicitly hub-scoped.
 - If the peer is known but is not currently direct-deliverable and an active propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
 - If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
 
@@ -468,6 +469,7 @@ Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM d
 Mixed TCP and LoRa behavior for the 1.2 release:
 - REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
 - TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
+- REM acts as a Reticulum transport node by default by enabling Reticulum packet retransmit on the runtime transport. Operators can turn off transport-node forwarding in Settings without changing broadcast discovery.
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 

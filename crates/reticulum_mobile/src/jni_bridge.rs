@@ -77,6 +77,7 @@ struct NodeConfigInput {
     storage_dir: Option<String>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
+    transport_node_enabled: Option<bool>,
     announce_interval_seconds: Option<u32>,
     stale_after_minutes: Option<u32>,
     announce_capabilities: Option<String>,
@@ -169,6 +170,8 @@ struct AppSettingsInput {
     announce_capabilities: String,
     tcp_clients: Vec<String>,
     broadcast: bool,
+    #[serde(default = "default_true")]
+    transport_node_enabled: bool,
     announce_interval_seconds: u32,
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
@@ -182,6 +185,10 @@ struct AppSettingsInput {
 #[serde(rename_all = "camelCase")]
 struct ChecklistSettingsInput {
     default_task_due_step_minutes: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -673,6 +680,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .filter(|v| !v.is_empty())
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
+        transport_node_enabled: input.transport_node_enabled.unwrap_or(true),
         announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
         stale_after_minutes: input.stale_after_minutes.unwrap_or(30).max(1),
         announce_capabilities: input
@@ -879,6 +887,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
         announce_capabilities: input.announce_capabilities,
         tcp_clients: input.tcp_clients,
         broadcast: input.broadcast,
+        transport_node_enabled: input.transport_node_enabled,
         announce_interval_seconds: input.announce_interval_seconds,
         telemetry: TelemetrySettingsRecord {
             enabled: input.telemetry.enabled,
@@ -1229,6 +1238,7 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceCapabilities": settings.announce_capabilities,
         "tcpClients": settings.tcp_clients,
         "broadcast": settings.broadcast,
+        "transportNodeEnabled": settings.transport_node_enabled,
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub),

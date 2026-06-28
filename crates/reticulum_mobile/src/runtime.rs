@@ -9163,7 +9163,7 @@ pub async fn run_node(
     mut priority_cmd_rx: mpsc::Receiver<Command>,
 ) {
     let mut transport_cfg = TransportConfig::new(config.name.clone(), &identity, config.broadcast);
-    transport_cfg.set_retransmit(false);
+    transport_cfg.set_retransmit(config.transport_node_enabled);
     if config.rnode.enabled {
         transport_cfg.set_resource_retry_interval_secs(RNODE_BLE_RESOURCE_RETRY_INTERVAL_SECS);
         transport_cfg.set_resource_retry_limit(RNODE_BLE_RESOURCE_RETRY_LIMIT);
@@ -14389,8 +14389,9 @@ mod tests {
             )
             .await;
         let transport = Arc::new(transport);
-        let capabilities =
-            Arc::new(TokioMutex::new("R3AKT,EMergencyMessages,Telemetry;name=Pixel".to_string()));
+        let capabilities = Arc::new(TokioMutex::new(
+            "R3AKT,EMergencyMessages,Telemetry;name=Pixel".to_string(),
+        ));
 
         announce_destinations(
             &transport,
@@ -14405,7 +14406,10 @@ mod tests {
             .await
             .expect("expected outbound announce")
             .expect("tx channel open");
-        assert!(matches!(first_announce.tx_type, TxMessageType::Broadcast(None)));
+        assert!(matches!(
+            first_announce.tx_type,
+            TxMessageType::Broadcast(None)
+        ));
 
         let lxmf_destination_hash = lxmf_destination.lock().await.desc.address_hash;
         let mut request_data = PacketDataBuffer::new_from_slice(lxmf_destination_hash.as_slice());
