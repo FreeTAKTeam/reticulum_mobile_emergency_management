@@ -102,6 +102,7 @@ const NODE_START_TIMEOUT_MS = 15_000;
 const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
 const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
 const REMOVED_PEERS_STORAGE_KEY = "reticulum.mobile.removedPeers.v1";
+const NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY = "reticulum.mobile.nodeConfigRestartRequired.v1";
 
 const EMPTY_STATUS: NodeStatus = {
   running: false,
@@ -161,6 +162,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
   tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
+  transportNodeEnabled: DEFAULT_NODE_CONFIG.transportNodeEnabled,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   telemetry: {
     enabled: false,
@@ -413,6 +415,7 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
     announceCapabilities: settings.announceCapabilities,
     tcpClients: [...settings.tcpClients],
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     telemetry: {
       enabled: settings.telemetry.enabled,
@@ -453,6 +456,30 @@ function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord)
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function nodeConfigsEqual(left: NodeConfig, right: NodeConfig): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function loadNodeConfigRestartRequired(): boolean {
+  try {
+    return window.localStorage.getItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeNodeConfigRestartRequired(required: boolean): void {
+  try {
+    if (required) {
+      window.localStorage.setItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY, "1");
+    } else {
+      window.localStorage.removeItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY);
+    }
+  } catch {
+    // Local storage can be unavailable in restricted webviews; the in-memory flag still applies.
+  }
+}
+
 function toUiSettingsProjection(
   next: Pick<NodeUiSettings, "clientMode">,
 ): NodeUiPreferences {
@@ -479,6 +506,7 @@ function normalizeAppSettingsRecord(
       tcpFallback,
       allowEmptyTcpClients,
     ),
+    transportNodeEnabled: runtimeSettings.transportNodeEnabled ?? DEFAULT_SETTINGS.transportNodeEnabled,
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
     pluginTrust: {
@@ -498,6 +526,20 @@ function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): SavedPeerRec
     destination: normalizeDestinationHex(peer.destination),
     label: peer.label?.trim() || undefined,
     savedAt: Number(peer.savedAt ?? nowMs()),
+    identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+      ? normalizeDestinationHex(peer.identityHex ?? "")
+      : undefined,
+    lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+      ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+      : undefined,
+    appData: peer.appData?.trim() || undefined,
+    displayName: peer.displayName?.trim() || undefined,
+    lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+      ? peer.lastRouteSeenAtMs
+      : undefined,
+    lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+      ? peer.lastHops
+      : undefined,
   }));
 }
 
@@ -512,6 +554,20 @@ function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedP
       destination,
       label: peer.label?.trim() || undefined,
       savedAt: Number(peer.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
+        ? normalizeDestinationHex(peer.identityHex ?? "")
+        : undefined,
+      lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
+        ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
+        : undefined,
+      appData: peer.appData?.trim() || undefined,
+      displayName: peer.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
+        ? peer.lastRouteSeenAtMs
+        : undefined,
+      lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
+        ? peer.lastHops
+        : undefined,
     };
   }
   return out;
@@ -558,6 +614,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     })),
     tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
     announceCapabilities: formatAnnounceAppData(
@@ -576,6 +633,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
 export const useNodeStore = defineStore("node", () => {
   const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
   const status = ref<NodeStatus>({ ...EMPTY_STATUS });
+  const nodeConfigRestartRequired = ref(loadNodeConfigRestartRequired());
   const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
   const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
   const savedByDestination = reactive<Record<string, SavedPeer>>({});
@@ -650,6 +708,11 @@ export const useNodeStore = defineStore("node", () => {
       "Debug",
       `Plug-in LXMF message received plugin=${message.pluginId} message=${message.messageName}.`,
     );
+  }
+
+  function setNodeConfigRestartRequired(required: boolean): void {
+    nodeConfigRestartRequired.value = required;
+    storeNodeConfigRestartRequired(required);
   }
 
   function toPluginLogLevel(level: string): LogLevel {
@@ -970,6 +1033,7 @@ export const useNodeStore = defineStore("node", () => {
       },
       peer.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "native peer route profile");
   }
 
   function applyPeerChanged(change: PeerChangedEvent["change"]): void {
@@ -1035,6 +1099,7 @@ export const useNodeStore = defineStore("node", () => {
       },
       change.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
     );
+    refreshSavedPeerProfile(canonicalDestination, "peer change route profile");
   }
 
   function reconcileNativePeerSnapshot(peers: PeerRecord[]): void {
@@ -1149,6 +1214,7 @@ export const useNodeStore = defineStore("node", () => {
     settings.announceCapabilities = next.announceCapabilities;
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
+    settings.transportNodeEnabled = next.transportNodeEnabled;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
     settings.telemetry = { ...next.telemetry };
     settings.checklists = { ...next.checklists };
@@ -1601,9 +1667,17 @@ export const useNodeStore = defineStore("node", () => {
 
     const existingPeer = savedByDestination[canonicalDestination];
     const migratedPeer: SavedPeer = {
+      ...aliasPeer,
+      ...existingPeer,
       destination: canonicalDestination,
       label: existingPeer?.label ?? aliasPeer.label,
       savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
+      identityHex: existingPeer?.identityHex ?? aliasPeer.identityHex,
+      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex ?? canonicalDestination,
+      appData: existingPeer?.appData ?? aliasPeer.appData,
+      displayName: existingPeer?.displayName ?? aliasPeer.displayName,
+      lastRouteSeenAtMs: existingPeer?.lastRouteSeenAtMs ?? aliasPeer.lastRouteSeenAtMs,
+      lastHops: existingPeer?.lastHops ?? aliasPeer.lastHops,
     };
     delete savedByDestination[aliasDestination];
     savedByDestination[canonicalDestination] = migratedPeer;
@@ -1615,6 +1689,70 @@ export const useNodeStore = defineStore("node", () => {
       `canonical saved peer ${canonicalDestination}`,
     );
     return migratedPeer;
+  }
+
+  function savedPeerProfileFromDiscovered(
+    destinationRaw: string,
+    discovered?: DiscoveredPeer,
+    fallback?: Partial<SavedPeer>,
+  ): SavedPeer {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const identityHex = normalizeDestinationHex(discovered?.identityHex ?? fallback?.identityHex ?? "");
+    const lxmfDestinationHex = normalizeDestinationHex(
+      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? destination,
+    );
+    const routeSeenAt = Math.max(
+      discovered?.lxmfLastSeenAt ?? 0,
+      discovered?.announceLastSeenAt ?? 0,
+      discovered?.lastSeenAt ?? 0,
+      fallback?.lastRouteSeenAtMs ?? 0,
+    );
+    const hops = typeof discovered?.hops === "number" && Number.isFinite(discovered.hops)
+      ? discovered.hops
+      : fallback?.lastHops;
+
+    return {
+      destination,
+      label: discovered?.label ?? fallback?.label,
+      savedAt: Number(fallback?.savedAt ?? nowMs()),
+      identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
+      lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
+      appData: discovered?.appData?.trim() || fallback?.appData?.trim() || undefined,
+      displayName: discovered?.announcedName?.trim() || fallback?.displayName?.trim() || undefined,
+      lastRouteSeenAtMs: routeSeenAt > 0 ? routeSeenAt : undefined,
+      lastHops: typeof hops === "number" && Number.isFinite(hops) ? hops : undefined,
+    };
+  }
+
+  function sameSavedPeerProfile(left: SavedPeer, right: SavedPeer): boolean {
+    return left.destination === right.destination
+      && left.label === right.label
+      && left.savedAt === right.savedAt
+      && left.identityHex === right.identityHex
+      && left.lxmfDestinationHex === right.lxmfDestinationHex
+      && left.appData === right.appData
+      && left.displayName === right.displayName
+      && left.lastRouteSeenAtMs === right.lastRouteSeenAtMs
+      && left.lastHops === right.lastHops;
+  }
+
+  function refreshSavedPeerProfile(destinationRaw: string, reason: string): void {
+    const destination = normalizeDestinationHex(destinationRaw);
+    const saved = savedByDestination[destination];
+    const discovered = discoveredByDestination[destination];
+    if (!saved || !discovered) {
+      return;
+    }
+
+    const next = savedPeerProfileFromDiscovered(destination, discovered, saved);
+    if (sameSavedPeerProfile(saved, next)) {
+      return;
+    }
+    savedByDestination[destination] = next;
+    void persistSavedPeersProjection(
+      { ...savedByDestination },
+      `${reason} ${destination}`,
+    );
   }
 
   function nativeSavedPeerForCanonicalDestination(
@@ -1639,11 +1777,11 @@ export const useNodeStore = defineStore("node", () => {
     }
 
     const existing = peerByAnyKnownDestination(discoveredByDestination, canonicalDestination);
-    const adoptedPeer: SavedPeer = {
-      destination: canonicalDestination,
-      label: existing?.label ?? (displayName?.trim() || undefined),
+    const adoptedPeer = savedPeerProfileFromDiscovered(canonicalDestination, existing, {
+      label: displayName?.trim() || undefined,
+      displayName: displayName?.trim() || undefined,
       savedAt: nowMs(),
-    };
+    });
     savedByDestination[canonicalDestination] = adoptedPeer;
     void persistSavedPeersProjection(
       { ...savedByDestination },
@@ -2180,6 +2318,7 @@ export const useNodeStore = defineStore("node", () => {
         NODE_START_TIMEOUT_MS,
         `node runtime start timed out after ${NODE_START_TIMEOUT_MS}ms`,
       );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -2234,6 +2373,7 @@ export const useNodeStore = defineStore("node", () => {
         NODE_START_TIMEOUT_MS,
         `node runtime restart timed out after ${NODE_START_TIMEOUT_MS}ms`,
       );
+      setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
       await refreshMessagingState();
       await refreshAnnounceState();
@@ -2422,11 +2562,10 @@ export const useNodeStore = defineStore("node", () => {
     clearPeerRemoved(destination, discovered);
     const nextSavedPeers = {
       ...savedByDestination,
-      [destination]: {
-        destination,
+      [destination]: savedPeerProfileFromDiscovered(destination, discovered, {
         label: discovered?.label,
         savedAt: nowMs(),
-      },
+      }),
     };
     if (requestedDestination !== destination) {
       delete nextSavedPeers[requestedDestination];
@@ -2492,6 +2631,7 @@ export const useNodeStore = defineStore("node", () => {
   async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
+    const previousNodeConfig = toNodeConfig(settings);
     if (next.displayName !== undefined) {
       settings.displayName = normalizeStoredDisplayName(next.displayName);
     }
@@ -2508,6 +2648,9 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
+    }
+    if (typeof next.transportNodeEnabled === "boolean") {
+      settings.transportNodeEnabled = next.transportNodeEnabled;
     }
     if (next.announceIntervalSeconds !== undefined) {
       settings.announceIntervalSeconds = next.announceIntervalSeconds;
@@ -2564,6 +2707,11 @@ export const useNodeStore = defineStore("node", () => {
       appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
       throw error;
     }
+    const nodeConfigChanged = !nodeConfigsEqual(previousNodeConfig, toNodeConfig(settings));
+    if (status.value.running && nodeConfigChanged) {
+      setNodeConfigRestartRequired(true);
+      appendLog("Info", "Node interface settings changed. Restart the app or node to apply them.");
+    }
     if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
       void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
       return;
@@ -2608,6 +2756,7 @@ export const useNodeStore = defineStore("node", () => {
         destination,
         label: peer.label?.trim() || undefined,
         savedAt: nowMs(),
+        lxmfDestinationHex: destination,
       };
       upsertDiscovered(
         destination,
@@ -3273,6 +3422,7 @@ export const useNodeStore = defineStore("node", () => {
 
   return {
     settings,
+    nodeConfigRestartRequired,
     watchStatusServer,
     status,
     syncStatus,

@@ -94,6 +94,7 @@ export interface NodeConfig {
   pluginTrustedPublishers?: TrustedPluginPublisherRecord[];
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   staleAfterMinutes: number;
   announceCapabilities: string;
@@ -443,6 +444,7 @@ export interface AppSettingsRecord {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
@@ -514,6 +516,12 @@ export interface SavedPeerRecord {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export interface EamSourceRecord {
@@ -991,6 +999,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   pluginTrustedPublishers: [],
   tcpClients: [],
   broadcast: true,
+  transportNodeEnabled: true,
   announceIntervalSeconds: 1800,
   staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
@@ -2173,6 +2182,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
     announceCapabilities: String(raw.announceCapabilities ?? ""),
     tcpClients: Array.isArray(raw.tcpClients) ? raw.tcpClients.map((entry) => String(entry)) : [],
     broadcast: Boolean(raw.broadcast),
+    transportNodeEnabled: Boolean(raw.transportNodeEnabled ?? raw.transport_node_enabled ?? true),
     announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
     telemetry: {
       enabled: Boolean(telemetry.enabled),
@@ -2229,6 +2239,20 @@ function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
     destination: normalizeHex(raw.destination ?? raw.destinationHex ?? ""),
     label: typeof raw.label === "string" ? raw.label : undefined,
     savedAt: Number(raw.savedAt ?? raw.saved_at_ms ?? raw.savedAtMs ?? Date.now()),
+    identityHex: toOptionalHex(raw.identityHex ?? raw.identity_hex),
+    lxmfDestinationHex: toOptionalHex(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex),
+    appData: typeof raw.appData === "string"
+      ? raw.appData
+      : typeof raw.app_data === "string"
+        ? raw.app_data
+        : undefined,
+    displayName: typeof raw.displayName === "string"
+      ? raw.displayName
+      : typeof raw.display_name === "string"
+        ? raw.display_name
+        : undefined,
+    lastRouteSeenAtMs: toOptionalNumber(raw.lastRouteSeenAtMs ?? raw.last_route_seen_at_ms),
+    lastHops: toOptionalNumber(raw.lastHops ?? raw.last_hops),
   };
 }
 
@@ -3525,6 +3549,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     })),
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
+    transportNodeEnabled: config.transportNodeEnabled,
     announceIntervalSeconds: config.announceIntervalSeconds,
     staleAfterMinutes: config.staleAfterMinutes,
     announceCapabilities: config.announceCapabilities,

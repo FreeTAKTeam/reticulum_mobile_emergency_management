@@ -43,10 +43,11 @@ test("fresh installs default to the first TCP community server", async ({ page }
     .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
 
   await expect(firstServer.getByRole("checkbox")).toBeChecked();
+  await expect(runtimePanel.getByLabel("Transport node forwarding")).toBeChecked();
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
-test("legacy placeholder TCP selection normalizes to the first community server", async ({ page }) => {
+test("rmap TCP selection is preserved as a community server", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -62,20 +63,23 @@ test("legacy placeholder TCP selection normalizes to the first community server"
 
   await runtimePanel.locator("summary").click();
 
-  const firstServer = page
-    .locator("label.server-option")
-    .filter({ hasText: DEFAULT_TCP_COMMUNITY_ENDPOINT });
+  const rmapServer = page.locator("label.server-option").filter({ hasText: "rmap.world:4242" });
 
-  await expect(firstServer.getByRole("checkbox")).toBeChecked();
-  await expect(page.getByText("rmap.world:4242")).toHaveCount(0);
+  await expect(rmapServer.getByRole("checkbox")).toBeChecked();
+  await expect(page.getByText(DEFAULT_TCP_COMMUNITY_ENDPOINT)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 
-  await page.getByRole("button", { name: "Save" }).click();
+  const runtimeSettings = await page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().settings;
+  });
 
   const storedSettings = await page.evaluate(() =>
     JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
   );
 
-  expect(storedSettings.tcpClients).toEqual([DEFAULT_TCP_COMMUNITY_ENDPOINT]);
+  expect(runtimeSettings.tcpClients).toEqual(["rmap.world:4242"]);
+  expect(storedSettings.tcpClients).toEqual(["rmap.world:4242"]);
 });
 
 test("operators can update runtime settings and persist TCP endpoints", async ({ page }) => {
@@ -94,7 +98,10 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
 
   await runtimePanel.locator("summary").click();
   await runtimePanel.getByLabel("Call Sign").fill("Atlas-7");
-  await runtimePanel.getByPlaceholder("Add custom endpoint (host:port)").fill("mesh.example.org:5151");
+  await runtimePanel.getByLabel("Transport node forwarding").uncheck();
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("mesh.example.org:5151");
   await runtimePanel.getByRole("button", { name: "Add" }).click();
 
   await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
@@ -106,6 +113,34 @@ test("operators can update runtime settings and persist TCP endpoints", async ({
   );
 
   expect(storedSettings.displayName).toBe("Atlas-7");
+  expect(storedSettings.transportNodeEnabled).toBe(false);
+  expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
+});
+
+test("operators can add Reticulum-style TCP URLs as custom endpoints", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
+  });
+
+  await runtimePanel.locator("summary").click();
+  await runtimePanel
+    .getByPlaceholder("Add custom endpoint (host:port or tcp://host:port)")
+    .fill("tcp://mesh.example.org:5151");
+  await runtimePanel.getByRole("button", { name: "Add" }).click();
+
+  await expect(runtimePanel.getByText("mesh.example.org:5151")).toBeVisible();
+  await page.getByRole("button", { name: "Save" }).click();
+
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
 });
 

@@ -1,5 +1,6 @@
 package network.reticulum.emergency;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -7,9 +8,12 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.app.Activity;
 import android.app.Application;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
@@ -1765,6 +1769,7 @@ public final class ReticulumNodeService extends Service {
         final JSONObject config = rawConfigJson == null || rawConfigJson.trim().isEmpty()
             ? new JSONObject()
             : new JSONObject(rawConfigJson);
+        repairRnodeConfig(config);
         final File resolvedStorageDir = resolveStorageDir(config.optString("storageDir", ""));
         config.put("storageDir", resolvedStorageDir.getAbsolutePath());
         config.put("pluginAndroidAbi", primaryAndroidAbi());
@@ -1773,6 +1778,104 @@ public final class ReticulumNodeService extends Service {
             canonicalize(config),
             resolvedStorageDir.getAbsolutePath()
         );
+    }
+
+    private void repairRnodeConfig(JSONObject config) throws JSONException {
+        final JSONObject rnode = config.optJSONObject("rnode");
+        if (rnode == null || !rnode.optBoolean("enabled", false)) {
+            return;
+        }
+        final String configuredId = rnode.optString("peripheralId", "").trim();
+        if (configuredId.isEmpty() || !hasBluetoothConnectPermission()) {
+            return;
+        }
+        final BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            return;
+        }
+
+        BluetoothDevice singleRnode = null;
+        int rnodeCount = 0;
+        try {
+            for (BluetoothDevice device : adapter.getBondedDevices()) {
+                if (deviceMatchesId(device, configuredId)) {
+                    return;
+                }
+                if (isRnodeBluetoothDevice(device)) {
+                    singleRnode = device;
+                    rnodeCount += 1;
+                }
+            }
+        } catch (SecurityException ex) {
+            return;
+        }
+
+        if (rnodeCount != 1 || singleRnode == null) {
+            return;
+        }
+        final String address = singleRnode.getAddress();
+        if (address == null || address.trim().isEmpty()) {
+            return;
+        }
+        String name = "";
+        try {
+            name = singleRnode.getName();
+        } catch (SecurityException ignored) {
+        }
+        rnode.put("peripheralId", address);
+        rnode.put("displayName", name == null || name.trim().isEmpty() ? address : name.trim());
+        Log.i(
+            TAG,
+            "RNode config repaired from stale peripheral " + configuredId
+                + " to bonded " + address
+        );
+    }
+
+    private boolean hasBluetoothConnectPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+        }
+        return checkSelfPermission(Manifest.permission.BLUETOOTH)
+            == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isRnodeBluetoothDevice(BluetoothDevice device) {
+        if (device == null || device.getBondState() != BluetoothDevice.BOND_BONDED) {
+            return false;
+        }
+        try {
+            final String name = device.getName();
+            return name != null && name.toLowerCase(Locale.US).contains("rnode");
+        } catch (SecurityException ex) {
+            return false;
+        }
+    }
+
+    private boolean deviceMatchesId(BluetoothDevice device, String configuredId) {
+        if (device == null) {
+            return false;
+        }
+        final String target = normalizeBluetoothId(configuredId);
+        if (target.isEmpty()) {
+            return false;
+        }
+        final String address = device.getAddress();
+        if (normalizeBluetoothId(address).equals(target)) {
+            return true;
+        }
+        try {
+            return normalizeBluetoothId(device.getName()).equals(target);
+        } catch (SecurityException ex) {
+            return false;
+        }
+    }
+
+    private String normalizeBluetoothId(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim().replace(":", "").replace("-", "").toLowerCase(Locale.US);
     }
 
     private File resolveStorageDir(String rawStorageDir) {

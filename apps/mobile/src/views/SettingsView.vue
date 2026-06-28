@@ -75,6 +75,7 @@ const form = reactive({
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  transportNodeEnabled: nodeStore.settings.transportNodeEnabled,
   rnodeEnabled: nodeStore.settings.rnode.enabled,
   rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
   rnodeDisplayName: nodeStore.settings.rnode.displayName,
@@ -336,6 +337,7 @@ const hasMainSettingsChanges = computed(() =>
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
+  || form.transportNodeEnabled !== nodeStore.settings.transportNodeEnabled
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
   || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
@@ -389,7 +391,7 @@ watch(
 );
 
 function normalizeTcpEndpoint(value: string): string | undefined {
-  const candidate = value.trim();
+  const candidate = value.trim().replace(/^tcp:\/\//i, "");
   if (!candidate) {
     return undefined;
   }
@@ -434,7 +436,7 @@ function toggleKnownTcpEndpoint(endpoint: string, selected: boolean): void {
 function addCustomTcpEndpoint(): void {
   const normalized = normalizeTcpEndpoint(customTcpEndpoint.value);
   if (!normalized) {
-    runtimeFeedback.value = "Invalid endpoint. Use host:port or [ipv6]:port.";
+    runtimeFeedback.value = "Invalid endpoint. Use host:port, tcp://host:port, or [ipv6]:port.";
     return;
   }
   const next = new Set(normalizedTcpClients.value);
@@ -517,18 +519,24 @@ async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
         rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
         return;
       }
-      rnodeScanFeedback.value = pairResult.paired
-        ? "RNode is already paired."
-        : "Bluetooth pairing started. Confirm the Android pairing prompt before restarting the node.";
+      if (!pairResult.paired) {
+        form.rnodeEnabled = false;
+        form.rnodePeripheralId = "";
+        rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
+        rnodeScanFeedback.value = "Bluetooth pairing started. Confirm the Android pairing prompt, then select the RNode from paired devices before saving.";
+        return;
+      }
+      rnodeScanFeedback.value = "RNode is already paired.";
+      form.rnodePeripheralId = pairResult.id || pairResult.address || deviceId;
     } catch (error: unknown) {
       rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
       return;
     }
   } else {
     rnodeScanFeedback.value = "";
+    form.rnodePeripheralId = deviceId;
   }
   form.rnodeEnabled = true;
-  form.rnodePeripheralId = deviceId;
   form.rnodeDisplayName = device.name || device.address;
 }
 
@@ -542,9 +550,36 @@ function syncWatchStatusServerForm(): void {
   form.watchStatusServerPort = nodeStore.watchStatusServer.port;
 }
 
+function syncSettingsForm(): void {
+  form.displayName = nodeStore.settings.displayName;
+  form.clientMode = nodeStore.settings.clientMode;
+  form.announceCapabilities = ensureRequiredAnnounceCapabilities(nodeStore.settings.announceCapabilities);
+  form.announceIntervalSeconds = nodeStore.settings.announceIntervalSeconds;
+  form.tcpClients = [...nodeStore.settings.tcpClients];
+  form.broadcast = nodeStore.settings.broadcast;
+  form.transportNodeEnabled = nodeStore.settings.transportNodeEnabled;
+  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
+  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
+  form.rnodeRegion = nodeStore.settings.rnode.region;
+  form.rnodeProfile = nodeStore.settings.rnode.profile;
+  form.telemetryEnabled = nodeStore.settings.telemetry.enabled;
+  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
+  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
+  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
+  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
+  form.hubMode = nodeStore.settings.hub.mode;
+  form.hubIdentityHash = nodeStore.settings.hub.identityHash;
+  form.hubApiBaseUrl = nodeStore.settings.hub.apiBaseUrl;
+  form.hubApiKey = nodeStore.settings.hub.apiKey;
+  form.hubRefreshIntervalSeconds = nodeStore.settings.hub.refreshIntervalSeconds;
+  syncWatchStatusServerForm();
+}
+
 onMounted(() => {
-  void nodeStore.refreshWatchStatusServerSettings()
-    .then(syncWatchStatusServerForm)
+  void nodeStore.init()
+    .then(() => nodeStore.refreshWatchStatusServerSettings())
+    .then(syncSettingsForm)
     .catch(() => undefined);
 });
 
@@ -570,6 +605,7 @@ async function applySettings(): Promise<void> {
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
+      transportNodeEnabled: form.transportNodeEnabled,
       rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
@@ -623,22 +659,7 @@ async function applySettings(): Promise<void> {
     savingSettings.value = false;
   }
 
-  form.displayName = nodeStore.settings.displayName;
-  form.announceCapabilities = nodeStore.settings.announceCapabilities;
-  form.tcpClients = [...nodeStore.settings.tcpClients];
-  form.rnodeEnabled = nodeStore.settings.rnode.enabled;
-  form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
-  form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
-  form.rnodeRegion = nodeStore.settings.rnode.region;
-  form.rnodeProfile = nodeStore.settings.rnode.profile;
-  form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
-  form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
-  form.telemetryStaleAfterMinutes = nodeStore.settings.telemetry.staleAfterMinutes;
-  form.telemetryExpireAfterMinutes = nodeStore.settings.telemetry.expireAfterMinutes;
-  form.pluginTrustedPublishers = formatTrustedPluginPublishers(
-    nodeStore.settings.pluginTrust.trustedPublishers,
-  );
-  syncWatchStatusServerForm();
+  syncSettingsForm();
   const displayNameChanged = nodeStore.settings.displayName !== previousDisplayName;
   const hubRoutingChanged =
     nodeStore.settings.hub.mode !== previousHubMode
@@ -647,6 +668,8 @@ async function applySettings(): Promise<void> {
     ? `RNode settings saved, but node start/restart failed: ${rnodeApplyError}`
     : rnodeChangedBeforeSave && rnodeAppliedToRuntime
       ? "RNode settings saved and applied to the running LoRa interface configuration."
+      : nodeStore.nodeConfigRestartRequired
+        ? "Settings saved. Restart the app or node to apply updated interface configuration."
       : displayNameChanged
       ? "Settings saved. Restart the node to announce the updated call sign."
       : nodeStore.status.running && hubRoutingChanged
@@ -962,6 +985,10 @@ async function refreshPluginSettings(): Promise<void> {
             <input v-model="form.broadcast" type="checkbox" />
             Broadcast enabled
           </label>
+          <label class="checkbox">
+            <input v-model="form.transportNodeEnabled" type="checkbox" />
+            Transport node forwarding
+          </label>
         </div>
 
         <section class="config-section" aria-labelledby="tcp-interfaces-heading">
@@ -998,7 +1025,7 @@ async function refreshPluginSettings(): Promise<void> {
             <input
               v-model="customTcpEndpoint"
               type="text"
-              placeholder="Add custom endpoint (host:port)"
+              placeholder="Add custom endpoint (host:port or tcp://host:port)"
             />
             <button type="button" @click="addCustomTcpEndpoint">Add</button>
           </div>
@@ -1094,6 +1121,11 @@ async function refreshPluginSettings(): Promise<void> {
           </div>
           <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
         </section>
+
+        <p class="section-note">
+          Save TCP or LoRa changes, then restart REM before validating interface traffic.
+          When TCP and LoRa are both active, Reticulum selects the route.
+        </p>
 
         <div class="grid propagation-grid">
           <label>

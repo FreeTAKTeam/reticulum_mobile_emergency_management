@@ -183,6 +183,13 @@ fn msgpack_eam_uid(value: &MsgPackValue) -> Option<String> {
     }
 }
 
+fn msgpack_checklist_uid(value: &MsgPackValue) -> Option<String> {
+    match value {
+        MsgPackValue::Integer(value) => value.as_u64().map(|value| format!("chk-{value}")),
+        _ => msgpack_string(value),
+    }
+}
+
 fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String> {
     match value {
         MsgPackValue::Binary(bytes) if bytes.len() == 16 => {
@@ -196,7 +203,14 @@ fn event_command_id_from_tail(uid: &str, value: &MsgPackValue) -> Option<String>
                 &hex[20..32],
             ))
         }
-        _ => msgpack_string(value),
+        _ => {
+            let tail = msgpack_string(value)?;
+            if tail.starts_with("log-entry-") {
+                Some(tail)
+            } else {
+                Some(format!("log-entry-{uid}-{tail}"))
+            }
+        }
     }
 }
 
@@ -295,9 +309,13 @@ fn parse_identifier_fields(
     );
     parse_string_field(
         entries,
-        &["checklist_uid", "checklistUid", "cl"],
+        &["checklist_uid", "checklistUid"],
         &mut metadata.checklist_uid,
         false,
+    );
+    set_if_none(
+        &mut metadata.checklist_uid,
+        msgpack_get_named(entries, &["cl"]).and_then(msgpack_checklist_uid),
     );
     parse_string_field(
         entries,
@@ -318,9 +336,18 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
         return;
     };
     let entries = map.as_slice();
+    let args_entries = msgpack_get_named(entries, &["args", "a"]).and_then(msgpack_map_entries);
+    let has_compact_event_args = args_entries.is_some_and(|args| {
+        ["entry_uid", "event_uid", "u"].iter().any(|key| {
+            msgpack_get_named(args, &[*key])
+                .and_then(msgpack_event_uid)
+                .is_some()
+        })
+    });
     let has_command_markers = msgpack_get_named(entries, &["command_id", "i"]).is_some()
         || msgpack_get_named(entries, &["correlation_id", "c"]).is_some()
-        || msgpack_get_named(entries, &["command_type", "t"]).is_some();
+        || msgpack_get_named(entries, &["command_type", "t"]).is_some()
+        || has_compact_event_args;
     if !has_command_markers {
         return;
     }
@@ -344,26 +371,54 @@ fn parse_command_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMet
         false,
     );
     parse_identifier_fields(entries, metadata);
-    if let Some(args) = msgpack_get_named(entries, &["args", "a"]) {
-        if let Some(args_entries) = msgpack_map_entries(args) {
-            parse_identifier_fields(args_entries, metadata);
-            if let Some(uid) = metadata.event_uid.as_deref() {
-                if let Some(command_id) = msgpack_get_named(args_entries, &["ci"])
-                    .and_then(|value| event_command_id_from_tail(uid, value))
-                {
-                    metadata.command_id = Some(command_id);
-                }
+    if let Some(args_entries) = args_entries {
+        parse_identifier_fields(args_entries, metadata);
+        if let Some(uid) = metadata.event_uid.as_deref() {
+            if let Some(command_id) = msgpack_get_named(args_entries, &["ci"])
+                .and_then(|value| event_command_id_from_tail(uid, value))
+            {
+                metadata.command_id = Some(command_id);
             }
-            if metadata.correlation_id.is_none() {
-                metadata.correlation_id = metadata.command_id.clone();
-            }
-            if let Some(patch) = msgpack_get_checklist_arg(args_entries, "patch") {
-                if let Some(patch_entries) = msgpack_map_entries(patch) {
-                    parse_identifier_fields(patch_entries, metadata);
-                }
+        }
+        if metadata.correlation_id.is_none() {
+            metadata.correlation_id = metadata.command_id.clone();
+        }
+        if let Some(patch) = msgpack_get_checklist_arg(args_entries, "patch") {
+            if let Some(patch_entries) = msgpack_map_entries(patch) {
+                parse_identifier_fields(patch_entries, metadata);
             }
         }
     }
+}
+
+fn parse_positional_command_envelope(values: &[MsgPackValue], metadata: &mut MissionSyncMetadata) {
+    let Some(command_type) = values.first().and_then(|value| match value {
+        MsgPackValue::Integer(value) if value.as_u64() == Some(1) => {
+            Some("checklist.create.online".to_string())
+        }
+        value => {
+            msgpack_string(value).map(|value| canonical_command_type(value.as_str()).to_string())
+        }
+    }) else {
+        return;
+    };
+    if command_type != "checklist.create.online" || values.len() < 5 {
+        return;
+    }
+    metadata.command_present = true;
+    metadata.command_type = Some(command_type);
+    set_if_none(
+        &mut metadata.checklist_uid,
+        values.get(1).and_then(msgpack_checklist_uid),
+    );
+    parse_mission_uid_field(
+        &[(
+            MsgPackValue::from("m"),
+            values.get(2).expect("checked length").clone(),
+        )],
+        &["m"],
+        &mut metadata.mission_uid,
+    );
 }
 
 fn parse_result_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMetadata) {
@@ -372,14 +427,19 @@ fn parse_result_envelope(envelope: &MsgPackValue, metadata: &mut MissionSyncMeta
     };
     metadata.result_present = true;
     let entries = map.as_slice();
-    parse_string_field(entries, &["command_id"], &mut metadata.command_id, false);
     parse_string_field(
         entries,
-        &["correlation_id"],
+        &["command_id", "i"],
+        &mut metadata.command_id,
+        false,
+    );
+    parse_string_field(
+        entries,
+        &["correlation_id", "c"],
         &mut metadata.correlation_id,
         false,
     );
-    parse_string_field(entries, &["status"], &mut metadata.result_status, true);
+    parse_string_field(entries, &["status", "s"], &mut metadata.result_status, true);
     parse_identifier_fields(entries, metadata);
     for key in ["result", "payload", "args"] {
         if let Some(value) = msgpack_get_named(entries, &[key]) {
@@ -419,6 +479,7 @@ fn parse_envelope_tree(
 ) {
     match envelope {
         MsgPackValue::Array(entries) => {
+            parse_positional_command_envelope(entries.as_slice(), metadata);
             for entry in entries {
                 parse_envelope_tree(entry, metadata, parser);
             }
@@ -448,11 +509,50 @@ pub(crate) fn parse_mission_sync_metadata(fields_bytes: &[u8]) -> Option<Mission
         if let Some(command_type) = metadata.command_type.as_deref() {
             metadata.command_type = Some(canonical_command_type(command_type).to_string());
         }
+        if metadata.command_type.is_none()
+            && metadata.command_present
+            && metadata.event_uid.is_some()
+            && metadata.checklist_uid.is_none()
+        {
+            metadata.command_type = Some("mission.registry.log_entry.upsert".to_string());
+        }
         if metadata.command_type.as_deref() == Some("mission.registry.log_entry.upsert")
             && metadata.event_uid.is_some()
             && metadata.mission_uid.is_none()
         {
             metadata.mission_uid = Some("r3akt-default-mission".to_string());
+        }
+        if metadata.command_type.as_deref() == Some("mission.registry.log_entry.upsert")
+            && metadata.command_id.is_none()
+        {
+            if let Some(uid) = metadata.event_uid.as_deref() {
+                metadata.command_id = Some(format!("log-entry-{uid}"));
+                if metadata.correlation_id.is_none() {
+                    metadata.correlation_id = metadata.command_id.clone();
+                }
+            }
+        }
+        if metadata.result_present
+            && metadata.command_id.is_none()
+            && metadata.event_uid.is_some()
+            && metadata.checklist_uid.is_none()
+        {
+            if let Some(uid) = metadata.event_uid.as_deref() {
+                metadata.command_id = Some(format!("log-entry-{uid}"));
+            }
+        }
+        if metadata.result_status.as_deref() == Some("a") {
+            metadata.result_status = Some("accepted".to_string());
+        }
+        if metadata.result_present
+            && metadata.result_status.is_none()
+            && metadata.event_uid.is_some()
+            && metadata
+                .command_id
+                .as_deref()
+                .is_some_and(|value| value.starts_with("log-entry-"))
+        {
+            metadata.result_status = Some("accepted".to_string());
         }
         if matches!(
             metadata.command_type.as_deref(),

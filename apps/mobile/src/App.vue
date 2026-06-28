@@ -8,6 +8,10 @@ import logoUrl from "./assets/rem-logo.png";
 import SplashScreen from "./components/SplashScreen.vue";
 import SosOverlay from "./components/sos/SosOverlay.vue";
 import { initAppNotifications, registerNotificationNavigationHandler } from "./services/notifications";
+import {
+  listPairedRnodeBluetoothDevices,
+  type RnodeBleDeviceRecord,
+} from "./services/rnodeBluetooth";
 import { useChecklistsStore } from "./stores/checklistsStore";
 import { useEventsStore } from "./stores/eventsStore";
 import { useMessagingStore } from "./stores/messagingStore";
@@ -31,6 +35,54 @@ const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
+
+function normalizedBluetoothId(value: string): string {
+  return value
+    .trim()
+    .replace(/[:-]/g, "")
+    .toLowerCase();
+}
+
+function deviceMatchesId(device: RnodeBleDeviceRecord, configuredId: string): boolean {
+  const target = normalizedBluetoothId(configuredId);
+  return [device.id, device.address]
+    .some((value) => normalizedBluetoothId(value) === target);
+}
+
+function isRnodeDevice(device: RnodeBleDeviceRecord): boolean {
+  return device.paired && /rnode/i.test(device.name);
+}
+
+async function repairStartupRnodeSelection(): Promise<void> {
+  const rnode = nodeStore.settings.rnode;
+  const configuredId = rnode.peripheralId.trim();
+  if (!rnode.enabled || !configuredId) {
+    return;
+  }
+
+  try {
+    const pairedDevices = await listPairedRnodeBluetoothDevices();
+    if (pairedDevices.some((device) => deviceMatchesId(device, configuredId))) {
+      return;
+    }
+
+    const pairedRnodes = pairedDevices.filter(isRnodeDevice);
+    if (pairedRnodes.length !== 1) {
+      return;
+    }
+
+    const [device] = pairedRnodes;
+    await nodeStore.updateSettings({
+      rnode: {
+        ...rnode,
+        peripheralId: device.id || device.address,
+        displayName: device.name || device.address,
+      },
+    });
+  } catch {
+    // RNode selection can still be fixed manually from Settings if Bluetooth is unavailable.
+  }
+}
 
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {
@@ -61,7 +113,12 @@ onMounted(async () => {
     await nodeStore.init();
     await messagingStore.init();
     if (setupCompleted) {
-      await nodeStore.startNode();
+      await repairStartupRnodeSelection();
+      if (nodeStore.status.running && nodeStore.nodeConfigRestartRequired) {
+        await nodeStore.restartNode();
+      } else if (!nodeStore.status.running) {
+        await nodeStore.startNode();
+      }
     }
     await messagingStore.hydrateStartupHistory();
 

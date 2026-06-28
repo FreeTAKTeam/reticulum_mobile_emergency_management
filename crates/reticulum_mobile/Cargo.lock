@@ -1239,11 +1239,11 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lxmf-reference"
-version = "0.5.1"
+version = "0.5.2"
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hex",
  "hmac",
@@ -1258,7 +1258,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1715,7 +1715,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes",
  "cbc",
@@ -1742,9 +1742,10 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes",
+ "base64",
  "btleplug",
  "bzip2",
  "cbc",
@@ -1765,6 +1766,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
+ "shlex",
  "socket2 0.5.10",
  "tokio",
  "tokio-serial",

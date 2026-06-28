@@ -99,6 +99,7 @@ export interface SettingsSeed {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: {
     enabled: boolean;
@@ -147,6 +148,7 @@ export const defaultSettings: SettingsSeed = {
   announceCapabilities: "R3AKT,EMergencyMessages,Telemetry",
   tcpClients: [DEFAULT_TCP_COMMUNITY_ENDPOINT],
   broadcast: true,
+  transportNodeEnabled: true,
   announceIntervalSeconds: 1800,
   telemetry: {
     enabled: false,

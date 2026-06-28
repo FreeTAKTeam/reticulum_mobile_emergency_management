@@ -301,6 +301,10 @@ string_enum! {
 
 pub const DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES: u32 = 30;
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_checklist_task_due_step_minutes() -> u32 {
     DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES
 }
@@ -369,6 +373,7 @@ pub struct NodeConfig {
     pub plugin_trusted_publishers: Vec<TrustedPluginPublisherRecord>,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub stale_after_minutes: u32,
     pub announce_capabilities: String,
@@ -662,6 +667,8 @@ pub struct AppSettingsRecord {
     pub announce_capabilities: String,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    #[serde(default = "default_true")]
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub telemetry: TelemetrySettingsRecord,
     pub hub: HubSettingsRecord,
@@ -678,6 +685,18 @@ pub struct SavedPeerRecord {
     pub destination_hex: String,
     pub label: Option<String>,
     pub saved_at_ms: u64,
+    #[serde(default)]
+    pub identity_hex: Option<String>,
+    #[serde(default)]
+    pub lxmf_destination_hex: Option<String>,
+    #[serde(default)]
+    pub app_data: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub last_route_seen_at_ms: Option<u64>,
+    #[serde(default)]
+    pub last_hops: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

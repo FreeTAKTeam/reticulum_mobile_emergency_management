@@ -81,6 +81,7 @@ struct NodeConfigInput {
     plugin_trusted_publishers: Option<Vec<TrustedPluginPublisherRecord>>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
+    transport_node_enabled: Option<bool>,
     announce_interval_seconds: Option<u32>,
     stale_after_minutes: Option<u32>,
     announce_capabilities: Option<String>,
@@ -256,6 +257,8 @@ struct AppSettingsInput {
     announce_capabilities: String,
     tcp_clients: Vec<String>,
     broadcast: bool,
+    #[serde(default = "default_true")]
+    transport_node_enabled: bool,
     announce_interval_seconds: u32,
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
@@ -277,6 +280,10 @@ struct ChecklistSettingsInput {
 #[serde(rename_all = "camelCase")]
 struct PluginTrustSettingsInput {
     trusted_publishers: Vec<TrustedPluginPublisherRecord>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,6 +312,12 @@ struct SavedPeerInput {
     destination: String,
     label: Option<String>,
     saved_at: u64,
+    identity_hex: Option<String>,
+    lxmf_destination_hex: Option<String>,
+    app_data: Option<String>,
+    display_name: Option<String>,
+    last_route_seen_at_ms: Option<u64>,
+    last_hops: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,6 +778,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .filter(|v| !v.is_empty())
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
+        transport_node_enabled: input.transport_node_enabled.unwrap_or(true),
         announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
         stale_after_minutes: input.stale_after_minutes.unwrap_or(30).max(1),
         announce_capabilities: input
@@ -918,18 +932,29 @@ fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     }
 }
 
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
 fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
     SavedPeerRecord {
         destination_hex: input.destination.trim().to_ascii_lowercase(),
-        label: input.label.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
+        label: trimmed_non_empty(input.label),
         saved_at_ms: input.saved_at,
+        identity_hex: trimmed_non_empty(input.identity_hex).map(|value| value.to_ascii_lowercase()),
+        lxmf_destination_hex: trimmed_non_empty(input.lxmf_destination_hex)
+            .map(|value| value.to_ascii_lowercase()),
+        app_data: trimmed_non_empty(input.app_data),
+        display_name: trimmed_non_empty(input.display_name),
+        last_route_seen_at_ms: input.last_route_seen_at_ms,
+        last_hops: input.last_hops,
     }
 }
 
@@ -980,6 +1005,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
         announce_capabilities: input.announce_capabilities,
         tcp_clients: input.tcp_clients,
         broadcast: input.broadcast,
+        transport_node_enabled: input.transport_node_enabled,
         announce_interval_seconds: input.announce_interval_seconds,
         telemetry: TelemetrySettingsRecord {
             enabled: input.telemetry.enabled,
@@ -1353,6 +1379,7 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceCapabilities": settings.announce_capabilities,
         "tcpClients": settings.tcp_clients,
         "broadcast": settings.broadcast,
+        "transportNodeEnabled": settings.transport_node_enabled,
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub),
@@ -1474,7 +1501,13 @@ fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
     json!({
         "destination": peer.destination_hex,
         "label": peer.label,
-        "savedAt": peer.saved_at_ms
+        "savedAt": peer.saved_at_ms,
+        "identityHex": peer.identity_hex,
+        "lxmfDestinationHex": peer.lxmf_destination_hex,
+        "appData": peer.app_data,
+        "displayName": peer.display_name,
+        "lastRouteSeenAtMs": peer.last_route_seen_at_ms,
+        "lastHops": peer.last_hops
     })
 }
 
