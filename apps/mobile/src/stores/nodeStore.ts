@@ -944,8 +944,8 @@ export const useNodeStore = defineStore("node", () => {
     if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
       appDestinationByIdentity[identityHex] = destination;
     }
-    if (isValidDestinationHex(identityHex)) {
-      lxmfDestinationByIdentity[identityHex] = canonicalDestination;
+    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
+      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
     }
 
     const saved = nativeSavedPeerForCanonicalDestination(
@@ -965,7 +965,7 @@ export const useNodeStore = defineStore("node", () => {
       canonicalDestination,
       {
         identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-        lxmfDestinationHex: canonicalDestination,
+        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
         announcedName: peer.displayName?.trim() || undefined,
         label: saved?.label ?? undefined,
         appData: peer.appData,
@@ -1004,8 +1004,8 @@ export const useNodeStore = defineStore("node", () => {
     if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
       appDestinationByIdentity[identityHex] = destination;
     }
-    if (isValidDestinationHex(identityHex)) {
-      lxmfDestinationByIdentity[identityHex] = canonicalDestination;
+    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
+      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
     }
 
     const saved = nativeSavedPeerForCanonicalDestination(
@@ -1027,7 +1027,7 @@ export const useNodeStore = defineStore("node", () => {
         identityHex: isValidDestinationHex(identityHex)
           ? identityHex
           : undefined,
-        lxmfDestinationHex: canonicalDestination,
+        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
         announcedName: change.displayName?.trim() || undefined,
         label: saved?.label ?? discoveredByDestination[canonicalDestination]?.label,
         appData: change.appData ?? discoveredByDestination[canonicalDestination]?.appData,
@@ -1540,7 +1540,7 @@ export const useNodeStore = defineStore("node", () => {
       label: existingPeer?.label ?? aliasPeer.label,
       savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
       identityHex: existingPeer?.identityHex ?? aliasPeer.identityHex,
-      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex ?? canonicalDestination,
+      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex,
       appData: existingPeer?.appData ?? aliasPeer.appData,
       displayName: existingPeer?.displayName ?? aliasPeer.displayName,
       lastRouteSeenAtMs: existingPeer?.lastRouteSeenAtMs ?? aliasPeer.lastRouteSeenAtMs,
@@ -1566,7 +1566,7 @@ export const useNodeStore = defineStore("node", () => {
     const destination = normalizeDestinationHex(destinationRaw);
     const identityHex = normalizeDestinationHex(discovered?.identityHex ?? fallback?.identityHex ?? "");
     const lxmfDestinationHex = normalizeDestinationHex(
-      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? destination,
+      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? "",
     );
     const routeSeenAt = Math.max(
       discovered?.lxmfLastSeenAt ?? 0,
@@ -2268,6 +2268,7 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (!status.value.running) {
       const message = "Start node before connecting to a peer.";
+      setLastError(message);
       appendLog("Debug", `[peers] connect blocked destination=${destination}: node not running.`);
       throw new Error(message);
     }

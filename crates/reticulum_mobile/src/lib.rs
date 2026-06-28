@@ -1,3 +1,4 @@
+mod announce_metadata;
 mod app_state;
 mod delivery_policy;
 mod event_bus;
