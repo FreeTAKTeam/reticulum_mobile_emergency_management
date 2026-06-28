@@ -67,16 +67,16 @@ use crate::app_state::{
 use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
-    AnnounceClass, AnnounceRecord, ChecklistCellRecord, ChecklistColumnRecord, ChecklistColumnType,
-    ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey, ChecklistTaskRecord,
-    ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord,
-    EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
-    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
-    LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
-    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, PeerChange,
-    PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest,
-    SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
-    TelemetryPositionRecord,
+    AnnounceClass, AnnounceRecord, ApplicationAckState, ChecklistCellRecord, ChecklistColumnRecord,
+    ChecklistColumnType, ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey,
+    ChecklistTaskRecord, ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord,
+    EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord,
+    HubDirectorySnapshot, HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
+    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
+    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
+    SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -3611,6 +3611,66 @@ fn to_sdk_message_state(state: MessageState) -> sdkmsg::MessageState {
     }
 }
 
+fn to_sdk_transport_delivery_state(
+    state: TransportDeliveryState,
+) -> sdkmsg::TransportDeliveryState {
+    match state {
+        TransportDeliveryState::Queued {} => sdkmsg::TransportDeliveryState::Queued,
+        TransportDeliveryState::Sending {} => sdkmsg::TransportDeliveryState::Sending,
+        TransportDeliveryState::SentDirect {} => sdkmsg::TransportDeliveryState::SentDirect,
+        TransportDeliveryState::SentToPropagation {} => {
+            sdkmsg::TransportDeliveryState::SentToPropagation
+        }
+        TransportDeliveryState::TransportDelivered {} => {
+            sdkmsg::TransportDeliveryState::TransportDelivered
+        }
+        TransportDeliveryState::Failed {} => sdkmsg::TransportDeliveryState::Failed,
+        TransportDeliveryState::TimedOut {} => sdkmsg::TransportDeliveryState::TimedOut,
+        TransportDeliveryState::Cancelled {} => sdkmsg::TransportDeliveryState::Cancelled,
+    }
+}
+
+fn from_sdk_transport_delivery_state(
+    state: sdkmsg::TransportDeliveryState,
+) -> TransportDeliveryState {
+    match state {
+        sdkmsg::TransportDeliveryState::Queued => TransportDeliveryState::Queued {},
+        sdkmsg::TransportDeliveryState::Sending => TransportDeliveryState::Sending {},
+        sdkmsg::TransportDeliveryState::SentDirect => TransportDeliveryState::SentDirect {},
+        sdkmsg::TransportDeliveryState::SentToPropagation => {
+            TransportDeliveryState::SentToPropagation {}
+        }
+        sdkmsg::TransportDeliveryState::TransportDelivered => {
+            TransportDeliveryState::TransportDelivered {}
+        }
+        sdkmsg::TransportDeliveryState::Failed => TransportDeliveryState::Failed {},
+        sdkmsg::TransportDeliveryState::TimedOut => TransportDeliveryState::TimedOut {},
+        sdkmsg::TransportDeliveryState::Cancelled => TransportDeliveryState::Cancelled {},
+    }
+}
+
+fn to_sdk_application_ack_state(state: ApplicationAckState) -> sdkmsg::ApplicationAckState {
+    match state {
+        ApplicationAckState::NotRequired {} => sdkmsg::ApplicationAckState::NotRequired,
+        ApplicationAckState::Waiting {} => sdkmsg::ApplicationAckState::Waiting,
+        ApplicationAckState::Accepted {} => sdkmsg::ApplicationAckState::Accepted,
+        ApplicationAckState::Completed {} => sdkmsg::ApplicationAckState::Completed,
+        ApplicationAckState::Rejected {} => sdkmsg::ApplicationAckState::Rejected,
+        ApplicationAckState::Failed {} => sdkmsg::ApplicationAckState::Failed,
+    }
+}
+
+fn from_sdk_application_ack_state(state: sdkmsg::ApplicationAckState) -> ApplicationAckState {
+    match state {
+        sdkmsg::ApplicationAckState::NotRequired => ApplicationAckState::NotRequired {},
+        sdkmsg::ApplicationAckState::Waiting => ApplicationAckState::Waiting {},
+        sdkmsg::ApplicationAckState::Accepted => ApplicationAckState::Accepted {},
+        sdkmsg::ApplicationAckState::Completed => ApplicationAckState::Completed {},
+        sdkmsg::ApplicationAckState::Rejected => ApplicationAckState::Rejected {},
+        sdkmsg::ApplicationAckState::Failed => ApplicationAckState::Failed {},
+    }
+}
+
 fn from_sdk_message_state(state: sdkmsg::MessageState) -> MessageState {
     match state {
         sdkmsg::MessageState::Queued => MessageState::Queued {},
@@ -3757,10 +3817,16 @@ fn to_sdk_message_record(record: MessageRecord) -> sdkmsg::MessageRecord {
         direction: to_sdk_message_direction(record.direction),
         destination_hex: record.destination_hex,
         source_hex: record.source_hex,
+        requested_destination_hex: record.requested_destination_hex,
+        delivery_destination_hex: record.delivery_destination_hex,
+        recipient_identity_hex: record.recipient_identity_hex,
+        last_wire_message_id_hex: record.last_wire_message_id_hex,
         title: record.title,
         body_utf8: record.body_utf8,
         method: to_sdk_message_method(record.method),
         state: to_sdk_message_state(record.state),
+        transport_state: to_sdk_transport_delivery_state(record.transport_state),
+        application_ack_state: to_sdk_application_ack_state(record.application_ack_state),
         detail: record.detail,
         sent_at_ms: record.sent_at_ms,
         received_at_ms: record.received_at_ms,
@@ -3775,10 +3841,16 @@ fn from_sdk_message_record(record: sdkmsg::MessageRecord) -> MessageRecord {
         direction: from_sdk_message_direction(record.direction),
         destination_hex: record.destination_hex,
         source_hex: record.source_hex,
+        requested_destination_hex: record.requested_destination_hex,
+        delivery_destination_hex: record.delivery_destination_hex,
+        recipient_identity_hex: record.recipient_identity_hex,
+        last_wire_message_id_hex: record.last_wire_message_id_hex,
         title: record.title,
         body_utf8: record.body_utf8,
         method: from_sdk_message_method(record.method),
         state: from_sdk_message_state(record.state),
+        transport_state: from_sdk_transport_delivery_state(record.transport_state),
+        application_ack_state: from_sdk_application_ack_state(record.application_ack_state),
         detail: record.detail,
         sent_at_ms: record.sent_at_ms,
         received_at_ms: record.received_at_ms,
@@ -3968,6 +4040,7 @@ struct PendingLxmfDelivery {
 struct PendingLxmfAcknowledgement {
     source_hex: String,
     detail: Option<String>,
+    application_ack_state: ApplicationAckState,
     buffered_at_ms: u64,
 }
 
@@ -4426,6 +4499,76 @@ impl ReceiptHandler for RuntimeReceiptBridge {
     }
 }
 
+fn transport_state_for_lxmf_status(status: LxmfDeliveryStatus) -> TransportDeliveryState {
+    match status {
+        LxmfDeliveryStatus::Sent {} => TransportDeliveryState::SentDirect {},
+        LxmfDeliveryStatus::SentToPropagation {} => TransportDeliveryState::SentToPropagation {},
+        LxmfDeliveryStatus::Acknowledged {} => TransportDeliveryState::TransportDelivered {},
+        LxmfDeliveryStatus::Failed {} => TransportDeliveryState::Failed {},
+        LxmfDeliveryStatus::TimedOut {} => TransportDeliveryState::TimedOut {},
+    }
+}
+
+fn application_ack_state_for_lxmf_status(status: LxmfDeliveryStatus) -> ApplicationAckState {
+    match status {
+        LxmfDeliveryStatus::Acknowledged {} => ApplicationAckState::Accepted {},
+        LxmfDeliveryStatus::Failed {} | LxmfDeliveryStatus::TimedOut {} => {
+            ApplicationAckState::Failed {}
+        }
+        LxmfDeliveryStatus::Sent {} | LxmfDeliveryStatus::SentToPropagation {} => {
+            ApplicationAckState::Waiting {}
+        }
+    }
+}
+
+fn application_ack_state_for_mission_metadata(
+    metadata: &MissionSyncMetadata,
+) -> ApplicationAckState {
+    if metadata.result_present {
+        return match metadata
+            .result_status
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("completed" | "complete" | "done" | "success" | "succeeded" | "ok") => {
+                ApplicationAckState::Completed {}
+            }
+            Some("rejected" | "reject" | "denied" | "declined") => ApplicationAckState::Rejected {},
+            Some("failed" | "failure" | "error" | "timeout" | "timed_out" | "cancelled") => {
+                ApplicationAckState::Failed {}
+            }
+            _ => ApplicationAckState::Accepted {},
+        };
+    }
+
+    if metadata.event_present {
+        ApplicationAckState::Accepted {}
+    } else {
+        ApplicationAckState::Waiting {}
+    }
+}
+
+fn transport_state_for_message_state(state: MessageState) -> TransportDeliveryState {
+    match state {
+        MessageState::Queued {} | MessageState::PathRequested {} => {
+            TransportDeliveryState::Queued {}
+        }
+        MessageState::LinkEstablishing {} | MessageState::Sending {} => {
+            TransportDeliveryState::Sending {}
+        }
+        MessageState::SentDirect {} => TransportDeliveryState::SentDirect {},
+        MessageState::SentToPropagation {} => TransportDeliveryState::SentToPropagation {},
+        MessageState::Delivered {} | MessageState::Received {} => {
+            TransportDeliveryState::TransportDelivered {}
+        }
+        MessageState::Failed {} => TransportDeliveryState::Failed {},
+        MessageState::TimedOut {} => TransportDeliveryState::TimedOut {},
+        MessageState::Cancelled {} => TransportDeliveryState::Cancelled {},
+    }
+}
+
 fn emit_lxmf_delivery(
     bus: &EventBus,
     pending: &PendingLxmfDelivery,
@@ -4444,6 +4587,8 @@ fn emit_lxmf_delivery(
             event_uid: pending.event_uid.clone(),
             mission_uid: pending.mission_uid.clone(),
             status,
+            transport_state: transport_state_for_lxmf_status(status),
+            application_ack_state: application_ack_state_for_lxmf_status(status),
             method: pending.method,
             representation: pending.representation,
             relay_destination_hex: pending.relay_destination_hex.clone(),
@@ -4460,6 +4605,7 @@ fn emit_lxmf_delivery_with_source(
     pending: &PendingLxmfDelivery,
     source_hex: Option<String>,
     status: LxmfDeliveryStatus,
+    application_ack_state: ApplicationAckState,
     detail: Option<String>,
 ) {
     let now = now_ms();
@@ -4474,6 +4620,8 @@ fn emit_lxmf_delivery_with_source(
             event_uid: pending.event_uid.clone(),
             mission_uid: pending.mission_uid.clone(),
             status,
+            transport_state: transport_state_for_lxmf_status(status),
+            application_ack_state,
             method: pending.method,
             representation: pending.representation,
             relay_destination_hex: pending.relay_destination_hex.clone(),
@@ -4695,6 +4843,94 @@ fn record_saved_peer_profile(messaging: &mut sdkmsg::MessagingStore, peer: &Save
         peer.last_route_seen_at_ms,
         peer.last_hops,
     );
+}
+
+fn saved_peer_matches_selected_destination(
+    peer: &SavedPeerRecord,
+    selected_hex: &str,
+    selected_identity_hex: Option<&str>,
+) -> bool {
+    peer.destination_hex.eq_ignore_ascii_case(selected_hex)
+        || peer
+            .lxmf_destination_hex
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case(selected_hex))
+        || selected_identity_hex.is_some_and(|identity_hex| {
+            peer.identity_hex
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(identity_hex))
+        })
+}
+
+async fn selected_saved_peer_record(
+    state: &NodeRuntimeState,
+    selected_destination_hex: &str,
+) -> Result<SavedPeerRecord, NodeError> {
+    let normalized_selected =
+        normalize_hex_32(selected_destination_hex).ok_or(NodeError::InvalidConfig {})?;
+    let current_peer = peer_for_any_destination_hex(state, normalized_selected.as_str()).await;
+    let selected_identity_hex = current_peer
+        .as_ref()
+        .and_then(|peer| peer.identity_hex.as_deref());
+    let destination_hex = current_peer
+        .as_ref()
+        .map(|peer| peer.destination_hex.clone())
+        .unwrap_or_else(|| normalized_selected.clone());
+    let mut existing = state.app_state.get_saved_peers()?.into_iter().find(|peer| {
+        saved_peer_matches_selected_destination(
+            peer,
+            normalized_selected.as_str(),
+            selected_identity_hex,
+        ) || peer
+            .destination_hex
+            .eq_ignore_ascii_case(destination_hex.as_str())
+    });
+    let now = now_ms();
+    let mut record = existing.take().unwrap_or(SavedPeerRecord {
+        destination_hex: destination_hex.clone(),
+        label: None,
+        saved_at_ms: now,
+        identity_hex: None,
+        lxmf_destination_hex: None,
+        app_data: None,
+        display_name: None,
+        last_route_seen_at_ms: None,
+        last_hops: None,
+    });
+    record.destination_hex = destination_hex;
+    record.saved_at_ms = now;
+    if let Some(peer) = current_peer {
+        record.identity_hex = peer.identity_hex.or(record.identity_hex);
+        record.lxmf_destination_hex = peer
+            .lxmf_destination_hex
+            .or(record.lxmf_destination_hex)
+            .or(Some(normalized_selected));
+        record.app_data = peer.app_data.or(record.app_data);
+        record.display_name = peer.display_name.or(record.display_name);
+        record.last_route_seen_at_ms = peer
+            .lxmf_last_seen_at_ms
+            .or(peer.announce_last_seen_at_ms)
+            .or(record.last_route_seen_at_ms);
+    } else if record.lxmf_destination_hex.is_none() {
+        record.lxmf_destination_hex = Some(normalized_selected);
+    }
+    Ok(record)
+}
+
+async fn persist_selected_peer_destination(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    selected_destination_hex: &str,
+) -> Result<SavedPeerRecord, NodeError> {
+    let peer = selected_saved_peer_record(state, selected_destination_hex).await?;
+    let invalidation = state.app_state.upsert_saved_peer(&peer)?;
+    bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+    {
+        let mut messaging = state.messaging.lock().await;
+        messaging.mark_peer_saved(peer.destination_hex.as_str(), true);
+        record_saved_peer_profile(&mut messaging, &peer);
+    }
+    Ok(peer)
 }
 
 fn restore_saved_peer_management(
@@ -5581,6 +5817,23 @@ async fn resolve_current_lxmf_destination_hex(
 
 async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex: &str) -> String {
     let normalized_destination = destination_hex.to_ascii_lowercase();
+    if let Ok(saved_peers) = state.app_state.get_saved_peers() {
+        if let Some(peer) = saved_peers.iter().find(|peer| {
+            peer.destination_hex
+                .eq_ignore_ascii_case(normalized_destination.as_str())
+                || peer.lxmf_destination_hex.as_deref().is_some_and(|value| {
+                    value.eq_ignore_ascii_case(normalized_destination.as_str())
+                })
+                || peer.identity_hex.as_deref().is_some_and(|value| {
+                    value.eq_ignore_ascii_case(normalized_destination.as_str())
+                })
+        }) {
+            if let Some(lxmf_destination_hex) = peer.lxmf_destination_hex.as_deref() {
+                return lxmf_destination_hex.to_ascii_lowercase();
+            }
+            return peer.destination_hex.to_ascii_lowercase();
+        }
+    }
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
         return normalized_destination;
     };
@@ -7099,6 +7352,7 @@ async fn acknowledge_pending_with_buffered_ack(
             pending,
             Some(buffered_ack.source_hex.clone()),
             LxmfDeliveryStatus::Acknowledged {},
+            buffered_ack.application_ack_state,
             buffered_ack.detail.clone(),
         );
         info!(
@@ -7949,10 +8203,16 @@ async fn emit_received_payload(
                     direction: MessageDirection::Inbound {},
                     destination_hex: peer_hex.clone(),
                     source_hex: source_hex.clone(),
+                    requested_destination_hex: Some(peer_hex.clone()),
+                    delivery_destination_hex: Some(peer_hex.clone()),
+                    recipient_identity_hex: None,
+                    last_wire_message_id_hex: Some(message_id_hex.clone()),
                     title: title.clone(),
                     body_utf8: body_utf8.clone(),
                     method: MessageMethod::Direct {},
                     state: MessageState::Received {},
+                    transport_state: TransportDeliveryState::TransportDelivered {},
+                    application_ack_state: ApplicationAckState::NotRequired {},
                     detail: Some("sos".to_string()),
                     sent_at_ms: None,
                     received_at_ms: Some(received_at_ms),
@@ -8018,10 +8278,16 @@ async fn emit_received_payload(
                         direction: MessageDirection::Inbound {},
                         destination_hex: peer_hex.clone(),
                         source_hex: source_hex.clone(),
+                        requested_destination_hex: Some(peer_hex.clone()),
+                        delivery_destination_hex: Some(peer_hex.clone()),
+                        recipient_identity_hex: None,
+                        last_wire_message_id_hex: Some(message_id_hex.clone()),
                         title,
                         body_utf8: body_utf8.clone(),
                         method: MessageMethod::Direct {},
                         state: MessageState::Received {},
+                        transport_state: TransportDeliveryState::TransportDelivered {},
+                        application_ack_state: ApplicationAckState::NotRequired {},
                         detail: None,
                         sent_at_ms: None,
                         received_at_ms: Some(now_ms()),
@@ -8107,6 +8373,7 @@ async fn ack_pending_lxmf_delivery(
     };
 
     let detail = metadata.ack_detail().map(ToOwned::to_owned);
+    let application_ack_state = application_ack_state_for_mission_metadata(metadata);
     let mut guard = state.pending_lxmf_deliveries.lock().await;
     let mut matched: Option<PendingLxmfDelivery> = None;
 
@@ -8132,6 +8399,7 @@ async fn ack_pending_lxmf_delivery(
                 PendingLxmfAcknowledgement {
                     source_hex: source_hex.to_string(),
                     detail: detail.clone(),
+                    application_ack_state,
                     buffered_at_ms: now_ms(),
                 },
             );
@@ -8178,6 +8446,7 @@ async fn ack_pending_lxmf_delivery(
         &pending,
         Some(source_hex.to_string()),
         LxmfDeliveryStatus::Acknowledged {},
+        application_ack_state,
         detail.clone(),
     );
     info!(
@@ -8289,10 +8558,13 @@ async fn acknowledge_chat_delivery(
         .messaging
         .lock()
         .await
-        .update_message(
+        .update_message_delivery_state(
             message_id_hex.as_str(),
-            sdkmsg::MessageState::Delivered,
+            Some(sdkmsg::MessageState::Delivered),
+            Some(sdkmsg::TransportDeliveryState::TransportDelivered),
+            Some(sdkmsg::ApplicationAckState::Accepted),
             Some("chat delivery ack".to_string()),
+            None,
             now_ms(),
         )
         .map(from_sdk_message_record);
@@ -9393,10 +9665,13 @@ pub async fn run_node(
                     .messaging
                     .lock()
                     .await
-                    .update_message(
+                    .update_message_delivery_state(
                         message_id_hex.as_str(),
-                        sdkmsg::MessageState::Delivered,
+                        None,
+                        Some(sdkmsg::TransportDeliveryState::TransportDelivered),
+                        None,
                         Some("transport receipt".to_string()),
+                        None,
                         now_ms(),
                     )
                     .map(from_sdk_message_record);
@@ -10040,17 +10315,17 @@ pub async fn run_node(
                 let destination_hex_copy = destination_hex.clone();
                 let result = async {
                     let dest = parse_address_hash(&destination_hex)?;
-                    state
-                        .messaging
-                        .lock()
-                        .await
-                        .mark_peer_saved(&destination_hex, true);
+                    let saved_peer =
+                        persist_selected_peer_destination(&state, &bus, destination_hex.as_str())
+                            .await?;
                     clear_ignored_peer_destinations(&state, std::slice::from_ref(&destination_hex))
                         .await;
-                    emit_peer_changed(&state, &bus, &destination_hex).await;
-                    state
-                        .sdk
-                        .record_peer_changed(&destination_hex, PeerState::Connecting {}, None);
+                    emit_peer_changed(&state, &bus, saved_peer.destination_hex.as_str()).await;
+                    state.sdk.record_peer_changed(
+                        saved_peer.destination_hex.as_str(),
+                        PeerState::Connecting {},
+                        None,
+                    );
                     resolve_peer_route(&state, &bus, &destination_hex).await?;
                     let target =
                         match register_desired_managed_peer_link(&state, &destination_hex).await {
@@ -10422,10 +10697,21 @@ pub async fn run_node(
                             source_hex: Some(address_hash_to_hex(
                                 &state.lxmf_destination.lock().await.desc.address_hash,
                             )),
+                            requested_destination_hex: Some(request.destination_hex.clone()),
+                            delivery_destination_hex: Some(report.resolved_destination_hex.clone()),
+                            recipient_identity_hex: None,
+                            last_wire_message_id_hex: Some(report.message_id_hex.clone()),
                             title: request.title.clone(),
                             body_utf8: request.body_utf8.clone(),
                             method,
                             state: state_value,
+                            transport_state: transport_state_for_message_state(state_value),
+                            application_ack_state: if matches!(state_value, MessageState::Failed {})
+                            {
+                                ApplicationAckState::Failed {}
+                            } else {
+                                ApplicationAckState::Waiting {}
+                            },
                             detail: detail.clone(),
                             sent_at_ms: Some(now_ms()),
                             received_at_ms: None,
@@ -10511,7 +10797,7 @@ pub async fn run_node(
                             MessageState::SentDirect {}
                         };
                         let retried = MessageRecord {
-                            message_id_hex: report.message_id_hex.clone(),
+                            message_id_hex: outbound.message_id_hex.clone(),
                             conversation_id: conversation_id_for(
                                 report.resolved_destination_hex.as_str(),
                             ),
@@ -10520,6 +10806,12 @@ pub async fn run_node(
                             source_hex: Some(address_hash_to_hex(
                                 &state.lxmf_destination.lock().await.desc.address_hash,
                             )),
+                            requested_destination_hex: Some(
+                                outbound.request.destination_hex.clone(),
+                            ),
+                            delivery_destination_hex: Some(report.resolved_destination_hex.clone()),
+                            recipient_identity_hex: None,
+                            last_wire_message_id_hex: Some(report.message_id_hex.clone()),
                             title: outbound.request.title.clone(),
                             body_utf8: outbound.request.body_utf8.clone(),
                             method: match (report.method, report.representation) {
@@ -10535,6 +10827,8 @@ pub async fn run_node(
                                 _ => MessageMethod::Direct {},
                             },
                             state: retried_state,
+                            transport_state: transport_state_for_message_state(retried_state),
+                            application_ack_state: ApplicationAckState::Waiting {},
                             detail: Some(format!("retry of {}", outbound.message_id_hex)),
                             sent_at_ms: Some(now_ms()),
                             received_at_ms: None,
@@ -10544,7 +10838,7 @@ pub async fn run_node(
                         state.messaging.lock().await.store_outbound(
                             sdkmsg::StoredOutboundMessage {
                                 request: outbound.request,
-                                message_id_hex: report.message_id_hex.clone(),
+                                message_id_hex: outbound.message_id_hex.clone(),
                             },
                         );
                         Ok::<(), NodeError>(())
@@ -10571,10 +10865,13 @@ pub async fn run_node(
                         .messaging
                         .lock()
                         .await
-                        .update_message(
+                        .update_message_delivery_state(
                             message_id_hex.as_str(),
-                            sdkmsg::MessageState::Cancelled,
+                            Some(sdkmsg::MessageState::Cancelled),
+                            Some(sdkmsg::TransportDeliveryState::Cancelled),
+                            Some(sdkmsg::ApplicationAckState::Failed),
                             Some("cancelled locally".to_string()),
+                            None,
                             now_ms(),
                         )
                         .map(from_sdk_message_record)
@@ -11400,6 +11697,27 @@ mod tests {
             ..MissionSyncMetadata::default()
         };
         assert!(!is_accepted_result_metadata(Some(&command)));
+    }
+
+    #[test]
+    fn mission_result_metadata_maps_application_ack_states() {
+        for (status, expected) in [
+            ("accepted", ApplicationAckState::Accepted {}),
+            ("completed", ApplicationAckState::Completed {}),
+            ("rejected", ApplicationAckState::Rejected {}),
+            ("failed", ApplicationAckState::Failed {}),
+        ] {
+            let metadata = MissionSyncMetadata {
+                result_present: true,
+                result_status: Some(status.to_string()),
+                ..MissionSyncMetadata::default()
+            };
+
+            assert_eq!(
+                application_ack_state_for_mission_metadata(&metadata),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -13037,6 +13355,7 @@ mod tests {
                 PendingLxmfAcknowledgement {
                     source_hex: "src-fresh".to_string(),
                     detail: None,
+                    application_ack_state: ApplicationAckState::Accepted {},
                     buffered_at_ms: now,
                 },
             ),
@@ -13045,6 +13364,7 @@ mod tests {
                 PendingLxmfAcknowledgement {
                     source_hex: "src-stale".to_string(),
                     detail: None,
+                    application_ack_state: ApplicationAckState::Accepted {},
                     buffered_at_ms: now
                         .saturating_sub(DEFAULT_BUFFERED_ACK_TTL.as_millis() as u64 + 1),
                 },

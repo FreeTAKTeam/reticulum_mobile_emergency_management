@@ -28,7 +28,7 @@ use crate::sos::{
 use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ChecklistCreateFromTemplateRequest,
+    AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
     ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
@@ -40,7 +40,7 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord,
+    TelemetryPositionRecord, TransportDeliveryState,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -2746,6 +2746,10 @@ fn run_sos_fanout(
             direction: MessageDirection::Outbound {},
             destination_hex: destination_hex.clone(),
             source_hex: Some(status.lxmf_destination_hex.clone()),
+            requested_destination_hex: Some(destination_hex.clone()),
+            delivery_destination_hex: Some(destination_hex.clone()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some(message_id_hex.clone()),
             title: Some("SOS Emergency".to_string()),
             body_utf8: body.clone(),
             method: if matches!(target.send_mode, SendMode::PropagationOnly {}) {
@@ -2754,6 +2758,8 @@ fn run_sos_fanout(
                 MessageMethod::Direct {}
             },
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: Some(format!("sos:{}", crate::sos::sos_kind_label(kind))),
             sent_at_ms: Some(now),
             received_at_ms: None,
@@ -8547,10 +8553,16 @@ mod tests {
             direction: MessageDirection::Outbound {},
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             source_hex: Some("cccccccccccccccccccccccccccccccc".to_string()),
+            requested_destination_hex: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            delivery_destination_hex: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
             title: Some("check-in".to_string()),
             body_utf8: "Hello world".to_string(),
             method: MessageMethod::Direct {},
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: None,
             sent_at_ms: Some(1_700_000_000_300),
             received_at_ms: None,
@@ -8708,10 +8720,16 @@ mod tests {
             direction: MessageDirection::Outbound {},
             destination_hex: "DEST-1".to_string(),
             source_hex: None,
+            requested_destination_hex: Some("DEST-1".to_string()),
+            delivery_destination_hex: Some("DEST-1".to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("msg-1".to_string()),
             title: Some("Hello".to_string()),
             body_utf8: "hello from pre-start".to_string(),
             method: MessageMethod::Direct {},
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: Some("queued".to_string()),
             sent_at_ms: Some(1),
             received_at_ms: None,

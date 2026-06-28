@@ -13,20 +13,21 @@ use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistDeleteRequest, ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
-    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
-    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
-    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord,
-    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
-    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
+    ChecklistRecord, ChecklistSettingsRecord, ChecklistTaskCellSetRequest,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
+    ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
+    EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
     PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
     SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
+    TransportDeliveryState,
 };
 
 const RESULT_OK: jint = 0;
@@ -291,10 +292,16 @@ struct MessageRecordInput {
     direction: String,
     destination_hex: String,
     source_hex: Option<String>,
+    requested_destination_hex: Option<String>,
+    delivery_destination_hex: Option<String>,
+    recipient_identity_hex: Option<String>,
+    last_wire_message_id_hex: Option<String>,
     title: Option<String>,
     body_utf8: String,
     method: String,
     state: String,
+    transport_state: Option<String>,
+    application_ack_state: Option<String>,
     detail: Option<String>,
     sent_at: Option<u64>,
     received_at: Option<u64>,
@@ -795,6 +802,34 @@ fn parse_message_state(value: &str) -> Result<MessageState, NodeError> {
     }
 }
 
+fn parse_transport_delivery_state(
+    value: Option<&str>,
+) -> Result<TransportDeliveryState, NodeError> {
+    match value.unwrap_or("Queued").trim() {
+        "Queued" => Ok(TransportDeliveryState::Queued {}),
+        "Sending" => Ok(TransportDeliveryState::Sending {}),
+        "SentDirect" => Ok(TransportDeliveryState::SentDirect {}),
+        "SentToPropagation" => Ok(TransportDeliveryState::SentToPropagation {}),
+        "TransportDelivered" => Ok(TransportDeliveryState::TransportDelivered {}),
+        "Failed" => Ok(TransportDeliveryState::Failed {}),
+        "TimedOut" => Ok(TransportDeliveryState::TimedOut {}),
+        "Cancelled" => Ok(TransportDeliveryState::Cancelled {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
+fn parse_application_ack_state(value: Option<&str>) -> Result<ApplicationAckState, NodeError> {
+    match value.unwrap_or("NotRequired").trim() {
+        "NotRequired" => Ok(ApplicationAckState::NotRequired {}),
+        "Waiting" => Ok(ApplicationAckState::Waiting {}),
+        "Accepted" => Ok(ApplicationAckState::Accepted {}),
+        "Completed" => Ok(ApplicationAckState::Completed {}),
+        "Rejected" => Ok(ApplicationAckState::Rejected {}),
+        "Failed" => Ok(ApplicationAckState::Failed {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
 fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     match value
         .unwrap_or("Manual")
@@ -975,10 +1010,16 @@ fn to_message_record(input: MessageRecordInput) -> Result<MessageRecord, NodeErr
         direction: parse_message_direction(&input.direction)?,
         destination_hex: input.destination_hex,
         source_hex: input.source_hex,
+        requested_destination_hex: input.requested_destination_hex,
+        delivery_destination_hex: input.delivery_destination_hex,
+        recipient_identity_hex: input.recipient_identity_hex,
+        last_wire_message_id_hex: input.last_wire_message_id_hex,
         title: input.title,
         body_utf8: input.body_utf8,
         method: parse_message_method(&input.method)?,
         state: parse_message_state(&input.state)?,
+        transport_state: parse_transport_delivery_state(input.transport_state.as_deref())?,
+        application_ack_state: parse_application_ack_state(input.application_ack_state.as_deref())?,
         detail: input.detail,
         sent_at_ms: input.sent_at,
         received_at_ms: input.received_at,
@@ -1685,6 +1726,30 @@ fn message_state_to_str(state: MessageState) -> &'static str {
     }
 }
 
+fn transport_delivery_state_to_str(state: TransportDeliveryState) -> &'static str {
+    match state {
+        TransportDeliveryState::Queued {} => "Queued",
+        TransportDeliveryState::Sending {} => "Sending",
+        TransportDeliveryState::SentDirect {} => "SentDirect",
+        TransportDeliveryState::SentToPropagation {} => "SentToPropagation",
+        TransportDeliveryState::TransportDelivered {} => "TransportDelivered",
+        TransportDeliveryState::Failed {} => "Failed",
+        TransportDeliveryState::TimedOut {} => "TimedOut",
+        TransportDeliveryState::Cancelled {} => "Cancelled",
+    }
+}
+
+fn application_ack_state_to_str(state: ApplicationAckState) -> &'static str {
+    match state {
+        ApplicationAckState::NotRequired {} => "NotRequired",
+        ApplicationAckState::Waiting {} => "Waiting",
+        ApplicationAckState::Accepted {} => "Accepted",
+        ApplicationAckState::Completed {} => "Completed",
+        ApplicationAckState::Rejected {} => "Rejected",
+        ApplicationAckState::Failed {} => "Failed",
+    }
+}
+
 fn message_direction_to_str(direction: MessageDirection) -> &'static str {
     match direction {
         MessageDirection::Inbound {} => "Inbound",
@@ -1740,10 +1805,16 @@ fn message_record_json(message: &MessageRecord) -> Value {
         "direction": message_direction_to_str(message.direction),
         "destinationHex": message.destination_hex,
         "sourceHex": message.source_hex,
+        "requestedDestinationHex": message.requested_destination_hex,
+        "deliveryDestinationHex": message.delivery_destination_hex,
+        "recipientIdentityHex": message.recipient_identity_hex,
+        "lastWireMessageIdHex": message.last_wire_message_id_hex,
         "title": message.title,
         "bodyUtf8": message.body_utf8,
         "method": message_method_to_str(message.method),
         "state": message_state_to_str(message.state),
+        "transportState": transport_delivery_state_to_str(message.transport_state),
+        "applicationAckState": application_ack_state_to_str(message.application_ack_state),
         "detail": message.detail,
         "sentAtMs": message.sent_at_ms,
         "receivedAtMs": message.received_at_ms,
@@ -1845,6 +1916,8 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "eventUid": update.event_uid,
                 "missionUid": update.mission_uid,
                 "status": lxmf_delivery_status_to_str(update.status),
+                "transportState": transport_delivery_state_to_str(update.transport_state),
+                "applicationAckState": application_ack_state_to_str(update.application_ack_state),
                 "method": lxmf_delivery_method_to_str(update.method),
                 "representation": lxmf_delivery_representation_to_str(update.representation),
                 "relayDestinationHex": update.relay_destination_hex,

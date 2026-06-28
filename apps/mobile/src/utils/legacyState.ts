@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import type {
+  ApplicationAckState,
   AppSettingsRecord,
   EamProjectionRecord,
   EventProjectionRecord,
@@ -11,6 +12,7 @@ import type {
   MessageState,
   SavedPeerRecord,
   TelemetryPositionRecord,
+  TransportDeliveryState,
 } from "@reticulum/node-client";
 
 import type { NodeUiSettings } from "../types/domain";
@@ -66,6 +68,24 @@ const MESSAGE_STATES = new Set<MessageState>([
   "Received",
 ]);
 const MESSAGE_DIRECTIONS = new Set<MessageDirection>(["Inbound", "Outbound"]);
+const TRANSPORT_DELIVERY_STATES = new Set<TransportDeliveryState>([
+  "Queued",
+  "Sending",
+  "SentDirect",
+  "SentToPropagation",
+  "TransportDelivered",
+  "Failed",
+  "TimedOut",
+  "Cancelled",
+]);
+const APPLICATION_ACK_STATES = new Set<ApplicationAckState>([
+  "NotRequired",
+  "Waiting",
+  "Accepted",
+  "Completed",
+  "Rejected",
+  "Failed",
+]);
 const HUB_MODES = new Set<string>([
   "Autonomous",
   "SemiAutonomous",
@@ -371,16 +391,66 @@ function normalizeLegacyInboxMessages(): MessageRecord[] {
     const direction = asTrimmedString(record.direction) as MessageDirection;
     const method = asTrimmedString(record.method) as MessageMethod;
     const state = asTrimmedString(record.state) as MessageState;
+    const transportState = asTrimmedString(
+      record.transportState ?? record.transport_state,
+    ) as TransportDeliveryState;
+    const applicationAckState = asTrimmedString(
+      record.applicationAckState ?? record.application_ack_state,
+    ) as ApplicationAckState;
+    const normalizedDirection = MESSAGE_DIRECTIONS.has(direction) ? direction : "Outbound";
+    const normalizedState = MESSAGE_STATES.has(state) ? state : "Queued";
+    const defaultTransportState: TransportDeliveryState =
+      normalizedState === "Received" || normalizedState === "Delivered"
+        ? "TransportDelivered"
+        : normalizedState === "Failed"
+          ? "Failed"
+          : normalizedState === "TimedOut"
+            ? "TimedOut"
+            : normalizedState === "Cancelled"
+              ? "Cancelled"
+              : normalizedState === "SentToPropagation"
+                ? "SentToPropagation"
+                : normalizedState === "SentDirect"
+                  ? "SentDirect"
+                  : normalizedState === "Sending" || normalizedState === "LinkEstablishing"
+                    ? "Sending"
+                    : "Queued";
+    const defaultApplicationAckState: ApplicationAckState =
+      normalizedDirection === "Inbound"
+        ? "NotRequired"
+        : normalizedState === "Failed" || normalizedState === "TimedOut" || normalizedState === "Cancelled"
+          ? "Failed"
+          : normalizedState === "Delivered"
+            ? "Accepted"
+            : "Waiting";
     out.push({
       messageIdHex,
       conversationId,
-      direction: MESSAGE_DIRECTIONS.has(direction) ? direction : "Outbound",
+      direction: normalizedDirection,
       destinationHex,
       sourceHex: asTrimmedString(record.sourceHex ?? record.source_hex) || undefined,
+      requestedDestinationHex: asTrimmedString(
+        record.requestedDestinationHex ?? record.requested_destination_hex,
+      ) || undefined,
+      deliveryDestinationHex: asTrimmedString(
+        record.deliveryDestinationHex ?? record.delivery_destination_hex,
+      ) || undefined,
+      recipientIdentityHex: asTrimmedString(
+        record.recipientIdentityHex ?? record.recipient_identity_hex,
+      ) || undefined,
+      lastWireMessageIdHex: asTrimmedString(
+        record.lastWireMessageIdHex ?? record.last_wire_message_id_hex,
+      ) || undefined,
       title: asTrimmedString(record.title) || undefined,
       bodyUtf8: typeof record.bodyUtf8 === "string" ? record.bodyUtf8 : "",
       method: MESSAGE_METHODS.has(method) ? method : "Direct",
-      state: MESSAGE_STATES.has(state) ? state : "Queued",
+      state: normalizedState,
+      transportState: TRANSPORT_DELIVERY_STATES.has(transportState)
+        ? transportState
+        : defaultTransportState,
+      applicationAckState: APPLICATION_ACK_STATES.has(applicationAckState)
+        ? applicationAckState
+        : defaultApplicationAckState,
       detail: asTrimmedString(record.detail) || undefined,
       sentAtMs: optionalNumber(record.sentAtMs ?? record.sent_at_ms),
       receivedAtMs: optionalNumber(record.receivedAtMs ?? record.received_at_ms),

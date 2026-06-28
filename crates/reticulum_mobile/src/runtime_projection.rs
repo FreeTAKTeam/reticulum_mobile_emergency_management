@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::event_bus::EventBus;
 use crate::runtime::now_ms;
 use crate::types::{
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent, PeerRecord, PeerState,
-    ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
+    ApplicationAckState, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent,
+    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
+    TransportDeliveryState,
 };
 
 pub(crate) const PERSIST_FILENAME: &str = "runtime_projection.json";
@@ -48,10 +49,22 @@ struct PersistedMessageRecord {
     direction: String,
     destination_hex: String,
     source_hex: Option<String>,
+    #[serde(default)]
+    requested_destination_hex: Option<String>,
+    #[serde(default)]
+    delivery_destination_hex: Option<String>,
+    #[serde(default)]
+    recipient_identity_hex: Option<String>,
+    #[serde(default)]
+    last_wire_message_id_hex: Option<String>,
     title: Option<String>,
     body_utf8: String,
     method: String,
     state: String,
+    #[serde(default)]
+    transport_state: TransportDeliveryState,
+    #[serde(default)]
+    application_ack_state: ApplicationAckState,
     detail: Option<String>,
     sent_at_ms: Option<u64>,
     received_at_ms: Option<u64>,
@@ -141,8 +154,8 @@ mod tests {
     };
     use crate::event_bus::EventBus;
     use crate::types::{
-        MessageDirection, MessageMethod, MessageRecord, MessageState, PeerRecord, PeerState,
-        ProjectionScope,
+        ApplicationAckState, MessageDirection, MessageMethod, MessageRecord, MessageState,
+        PeerRecord, PeerState, ProjectionScope, TransportDeliveryState,
     };
 
     fn build_persisted_peer(
@@ -182,10 +195,16 @@ mod tests {
             direction: MessageDirection::Inbound {},
             destination_hex: destination_hex.to_string(),
             source_hex: source_hex.map(str::to_string),
+            requested_destination_hex: Some(destination_hex.to_string()),
+            delivery_destination_hex: Some(destination_hex.to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some(message_id_hex.to_string()),
             title: Some("chat".to_string()),
             body_utf8: format!("body {message_id_hex}"),
             method: MessageMethod::Direct {},
             state: MessageState::Received {},
+            transport_state: TransportDeliveryState::TransportDelivered {},
+            application_ack_state: ApplicationAckState::NotRequired {},
             detail: None,
             sent_at_ms: None,
             received_at_ms: Some(1_700_000_000_000),
@@ -405,10 +424,16 @@ fn persisted_message_from_runtime(record: &MessageRecord) -> Option<PersistedMes
         direction: message_direction_to_string(record.direction),
         destination_hex: record.destination_hex.clone(),
         source_hex: record.source_hex.clone(),
+        requested_destination_hex: record.requested_destination_hex.clone(),
+        delivery_destination_hex: record.delivery_destination_hex.clone(),
+        recipient_identity_hex: record.recipient_identity_hex.clone(),
+        last_wire_message_id_hex: record.last_wire_message_id_hex.clone(),
         title: record.title.clone(),
         body_utf8: record.body_utf8.clone(),
         method: message_method_to_string(record.method),
         state: message_state_to_string(record.state),
+        transport_state: record.transport_state,
+        application_ack_state: record.application_ack_state,
         detail: record.detail.clone(),
         sent_at_ms: record.sent_at_ms,
         received_at_ms: record.received_at_ms,
@@ -460,10 +485,16 @@ fn runtime_message_from_persisted(record: PersistedMessageRecord) -> MessageReco
             .unwrap_or(MessageDirection::Outbound {}),
         destination_hex: record.destination_hex,
         source_hex: record.source_hex,
+        requested_destination_hex: record.requested_destination_hex,
+        delivery_destination_hex: record.delivery_destination_hex,
+        recipient_identity_hex: record.recipient_identity_hex,
+        last_wire_message_id_hex: record.last_wire_message_id_hex,
         title: record.title,
         body_utf8: record.body_utf8,
         method: message_method_from_string(record.method).unwrap_or(MessageMethod::Direct {}),
         state: message_state_from_string(record.state).unwrap_or(MessageState::Queued {}),
+        transport_state: record.transport_state,
+        application_ack_state: record.application_ack_state,
         detail: record.detail,
         sent_at_ms: record.sent_at_ms,
         received_at_ms: record.received_at_ms,
