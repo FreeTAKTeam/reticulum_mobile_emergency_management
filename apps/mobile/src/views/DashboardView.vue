@@ -12,6 +12,7 @@ import { useEventsStore } from "../stores/eventsStore";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
+import { useWearablesStore } from "../stores/wearablesStore";
 
 const checklistsStore = useChecklistsStore();
 const { dashboardSummary } = storeToRefs(checklistsStore);
@@ -19,6 +20,7 @@ const eventsStore = useEventsStore();
 const messagesStore = useMessagesStore();
 const messagingStore = useMessagingStore();
 const nodeStore = useNodeStore();
+const wearablesStore = useWearablesStore();
 const notificationActivities = shallowRef<NotificationActivityRecord[]>(listNotificationActivity());
 let unsubscribeNotificationActivity: (() => void) | null = null;
 const dashboardActionTitle = computed(() =>
@@ -114,6 +116,19 @@ const activitySummaryMetrics = computed(() => [
   },
 ]);
 
+const wearableMetrics = computed(() =>
+  wearablesStore.wearableStatus.map((status) => ({
+    key: `${status.deviceId}:${status.sensorType}`,
+    name: status.deviceName || "Generic BLE Heart Rate Device",
+    bpm: status.sensorType === "heart_rate_bpm" ? status.value : "-",
+    status: status.status,
+    operator: status.operatorRnsIdentity || "Unassigned",
+    lastSeen: status.lastSeenTimestampMs > 0
+      ? new Date(status.lastSeenTimestampMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : "-",
+  })),
+);
+
 function activityHref(activity: NotificationActivityRecord): string {
   const route = activity.route?.trim();
   if (!route) {
@@ -163,6 +178,7 @@ function refreshNotificationActivities(): void {
 
 onMounted(() => {
   void checklistsStore.refreshLive();
+  void wearablesStore.init();
   refreshNotificationActivities();
   unsubscribeNotificationActivity = subscribeNotificationActivity(refreshNotificationActivities);
 });
@@ -277,6 +293,21 @@ onUnmounted(() => {
           No logs yet.
         </p>
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>Wearables</h2>
+      <div v-if="wearableMetrics.length" class="wearable-list">
+        <article v-for="metric in wearableMetrics" :key="metric.key" class="wearable-row">
+          <div>
+            <strong>{{ metric.name }}</strong>
+            <span>{{ metric.operator }}</span>
+          </div>
+          <p>{{ metric.bpm }} bpm</p>
+          <span>{{ metric.status }} | {{ metric.lastSeen }}</span>
+        </article>
+      </div>
+      <p v-else class="empty-copy">No wearable heart-rate data.</p>
     </section>
   </section>
 </template>
@@ -652,6 +683,56 @@ h2 {
   margin: 0.2rem 0 0;
 }
 
+.wearable-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.wearable-row {
+  align-items: center;
+  background: rgb(7 20 44 / 72%);
+  border: 1px solid rgb(67 106 165 / 30%);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: 0.7rem 0.8rem;
+}
+
+.wearable-row strong,
+.wearable-row span,
+.wearable-row p,
+.empty-copy {
+  font-family: var(--font-body);
+}
+
+.wearable-row strong,
+.wearable-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.wearable-row strong,
+.wearable-row p {
+  color: #d5eaff;
+}
+
+.wearable-row p {
+  font-family: var(--font-ui);
+  font-weight: 700;
+  margin: 0;
+}
+
+.wearable-row span,
+.empty-copy {
+  color: #96afd5;
+}
+
+.empty-copy {
+  margin: 0.75rem 0 0;
+}
+
 @media (max-width: 720px) {
   h1 {
     font-size: 1.1rem;
@@ -706,6 +787,10 @@ h2 {
   .ring-visual svg {
     height: 84px;
     width: 84px;
+  }
+
+  .wearable-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

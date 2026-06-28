@@ -113,8 +113,17 @@ enum ProjectionScope {
   "Conversations",
   "Messages",
   "Telemetry",
+  "Wearables",
   "Plugins",
   "Sos"
+};
+
+enum WearableSensorType {
+  "HeartRateBpm",
+  "BatteryPercent",
+  "StepCount",
+  "Location",
+  "Unknown"
 };
 
 // Error surface.
@@ -332,6 +341,19 @@ dictionary ChecklistSettingsRecord {
   u32 default_task_due_step_minutes;
 };
 
+dictionary WearableDeviceConfigRecord {
+  string device_id;
+  string? alias;
+  string? operator_rns_identity;
+  WearableSensorType sensor_type;
+};
+
+dictionary WearableSettingsRecord {
+  boolean enabled;
+  u32 stale_timeout_seconds;
+  sequence<WearableDeviceConfigRecord> devices;
+};
+
 dictionary TrustedPluginPublisherRecord {
   string publisher;
   string public_key_base64;
@@ -360,6 +382,7 @@ dictionary AppSettingsRecord {
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
   ChecklistSettingsRecord checklists;
+  WearableSettingsRecord wearables;
   PluginTrustSettingsRecord plugin_trust;
   RnodeSettingsRecord rnode;
 };
@@ -741,6 +764,7 @@ dictionary OperationalSummary {
   u32 eam_count;
   u32 event_count;
   u32 telemetry_count;
+  u32 wearable_count;
   string? active_propagation_node_hex;
   u64 updated_at_ms;
 };
@@ -777,6 +801,7 @@ interface NodeEvent {
   HubDirectoryUpdated(HubDirectorySnapshot snapshot);
   OperationalNotice(OperationalNotice notice);
   ProjectionInvalidated(ProjectionInvalidation invalidation);
+  WearableSensorUpdated(string status_json);
   SosStatusChanged(SosStatusRecord status);
   SosAlertChanged(SosAlertRecord alert);
   SosTelemetryRequested();

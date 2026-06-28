@@ -318,6 +318,16 @@ export interface NodeUiSettings {
     staleAfterMinutes: number;
     expireAfterMinutes: number;
   };
+  wearables: {
+    enabled: boolean;
+    staleTimeoutSeconds: number;
+    devices: Array<{
+      deviceId: string;
+      alias?: string;
+      operatorRnsIdentity?: string;
+      sensorType: "heart_rate_bpm" | "battery_percent" | "step_count" | "location" | "unknown";
+    }>;
+  };
   hub: HubSettings;
   rnode: RnodeSettings;
   checklists: {

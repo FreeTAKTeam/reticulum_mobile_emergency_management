@@ -47,8 +47,10 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord, TrustedPluginPublisherRecord,
+    TelemetryPositionRecord, WearableSensorEvent, WearableStatusRecord,
+    TrustedPluginPublisherRecord,
 };
+use crate::wearables::status_from_event;
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");
@@ -6079,6 +6081,45 @@ impl Node {
         Ok(())
     }
 
+    pub fn get_wearable_status(&self) -> Result<Vec<WearableStatusRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.get_wearable_status()
+    }
+
+    pub fn ingest_wearable_sensor_event(
+        &self,
+        event: WearableSensorEvent,
+    ) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let settings = inner
+            .app_state
+            .get_app_settings()?
+            .map(|settings| settings.wearables)
+            .unwrap_or_default();
+        let config = settings.devices.iter().find(|candidate| {
+            candidate.device_id == event.device_id && candidate.sensor_type == event.sensor_type
+        });
+        let status = status_from_event(
+            event,
+            config,
+            settings.stale_timeout_seconds,
+            crate::runtime::now_ms() as i64,
+        )
+        .map_err(|_| NodeError::InvalidConfig {})?;
+        let invalidation = inner.app_state.upsert_wearable_status(&status)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        let summary = inner.app_state.bump_projection_revision(
+            ProjectionScope::OperationalSummary {},
+            None,
+            Some("wearable-upserted".to_string()),
+        )?;
+        emit_projection_invalidation(&inner.bus, summary);
+        inner.bus.emit(NodeEvent::WearableSensorUpdated {
+            status_json: serde_json::to_string(&status).map_err(|_| NodeError::InternalError {})?,
+        });
+        Ok(())
+    }
+
     pub fn get_sos_settings(&self) -> Result<SosSettingsRecord, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         Ok(inner
@@ -6462,6 +6503,7 @@ impl Node {
             eam_count: inner.app_state.get_eams()?.len() as u32,
             event_count: inner.app_state.get_events()?.len() as u32,
             telemetry_count: inner.app_state.get_telemetry_positions()?.len() as u32,
+            wearable_count: inner.app_state.get_wearable_status()?.len() as u32,
             active_propagation_node_hex: sync.active_propagation_node_hex,
             updated_at_ms: crate::runtime::now_ms(),
         })
@@ -8568,6 +8610,7 @@ schema = "schemas/bad_status.schema.json"
                 refresh_interval_seconds: 3600,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            wearables: crate::types::WearableSettingsRecord::default(),
             plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
             rnode: crate::types::RnodeSettingsRecord::default(),
         }
@@ -9869,6 +9912,7 @@ schema = "schemas/bad_status.schema.json"
                 refresh_interval_seconds: 0,
             },
             checklists: crate::types::ChecklistSettingsRecord::default(),
+            wearables: crate::types::WearableSettingsRecord::default(),
             plugin_trust: crate::types::PluginTrustSettingsRecord::default(),
             rnode: crate::types::RnodeSettingsRecord::default(),
         }
