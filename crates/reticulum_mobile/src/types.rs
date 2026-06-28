@@ -301,6 +301,10 @@ string_enum! {
 
 pub const DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES: u32 = 30;
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_checklist_task_due_step_minutes() -> u32 {
     DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES
 }
@@ -355,6 +359,7 @@ pub struct NodeConfig {
     pub storage_dir: Option<String>,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub stale_after_minutes: u32,
     pub announce_capabilities: String,
@@ -648,6 +653,8 @@ pub struct AppSettingsRecord {
     pub announce_capabilities: String,
     pub tcp_clients: Vec<String>,
     pub broadcast: bool,
+    #[serde(default = "default_true")]
+    pub transport_node_enabled: bool,
     pub announce_interval_seconds: u32,
     pub telemetry: TelemetrySettingsRecord,
     pub hub: HubSettingsRecord,

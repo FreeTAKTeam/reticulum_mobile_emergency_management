@@ -156,6 +156,7 @@ const DEFAULT_SETTINGS: NodeUiSettings = {
   announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
   tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
   broadcast: DEFAULT_NODE_CONFIG.broadcast,
+  transportNodeEnabled: DEFAULT_NODE_CONFIG.transportNodeEnabled,
   announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
   telemetry: {
     enabled: false,
@@ -397,6 +398,7 @@ function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
     announceCapabilities: settings.announceCapabilities,
     tcpClients: [...settings.tcpClients],
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     telemetry: {
       enabled: settings.telemetry.enabled,
@@ -481,6 +483,7 @@ function normalizeAppSettingsRecord(
       tcpFallback,
       allowEmptyTcpClients,
     ),
+    transportNodeEnabled: runtimeSettings.transportNodeEnabled ?? DEFAULT_SETTINGS.transportNodeEnabled,
     telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
     checklists: normalizeChecklistSettings(runtimeSettings.checklists),
     rnode: normalizeRnodeSettings(runtimeSettings.rnode),
@@ -581,6 +584,7 @@ function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     storageDir: "reticulum-mobile",
     tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
     broadcast: settings.broadcast,
+    transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
     announceCapabilities: formatAnnounceAppData(
@@ -1161,6 +1165,7 @@ export const useNodeStore = defineStore("node", () => {
     settings.announceCapabilities = next.announceCapabilities;
     settings.tcpClients = [...next.tcpClients];
     settings.broadcast = next.broadcast;
+    settings.transportNodeEnabled = next.transportNodeEnabled;
     settings.announceIntervalSeconds = next.announceIntervalSeconds;
     settings.telemetry = { ...next.telemetry };
     settings.checklists = { ...next.checklists };
@@ -2503,6 +2508,9 @@ export const useNodeStore = defineStore("node", () => {
     }
     if (typeof next.broadcast === "boolean") {
       settings.broadcast = next.broadcast;
+    }
+    if (typeof next.transportNodeEnabled === "boolean") {
+      settings.transportNodeEnabled = next.transportNodeEnabled;
     }
     if (next.announceIntervalSeconds !== undefined) {
       settings.announceIntervalSeconds = next.announceIntervalSeconds;

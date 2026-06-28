@@ -91,6 +91,7 @@ export interface NodeConfig {
   storageDir?: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   staleAfterMinutes: number;
   announceCapabilities: string;
@@ -414,6 +415,7 @@ export interface AppSettingsRecord {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
@@ -899,6 +901,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: generateDefaultCallSign(),
   tcpClients: [],
   broadcast: true,
+  transportNodeEnabled: true,
   announceIntervalSeconds: 1800,
   staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
@@ -1904,6 +1907,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
     announceCapabilities: String(raw.announceCapabilities ?? ""),
     tcpClients: Array.isArray(raw.tcpClients) ? raw.tcpClients.map((entry) => String(entry)) : [],
     broadcast: Boolean(raw.broadcast),
+    transportNodeEnabled: Boolean(raw.transportNodeEnabled ?? raw.transport_node_enabled ?? true),
     announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
     telemetry: {
       enabled: Boolean(telemetry.enabled),
@@ -3238,6 +3242,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     storageDir: config.storageDir,
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
+    transportNodeEnabled: config.transportNodeEnabled,
     announceIntervalSeconds: config.announceIntervalSeconds,
     staleAfterMinutes: config.staleAfterMinutes,
     announceCapabilities: config.announceCapabilities,

@@ -187,6 +187,9 @@ function normalizeRuntimeSettings(
       defaults.tcpClients.length > 0 ? defaults.tcpClients : DEFAULT_TCP_COMMUNITY_ENDPOINTS,
     ),
     broadcast: typeof value.broadcast === "boolean" ? value.broadcast : defaults.broadcast,
+    transportNodeEnabled: typeof value.transportNodeEnabled === "boolean"
+      ? value.transportNodeEnabled
+      : defaults.transportNodeEnabled,
     announceIntervalSeconds: Math.max(
       60,
       Number(value.announceIntervalSeconds ?? defaults.announceIntervalSeconds),

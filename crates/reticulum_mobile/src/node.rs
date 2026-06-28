@@ -101,6 +101,7 @@ struct NodeConfigFingerprint {
     storage_dir: Option<String>,
     tcp_clients: Vec<String>,
     broadcast: bool,
+    transport_node_enabled: bool,
     announce_interval_seconds: u32,
     stale_after_minutes: u32,
     announce_capabilities: String,
@@ -124,6 +125,7 @@ impl NodeConfigFingerprint {
             storage_dir: config.storage_dir.clone(),
             tcp_clients: config.tcp_clients.clone(),
             broadcast: config.broadcast,
+            transport_node_enabled: config.transport_node_enabled,
             announce_interval_seconds: config.announce_interval_seconds,
             stale_after_minutes: config.stale_after_minutes,
             announce_capabilities: config.announce_capabilities.clone(),
@@ -397,20 +399,11 @@ fn build_runtime_telemetry_destinations(
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => {
-            let app_destination_hex = configured_hub_destination(config)?;
-            let Some(send_mode) = current_replication_send_mode(
-                peers,
-                app_destination_hex.as_str(),
-                active_propagation_node_hex,
-            ) else {
-                return Ok(Vec::new());
-            };
-            Ok(vec![MissionReplicationTarget {
-                app_destination_hex,
-                send_mode,
-            }])
-        }
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             if config
                 .hub_identity_hash
@@ -1208,13 +1201,6 @@ fn build_transient_replication_targets(
     direct_targets
 }
 
-fn has_current_replication_peer(peers: &[PeerRecord], app_destination_hex: &str) -> bool {
-    peers.iter().any(|peer| {
-        normalize_hex_32(peer.destination_hex.as_str()).as_deref() == Some(app_destination_hex)
-            && peer_is_current_replication_target(peer)
-    })
-}
-
 fn current_replication_send_mode(
     peers: &[PeerRecord],
     app_destination_hex: &str,
@@ -1238,6 +1224,24 @@ fn current_replication_send_mode(
     } else {
         None
     }
+}
+
+fn connected_hub_replication_target(
+    peers: &[PeerRecord],
+    active_propagation_node_hex: Option<&str>,
+    config: &NodeConfigFingerprint,
+) -> Result<MissionReplicationTarget, NodeError> {
+    let app_destination_hex = configured_hub_destination(config)?;
+    let send_mode = current_replication_send_mode(
+        peers,
+        app_destination_hex.as_str(),
+        active_propagation_node_hex,
+    )
+    .unwrap_or(SendMode::PropagationOnly {});
+    Ok(MissionReplicationTarget {
+        app_destination_hex,
+        send_mode,
+    })
 }
 
 fn build_runtime_mission_replication_targets(
@@ -1264,13 +1268,11 @@ fn build_runtime_mission_replication_targets(
             saved_peers,
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
-            app_destination_hex: configured_hub_destination(config)?,
-            send_mode: SendMode::Auto {},
-        }]
-        .into_iter()
-        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
-        .collect()),
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -1415,13 +1417,11 @@ fn build_runtime_event_replication_targets(
             saved_peers,
             active_propagation_node_hex,
         )),
-        HubMode::Connected {} => Ok(vec![MissionReplicationTarget {
-            app_destination_hex: configured_hub_destination(config)?,
-            send_mode: SendMode::Auto {},
-        }]
-        .into_iter()
-        .filter(|target| has_current_replication_peer(peers, target.app_destination_hex.as_str()))
-        .collect()),
+        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
+            peers,
+            active_propagation_node_hex,
+            config,
+        )?]),
         HubMode::SemiAutonomous {} => {
             let Some(_hub_identity_hash) = config
                 .hub_identity_hash
@@ -3154,45 +3154,6 @@ impl Node {
             hub_directory_snapshot.as_ref(),
         )?;
 
-        let (resp_tx, _resp_rx) = cb::bounded(1);
-        dispatch_command(
-            &tx,
-            Command::SendBytes {
-                destination_hex,
-                bytes,
-                fields_bytes,
-                send_mode,
-                resp: resp_tx,
-            },
-        )
-    }
-
-    fn send_bytes_sync(
-        &self,
-        destination_hex: String,
-        bytes: Vec<u8>,
-        fields_bytes: Option<Vec<u8>>,
-        send_mode: SendMode,
-    ) -> Result<(), NodeError> {
-        let (tx, active_config, hub_directory_snapshot) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            let hub_directory_snapshot = inner
-                .hub_directory_snapshot
-                .lock()
-                .map_err(|_| NodeError::InternalError {})?
-                .clone();
-            (
-                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
-                inner.active_config.clone(),
-                hub_directory_snapshot,
-            )
-        };
-        let destination_hex = routed_destination_hex(
-            destination_hex,
-            active_config.as_ref(),
-            hub_directory_snapshot.as_ref(),
-        )?;
-
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
             &tx,
@@ -3296,25 +3257,13 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let (tx, active_config, hub_directory_snapshot) = {
+        let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            let hub_directory_snapshot = inner
-                .hub_directory_snapshot
-                .lock()
-                .map_err(|_| NodeError::InternalError {})?
-                .clone();
-            (
-                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
-                inner.active_config.clone(),
-                hub_directory_snapshot,
-            )
+            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
         let request = SendLxmfRequest {
-            destination_hex: routed_destination_hex(
-                request.destination_hex,
-                active_config.as_ref(),
-                hub_directory_snapshot.as_ref(),
-            )?,
+            destination_hex: normalize_hex_32(request.destination_hex.as_str())
+                .ok_or(NodeError::InvalidConfig {})?,
             ..request
         };
 
@@ -3337,14 +3286,17 @@ impl Node {
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
-        let (resp_tx, _resp_rx) = cb::bounded(1);
+        let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
             &tx,
             Command::RetryLxmf {
                 message_id_hex,
                 resp: resp_tx,
             },
-        )
+        )?;
+        resp_rx
+            .recv_timeout(SEND_COMMAND_TIMEOUT)
+            .unwrap_or(Err(NodeError::Timeout {}))
     }
 
     pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
@@ -5245,7 +5197,7 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes_sync(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -6226,6 +6178,7 @@ mod tests {
             storage_dir: Some(storage_dir.to_string_lossy().to_string()),
             tcp_clients: vec![relay_addr.to_string()],
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 1,
             stale_after_minutes: 30,
             announce_capabilities: "R3AKT,EMergencyMessages,Telemetry".to_string(),
@@ -7343,6 +7296,7 @@ mod tests {
             announce_capabilities: "R3AKT,EMergencyMessages,Telemetry".to_string(),
             tcp_clients: vec!["rns.beleth.net:4242".to_string()],
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 1800,
             telemetry: TelemetrySettingsRecord {
                 enabled: true,
@@ -7417,6 +7371,7 @@ mod tests {
             storage_dir: None,
             tcp_clients: Vec::new(),
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 1800,
             stale_after_minutes: 30,
             announce_capabilities: "R3AKT,EMergencyMessages,Telemetry".to_string(),
@@ -7621,6 +7576,64 @@ mod tests {
             "56565656565656565656565656565656"
         );
         assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    }
+
+    #[test]
+    fn connected_telemetry_destinations_route_to_selected_hub_without_current_peer() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::Connected {},
+            Some("56565656565656565656565656565656"),
+        );
+
+        let destinations =
+            build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
+                .expect("connected telemetry destinations");
+
+        assert_eq!(destinations.len(), 1);
+        assert_eq!(
+            destinations[0].app_destination_hex,
+            "56565656565656565656565656565656"
+        );
+        assert!(matches!(
+            destinations[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
+    }
+
+    #[test]
+    fn connected_replication_targets_route_to_selected_hub_without_current_peer() {
+        let status = build_status_for_tests();
+        let config = build_config_fingerprint_for_tests(
+            HubMode::Connected {},
+            Some("56565656565656565656565656565656"),
+        );
+
+        let mission_targets =
+            build_runtime_mission_replication_targets(&status, &[], &[], None, Some(&config), None)
+                .expect("connected mission targets");
+        let event_targets =
+            build_runtime_event_replication_targets(&status, &[], &[], None, Some(&config), None)
+                .expect("connected event targets");
+
+        assert_eq!(mission_targets.len(), 1);
+        assert_eq!(
+            mission_targets[0].app_destination_hex,
+            "56565656565656565656565656565656"
+        );
+        assert!(matches!(
+            mission_targets[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
+        assert_eq!(event_targets.len(), 1);
+        assert_eq!(
+            event_targets[0].app_destination_hex,
+            "56565656565656565656565656565656"
+        );
+        assert!(matches!(
+            event_targets[0].send_mode,
+            SendMode::PropagationOnly {}
+        ));
     }
 
     #[test]
@@ -8582,6 +8595,7 @@ mod tests {
             announce_capabilities: "mission,eam".to_string(),
             tcp_clients: vec!["tcp://127.0.0.1:4242".to_string()],
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 30,
             telemetry: TelemetrySettingsRecord {
                 enabled: true,

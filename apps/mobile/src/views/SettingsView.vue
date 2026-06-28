@@ -64,6 +64,7 @@ const form = reactive({
   announceIntervalSeconds: nodeStore.settings.announceIntervalSeconds,
   tcpClients: [...nodeStore.settings.tcpClients],
   broadcast: nodeStore.settings.broadcast,
+  transportNodeEnabled: nodeStore.settings.transportNodeEnabled,
   rnodeEnabled: nodeStore.settings.rnode.enabled,
   rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
   rnodeDisplayName: nodeStore.settings.rnode.displayName,
@@ -267,6 +268,7 @@ const hasMainSettingsChanges = computed(() =>
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
   || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
+  || form.transportNodeEnabled !== nodeStore.settings.transportNodeEnabled
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
   || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
@@ -466,6 +468,7 @@ function syncSettingsForm(): void {
   form.announceIntervalSeconds = nodeStore.settings.announceIntervalSeconds;
   form.tcpClients = [...nodeStore.settings.tcpClients];
   form.broadcast = nodeStore.settings.broadcast;
+  form.transportNodeEnabled = nodeStore.settings.transportNodeEnabled;
   form.rnodeEnabled = nodeStore.settings.rnode.enabled;
   form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
   form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
@@ -512,6 +515,7 @@ async function applySettings(): Promise<void> {
       announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
+      transportNodeEnabled: form.transportNodeEnabled,
       rnode: nextRnode,
       telemetry: {
         enabled: form.telemetryEnabled,
@@ -752,6 +756,10 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />
             Broadcast enabled
+          </label>
+          <label class="checkbox">
+            <input v-model="form.transportNodeEnabled" type="checkbox" />
+            Transport node forwarding
           </label>
         </div>
 

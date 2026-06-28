@@ -3610,6 +3610,7 @@ mod tests {
             announce_capabilities: "R3AKT,EMergencyMessages".to_string(),
             tcp_clients: Vec::new(),
             broadcast: true,
+            transport_node_enabled: true,
             announce_interval_seconds: 1800,
             telemetry: TelemetrySettingsRecord {
                 enabled: false,
