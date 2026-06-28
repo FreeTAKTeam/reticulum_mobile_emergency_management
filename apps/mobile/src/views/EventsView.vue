@@ -24,6 +24,7 @@ const isCreateFormVisible = shallowRef(false);
 const isSeverityMenuOpen = shallowRef(false);
 const isEventMenuOpen = shallowRef(false);
 const isFilterPanelOpen = shallowRef(false);
+const isCreatingEvent = shallowRef(false);
 const categoryScroller = ref<HTMLElement | null>(null);
 const categoryDrag = reactive({
   active: false,
@@ -254,6 +255,9 @@ function stopCategoryDrag(event: PointerEvent): void {
 }
 
 async function createEvent(): Promise<void> {
+  if (isCreatingEvent.value) {
+    return;
+  }
   if (!ensureReady("send events")) {
     return;
   }
@@ -261,6 +265,7 @@ async function createEvent(): Promise<void> {
     nodeStore.logUi("Warn", "[events] create blocked: callsign=Unset");
     return;
   }
+  isCreatingEvent.value = true;
   try {
     nodeStore.logUi("Info", `[events] creating MECP event body="${mecpPreview.value}".`);
     await eventsStore.upsertLocal({
@@ -273,6 +278,8 @@ async function createEvent(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     nodeStore.setLastError(message);
     nodeStore.logUi("Error", `[events] create failed: ${message}`);
+  } finally {
+    isCreatingEvent.value = false;
   }
 }
 
@@ -512,8 +519,8 @@ async function deleteEvent(uid: string): Promise<void> {
         </div>
       </section>
 
-      <button type="submit" :disabled="!appReady" :title="appReady ? 'Add event' : readinessHint">
-        Add event
+      <button type="submit" :disabled="!appReady || isCreatingEvent" :title="appReady ? 'Add event' : readinessHint">
+        {{ isCreatingEvent ? "Adding event..." : "Add event" }}
       </button>
     </form>
 

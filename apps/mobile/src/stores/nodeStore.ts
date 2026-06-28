@@ -86,6 +86,7 @@ import {
   nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
 } from "../utils/readinessErrors";
+import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
@@ -1661,7 +1662,6 @@ export const useNodeStore = defineStore("node", () => {
     event: AnnounceReceivedEvent | AnnounceRecord,
     source: "live" | "snapshot" = "live",
   ): void {
-    presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
     const identityHex = normalizeDestinationHex(event.identityHex ?? "");
     if (isLocalDestinationIdentityPair(event.destinationHex, identityHex)) {
       return;
@@ -1692,6 +1692,7 @@ export const useNodeStore = defineStore("node", () => {
       })) {
         return;
       }
+      presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
       const aliasDestination = isValidDestinationHex(identityHex)
         ? appDestinationByIdentity[identityHex]
         : undefined;
@@ -2029,13 +2030,15 @@ export const useNodeStore = defineStore("node", () => {
         }
       }),
       nodeClient.on("log", (event: NodeLogEvent) => {
-        appendLog(event.level, event.message);
         if (logIndicatesReadinessError(event.message)) {
           if (tcpInterfaceFailureCanFallBackToConfiguredInterface(event.message)) {
             clearReadinessError();
           } else {
             setReadinessError(event.message);
           }
+        }
+        if (nativeLogShouldAppendToUi(event.level, event.message)) {
+          appendLog(event.level, event.message);
         }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {

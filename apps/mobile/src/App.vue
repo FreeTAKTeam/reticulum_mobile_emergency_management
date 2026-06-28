@@ -172,7 +172,7 @@ let androidBackButtonListener: { remove: () => Promise<void> } | undefined;
 const footerItems: NavigationItem[] = [
   { path: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { path: "/inbox", label: "Chat", icon: "chat" },
-  { path: "/checklists", label: "Checklists", icon: "checklists" },
+  { path: "/events", label: "Events", icon: "events" },
   { path: "/telemetry", label: "Map", icon: "map" },
 ];
 
