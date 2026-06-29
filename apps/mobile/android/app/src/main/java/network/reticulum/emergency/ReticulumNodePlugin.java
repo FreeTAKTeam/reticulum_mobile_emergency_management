@@ -9,9 +9,11 @@ import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.os.Build;
 import android.os.Handler;
@@ -62,12 +64,15 @@ public class ReticulumNodePlugin extends Plugin {
     private static final String RNODE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
     private static final long DEFAULT_RNODE_SCAN_TIMEOUT_MS = 8_000L;
+    private static final long RNODE_PAIR_TIMEOUT_MS = 30_000L;
 
     private volatile ReticulumNodeService boundService;
     private volatile boolean serviceBound = false;
     private volatile boolean serviceListenerRegistered = false;
     private volatile boolean bridgeForeground = true;
     private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Map<String, PendingRnodePairing> pendingRnodePairings = new LinkedHashMap<>();
 
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
@@ -128,6 +133,61 @@ public class ReticulumNodePlugin extends Plugin {
         }
     };
 
+    private static final class PendingRnodePairing {
+        final PluginCall call;
+        final BroadcastReceiver receiver;
+        Runnable timeout;
+
+        PendingRnodePairing(PluginCall call, BroadcastReceiver receiver) {
+            this.call = call;
+            this.receiver = receiver;
+        }
+    }
+
+    private void cancelPendingRnodePairings() {
+        final List<PendingRnodePairing> pending;
+        synchronized (pendingRnodePairings) {
+            pending = new ArrayList<>(pendingRnodePairings.values());
+            pendingRnodePairings.clear();
+        }
+        for (PendingRnodePairing pairing : pending) {
+            if (pairing.timeout != null) {
+                mainHandler.removeCallbacks(pairing.timeout);
+            }
+            try {
+                getContext().unregisterReceiver(pairing.receiver);
+            } catch (IllegalArgumentException ignored) {
+                // Receiver may already be unregistered by a terminal bond-state event.
+            }
+        }
+    }
+
+    private void finishPendingRnodePairing(String address, BluetoothDevice device, boolean timedOut) {
+        final PendingRnodePairing pending;
+        synchronized (pendingRnodePairings) {
+            pending = pendingRnodePairings.remove(address);
+        }
+        if (pending == null) {
+            return;
+        }
+        if (pending.timeout != null) {
+            mainHandler.removeCallbacks(pending.timeout);
+        }
+        try {
+            getContext().unregisterReceiver(pending.receiver);
+        } catch (IllegalArgumentException ignored) {
+            // Receiver may already be unregistered during plugin teardown.
+        }
+        final JSObject payload = new JSObject();
+        payload.put("id", device.getAddress());
+        payload.put("address", device.getAddress());
+        payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+        payload.put("bondingStarted", true);
+        payload.put("bondState", bondStateLabel(device.getBondState()));
+        payload.put("timedOut", timedOut);
+        pending.call.resolve(payload);
+    }
+
     @Override
     public void load() {
         super.load();
@@ -172,6 +232,7 @@ public class ReticulumNodePlugin extends Plugin {
             boundService.setAppUiForeground(false);
         }
         unregisterServiceListener();
+        cancelPendingRnodePairings();
         unbindFromService();
         bridgeExecutor.shutdownNow();
         super.handleOnDestroy();
@@ -363,23 +424,67 @@ public class ReticulumNodePlugin extends Plugin {
         }
         try {
             final BluetoothDevice device = adapter.getRemoteDevice(id.trim());
+            final String address = device.getAddress();
             final JSObject payload = new JSObject();
-            payload.put("id", device.getAddress());
-            payload.put("address", device.getAddress());
+            payload.put("id", address);
+            payload.put("address", address);
             payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
             if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                 payload.put("bondState", "bonded");
+                payload.put("bondingStarted", false);
+                payload.put("timedOut", false);
                 call.resolve(payload);
                 return;
             }
-            final boolean bondingStarted = device.createBond();
+            synchronized (pendingRnodePairings) {
+                if (pendingRnodePairings.containsKey(address)) {
+                    call.reject("Bluetooth pairing is already pending for this RNode.");
+                    return;
+                }
+            }
+
+            final BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) {
+                        return;
+                    }
+                    final BluetoothDevice changedDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    if (changedDevice == null || !address.equals(changedDevice.getAddress())) {
+                        return;
+                    }
+                    final int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, changedDevice.getBondState());
+                    if (state == BluetoothDevice.BOND_BONDED || state == BluetoothDevice.BOND_NONE) {
+                        finishPendingRnodePairing(address, changedDevice, false);
+                    }
+                }
+            };
+            final PendingRnodePairing pending = new PendingRnodePairing(call, receiver);
+            pending.timeout = () -> finishPendingRnodePairing(address, device, true);
+            synchronized (pendingRnodePairings) {
+                pendingRnodePairings.put(address, pending);
+            }
+            ContextCompat.registerReceiver(
+                getContext(),
+                receiver,
+                new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            );
+
+            final boolean bondingStarted = device.getBondState() == BluetoothDevice.BOND_BONDING || device.createBond();
             if (!bondingStarted) {
+                synchronized (pendingRnodePairings) {
+                    pendingRnodePairings.remove(address);
+                }
+                try {
+                    getContext().unregisterReceiver(receiver);
+                } catch (IllegalArgumentException ignored) {
+                    // Receiver was not registered or was already removed.
+                }
                 call.reject("Android did not start Bluetooth pairing for this RNode.");
                 return;
             }
-            payload.put("bondingStarted", true);
-            payload.put("bondState", bondStateLabel(device.getBondState()));
-            call.resolve(payload);
+            mainHandler.postDelayed(pending.timeout, RNODE_PAIR_TIMEOUT_MS);
         } catch (IllegalArgumentException ex) {
             call.reject("Invalid Bluetooth device id.", ex);
         }

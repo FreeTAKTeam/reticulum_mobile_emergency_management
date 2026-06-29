@@ -14,6 +14,7 @@ import {
   type NodeConfig,
   type NodeClientEvents,
   type NodeErrorEvent,
+  type InterfaceStatusChangedEvent,
   type NodeLogEvent,
   type NodeStatus,
   type PeerChangedEvent,
@@ -106,6 +107,7 @@ const EMPTY_STATUS: NodeStatus = {
   appDestinationHex: "",
   lxmfDestinationHex: "",
   lastError: undefined,
+  interfaces: [],
 };
 
 const EMPTY_SYNC_STATUS: SyncStatus = {
@@ -264,6 +266,7 @@ function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
     appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
     lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
     lastError: lastError || undefined,
+    interfaces: Array.isArray(value?.interfaces) ? value.interfaces : [],
   };
 }
 
@@ -1966,6 +1969,15 @@ export const useNodeStore = defineStore("node", () => {
           clearReadinessError();
         }
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
+      }),
+      nodeClient.on("interfaceStatusChanged", (event: InterfaceStatusChangedEvent) => {
+        const current = status.value.interfaces.filter(
+          (entry) => entry.interfaceHex !== event.status.interfaceHex,
+        );
+        status.value = normalizeNodeStatus({
+          ...status.value,
+          interfaces: event.status.state === "disconnected" ? current : [...current, event.status],
+        });
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         upsertNativeAnnounceRecord(event);

@@ -30,7 +30,7 @@ pub use types::{
     ConversationRecord, EamProjectionRecord, EamReadinessMessageRecord,
     EamReadinessStatusMetricRecord, EamReadinessSummaryRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    HubMode, HubSettingsRecord, InterfaceStatusRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, OperationalSummary, PeerChange, PeerRecord, PeerState,

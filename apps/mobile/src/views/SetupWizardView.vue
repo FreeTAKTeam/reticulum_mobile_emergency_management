@@ -255,8 +255,13 @@ onMounted(() => {
           <label class="field-block">
             <span>Region</span>
             <select v-model="wizard.draft.rnode.region">
-              <option value="US915">US915</option>
-              <option value="EU868">EU868</option>
+              <option
+                v-for="region in wizard.rnodeRegions"
+                :key="region.id"
+                :value="region.id"
+              >
+                {{ region.id }} - {{ region.label }}
+              </option>
             </select>
           </label>
           <button type="button" class="secondary-action inline-action" @click="wizard.inferRnodeRegion">

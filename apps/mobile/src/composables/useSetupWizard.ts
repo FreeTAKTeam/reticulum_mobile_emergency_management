@@ -1,4 +1,4 @@
-import { computed, reactive, shallowRef } from "vue";
+import { computed, reactive, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useNodeStore } from "../stores/nodeStore";
@@ -9,9 +9,11 @@ import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupW
 import {
   DEFAULT_RNODE_SETTINGS,
   RNODE_PROFILE_SPECS,
+  RNODE_REGION_SPECS,
   inferRnodeRegionFromCoordinates,
   inferRnodeRegionFromTimezone,
   normalizeRnodeSettings,
+  resolveRnodeFrequencyForRegionChange,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
 import {
@@ -130,6 +132,17 @@ export function useSetupWizard() {
   );
   const selectedTcpEndpointSet = computed(() => new Set(normalizedTcpClients.value));
   const sosFloatingButtonEnabled = computed(() => draft.sosEnabled || sosStore.settings.floatingButton);
+
+  watch(
+    () => draft.rnode.region,
+    (nextRegion, previousRegion) => {
+      draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
+        previousRegion,
+        nextRegion,
+        draft.rnode.frequencyHz,
+      );
+    },
+  );
 
   const canGoNext = computed(() => {
     if (activeStep.value.id === "callsign") {
@@ -279,6 +292,10 @@ export function useSetupWizard() {
     if (!device.paired) {
       try {
         const pairResult = await pairRnodeBleDevice(deviceId);
+        if (pairResult.timedOut) {
+          feedback.value = "Bluetooth pairing did not finish within 30 seconds. Confirm the Android prompt, then try again.";
+          return;
+        }
         if (!pairResult.paired && !pairResult.bondingStarted) {
           feedback.value = "Android did not start Bluetooth pairing for this RNode.";
           return;
@@ -378,6 +395,7 @@ export function useSetupWizard() {
     rnodePairedLoading,
     rnodeDevices,
     rnodeProfiles: RNODE_PROFILE_SPECS,
+    rnodeRegions: RNODE_REGION_SPECS,
     rnodeScanning,
     saving,
     selectedTcpEndpointSet,

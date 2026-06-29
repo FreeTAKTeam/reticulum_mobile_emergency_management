@@ -25,6 +25,7 @@ export async function pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult
       paired: false,
       bondingStarted: false,
       bondState: "unavailable",
+      timedOut: false,
     };
   }
   return createReticulumNodeClient().pairRnodeBleDevice(id);

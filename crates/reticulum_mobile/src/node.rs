@@ -2827,6 +2827,7 @@ impl Node {
             identity_hex: String::new(),
             app_destination_hex: String::new(),
             lxmf_destination_hex: String::new(),
+            interfaces: Vec::new(),
         };
 
         Self {
@@ -2895,6 +2896,7 @@ impl Node {
                 identity_hex: identity.address_hash().to_hex_string(),
                 app_destination_hex: lxmf_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
+                interfaces: Vec::new(),
             };
         }
 
@@ -3065,6 +3067,7 @@ impl Node {
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                interfaces: Vec::new(),
             };
         };
 
@@ -3078,6 +3081,7 @@ impl Node {
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                interfaces: Vec::new(),
             })
     }
 
@@ -6911,6 +6915,7 @@ mod tests {
             identity_hex: "11111111111111111111111111111111".to_string(),
             app_destination_hex: "22222222222222222222222222222222".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let target = MissionReplicationTarget {
             app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -7385,6 +7390,7 @@ mod tests {
             identity_hex: "99999999999999999999999999999999".to_string(),
             app_destination_hex: "12121212121212121212121212121212".to_string(),
             lxmf_destination_hex: "34343434343434343434343434343434".to_string(),
+            interfaces: Vec::new(),
         }
     }
 
@@ -8071,6 +8077,7 @@ mod tests {
             identity_hex: "11111111111111111111111111111111".to_string(),
             app_destination_hex: "22222222222222222222222222222222".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let record = build_eam();
         let target = MissionReplicationTarget {
@@ -8105,6 +8112,7 @@ mod tests {
             identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
             app_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
             lxmf_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+            interfaces: Vec::new(),
         };
         let mut record = build_eam();
         record.eam_uid = Some("eam-6ef80799-29b1-4de5-b711-3896b9a55161".to_string());
@@ -8242,6 +8250,7 @@ mod tests {
             identity_hex: "11111111111111111111111111111111".to_string(),
             app_destination_hex: "22222222222222222222222222222222".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let record = EventProjectionRecord {
             uid: "evt-a9f9c462-c439-425a-879d-6d13f13a3b86".to_string(),
@@ -8343,6 +8352,7 @@ mod tests {
             identity_hex: "11111111111111111111111111111111".to_string(),
             app_destination_hex: "22222222222222222222222222222222".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let mut record = build_eam();
         record.group_name = "blue".to_string();
@@ -8409,6 +8419,7 @@ mod tests {
             identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
             app_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
             lxmf_destination_hex: "fb4c70e20cfac047b899ca2f3671b50a".to_string(),
+            interfaces: Vec::new(),
         };
         let receiver = PrivateIdentity::new_from_name("event-replication-propagation-budget-peer");
         let receiver_lxmf = SingleOutputDestination::new(
@@ -10662,6 +10673,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let peers = vec![
@@ -10718,6 +10730,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -10757,6 +10770,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -10895,6 +10909,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
@@ -10969,6 +10984,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let peers = vec![
@@ -11025,6 +11041,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let stale_saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -11442,6 +11459,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "cccccccccccccccccccccccccccccccc".to_string(),
@@ -11516,6 +11534,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -11555,6 +11574,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -11603,6 +11623,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = SavedPeerRecord {
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -11648,6 +11669,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -11682,6 +11704,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -11719,6 +11742,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -11850,6 +11874,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
 
@@ -11866,6 +11891,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer_with_lxmf_route(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11895,6 +11921,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
         let mut peer = build_peer_record(
@@ -11931,6 +11958,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer();
 
@@ -11947,6 +11975,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let saved_peer = build_saved_peer_with_lxmf_route(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -11977,6 +12006,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let mut peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -12022,6 +12052,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let mut targets = Vec::new();
 
@@ -12045,6 +12076,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let mut peer = build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -12081,6 +12113,7 @@ mod tests {
             identity_hex: "22222222222222222222222222222222".to_string(),
             app_destination_hex: "11111111111111111111111111111111".to_string(),
             lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
+            interfaces: Vec::new(),
         };
         let direct_target = MissionReplicationTarget {
             app_destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
