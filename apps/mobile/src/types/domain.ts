@@ -244,6 +244,12 @@ export interface SavedPeer {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
@@ -303,6 +309,7 @@ export interface NodeUiSettings {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: {
     enabled: boolean;

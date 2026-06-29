@@ -283,18 +283,24 @@ export function useSetupWizard() {
           feedback.value = "Android did not start Bluetooth pairing for this RNode.";
           return;
         }
-        feedback.value = pairResult.paired
-          ? "RNode is already paired."
-          : "Bluetooth pairing started. Confirm the Android pairing prompt before finishing setup.";
+        if (!pairResult.paired) {
+          draft.rnode.enabled = false;
+          draft.rnode.peripheralId = "";
+          rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
+          feedback.value = "Bluetooth pairing started. Confirm the Android pairing prompt, then select the RNode from paired devices before finishing setup.";
+          return;
+        }
+        feedback.value = "RNode is already paired.";
+        draft.rnode.peripheralId = pairResult.id || pairResult.address || deviceId;
       } catch (error: unknown) {
         feedback.value = error instanceof Error ? error.message : String(error);
         return;
       }
     } else {
       feedback.value = "";
+      draft.rnode.peripheralId = deviceId;
     }
     draft.rnode.enabled = true;
-    draft.rnode.peripheralId = deviceId;
     draft.rnode.displayName = device.name || device.address;
   }
 

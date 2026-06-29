@@ -24,6 +24,26 @@ enum SendOutcome {
 
 enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Acknowledged", "Failed", "TimedOut" };
 
+enum TransportDeliveryState {
+  "Queued",
+  "Sending",
+  "SentDirect",
+  "SentToPropagation",
+  "TransportDelivered",
+  "Failed",
+  "TimedOut",
+  "Cancelled"
+};
+
+enum ApplicationAckState {
+  "NotRequired",
+  "Waiting",
+  "Accepted",
+  "Completed",
+  "Rejected",
+  "Failed"
+};
+
 enum SendMode { "Auto", "DirectOnly", "PropagationOnly" };
 
 enum LxmfDeliveryMethod { "Direct", "Opportunistic", "Propagated" };
@@ -157,6 +177,9 @@ dictionary NodeConfig {
   // Transport broadcast mode (true enables broadcast for discovery/path requests).
   boolean broadcast;
 
+  // Packet retransmit mode (true lets REM act as a Reticulum transport node).
+  boolean transport_node_enabled;
+
   // Periodic announce interval for the app destination.
   u32 announce_interval_seconds;
 
@@ -213,6 +236,8 @@ dictionary LxmfDeliveryUpdate {
   string? event_uid;
   string? mission_uid;
   LxmfDeliveryStatus status;
+  TransportDeliveryState transport_state;
+  ApplicationAckState application_ack_state;
   LxmfDeliveryMethod method;
   LxmfDeliveryRepresentation representation;
   string? relay_destination_hex;
@@ -268,10 +293,16 @@ dictionary MessageRecord {
   MessageDirection direction;
   string destination_hex;
   string? source_hex;
+  string? requested_destination_hex;
+  string? delivery_destination_hex;
+  string? recipient_identity_hex;
+  string? last_wire_message_id_hex;
   string? title;
   string body_utf8;
   MessageMethod method;
   MessageState state;
+  TransportDeliveryState transport_state;
+  ApplicationAckState application_ack_state;
   string? detail;
   u64? sent_at_ms;
   u64? received_at_ms;
@@ -393,6 +424,7 @@ dictionary AppSettingsRecord {
   string announce_capabilities;
   sequence<string> tcp_clients;
   boolean broadcast;
+  boolean transport_node_enabled;
   u32 announce_interval_seconds;
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
@@ -404,6 +436,12 @@ dictionary SavedPeerRecord {
   string destination_hex;
   string? label;
   u64 saved_at_ms;
+  string? identity_hex;
+  string? lxmf_destination_hex;
+  string? app_data;
+  string? display_name;
+  u64? last_route_seen_at_ms;
+  u8? last_hops;
 };
 
 dictionary EamSourceRecord {

@@ -13,21 +13,21 @@ use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
 use crate::types::{
-    AppSettingsRecord, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistDeleteRequest, ChecklistListActiveRequest, ChecklistRecord, ChecklistSettingsRecord,
-    ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
-    ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
-    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord,
-    EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode,
-    HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
+    ChecklistRecord, ChecklistSettingsRecord, ChecklistTaskCellSetRequest,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
+    ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
+    EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
     PeerChange, PeerRecord, PeerState, ProjectionScope, PropagationConnectivityState,
     PropagationNodeStatus, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode,
     SendOutcome, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord,
     SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncPhase,
-    TelemetryPositionRecord, TelemetrySettingsRecord,
+    TelemetryPositionRecord, TelemetrySettingsRecord, TransportDeliveryState,
 };
 
 const RESULT_OK: jint = 0;
@@ -78,6 +78,7 @@ struct NodeConfigInput {
     storage_dir: Option<String>,
     tcp_clients: Option<Vec<String>>,
     broadcast: Option<bool>,
+    transport_node_enabled: Option<bool>,
     announce_interval_seconds: Option<u32>,
     stale_after_minutes: Option<u32>,
     announce_capabilities: Option<String>,
@@ -170,6 +171,8 @@ struct AppSettingsInput {
     announce_capabilities: String,
     tcp_clients: Vec<String>,
     broadcast: bool,
+    #[serde(default = "default_true")]
+    transport_node_enabled: bool,
     announce_interval_seconds: u32,
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
@@ -183,6 +186,10 @@ struct AppSettingsInput {
 #[serde(rename_all = "camelCase")]
 struct ChecklistSettingsInput {
     default_task_due_step_minutes: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,6 +218,12 @@ struct SavedPeerInput {
     destination: String,
     label: Option<String>,
     saved_at: u64,
+    identity_hex: Option<String>,
+    lxmf_destination_hex: Option<String>,
+    app_data: Option<String>,
+    display_name: Option<String>,
+    last_route_seen_at_ms: Option<u64>,
+    last_hops: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,10 +292,16 @@ struct MessageRecordInput {
     direction: String,
     destination_hex: String,
     source_hex: Option<String>,
+    requested_destination_hex: Option<String>,
+    delivery_destination_hex: Option<String>,
+    recipient_identity_hex: Option<String>,
+    last_wire_message_id_hex: Option<String>,
     title: Option<String>,
     body_utf8: String,
     method: String,
     state: String,
+    transport_state: Option<String>,
+    application_ack_state: Option<String>,
     detail: Option<String>,
     sent_at: Option<u64>,
     received_at: Option<u64>,
@@ -668,6 +687,7 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             .filter(|v| !v.is_empty())
             .collect(),
         broadcast: input.broadcast.unwrap_or(true),
+        transport_node_enabled: input.transport_node_enabled.unwrap_or(true),
         announce_interval_seconds: input.announce_interval_seconds.unwrap_or(1800).max(1),
         stale_after_minutes: input.stale_after_minutes.unwrap_or(30).max(1),
         announce_capabilities: input
@@ -782,6 +802,34 @@ fn parse_message_state(value: &str) -> Result<MessageState, NodeError> {
     }
 }
 
+fn parse_transport_delivery_state(
+    value: Option<&str>,
+) -> Result<TransportDeliveryState, NodeError> {
+    match value.unwrap_or("Queued").trim() {
+        "Queued" => Ok(TransportDeliveryState::Queued {}),
+        "Sending" => Ok(TransportDeliveryState::Sending {}),
+        "SentDirect" => Ok(TransportDeliveryState::SentDirect {}),
+        "SentToPropagation" => Ok(TransportDeliveryState::SentToPropagation {}),
+        "TransportDelivered" => Ok(TransportDeliveryState::TransportDelivered {}),
+        "Failed" => Ok(TransportDeliveryState::Failed {}),
+        "TimedOut" => Ok(TransportDeliveryState::TimedOut {}),
+        "Cancelled" => Ok(TransportDeliveryState::Cancelled {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
+fn parse_application_ack_state(value: Option<&str>) -> Result<ApplicationAckState, NodeError> {
+    match value.unwrap_or("NotRequired").trim() {
+        "NotRequired" => Ok(ApplicationAckState::NotRequired {}),
+        "Waiting" => Ok(ApplicationAckState::Waiting {}),
+        "Accepted" => Ok(ApplicationAckState::Accepted {}),
+        "Completed" => Ok(ApplicationAckState::Completed {}),
+        "Rejected" => Ok(ApplicationAckState::Rejected {}),
+        "Failed" => Ok(ApplicationAckState::Failed {}),
+        _ => Err(NodeError::InvalidConfig {}),
+    }
+}
+
 fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     match value
         .unwrap_or("Manual")
@@ -801,18 +849,29 @@ fn parse_sos_trigger_source(value: Option<&str>) -> SosTriggerSource {
     }
 }
 
+fn trimmed_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
 fn to_saved_peer_record(input: SavedPeerInput) -> SavedPeerRecord {
     SavedPeerRecord {
         destination_hex: input.destination.trim().to_ascii_lowercase(),
-        label: input.label.and_then(|value| {
-            let trimmed = value.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
+        label: trimmed_non_empty(input.label),
         saved_at_ms: input.saved_at,
+        identity_hex: trimmed_non_empty(input.identity_hex).map(|value| value.to_ascii_lowercase()),
+        lxmf_destination_hex: trimmed_non_empty(input.lxmf_destination_hex)
+            .map(|value| value.to_ascii_lowercase()),
+        app_data: trimmed_non_empty(input.app_data),
+        display_name: trimmed_non_empty(input.display_name),
+        last_route_seen_at_ms: input.last_route_seen_at_ms,
+        last_hops: input.last_hops,
     }
 }
 
@@ -863,6 +922,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
         announce_capabilities: input.announce_capabilities,
         tcp_clients: input.tcp_clients,
         broadcast: input.broadcast,
+        transport_node_enabled: input.transport_node_enabled,
         announce_interval_seconds: input.announce_interval_seconds,
         telemetry: TelemetrySettingsRecord {
             enabled: input.telemetry.enabled,
@@ -950,10 +1010,16 @@ fn to_message_record(input: MessageRecordInput) -> Result<MessageRecord, NodeErr
         direction: parse_message_direction(&input.direction)?,
         destination_hex: input.destination_hex,
         source_hex: input.source_hex,
+        requested_destination_hex: input.requested_destination_hex,
+        delivery_destination_hex: input.delivery_destination_hex,
+        recipient_identity_hex: input.recipient_identity_hex,
+        last_wire_message_id_hex: input.last_wire_message_id_hex,
         title: input.title,
         body_utf8: input.body_utf8,
         method: parse_message_method(&input.method)?,
         state: parse_message_state(&input.state)?,
+        transport_state: parse_transport_delivery_state(input.transport_state.as_deref())?,
+        application_ack_state: parse_application_ack_state(input.application_ack_state.as_deref())?,
         detail: input.detail,
         sent_at_ms: input.sent_at,
         received_at_ms: input.received_at,
@@ -1213,6 +1279,7 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceCapabilities": settings.announce_capabilities,
         "tcpClients": settings.tcp_clients,
         "broadcast": settings.broadcast,
+        "transportNodeEnabled": settings.transport_node_enabled,
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub),
@@ -1333,7 +1400,13 @@ fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
     json!({
         "destination": peer.destination_hex,
         "label": peer.label,
-        "savedAt": peer.saved_at_ms
+        "savedAt": peer.saved_at_ms,
+        "identityHex": peer.identity_hex,
+        "lxmfDestinationHex": peer.lxmf_destination_hex,
+        "appData": peer.app_data,
+        "displayName": peer.display_name,
+        "lastRouteSeenAtMs": peer.last_route_seen_at_ms,
+        "lastHops": peer.last_hops
     })
 }
 
@@ -1653,6 +1726,30 @@ fn message_state_to_str(state: MessageState) -> &'static str {
     }
 }
 
+fn transport_delivery_state_to_str(state: TransportDeliveryState) -> &'static str {
+    match state {
+        TransportDeliveryState::Queued {} => "Queued",
+        TransportDeliveryState::Sending {} => "Sending",
+        TransportDeliveryState::SentDirect {} => "SentDirect",
+        TransportDeliveryState::SentToPropagation {} => "SentToPropagation",
+        TransportDeliveryState::TransportDelivered {} => "TransportDelivered",
+        TransportDeliveryState::Failed {} => "Failed",
+        TransportDeliveryState::TimedOut {} => "TimedOut",
+        TransportDeliveryState::Cancelled {} => "Cancelled",
+    }
+}
+
+fn application_ack_state_to_str(state: ApplicationAckState) -> &'static str {
+    match state {
+        ApplicationAckState::NotRequired {} => "NotRequired",
+        ApplicationAckState::Waiting {} => "Waiting",
+        ApplicationAckState::Accepted {} => "Accepted",
+        ApplicationAckState::Completed {} => "Completed",
+        ApplicationAckState::Rejected {} => "Rejected",
+        ApplicationAckState::Failed {} => "Failed",
+    }
+}
+
 fn message_direction_to_str(direction: MessageDirection) -> &'static str {
     match direction {
         MessageDirection::Inbound {} => "Inbound",
@@ -1735,10 +1832,16 @@ fn message_record_json(message: &MessageRecord) -> Value {
         "direction": message_direction_to_str(message.direction),
         "destinationHex": message.destination_hex,
         "sourceHex": message.source_hex,
+        "requestedDestinationHex": message.requested_destination_hex,
+        "deliveryDestinationHex": message.delivery_destination_hex,
+        "recipientIdentityHex": message.recipient_identity_hex,
+        "lastWireMessageIdHex": message.last_wire_message_id_hex,
         "title": message.title,
         "bodyUtf8": message.body_utf8,
         "method": message_method_to_str(message.method),
         "state": message_state_to_str(message.state),
+        "transportState": transport_delivery_state_to_str(message.transport_state),
+        "applicationAckState": application_ack_state_to_str(message.application_ack_state),
         "detail": message.detail,
         "sentAtMs": message.sent_at_ms,
         "receivedAtMs": message.received_at_ms,
@@ -1840,6 +1943,8 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                 "eventUid": update.event_uid,
                 "missionUid": update.mission_uid,
                 "status": lxmf_delivery_status_to_str(update.status),
+                "transportState": transport_delivery_state_to_str(update.transport_state),
+                "applicationAckState": application_ack_state_to_str(update.application_ack_state),
                 "method": lxmf_delivery_method_to_str(update.method),
                 "representation": lxmf_delivery_representation_to_str(update.representation),
                 "relayDestinationHex": update.relay_destination_hex,

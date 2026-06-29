@@ -1,3 +1,4 @@
+mod announce_metadata;
 mod app_state;
 mod delivery_policy;
 mod event_bus;
@@ -18,11 +19,11 @@ mod types;
 
 pub use node::{EventSubscription, Node};
 pub use types::{
-    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
-    ChecklistColumnType, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistDeleteRequest, ChecklistFeedPublicationRecord, ChecklistListActiveRequest,
-    ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSettingsRecord,
-    ChecklistStatusCounts, ChecklistSyncState, ChecklistSystemColumnKey,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCellRecord,
+    ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistFeedPublicationRecord,
+    ChecklistListActiveRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
+    ChecklistSettingsRecord, ChecklistStatusCounts, ChecklistSyncState, ChecklistSystemColumnKey,
     ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
@@ -40,7 +41,7 @@ pub use types::{
     SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
-    TelemetrySettingsRecord,
+    TelemetrySettingsRecord, TransportDeliveryState,
 };
 
 pub fn healthcheck() -> String {

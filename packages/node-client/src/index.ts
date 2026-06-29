@@ -15,6 +15,22 @@ export type SendOutcome =
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
 export type LxmfDeliveryStatus = "Sent" | "SentToPropagation" | "Acknowledged" | "Failed" | "TimedOut";
+export type TransportDeliveryState =
+  | "Queued"
+  | "Sending"
+  | "SentDirect"
+  | "SentToPropagation"
+  | "TransportDelivered"
+  | "Failed"
+  | "TimedOut"
+  | "Cancelled";
+export type ApplicationAckState =
+  | "NotRequired"
+  | "Waiting"
+  | "Accepted"
+  | "Completed"
+  | "Rejected"
+  | "Failed";
 export type SendMode = "Auto" | "DirectOnly" | "PropagationOnly";
 export type LxmfDeliveryMethod = "Direct" | "Opportunistic" | "Propagated";
 export type LxmfDeliveryRepresentation = "Packet" | "Resource";
@@ -91,6 +107,7 @@ export interface NodeConfig {
   storageDir?: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   staleAfterMinutes: number;
   announceCapabilities: string;
@@ -190,6 +207,8 @@ export interface LxmfDeliveryEvent {
   eventUid?: string;
   missionUid?: string;
   status: LxmfDeliveryStatus;
+  transportState: TransportDeliveryState;
+  applicationAckState: ApplicationAckState;
   method: LxmfDeliveryMethod;
   representation: LxmfDeliveryRepresentation;
   relayDestinationHex?: string;
@@ -205,10 +224,16 @@ export interface MessageRecord {
   direction: MessageDirection;
   destinationHex: string;
   sourceHex?: string;
+  requestedDestinationHex?: string;
+  deliveryDestinationHex?: string;
+  recipientIdentityHex?: string;
+  lastWireMessageIdHex?: string;
   title?: string;
   bodyUtf8: string;
   method: MessageMethod;
   state: MessageState;
+  transportState: TransportDeliveryState;
+  applicationAckState: ApplicationAckState;
   detail?: string;
   sentAtMs?: number;
   receivedAtMs?: number;
@@ -433,6 +458,7 @@ export interface AppSettingsRecord {
   announceCapabilities: string;
   tcpClients: string[];
   broadcast: boolean;
+  transportNodeEnabled: boolean;
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
@@ -444,6 +470,12 @@ export interface SavedPeerRecord {
   destination: string;
   label?: string;
   savedAt: number;
+  identityHex?: string;
+  lxmfDestinationHex?: string;
+  appData?: string;
+  displayName?: string;
+  lastRouteSeenAtMs?: number;
+  lastHops?: number;
 }
 
 export interface EamSourceRecord {
@@ -913,6 +945,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   name: generateDefaultCallSign(),
   tcpClients: [],
   broadcast: true,
+  transportNodeEnabled: true,
   announceIntervalSeconds: 1800,
   staleAfterMinutes: 30,
   announceCapabilities: "R3AKT,EMergencyMessages",
@@ -1522,6 +1555,38 @@ function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
     : "Failed";
 }
 
+function toTransportDeliveryState(raw: unknown): TransportDeliveryState {
+  const value = String(raw ?? "");
+  const valid: TransportDeliveryState[] = [
+    "Queued",
+    "Sending",
+    "SentDirect",
+    "SentToPropagation",
+    "TransportDelivered",
+    "Failed",
+    "TimedOut",
+    "Cancelled",
+  ];
+  return valid.includes(value as TransportDeliveryState)
+    ? (value as TransportDeliveryState)
+    : "Queued";
+}
+
+function toApplicationAckState(raw: unknown): ApplicationAckState {
+  const value = String(raw ?? "");
+  const valid: ApplicationAckState[] = [
+    "NotRequired",
+    "Waiting",
+    "Accepted",
+    "Completed",
+    "Rejected",
+    "Failed",
+  ];
+  return valid.includes(value as ApplicationAckState)
+    ? (value as ApplicationAckState)
+    : "NotRequired";
+}
+
 function toLxmfDeliveryMethod(raw: unknown): LxmfDeliveryMethod {
   const value = String(raw ?? "");
   const valid: LxmfDeliveryMethod[] = ["Direct", "Opportunistic", "Propagated"];
@@ -1583,6 +1648,12 @@ function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
           ? raw.mission_uid
           : undefined,
     status: toLxmfDeliveryStatus(raw.status),
+    transportState: toTransportDeliveryState(
+      hasValue(raw.transportState) ? raw.transportState : raw.transport_state,
+    ),
+    applicationAckState: toApplicationAckState(
+      hasValue(raw.applicationAckState) ? raw.applicationAckState : raw.application_ack_state,
+    ),
     method: toLxmfDeliveryMethod(raw.method),
     representation: toLxmfDeliveryRepresentation(raw.representation),
     relayDestinationHex: toOptionalHex(
@@ -1675,6 +1746,18 @@ function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
       raw.sourceHex !== undefined || raw.source_hex !== undefined
         ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
         : undefined,
+    requestedDestinationHex: toOptionalHex(
+      raw.requestedDestinationHex ?? raw.requested_destination_hex,
+    ),
+    deliveryDestinationHex: toOptionalHex(
+      raw.deliveryDestinationHex ?? raw.delivery_destination_hex,
+    ),
+    recipientIdentityHex: toOptionalHex(
+      raw.recipientIdentityHex ?? raw.recipient_identity_hex,
+    ),
+    lastWireMessageIdHex: toOptionalHex(
+      raw.lastWireMessageIdHex ?? raw.last_wire_message_id_hex,
+    ),
     title:
       typeof raw.title === "string"
         ? raw.title
@@ -1682,6 +1765,8 @@ function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
     bodyUtf8: String(raw.bodyUtf8 ?? raw.body_utf8 ?? ""),
     method: toMessageMethod(raw.method),
     state: toMessageState(raw.state),
+    transportState: toTransportDeliveryState(raw.transportState ?? raw.transport_state),
+    applicationAckState: toApplicationAckState(raw.applicationAckState ?? raw.application_ack_state),
     detail:
       typeof raw.detail === "string"
         ? raw.detail
@@ -1960,6 +2045,7 @@ function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | 
     announceCapabilities: String(raw.announceCapabilities ?? ""),
     tcpClients: Array.isArray(raw.tcpClients) ? raw.tcpClients.map((entry) => String(entry)) : [],
     broadcast: Boolean(raw.broadcast),
+    transportNodeEnabled: Boolean(raw.transportNodeEnabled ?? raw.transport_node_enabled ?? true),
     announceIntervalSeconds: Number(raw.announceIntervalSeconds ?? 1800),
     telemetry: {
       enabled: Boolean(telemetry.enabled),
@@ -1989,6 +2075,20 @@ function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord {
     destination: normalizeHex(raw.destination ?? raw.destinationHex ?? ""),
     label: typeof raw.label === "string" ? raw.label : undefined,
     savedAt: Number(raw.savedAt ?? raw.saved_at_ms ?? raw.savedAtMs ?? Date.now()),
+    identityHex: toOptionalHex(raw.identityHex ?? raw.identity_hex),
+    lxmfDestinationHex: toOptionalHex(raw.lxmfDestinationHex ?? raw.lxmf_destination_hex),
+    appData: typeof raw.appData === "string"
+      ? raw.appData
+      : typeof raw.app_data === "string"
+        ? raw.app_data
+        : undefined,
+    displayName: typeof raw.displayName === "string"
+      ? raw.displayName
+      : typeof raw.display_name === "string"
+        ? raw.display_name
+        : undefined,
+    lastRouteSeenAtMs: toOptionalNumber(raw.lastRouteSeenAtMs ?? raw.last_route_seen_at_ms),
+    lastHops: toOptionalNumber(raw.lastHops ?? raw.last_hops),
   };
 }
 
@@ -3280,6 +3380,7 @@ function configToPlugin(config: NodeConfig): Record<string, unknown> {
     storageDir: config.storageDir,
     tcpClients: config.tcpClients,
     broadcast: config.broadcast,
+    transportNodeEnabled: config.transportNodeEnabled,
     announceIntervalSeconds: config.announceIntervalSeconds,
     staleAfterMinutes: config.staleAfterMinutes,
     announceCapabilities: config.announceCapabilities,
@@ -4093,10 +4194,15 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       conversationId: destinationHex,
       direction: "Outbound",
       destinationHex,
+      requestedDestinationHex: destinationHex,
+      deliveryDestinationHex: destinationHex,
+      lastWireMessageIdHex: messageIdHex,
       title: request.title,
       bodyUtf8: request.bodyUtf8,
       method: "Direct",
       state: this.connected.has(destinationHex) ? "Delivered" : "Failed",
+      transportState: this.connected.has(destinationHex) ? "TransportDelivered" : "Failed",
+      applicationAckState: this.connected.has(destinationHex) ? "Accepted" : "Failed",
       detail: this.connected.has(destinationHex) ? "web mock delivery" : "web mock missing route",
       sentAtMs: now,
       updatedAtMs: now,
@@ -4708,10 +4814,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       conversationId: destinationHex,
       direction: "Outbound",
       destinationHex,
+      requestedDestinationHex: destinationHex,
+      deliveryDestinationHex: destinationHex,
+      lastWireMessageIdHex: messageIdHex,
       title: request.title,
       bodyUtf8: request.bodyUtf8,
       method: "Direct",
       state: "SentDirect",
+      transportState: "SentDirect",
+      applicationAckState: "Waiting",
       sentAtMs: now,
       updatedAtMs: now,
     });
@@ -4721,10 +4832,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         conversationId: destinationHex,
         direction: "Outbound",
         destinationHex,
+        requestedDestinationHex: destinationHex,
+        deliveryDestinationHex: destinationHex,
+        lastWireMessageIdHex: messageIdHex,
         title: request.title,
         bodyUtf8: request.bodyUtf8,
         method: "Direct",
-        state: "Delivered",
+        state: "SentDirect",
+        transportState: "TransportDelivered",
+        applicationAckState: "Waiting",
         detail: "mock transport receipt",
         sentAtMs: now,
         updatedAtMs: Date.now(),

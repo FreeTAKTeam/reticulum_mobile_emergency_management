@@ -520,6 +520,59 @@ export const useEventsStore = defineStore("events", () => {
     }));
   }
 
+  async function persistNativeEventUpsert(
+    nextRecord: EventProjectionRecord,
+    previousRecord: EventProjectionRecord | undefined,
+  ): Promise<void> {
+    const entryUid = getEventUid(nextRecord);
+    try {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      await client.upsertEvent(nextRecord);
+      await refreshFromNative();
+    } catch (error: unknown) {
+      const currentRecord = byUid.value[entryUid];
+      if (currentRecord?.updatedAt === nextRecord.updatedAt) {
+        if (previousRecord) {
+          byUid.value = {
+            ...byUid.value,
+            [entryUid]: previousRecord,
+          };
+        } else {
+          const { [entryUid]: _failedRecord, ...remainingRecords } = byUid.value;
+          byUid.value = remainingRecords;
+        }
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      nodeStore.setLastError(message);
+      nodeStore.logUi("Error", `[events] native create failed: ${message}`);
+    }
+  }
+
+  async function persistNativeEventDelete(
+    entryUid: string,
+    deletedAt: number,
+    previousRecord: EventProjectionRecord,
+  ): Promise<void> {
+    try {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      await client.deleteEvent(entryUid, deletedAt);
+      await refreshFromNative();
+    } catch (error: unknown) {
+      const currentRecord = byUid.value[entryUid];
+      if (currentRecord?.deleted_at === deletedAt) {
+        byUid.value = {
+          ...byUid.value,
+          [entryUid]: previousRecord,
+        };
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      nodeStore.setLastError(message);
+      nodeStore.logUi("Error", `[events] native delete failed: ${message}`);
+    }
+  }
+
   async function upsertLocal(input: {
     type: string;
     summary: string;
@@ -562,9 +615,13 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
 
-    const client = getProjectionClient(nodeStore.settings.clientMode);
-    await client.upsertEvent(nextRecord);
-    await refreshFromNative();
+    const previousRecord = byUid.value[entryUid];
+    byUid.value = {
+      ...byUid.value,
+      [entryUid]: nextRecord,
+    };
+
+    void persistNativeEventUpsert(nextRecord, previousRecord);
   }
 
   async function deleteLocal(uid: string): Promise<void> {
@@ -591,9 +648,21 @@ export const useEventsStore = defineStore("events", () => {
       return;
     }
 
-    const client = getProjectionClient(nodeStore.settings.clientMode);
-    await client.deleteEvent(normalizedUid, deletedAt);
-    await refreshFromNative();
+    const existing = byUid.value[normalizedUid];
+    if (!existing) {
+      return;
+    }
+
+    byUid.value = {
+      ...byUid.value,
+      [normalizedUid]: {
+        ...existing,
+        deleted_at: deletedAt,
+        updatedAt: deletedAt,
+      },
+    };
+
+    void persistNativeEventDelete(normalizedUid, deletedAt, existing);
   }
 
   const records = computed(() =>

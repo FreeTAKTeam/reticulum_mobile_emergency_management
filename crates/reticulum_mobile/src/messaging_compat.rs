@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::announce_metadata::supports_mission_traffic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PeerState {
     Connecting,
@@ -38,6 +40,40 @@ pub enum MessageState {
     TimedOut,
     Cancelled,
     Received,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransportDeliveryState {
+    Queued,
+    Sending,
+    SentDirect,
+    SentToPropagation,
+    TransportDelivered,
+    Failed,
+    TimedOut,
+    Cancelled,
+}
+
+impl Default for TransportDeliveryState {
+    fn default() -> Self {
+        Self::Queued
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplicationAckState {
+    NotRequired,
+    Waiting,
+    Accepted,
+    Completed,
+    Rejected,
+    Failed,
+}
+
+impl Default for ApplicationAckState {
+    fn default() -> Self {
+        Self::NotRequired
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +131,16 @@ pub struct PeerRecord {
     pub lxmf_last_seen_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SavedPeerProfile {
+    destination_hex: String,
+    identity_hex: Option<String>,
+    lxmf_destination_hex: Option<String>,
+    app_data: Option<String>,
+    display_name: Option<String>,
+    last_route_seen_at_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerChange {
     pub destination_hex: String,
@@ -132,10 +178,22 @@ pub struct MessageRecord {
     pub direction: MessageDirection,
     pub destination_hex: String,
     pub source_hex: Option<String>,
+    #[serde(default)]
+    pub requested_destination_hex: Option<String>,
+    #[serde(default)]
+    pub delivery_destination_hex: Option<String>,
+    #[serde(default)]
+    pub recipient_identity_hex: Option<String>,
+    #[serde(default)]
+    pub last_wire_message_id_hex: Option<String>,
     pub title: Option<String>,
     pub body_utf8: String,
     pub method: MessageMethod,
     pub state: MessageState,
+    #[serde(default)]
+    pub transport_state: TransportDeliveryState,
+    #[serde(default)]
+    pub application_ack_state: ApplicationAckState,
     pub detail: Option<String>,
     pub sent_at_ms: Option<u64>,
     pub received_at_ms: Option<u64>,
@@ -186,6 +244,7 @@ pub struct MessagingStore {
     resolved_app_identity_by_destination: HashMap<String, String>,
     resolved_lxmf_by_identity: HashMap<String, String>,
     saved_destinations: HashSet<String>,
+    saved_peer_profiles: HashMap<String, SavedPeerProfile>,
     active_link_destinations: HashSet<String>,
     last_resolution_errors: HashMap<String, String>,
     last_resolution_attempt_at_ms: HashMap<String, u64>,
@@ -199,7 +258,6 @@ pub struct MessagingStore {
 const DEFAULT_PEER_STALE_AFTER_MINUTES: u32 = 30;
 pub(crate) const DEFAULT_PEER_STALE_AFTER_MS: u64 =
     DEFAULT_PEER_STALE_AFTER_MINUTES as u64 * 60_000;
-const REQUIRED_MISSION_CAPABILITIES: [&str; 2] = ["r3akt", "emergencymessages"];
 
 impl Default for SyncStatus {
     fn default() -> Self {
@@ -228,6 +286,7 @@ impl MessagingStore {
             resolved_app_identity_by_destination: HashMap::new(),
             resolved_lxmf_by_identity: HashMap::new(),
             saved_destinations: HashSet::new(),
+            saved_peer_profiles: HashMap::new(),
             active_link_destinations: HashSet::new(),
             last_resolution_errors: HashMap::new(),
             last_resolution_attempt_at_ms: HashMap::new(),
@@ -353,10 +412,59 @@ impl MessagingStore {
             self.last_resolution_errors.remove(&normalized);
         } else {
             self.saved_destinations.remove(&normalized);
+            self.saved_peer_profiles.remove(&normalized);
             self.active_link_destinations.remove(&normalized);
             self.last_resolution_errors.remove(&normalized);
             self.last_resolution_attempt_at_ms.remove(&normalized);
         }
+    }
+
+    pub fn record_saved_peer_profile(
+        &mut self,
+        destination_hex: &str,
+        identity_hex: Option<&str>,
+        lxmf_destination_hex: Option<&str>,
+        app_data: Option<&str>,
+        display_name: Option<&str>,
+        last_route_seen_at_ms: Option<u64>,
+        _last_hops: Option<u8>,
+    ) {
+        let destination_hex = normalize_hex(destination_hex);
+        if destination_hex.is_empty() {
+            return;
+        }
+        let identity_hex = identity_hex
+            .map(normalize_hex)
+            .filter(|value| !value.is_empty());
+        let lxmf_destination_hex = lxmf_destination_hex
+            .map(normalize_hex)
+            .filter(|value| !value.is_empty());
+        if let (Some(identity_hex), Some(lxmf_destination_hex)) =
+            (identity_hex.as_ref(), lxmf_destination_hex.as_ref())
+        {
+            self.resolved_lxmf_by_identity
+                .insert(identity_hex.clone(), lxmf_destination_hex.clone());
+        }
+        if let Some(identity_hex) = identity_hex.as_ref() {
+            self.update_app_destination_mapping(destination_hex.clone(), identity_hex.clone());
+        }
+        self.saved_peer_profiles.insert(
+            destination_hex.clone(),
+            SavedPeerProfile {
+                destination_hex,
+                identity_hex,
+                lxmf_destination_hex,
+                app_data: app_data
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
+                display_name: display_name
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
+                last_route_seen_at_ms,
+            },
+        );
     }
 
     pub fn saved_destination_hexes(&self) -> Vec<String> {
@@ -421,6 +529,21 @@ impl MessagingStore {
                 .entry(identity_hex.clone())
                 .or_insert_with(|| lxmf_destination_hex.clone());
         }
+        for profile in self.saved_peer_profiles.values() {
+            if let (Some(identity_hex), Some(lxmf_destination_hex)) = (
+                profile.identity_hex.as_ref(),
+                profile.lxmf_destination_hex.as_ref(),
+            ) {
+                lxmf_dest_by_identity
+                    .entry(identity_hex.clone())
+                    .or_insert_with(|| lxmf_destination_hex.clone());
+            }
+            if let Some(identity_hex) = profile.identity_hex.as_ref() {
+                app_dest_by_identity
+                    .entry(identity_hex.clone())
+                    .or_insert_with(|| profile.destination_hex.clone());
+            }
+        }
 
         let mut removed = Vec::new();
         for saved_destination in self.saved_destination_hexes() {
@@ -467,6 +590,21 @@ impl MessagingStore {
         let current =
             current_time_ms().saturating_sub(record.received_at_ms) <= self.peer_stale_after_ms;
         current.then_some(record.destination_hex.clone())
+    }
+
+    fn saved_profile_for_destination(&self, destination_hex: &str) -> Option<&SavedPeerProfile> {
+        let normalized = normalize_hex(destination_hex);
+        if normalized.is_empty() {
+            return None;
+        }
+        self.saved_peer_profiles
+            .get(normalized.as_str())
+            .or_else(|| {
+                self.saved_peer_profiles.values().find(|profile| {
+                    profile.lxmf_destination_hex.as_deref() == Some(normalized.as_str())
+                        || profile.identity_hex.as_deref() == Some(normalized.as_str())
+                })
+            })
     }
 
     pub fn record_resolution_attempt(&mut self, destination_hex: &str, attempted_at_ms: u64) {
@@ -572,6 +710,7 @@ impl MessagingStore {
                 .map(|(destination_hex, _)| destination_hex.clone()),
         );
         for saved_destination in &self.saved_destinations {
+            let saved_profile = self.saved_profile_for_destination(saved_destination);
             let canonical_destination = app_records
                 .get(saved_destination)
                 .map(|record| record.identity_hex.as_str())
@@ -589,6 +728,11 @@ impl MessagingStore {
                         })
                 })
                 .cloned()
+                .or_else(|| {
+                    saved_profile
+                        .filter(|profile| supports_mission_traffic(profile.app_data.as_deref()))
+                        .and_then(|profile| profile.lxmf_destination_hex.clone())
+                })
                 .unwrap_or_else(|| saved_destination.clone());
             candidate_destinations.insert(canonical_destination);
         }
@@ -602,8 +746,10 @@ impl MessagingStore {
             let lxmf_record = lxmf_records
                 .get(&destination_hex)
                 .filter(|record| supports_mission_traffic(Some(record.app_data.as_str())));
+            let saved_profile = self.saved_profile_for_destination(destination_hex.as_str());
             let identity_hex = lxmf_record
                 .map(|record| record.identity_hex.clone())
+                .or_else(|| saved_profile.and_then(|profile| profile.identity_hex.clone()))
                 .or_else(|| {
                     app_records
                         .get(&destination_hex)
@@ -624,10 +770,12 @@ impl MessagingStore {
                     identity_hex
                         .as_ref()
                         .and_then(|identity| lxmf_dest_by_identity.get(identity).cloned())
-                });
+                })
+                .or_else(|| saved_profile.and_then(|profile| profile.lxmf_destination_hex.clone()));
             let app_alias_destination = identity_hex
                 .as_ref()
-                .and_then(|identity| app_dest_by_identity.get(identity));
+                .and_then(|identity| app_dest_by_identity.get(identity))
+                .or_else(|| saved_profile.map(|profile| &profile.destination_hex));
             let saved_alias = app_alias_destination.is_some_and(|app_destination| {
                 self.saved_destinations.contains(app_destination.as_str())
             });
@@ -644,7 +792,9 @@ impl MessagingStore {
                             self.last_resolution_errors.get(app_destination).cloned()
                         })
                 });
-            let announce_last_seen_at_ms = lxmf_record.map(|record| record.received_at_ms);
+            let announce_last_seen_at_ms = lxmf_record
+                .map(|record| record.received_at_ms)
+                .or_else(|| saved_profile.and_then(|profile| profile.last_route_seen_at_ms));
             let lxmf_last_seen_at_ms = announce_last_seen_at_ms;
             let has_transport_link = self
                 .active_link_destinations
@@ -656,7 +806,9 @@ impl MessagingStore {
                     .is_some_and(|value| self.active_link_destinations.contains(value.as_str()));
             let active_link = has_transport_link;
             let latest_route_seen_at_ms = announce_last_seen_at_ms;
-            let peer_app_data = lxmf_record.map(|record| record.app_data.as_str());
+            let peer_app_data = lxmf_record
+                .map(|record| record.app_data.as_str())
+                .or_else(|| saved_profile.and_then(|profile| profile.app_data.as_deref()));
             let mission_capable = supports_mission_traffic(peer_app_data);
             let unsaved_recent = announce_last_seen_at_ms.is_some_and(|seen_at_ms| {
                 now_ms.saturating_sub(seen_at_ms) <= self.peer_stale_after_ms
@@ -684,7 +836,8 @@ impl MessagingStore {
                 lxmf_destination_hex: lxmf_destination_hex.clone(),
                 display_name: lxmf_record
                     .and_then(|record| record.display_name.clone())
-                    .or_else(|| app_record.and_then(|record| record.display_name.clone())),
+                    .or_else(|| app_record.and_then(|record| record.display_name.clone()))
+                    .or_else(|| saved_profile.and_then(|profile| profile.display_name.clone())),
                 app_data: peer_app_data.map(ToOwned::to_owned),
                 state: compatibility_peer_state(saved, availability_state, active_link),
                 saved,
@@ -765,15 +918,46 @@ impl MessagingStore {
         is_new
     }
 
-    pub fn update_message(
+    pub fn update_message_delivery_state(
         &mut self,
         message_id_hex: &str,
-        state: MessageState,
+        state: Option<MessageState>,
+        transport_state: Option<TransportDeliveryState>,
+        application_ack_state: Option<ApplicationAckState>,
         detail: Option<String>,
+        last_wire_message_id_hex: Option<String>,
         updated_at_ms: u64,
     ) -> Option<MessageRecord> {
-        let record = self.message_records.get_mut(message_id_hex)?;
-        record.state = state;
+        let resolved_message_id_hex = if self.message_records.contains_key(message_id_hex) {
+            message_id_hex.to_string()
+        } else {
+            self.message_records
+                .iter()
+                .find_map(|(stored_message_id_hex, record)| {
+                    record
+                        .last_wire_message_id_hex
+                        .as_deref()
+                        .is_some_and(|wire_message_id_hex| {
+                            wire_message_id_hex.eq_ignore_ascii_case(message_id_hex)
+                        })
+                        .then(|| stored_message_id_hex.clone())
+                })?
+        };
+        let record = self
+            .message_records
+            .get_mut(resolved_message_id_hex.as_str())?;
+        if let Some(state) = state {
+            record.state = state;
+        }
+        if let Some(transport_state) = transport_state {
+            record.transport_state = transport_state;
+        }
+        if let Some(application_ack_state) = application_ack_state {
+            record.application_ack_state = application_ack_state;
+        }
+        if let Some(last_wire_message_id_hex) = last_wire_message_id_hex {
+            record.last_wire_message_id_hex = Some(last_wire_message_id_hex);
+        }
         record.detail = detail;
         record.updated_at_ms = updated_at_ms;
         Some(record.clone())
@@ -947,23 +1131,6 @@ fn current_time_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn parse_capability_tokens(app_data: &str) -> Vec<String> {
-    app_data
-        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
-        .map(|token| token.to_ascii_lowercase())
-        .collect()
-}
-
-fn supports_mission_traffic(app_data: Option<&str>) -> bool {
-    let tokens = app_data.map(parse_capability_tokens).unwrap_or_default();
-    REQUIRED_MISSION_CAPABILITIES
-        .iter()
-        .all(|required| tokens.iter().any(|token| token == required))
-}
-
 fn peer_is_stale(
     saved: bool,
     active_link: bool,
@@ -1042,6 +1209,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mission_capability_check_accepts_msgpack_hex_app_data() {
+        let payload = rmpv::Value::Array(vec![
+            rmpv::Value::from("Msgpack Peer"),
+            rmpv::Value::Map(vec![(
+                rmpv::Value::from("caps"),
+                rmpv::Value::Array(vec![
+                    rmpv::Value::from("R3AKT"),
+                    rmpv::Value::from("EMergencyMessages"),
+                ]),
+            )]),
+        ]);
+        let app_data = hex::encode(rmp_serde::to_vec(&payload).expect("msgpack"));
+
+        assert!(supports_mission_traffic(Some(app_data.as_str())));
+    }
+
+    #[test]
     fn legacy_app_alias_projects_canonical_lxmf_peer() {
         let mut store = MessagingStore::default();
         let now = current_time_ms();
@@ -1078,6 +1262,38 @@ mod tests {
         assert!(peers[0].saved);
         assert_eq!(peers[0].last_seen_at_ms, now.saturating_sub(10));
         assert!(!peers[0].stale);
+    }
+
+    #[test]
+    fn saved_peer_profile_projects_stale_routable_lxmf_peer_without_announces() {
+        let mut store = MessagingStore::default();
+        let seen_at = current_time_ms().saturating_sub(DEFAULT_PEER_STALE_AFTER_MS + 1_000);
+
+        store.mark_peer_saved("appdest", true);
+        store.record_saved_peer_profile(
+            "appdest",
+            Some("identity"),
+            Some("lxmfdest"),
+            Some("R3AKT,EmergencyMessages,Telemetry"),
+            Some("Alice"),
+            Some(seen_at),
+            Some(3),
+        );
+
+        let peers = store.list_peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].destination_hex, "lxmfdest");
+        assert_eq!(peers[0].identity_hex.as_deref(), Some("identity"));
+        assert_eq!(peers[0].lxmf_destination_hex.as_deref(), Some("lxmfdest"));
+        assert_eq!(peers[0].display_name.as_deref(), Some("Alice"));
+        assert_eq!(
+            peers[0].app_data.as_deref(),
+            Some("R3AKT,EmergencyMessages,Telemetry")
+        );
+        assert!(peers[0].saved);
+        assert!(peers[0].stale);
+        assert_eq!(peers[0].state, PeerState::Disconnected);
+        assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(seen_at));
     }
 
     #[test]
@@ -1518,10 +1734,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "lxmfdest".into(),
             source_hex: None,
+            requested_destination_hex: Some("lxmfdest".into()),
+            delivery_destination_hex: Some("lxmfdest".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("msg".into()),
             title: None,
             body_utf8: "hello".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(30),
             received_at_ms: None,
@@ -1542,10 +1764,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "appdest".into(),
             source_hex: None,
+            requested_destination_hex: Some("appdest".into()),
+            delivery_destination_hex: Some("appdest".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("outbound".into()),
             title: None,
             body_utf8: "hello".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(10),
             received_at_ms: None,
@@ -1557,10 +1785,16 @@ mod tests {
             direction: MessageDirection::Inbound,
             destination_hex: "local".into(),
             source_hex: Some("lxmfdest".into()),
+            requested_destination_hex: Some("lxmfdest".into()),
+            delivery_destination_hex: Some("local".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("inbound".into()),
             title: None,
             body_utf8: "copy".into(),
             method: MessageMethod::Direct,
             state: MessageState::Received,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::NotRequired,
             detail: None,
             sent_at_ms: None,
             received_at_ms: Some(20),
@@ -1572,10 +1806,16 @@ mod tests {
             direction: MessageDirection::Outbound,
             destination_hex: "other".into(),
             source_hex: None,
+            requested_destination_hex: Some("other".into()),
+            delivery_destination_hex: Some("other".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("unrelated".into()),
             title: None,
             body_utf8: "keep".into(),
             method: MessageMethod::Direct,
             state: MessageState::Delivered,
+            transport_state: TransportDeliveryState::TransportDelivered,
+            application_ack_state: ApplicationAckState::Accepted,
             detail: None,
             sent_at_ms: Some(30),
             received_at_ms: None,
@@ -1964,5 +2204,145 @@ mod tests {
             Some(now.saturating_sub(10))
         );
         assert_eq!(peers[0].lxmf_last_seen_at_ms, Some(now.saturating_sub(10)));
+    }
+
+    #[test]
+    fn transport_receipt_does_not_mark_application_ack_accepted() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("wire-1".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "msg",
+                None,
+                Some(TransportDeliveryState::TransportDelivered),
+                None,
+                Some("transport receipt".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated");
+
+        assert_eq!(updated.state, MessageState::SentDirect);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Waiting);
+    }
+
+    #[test]
+    fn chat_ack_marks_application_ack_accepted() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("wire-1".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "msg",
+                Some(MessageState::Delivered),
+                Some(TransportDeliveryState::TransportDelivered),
+                Some(ApplicationAckState::Accepted),
+                Some("chat delivery ack".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated");
+
+        assert_eq!(updated.state, MessageState::Delivered);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
+    }
+
+    #[test]
+    fn retry_chat_ack_updates_original_record_by_wire_message_id() {
+        let mut store = MessagingStore::default();
+        store.upsert_message(MessageRecord {
+            message_id_hex: "logical-msg".into(),
+            conversation_id: "peer".into(),
+            direction: MessageDirection::Outbound,
+            destination_hex: "peer".into(),
+            source_hex: None,
+            requested_destination_hex: Some("peer".into()),
+            delivery_destination_hex: Some("peer".into()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("retry-wire-msg".into()),
+            title: None,
+            body_utf8: "hello".into(),
+            method: MessageMethod::Direct,
+            state: MessageState::SentDirect,
+            transport_state: TransportDeliveryState::SentDirect,
+            application_ack_state: ApplicationAckState::Waiting,
+            detail: None,
+            sent_at_ms: Some(10),
+            received_at_ms: None,
+            updated_at_ms: 10,
+        });
+
+        let updated = store
+            .update_message_delivery_state(
+                "retry-wire-msg",
+                Some(MessageState::Delivered),
+                Some(TransportDeliveryState::TransportDelivered),
+                Some(ApplicationAckState::Accepted),
+                Some("chat delivery ack".to_string()),
+                None,
+                20,
+            )
+            .expect("message updated by wire id");
+
+        assert_eq!(updated.message_id_hex, "logical-msg");
+        assert_eq!(
+            updated.last_wire_message_id_hex.as_deref(),
+            Some("retry-wire-msg")
+        );
+        assert_eq!(updated.state, MessageState::Delivered);
+        assert_eq!(
+            updated.transport_state,
+            TransportDeliveryState::TransportDelivered
+        );
+        assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
     }
 }

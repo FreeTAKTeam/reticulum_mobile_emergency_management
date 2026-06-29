@@ -6,6 +6,7 @@ Current mobile behavior differs from the older store-centric sketch below in two
 - Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
 - When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local LXMF delivery destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
 - The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
+- Saved peers persist a durable route profile when one is known: canonical LXMF delivery destination, identity, REM capability app data, display name, route timestamp, and hop count. The runtime can rebuild a stale saved peer from that profile after restart or missed announces, which lets propagation planning target the peer without waiting for a fresh peer snapshot.
 - Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends require a live managed LXMF link (`active_link=true` with native `Connected` state). Saved peers with known LXMF routes use propagation when an active relay is available, rather than being labeled as direct candidates from a recent announce alone. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
 - RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` refreshes a transient hub directory by sending `rem.registry.peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH and then uses those returned peers for direct sends. `Connected` sends outbound traffic only to the selected RCH, and an `effective_connected_mode=true` hub response temporarily upgrades `SemiAutonomous` to connected routing.
 - SOS uses the same numeric LXMF command slot in this repo: `FIELD_COMMANDS (0x09)`. The shared Rust constants are the source of truth, and the runtime separates SOS from RCH by envelope keys (`sos_state` / `incident_id` vs `command_type` / `command_id`). The earlier SOS note that said `FIELD_COMMANDS (0x06)` is stale for the current REM/RCH wire contract.
@@ -37,7 +38,7 @@ sequenceDiagram
             alt No tracked LXMF delivery destination
                 S8UI->>S8Node: Log warning\n"skipped peer, no LXMF delivery destination"
             else LXMF delivery destination available
-                S8UI->>S8Node: sendBytes(destination=lxfm/delivery,\nfieldsBase64=mission.registry.*,\nbytes=EMPTY)
+                S8UI->>S8Node: sendBytes(destination=lxmf/delivery,\nfieldsBase64=mission.registry.*,\nbytes=EMPTY)
                 S8Node->>S8RT: Native send request
                 S8RT->>S8RT: Build LXMF message\nmission.registry.mission.upsert (ensure mission)\nmission.registry.log_entry.upsert (event payload)\nextract commandId / correlationId / eventUid
                 S8RT->>RNS: Send LXMF wire message
@@ -138,6 +139,7 @@ sequenceDiagram
 - Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
 - Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over canonical LXMF delivery destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
 - Telemetry and events require the peer's REM-capable `lxmf.delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly. Legacy app destinations are inbound compatibility aliases, not routing targets.
+- REM capability parsing is centralized in the native runtime and accepts the legacy text announce app data (`R3AKT,EMergencyMessages,Telemetry;name=...`) plus the structured msgpack/hex layouts produced by LXMF-compatible peers. The app must not infer an LXMF route from a generic app destination.
 - Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
 
 ## Checklist / Excheck Flow
@@ -207,7 +209,7 @@ Transport:
 Routing:
 - Native `upsert_event()` fanout never includes merely discovered peers.
 - Event direct sends are scoped to saved or explicitly managed peers that are mission-ready and have a live direct link (`active_link=true` and native `state=Connected`).
-- Saved peers that are seen recently or have stored LXMF routes but no live direct link are sent via propagation when an active relay is available; merely discovered peers are never used as relay targets.
+- Saved peers that are seen recently or have stored LXMF routes but no live direct link are sent via propagation when an active relay is available; the stored route can come from a persisted saved-peer profile even when no current peer record is available. Merely discovered peers are never used as relay targets.
 - Each event target is attempted independently. One target timing out or returning a network error does not cancel the other target attempts.
 - Broadcast or direct send over the peer's canonical **`lxmf.delivery` destination** (`r3akt/emergency` payload path).
 
@@ -310,7 +312,9 @@ Verification:
 Routing:
 - Direct LXMF send to the peer's separately announced **`lxmf/delivery` destination**.
 - REM also registers its own local **`lxmf/propagation` destination** at runtime. This hosted local node is part of the propagation layer, not a separate offline queue.
-- If the peer is known but is not currently direct-deliverable and an active external propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
+- Chat uses `Auto` for saved peers with a known LXMF route and an active propagation relay, so Reticulum can try direct delivery when available and fall back to propagation instead of failing at the UI direct-link gate. Without a relay-backed saved route, chat keeps the direct connection flow and sends `DirectOnly`.
+- Generic peer chat keeps the selected peer as the LXMF destination in Connected RCH mode. Hub routing is reserved for mission, event, and telemetry replication payloads that are explicitly hub-scoped.
+- If the peer is known but is not currently direct-deliverable and an active propagation relay is available, the sender skips direct retries and hands the LXMF message to propagation immediately.
 - If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
 - Propagation send candidates are ordered from active/configured external relays to alternate external relays, then the hosted local propagation node. If no peer or external relay is reachable, the local propagation node still accepts the message, persists it in `app_state.db`, marks it pending replication, and returns normal propagation acceptance to the caller.
 - A runtime maintenance loop checks connectivity state from live peer links and discovered propagation relays. Offline state accepts locally without network access, degraded state keeps retry/backoff metadata, and online state drains pending local propagation records through the selected external propagation relay.
@@ -467,6 +471,27 @@ REM profile mapping:
 
 Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM defaults to `US915` with `REM-LF-RURAL-v1`; setup may infer `EU868` from location or timezone before saving.
 
+Mixed TCP and LoRa behavior for the 1.2 release:
+- REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
+- TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
+- REM acts as a Reticulum transport node by default by enabling Reticulum packet retransmit on the runtime transport. Operators can turn off transport-node forwarding in Settings without changing broadcast discovery.
+- Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
+- Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
+
+1.2 release gate:
+- The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
+- For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
+- Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
+- Peer connection works after announce in all three modes.
+- Chat delivery works in all three modes.
+- Event replication works in all three modes.
+- EAM/preparedness updates work in all three modes.
+- Checklist updates work in all three modes.
+- Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
+- Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
+- Settings clearly document that REM must be restarted after interface configuration changes for this release.
+- 1.2.0 remains a prerelease until this matrix passes on the connected phones.
+
 ## Mobile Runtime Ownership Status
 
 The mobile runtime is now moving toward a Rust-authoritative projection model on device:
@@ -483,8 +508,8 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
   - query refresh after projection invalidation
   - platform-only concerns such as geolocation permission UX
 - UI-only preferences such as `clientMode` and `showOnlyCapabilityVerified` remain in TypeScript storage and are not part of the native `AppSettingsRecord`.
-- Fresh installs and empty legacy TCP selections normalize to the first entry in `TCP_COMMUNITY_SERVERS`, so mobile starts with an active TCP community server selected by default.
-- The legacy `rmap.world:4242` placeholder is treated as unset and is normalized to that first community server during migration and settings persistence.
+- Fresh installs and empty legacy TCP selections normalize to the first entry in `TCP_COMMUNITY_SERVERS`, currently `R3AKT Server` at `134.122.46.48:37428`, so mobile starts with an active TCP community server selected by default.
+- `rmap.world:4242` is an available community TCP server and is preserved when selected or loaded from persisted settings.
 - Pre-start app-state/projection queries are valid through the JNI bridge; only runtime transport commands still require an initialized node.
 - Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
 - Saved peers are rehydrated into the Rust managed-peer set during runtime startup, so the app does not depend on a later UI-driven connect pass before EAM/Event/message sends can target intentional peers.

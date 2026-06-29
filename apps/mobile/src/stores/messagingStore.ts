@@ -4,6 +4,7 @@ import {
   type MessageRecord,
   type ProjectionInvalidationEvent,
   type ReticulumNodeClient,
+  type SendMode,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
@@ -17,6 +18,8 @@ import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.inbox.v1";
+const DIRECT_CHAT_CONNECT_TIMEOUT_MS = 7_000;
+const DIRECT_CHAT_CONNECT_POLL_MS = 250;
 
 type StoredMessages = Record<string, MessageRecord>;
 type ProjectionClientCache = typeof globalThis & {
@@ -84,6 +87,10 @@ function normalizeDestinationHex(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function isDestinationHash(value: string | undefined): boolean {
   return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value.trim());
 }
@@ -122,6 +129,105 @@ function displayNameForDestination(
     return displayName;
   }
   return nodeStore.savedByDestination[normalized]?.label?.trim() || destinationHex;
+}
+
+function activePeerForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  return peerForDestination(destinationHex, nodeStore)?.activeLink === true;
+}
+
+function savedPeerRouteForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+) {
+  const normalized = normalizeDestinationHex(destinationHex);
+  const peer = peerForDestination(normalized, nodeStore);
+  const candidates = [
+    normalized,
+    peer?.destination,
+    peer?.lxmfDestinationHex,
+    peer?.identityHex,
+  ]
+    .map((candidate) => normalizeDestinationHex(candidate ?? ""))
+    .filter(isDestinationHash);
+  for (const candidate of candidates) {
+    const saved = nodeStore.savedByDestination[candidate];
+    if (saved) {
+      return saved;
+    }
+  }
+  return null;
+}
+
+function hasKnownLxmfRoute(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  const peer = peerForDestination(destinationHex, nodeStore);
+  const saved = savedPeerRouteForDestination(destinationHex, nodeStore);
+  return isDestinationHash(peer?.lxmfDestinationHex)
+    || isDestinationHash(saved?.lxmfDestinationHex);
+}
+
+function canUseRelayChat(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  return Boolean(nodeStore.bestPropagationNodeHex)
+    && Boolean(savedPeerRouteForDestination(destinationHex, nodeStore))
+    && hasKnownLxmfRoute(destinationHex, nodeStore);
+}
+
+function chatSendModeForDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): SendMode {
+  return canUseRelayChat(destinationHex, nodeStore) ? "Auto" : "DirectOnly";
+}
+
+function peerConnectionDestination(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): string {
+  const normalized = normalizeDestinationHex(destinationHex);
+  const peer = peerForDestination(normalized, nodeStore);
+  return normalizeDestinationHex(peer?.destination ?? normalized);
+}
+
+async function waitForDirectPeerLink(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): Promise<boolean> {
+  const deadline = Date.now() + DIRECT_CHAT_CONNECT_TIMEOUT_MS;
+  do {
+    if (activePeerForDestination(destinationHex, nodeStore)) {
+      return true;
+    }
+    await sleep(DIRECT_CHAT_CONNECT_POLL_MS);
+  } while (Date.now() < deadline);
+  return activePeerForDestination(destinationHex, nodeStore);
+}
+
+async function ensureDirectChatPeerConnected(
+  destinationHex: string,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): Promise<void> {
+  if (activePeerForDestination(destinationHex, nodeStore)) {
+    return;
+  }
+
+  const connectionDestination = peerConnectionDestination(destinationHex, nodeStore);
+  await nodeStore.connectPeer(connectionDestination);
+  if (await waitForDirectPeerLink(destinationHex, nodeStore)) {
+    return;
+  }
+
+  const displayName = displayNameForDestination(destinationHex, nodeStore);
+  throw new Error(
+    `Peer ${displayName} is not connected and no propagation relay route is available. Announce, connect, or wait for a relay before sending chat.`,
+  );
 }
 
 function remoteDestinationForMessage(message: MessageRecord): string {
@@ -657,6 +763,11 @@ export const useMessagingStore = defineStore("messaging", () => {
   async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
     nodeStore.assertReadyForOutbound("send LXMF messages");
     const normalizedDestination = normalizeDestinationHex(destinationHex);
+    const sendMode = chatSendModeForDestination(normalizedDestination, nodeStore);
+    const messageMethod = sendMode === "DirectOnly" ? "Direct" : "Opportunistic";
+    if (sendMode === "DirectOnly") {
+      await ensureDirectChatPeerConnected(normalizedDestination, nodeStore);
+    }
     const existingConversation = findNativeConversationByDestination(normalizedDestination);
     const currentPending = pendingConversationForDestination(normalizedDestination);
     const conversationId = existingConversation?.conversationId
@@ -679,8 +790,10 @@ export const useMessagingStore = defineStore("messaging", () => {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
-      method: "Opportunistic",
+      method: messageMethod,
       state: "Queued",
+      transportState: "Queued",
+      applicationAckState: "Waiting",
       detail: undefined,
       sentAtMs: now,
       receivedAtMs: undefined,
@@ -689,7 +802,9 @@ export const useMessagingStore = defineStore("messaging", () => {
     persistWeb();
 
     try {
-      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title);
+      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title, {
+        sendMode,
+      });
       const nextMessages = { ...byMessageId.value };
       delete nextMessages[optimisticMessageId];
       nextMessages[messageIdHex] = cloneMessage({
@@ -700,8 +815,10 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: messageMethod,
         state: "Queued",
+        transportState: "Queued",
+        applicationAckState: "Waiting",
         detail: undefined,
         sentAtMs: now,
         receivedAtMs: undefined,
@@ -718,8 +835,10 @@ export const useMessagingStore = defineStore("messaging", () => {
         sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
         title,
         bodyUtf8,
-        method: "Opportunistic",
+        method: messageMethod,
         state: "Failed",
+        transportState: "Failed",
+        applicationAckState: "Failed",
         detail: error instanceof Error ? error.message : "Send failed",
         sentAtMs: now,
         receivedAtMs: undefined,
@@ -980,10 +1099,15 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Inbound",
         destinationHex: peerRecords[0].lxmfDestinationHex,
         sourceHex: peerRecords[0].lxmfDestinationHex,
+        requestedDestinationHex: peerRecords[0].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[0].lxmfDestinationHex,
+        lastWireMessageIdHex: "10000000000000000000000000000001",
         title: "Status check",
         bodyUtf8: "Alpha team is staged at checkpoint A. Radio relay is stable.",
         method: "Direct",
         state: "Received",
+        transportState: "TransportDelivered",
+        applicationAckState: "NotRequired",
         receivedAtMs: now - 9 * 60_000,
         updatedAtMs: now - 9 * 60_000,
       },
@@ -993,9 +1117,14 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Outbound",
         destinationHex: peerRecords[0].lxmfDestinationHex,
         sourceHex: localLxmfDestination,
+        requestedDestinationHex: peerRecords[0].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[0].lxmfDestinationHex,
+        lastWireMessageIdHex: "10000000000000000000000000000002",
         bodyUtf8: "Send two operators to the north entrance and confirm when they are in position.",
         method: "Direct",
         state: "Delivered",
+        transportState: "TransportDelivered",
+        applicationAckState: "Accepted",
         sentAtMs: now - 3 * 60_000,
         updatedAtMs: now - 2 * 60_000,
       },
@@ -1005,9 +1134,14 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Inbound",
         destinationHex: peerRecords[0].lxmfDestinationHex,
         sourceHex: peerRecords[0].lxmfDestinationHex,
+        requestedDestinationHex: peerRecords[0].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[0].lxmfDestinationHex,
+        lastWireMessageIdHex: "10000000000000000000000000000003",
         bodyUtf8: "Copy. Two operators moving to the north entrance now.",
         method: "Direct",
         state: "Received",
+        transportState: "TransportDelivered",
+        applicationAckState: "NotRequired",
         receivedAtMs: now - 45_000,
         updatedAtMs: now - 45_000,
       },
@@ -1017,10 +1151,15 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Inbound",
         destinationHex: peerRecords[2].lxmfDestinationHex,
         sourceHex: peerRecords[2].lxmfDestinationHex,
+        requestedDestinationHex: peerRecords[2].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[2].lxmfDestinationHex,
+        lastWireMessageIdHex: "20000000000000000000000000000001",
         title: "Medical",
         bodyUtf8: "Emergency: patient transport requested at triage tent.\nGPS: 46.81,-71.20",
         method: "Direct",
         state: "Received",
+        transportState: "TransportDelivered",
+        applicationAckState: "NotRequired",
         detail: "SOS priority message",
         receivedAtMs: now - 4 * 60_000,
         updatedAtMs: now - 4 * 60_000,
@@ -1031,9 +1170,14 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Outbound",
         destinationHex: peerRecords[2].lxmfDestinationHex,
         sourceHex: localLxmfDestination,
+        requestedDestinationHex: peerRecords[2].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[2].lxmfDestinationHex,
+        lastWireMessageIdHex: "20000000000000000000000000000002",
         bodyUtf8: "Transport team notified. Keep the patient at the marked triage point.",
         method: "Direct",
         state: "SentDirect",
+        transportState: "SentDirect",
+        applicationAckState: "Waiting",
         sentAtMs: now - 2 * 60_000,
         updatedAtMs: now - 2 * 60_000,
       },
@@ -1043,9 +1187,14 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Inbound",
         destinationHex: peerRecords[1].lxmfDestinationHex,
         sourceHex: peerRecords[1].lxmfDestinationHex,
+        requestedDestinationHex: peerRecords[1].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[1].lxmfDestinationHex,
+        lastWireMessageIdHex: "30000000000000000000000000000001",
         bodyUtf8: "North checkpoint is intermittent. Propagation relay is preferred until the link is stable.",
         method: "Propagated",
         state: "Received",
+        transportState: "TransportDelivered",
+        applicationAckState: "NotRequired",
         receivedAtMs: now - 21 * 60_000,
         updatedAtMs: now - 21 * 60_000,
       },
@@ -1055,10 +1204,15 @@ export const useMessagingStore = defineStore("messaging", () => {
         direction: "Outbound",
         destinationHex: peerRecords[1].lxmfDestinationHex,
         sourceHex: localLxmfDestination,
+        requestedDestinationHex: peerRecords[1].lxmfDestinationHex,
+        deliveryDestinationHex: peerRecords[1].lxmfDestinationHex,
+        lastWireMessageIdHex: "30000000000000000000000000000002",
         title: "Route update",
         bodyUtf8: "Route update queued through propagation. Confirm when NORTH-CP comes back online.",
         method: "Propagated",
         state: "SentToPropagation",
+        transportState: "SentToPropagation",
+        applicationAckState: "Waiting",
         detail: "Using propagation relay fallback",
         sentAtMs: now - 18 * 60_000,
         updatedAtMs: now - 17 * 60_000,
@@ -1106,9 +1260,14 @@ export const useMessagingStore = defineStore("messaging", () => {
       direction: "Outbound",
       destinationHex: conversation?.destinationHex ?? normalizedDestination,
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+      requestedDestinationHex: normalizedDestination,
+      deliveryDestinationHex: conversation?.destinationHex ?? normalizedDestination,
+      lastWireMessageIdHex: `900000000000000000000000${now.toString(16).slice(-8)}`,
       bodyUtf8,
       method: "Opportunistic",
       state: "Queued",
+      transportState: "Queued",
+      applicationAckState: "Waiting",
       sentAtMs: now,
       updatedAtMs: now,
     };

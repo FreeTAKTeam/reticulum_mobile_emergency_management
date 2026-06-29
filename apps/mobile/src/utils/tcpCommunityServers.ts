@@ -8,6 +8,7 @@ export interface TcpCommunityServer {
 // Mirrors the known community TCP server list used by Columba.
 export const TCP_COMMUNITY_SERVERS: TcpCommunityServer[] = [
   { name: "R3AKT Server", host: "134.122.46.48", port: 37428, isBootstrap: true },
+  { name: "rmap", host: "rmap.world", port: 4242, isBootstrap: true },
   { name: "Beleth RNS Hub", host: "rns.beleth.net", port: 4242, isBootstrap: true },
   { name: "Quad4 TCP Node 1", host: "rns.quad4.io", port: 4242, isBootstrap: true },
   { name: "FireZen", host: "firezen.com", port: 4242, isBootstrap: true },
@@ -48,17 +49,10 @@ export function normalizeTcpCommunityClients(
   fallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   allowEmpty = false,
 ): string[] {
-  const placeholderEndpoint = "rmap.world:4242";
   const candidateEntries = Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim())
     : [];
-  const uniqueEntries = [
-    ...new Set(
-      candidateEntries.filter(
-        (entry) => entry.length > 0 && entry.toLowerCase() !== placeholderEndpoint,
-      ),
-    ),
-  ];
+  const uniqueEntries = [...new Set(candidateEntries.filter((entry) => entry.length > 0))];
   if (uniqueEntries.length > 0) {
     return uniqueEntries;
   }

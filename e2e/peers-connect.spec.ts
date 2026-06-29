@@ -10,6 +10,7 @@ async function savePeerViaStore(page: Page, destination: string): Promise<void> 
     const store = mod.useNodeStore();
     await store.savePeer(peerDestination);
   }, destination);
+  await page.getByRole("button", { name: /Peers/ }).click();
 }
 
 async function stopNodeViaStore(page: Page): Promise<void> {
@@ -31,7 +32,7 @@ test("connect all dispatches for saved peers without an active link", async ({ p
   await gotoApp(page, "/peers");
   await savePeerViaStore(page, TEST_PEER_DESTINATION);
 
-  const savedItem = page.locator(".saved-item").filter({ hasText: TEST_PEER_DESTINATION });
+  const savedItem = page.locator(".peer-item").filter({ hasText: TEST_PEER_DESTINATION });
   await expect(savedItem).toContainText("Disconnected");
 
   await page.getByRole("button", { name: "Connect all", exact: true }).click();
@@ -50,7 +51,7 @@ test("manual connect uses the saved-peer button and surfaces node-not-running er
   await gotoApp(page, "/peers");
   await savePeerViaStore(page, TEST_PEER_DESTINATION);
 
-  const savedItem = page.locator(".saved-item").filter({ hasText: TEST_PEER_DESTINATION });
+  const savedItem = page.locator(".peer-item").filter({ hasText: TEST_PEER_DESTINATION });
   await expect(savedItem.getByRole("button", { name: "Connect" })).toBeVisible();
   await expect(savedItem).toContainText("Disconnected");
 
@@ -59,9 +60,14 @@ test("manual connect uses the saved-peer button and surfaces node-not-running er
   await expect(savedItem.getByRole("button", { name: "Disconnect" })).toBeVisible();
 
   await stopNodeViaStore(page);
-  await expect(savedItem).toContainText("Disconnected", { timeout: 5_000 });
+  await expect(savedItem.getByRole("button", { name: "Connect" })).toBeVisible({ timeout: 5_000 });
 
   await savedItem.getByRole("button", { name: "Connect" }).click();
-  await expect(page.locator(".feedback").last()).toContainText("Start node before connecting to a peer.");
+  await expect.poll(async () =>
+    page.evaluate(async () => {
+      const mod = await import("/src/stores/nodeStore.ts");
+      return mod.useNodeStore().lastError;
+    }),
+  ).toContain("Start node before connecting to a peer.");
   await expect(savedItem.getByRole("button", { name: "Connect" })).toBeVisible();
 });
