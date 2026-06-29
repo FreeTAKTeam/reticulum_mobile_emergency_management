@@ -71,13 +71,13 @@ use crate::types::{
     ChecklistColumnType, ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey,
     ChecklistTaskRecord, ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord,
     EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord,
-    HubDirectorySnapshot, HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
-    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
-    InterfaceStatusRecord, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    HubDirectorySnapshot, HubMode, InterfaceStatusRecord, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState, ProjectionScope,
-    RnodeSettingsRecord, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
+    RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome,
+    SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord,
+    TransportDeliveryState,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -3329,7 +3329,11 @@ fn interface_status_kind(label: &str) -> &'static str {
     }
 }
 
-fn new_interface_status(interface: AddressHash, label: String, state: &'static str) -> InterfaceStatusRecord {
+fn new_interface_status(
+    interface: AddressHash,
+    label: String,
+    state: &'static str,
+) -> InterfaceStatusRecord {
     let kind = interface_status_kind(&label).to_string();
     InterfaceStatusRecord {
         interface_hex: interface.to_hex_string(),
@@ -7189,7 +7193,9 @@ fn active_interfaces_include_relay_transport(
         .any(|interface| !interface_label_is_rnode_ble(&interface.label))
 }
 
-fn active_interfaces_are_rnode_ble_only(active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>) -> bool {
+fn active_interfaces_are_rnode_ble_only(
+    active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>,
+) -> bool {
     !active_interfaces.is_empty()
         && active_interfaces
             .values()
@@ -9160,7 +9166,10 @@ fn spawn_rnode_ble_interface(
                 .new_context_with_role_and_mode(adapter, IfaceRole::Unicast, InterfaceMode::Full);
             let iface = *context.channel.address();
             let status_update = new_interface_status(iface, label.clone(), "connected");
-            active_interface_registry.lock().await.insert(iface, status_update.clone());
+            active_interface_registry
+                .lock()
+                .await
+                .insert(iface, status_update.clone());
             publish_interface_registry_snapshot(
                 &active_interface_registry,
                 &status,
@@ -9290,7 +9299,9 @@ async fn unregister_tcp_client_endpoint(
         let mut registry = active_interface_registry.lock().await;
         let remove_keys = registry
             .iter()
-            .filter_map(|(interface, registered)| (registered.label == endpoint).then_some(*interface))
+            .filter_map(|(interface, registered)| {
+                (registered.label == endpoint).then_some(*interface)
+            })
             .collect::<Vec<_>>();
         remove_keys
             .into_iter()
@@ -9299,7 +9310,8 @@ async fn unregister_tcp_client_endpoint(
     };
     for mut removed in removed {
         removed.state = "disconnected".to_string();
-        publish_interface_registry_snapshot(active_interface_registry, status, bus, Some(removed)).await;
+        publish_interface_registry_snapshot(active_interface_registry, status, bus, Some(removed))
+            .await;
     }
 }
 
@@ -9347,13 +9359,16 @@ fn spawn_tcp_client_interface_manager(
                             &bus_for_task,
                             task_addr.as_str(),
                         )
-                            .await;
+                        .await;
                         active_for_task.store(false, Ordering::Release);
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
                 );
                 let status_update = new_interface_status(iface, connect_addr.clone(), "connected");
-                active_interface_registry.lock().await.insert(iface, status_update.clone());
+                active_interface_registry
+                    .lock()
+                    .await
+                    .insert(iface, status_update.clone());
                 publish_interface_registry_snapshot(
                     &active_interface_registry,
                     &status,
@@ -11296,9 +11311,18 @@ mod tests {
         let second = AddressHash::new_from_slice(&[2u8; 16]);
         let third = AddressHash::new_from_slice(&[3u8; 16]);
         let registry: ActiveInterfaceRegistry = Arc::new(TokioMutex::new(HashMap::from([
-            (first, new_interface_status(first, "rns.beleth.net:4242".to_string(), "connected")),
-            (second, new_interface_status(second, "rns.beleth.net:4242".to_string(), "connected")),
-            (third, new_interface_status(third, "dfw.us.g00n.cloud:6969".to_string(), "connected")),
+            (
+                first,
+                new_interface_status(first, "rns.beleth.net:4242".to_string(), "connected"),
+            ),
+            (
+                second,
+                new_interface_status(second, "rns.beleth.net:4242".to_string(), "connected"),
+            ),
+            (
+                third,
+                new_interface_status(third, "dfw.us.g00n.cloud:6969".to_string(), "connected"),
+            ),
         ])));
         let status = Arc::new(Mutex::new(NodeStatus {
             running: true,
@@ -14771,7 +14795,9 @@ mod tests {
             frequency_hz: 915_000_000,
             ..RnodeSettingsRecord::default()
         };
-        assert!(rnode_lora_config(&bad_region).expect_err("invalid region").contains("region"));
+        assert!(rnode_lora_config(&bad_region)
+            .expect_err("invalid region")
+            .contains("region"));
 
         let bad_profile = RnodeSettingsRecord {
             region: "US915".to_string(),
@@ -14779,7 +14805,9 @@ mod tests {
             frequency_hz: 915_000_000,
             ..RnodeSettingsRecord::default()
         };
-        assert!(rnode_lora_config(&bad_profile).expect_err("invalid profile").contains("profile"));
+        assert!(rnode_lora_config(&bad_profile)
+            .expect_err("invalid profile")
+            .contains("profile"));
     }
 
     #[tokio::test]
