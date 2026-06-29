@@ -104,12 +104,58 @@ test("synced inbound action messages are visible but read-only", async ({ page }
   await expect(messageCard).toContainText("Reported by Pixel");
   await expect(messageCard).toContainText("Updated");
   await expect(messageCard.getByRole("button", { name: "Edit Pixel" })).toHaveCount(0);
-  await expect(messageCard.getByRole("button", { name: "Delete Pixel" })).toHaveCount(0);
+  await expect(messageCard.getByRole("button", { name: "Delete Pixel" })).toBeVisible();
 
   await messageCard.getByRole("button", { name: "Show statuses" }).click();
   const securityStatusButton = messageCard.locator(".pill-button").filter({ hasText: "Security" });
   await expect(securityStatusButton).toBeDisabled();
   await expect(securityStatusButton).toContainText("Red");
+
+  await messageCard.getByRole("button", { name: "Delete Pixel" }).click();
+  await expect(page.getByRole("heading", { name: "Pixel" })).toHaveCount(0);
+});
+
+test("read-only action messages can be deleted from a touch release", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      displayName: "Poco",
+    },
+    messages: [
+      {
+        callsign: "AdrenaLineProject_Tab",
+        groupName: "YELLOW",
+        securityStatus: "Green",
+        capabilityStatus: "Green",
+        preparednessStatus: "Green",
+        medicalStatus: "Green",
+        mobilityStatus: "Yellow",
+        commsStatus: "Yellow",
+        updatedAt: Date.UTC(2026, 5, 27, 19, 36, 0),
+        reportedBy: "AdrenaLineProject_Tab",
+        teamMemberUid: "external-team-member",
+        teamUid: "d6b6e188b910d6bdd24d04b7a7ec5444",
+        source: {
+          rns_identity: "external-identity",
+          display_name: "AdrenaLineProject_Tab",
+        },
+        syncState: "synced",
+        lastSyncedAt: Date.UTC(2026, 5, 27, 19, 36, 0),
+      },
+    ],
+  });
+
+  await gotoApp(page, "/messages");
+
+  const messageCard = page.locator("article.item:visible").filter({ hasText: "AdrenaLineProject_Tab" });
+  await expect(messageCard.getByRole("heading", { name: "AdrenaLineProject_Tab" })).toBeVisible();
+
+  await messageCard.getByRole("button", { name: "Delete AdrenaLineProject_Tab" }).dispatchEvent("pointerup", {
+    pointerType: "touch",
+    button: 0,
+  });
+
+  await expect(page.getByRole("heading", { name: "AdrenaLineProject_Tab" })).toHaveCount(0);
 });
 
 test("operators can filter action messages by team color", async ({ page }) => {

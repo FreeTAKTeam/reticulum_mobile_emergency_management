@@ -533,33 +533,44 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!normalizedCallsign) {
       return;
     }
-    const existing = byCallsign.value[keyFor(normalizedCallsign)];
-    if (existing && !canManageMessage(existing)) {
-      return;
-    }
 
-    if (!supportsNativeNodeRuntime) {
-      const key = keyFor(normalizedCallsign);
-      const existing = byCallsign.value[key];
-      if (!existing) {
-        return;
-      }
+    const key = keyFor(normalizedCallsign);
+    const existing = byCallsign.value[key];
+    const deletedAt = nowMs();
+    const canReplicateDelete = !existing || canManageMessage(existing);
+
+    if (existing) {
       byCallsign.value = {
         ...byCallsign.value,
         [key]: {
           ...existing,
-          deletedAt: nowMs(),
-          updatedAt: nowMs(),
+          deletedAt,
+          updatedAt: deletedAt,
         },
       };
+    }
+
+    if (!supportsNativeNodeRuntime) {
+      if (!existing) {
+        return;
+      }
       webPersist();
       await refreshTeamSummary();
       return;
     }
 
     const client = getProjectionClient(nodeStore.settings.clientMode);
-    await client.deleteEam(normalizedCallsign, nowMs());
-    await refreshAll();
+    try {
+      if (canReplicateDelete) {
+        await client.deleteEam(normalizedCallsign, deletedAt);
+      } else {
+        await client.deleteLocalEam(normalizedCallsign, deletedAt);
+      }
+      await refreshAll();
+    } catch (error) {
+      await refreshAll();
+      throw error;
+    }
   }
 
   function rotateStatus(callsign: string, field: keyof ActionMessage): void {

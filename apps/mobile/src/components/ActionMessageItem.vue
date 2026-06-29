@@ -25,6 +25,7 @@ const emit = defineEmits<{
 
 const messagesStore = useMessagesStore();
 const isExpanded = shallowRef(false);
+const lastDeleteReleaseAt = shallowRef(0);
 const itemElement = ref<HTMLElement | null>(null);
 
 const formattedTeam = computed(() => formatR3aktTeamColor(props.message.groupName));
@@ -74,6 +75,29 @@ function cycleStatus(field: ActionMessageStatusField): void {
   emit("cycle", props.message.callsign, field);
 }
 
+function requestDelete(event?: Event): void {
+  event?.preventDefault();
+  event?.stopPropagation();
+  emit("delete", props.message.callsign);
+}
+
+function requestDeleteFromRelease(event: PointerEvent | TouchEvent): void {
+  if (event instanceof PointerEvent && event.pointerType === "mouse" && event.button !== 0) {
+    return;
+  }
+  lastDeleteReleaseAt.value = Date.now();
+  requestDelete(event);
+}
+
+function requestDeleteFromClick(event: MouseEvent): void {
+  if (Date.now() - lastDeleteReleaseAt.value < 350) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  requestDelete(event);
+}
+
 watch(
   () => props.selected,
   async (selected) => {
@@ -96,8 +120,9 @@ watch(
           <p class="eyebrow">Call Sign</p>
           <div class="callsign-row">
             <h3 class="callsign">{{ props.message.callsign }}</h3>
-            <div v-if="props.editable" class="item-actions" role="group" aria-label="Message actions">
+            <div class="item-actions" role="group" aria-label="Message actions">
               <button
+                v-if="props.editable"
                 class="action edit"
                 type="button"
                 :aria-label="`Edit ${props.message.callsign}`"
@@ -114,7 +139,9 @@ watch(
                 type="button"
                 :aria-label="`Delete ${props.message.callsign}`"
                 title="Delete"
-                @click="emit('delete', props.message.callsign)"
+                @click="requestDeleteFromClick"
+                @pointerup="requestDeleteFromRelease"
+                @touchend="requestDeleteFromRelease"
               >
                 <svg class="action-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M3 6h18" />
@@ -389,6 +416,8 @@ watch(
   display: flex;
   flex-shrink: 0;
   gap: 0.45rem;
+  position: relative;
+  z-index: 2;
 }
 
 .action {
@@ -400,6 +429,7 @@ watch(
   height: 2.2rem;
   justify-content: center;
   padding: 0;
+  touch-action: manipulation;
   width: 2.2rem;
 }
 

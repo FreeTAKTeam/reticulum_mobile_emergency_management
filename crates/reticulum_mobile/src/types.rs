@@ -412,6 +412,12 @@ pub struct RnodeSettingsRecord {
     pub display_name: String,
     pub region: String,
     pub profile: String,
+    #[serde(default = "default_rnode_frequency_hz")]
+    pub frequency_hz: u64,
+}
+
+fn default_rnode_frequency_hz() -> u64 {
+    915_000_000
 }
 
 impl Default for RnodeSettingsRecord {
@@ -422,6 +428,7 @@ impl Default for RnodeSettingsRecord {
             display_name: String::new(),
             region: "US915".to_string(),
             profile: "REM-LF-RURAL-v1".to_string(),
+            frequency_hz: default_rnode_frequency_hz(),
         }
     }
 }
@@ -433,6 +440,19 @@ pub struct NodeStatus {
     pub identity_hex: String,
     pub app_destination_hex: String,
     pub lxmf_destination_hex: String,
+    pub interfaces: Vec<InterfaceStatusRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceStatusRecord {
+    pub interface_hex: String,
+    pub label: String,
+    pub kind: String,
+    pub state: String,
+    pub last_error: Option<String>,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub last_activity_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1109,6 +1129,9 @@ pub struct OperationalSummary {
 pub enum NodeEvent {
     StatusChanged {
         status: NodeStatus,
+    },
+    InterfaceStatusChanged {
+        status: InterfaceStatusRecord,
     },
     AnnounceReceived {
         destination_hex: String,

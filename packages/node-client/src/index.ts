@@ -2,7 +2,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
-export type RnodeRegion = "US915" | "EU868";
+export type RnodeRegion = "US915" | "EU868" | "AU915" | "AS923" | "IN865" | "KR920" | "RU864";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
@@ -83,6 +83,7 @@ export interface RnodeSettingsRecord {
   displayName: string;
   region: RnodeRegion;
   profile: RnodeProfileId;
+  frequencyHz: number;
 }
 
 export interface RnodeBleDeviceRecord {
@@ -100,6 +101,7 @@ export interface RnodeBlePairResult {
   paired: boolean;
   bondingStarted: boolean;
   bondState: string;
+  timedOut?: boolean;
 }
 
 export interface NodeConfig {
@@ -126,6 +128,18 @@ export interface NodeStatus {
   appDestinationHex: string;
   lxmfDestinationHex: string;
   lastError?: string;
+  interfaces: InterfaceStatusRecord[];
+}
+
+export interface InterfaceStatusRecord {
+  interfaceHex: string;
+  label: string;
+  kind: string;
+  state: string;
+  lastError?: string;
+  rxPackets: number;
+  rxBytes: number;
+  lastActivityMs: number;
 }
 
 export interface PeerChange {
@@ -149,6 +163,10 @@ export interface PeerChange {
 
 export interface StatusChangedEvent {
   status: NodeStatus;
+}
+
+export interface InterfaceStatusChangedEvent {
+  status: InterfaceStatusRecord;
 }
 
 export interface AnnounceReceivedEvent {
@@ -713,6 +731,7 @@ export interface NodeErrorEvent {
 
 export interface NodeClientEvents {
   statusChanged: StatusChangedEvent;
+  interfaceStatusChanged: InterfaceStatusChangedEvent;
   announceReceived: AnnounceReceivedEvent;
   peerChanged: PeerChangedEvent;
   peerResolved: PeerRecord;
@@ -854,6 +873,7 @@ export interface ReticulumNodeClient {
   getEams(): Promise<EamProjectionRecord[]>;
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
+  deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
   getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
@@ -937,6 +957,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
     displayName: "",
     region: "US915",
     profile: "REM-LF-RURAL-v1",
+    frequencyHz: 915_000_000,
   },
 };
 
@@ -1131,6 +1152,7 @@ interface ReticulumNodePlugin {
   getEams(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
+  deleteLocalEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
   getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
@@ -1230,6 +1252,7 @@ function encodeBytesToBase64(value: Uint8Array): string {
 }
 
 function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
+  const interfacesRaw = raw.interfaces ?? raw.interface_statuses;
   return {
     running: Boolean(raw.running),
     name: String(raw.name ?? ""),
@@ -1246,6 +1269,30 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
         : typeof raw.last_error === "string"
           ? raw.last_error
           : undefined,
+    interfaces: Array.isArray(interfacesRaw)
+      ? interfacesRaw.map((entry) => toInterfaceStatusRecord(entry)).filter((entry) => entry.interfaceHex.length > 0)
+      : [],
+  };
+}
+
+function toInterfaceStatusRecord(raw: unknown): InterfaceStatusRecord {
+  const record = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  return {
+    interfaceHex: String(record.interfaceHex ?? record.interface_hex ?? ""),
+    label: String(record.label ?? ""),
+    kind: String(record.kind ?? ""),
+    state: String(record.state ?? ""),
+    lastError:
+      typeof record.lastError === "string"
+        ? record.lastError
+        : typeof record.last_error === "string"
+          ? record.last_error
+          : undefined,
+    rxPackets: Number(record.rxPackets ?? record.rx_packets ?? 0),
+    rxBytes: Number(record.rxBytes ?? record.rx_bytes ?? 0),
+    lastActivityMs: Number(record.lastActivityMs ?? record.last_activity_ms ?? 0),
   };
 }
 
@@ -1303,6 +1350,11 @@ function toStatusChangedEvent(raw: Record<string, unknown>): StatusChangedEvent 
   const statusRaw =
     (raw.status as Record<string, unknown> | undefined) ?? raw;
   return { status: toNodeStatus(statusRaw) };
+}
+
+function toInterfaceStatusChangedEvent(raw: Record<string, unknown>): InterfaceStatusChangedEvent {
+  const statusRaw = raw.status ?? raw;
+  return { status: toInterfaceStatusRecord(statusRaw) };
 }
 
 function toAnnounceReceivedEvent(
@@ -1933,7 +1985,19 @@ function normalizeHubMode(value: unknown): HubMode {
 }
 
 function normalizeRnodeRegion(value: unknown): RnodeRegion {
-  return String(value ?? "").trim().toUpperCase() === "EU868" ? "EU868" : "US915";
+  const normalized = String(value ?? "").trim().toUpperCase();
+  switch (normalized) {
+    case "EU868":
+    case "AU915":
+    case "AS923":
+    case "IN865":
+    case "KR920":
+    case "RU864":
+      return normalized;
+    case "US915":
+    default:
+      return "US915";
+  }
 }
 
 function normalizeRnodeProfile(value: unknown): RnodeProfileId {
@@ -1952,13 +2016,42 @@ function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+  const region = normalizeRnodeRegion(raw.region);
   return {
     enabled: Boolean(raw.enabled),
     peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
     displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
-    region: normalizeRnodeRegion(raw.region),
+    region,
     profile: normalizeRnodeProfile(raw.profile),
+    frequencyHz: normalizeRnodeFrequencyHz(raw.frequencyHz ?? raw.frequency_hz, region),
   };
+}
+
+function rnodeRegionDefaultFrequencyHz(region: RnodeRegion): number {
+  switch (region) {
+    case "EU868":
+      return 868_000_000;
+    case "AU915":
+      return 915_000_000;
+    case "AS923":
+      return 923_000_000;
+    case "IN865":
+      return 865_000_000;
+    case "KR920":
+      return 920_000_000;
+    case "RU864":
+      return 864_000_000;
+    case "US915":
+    default:
+      return 915_000_000;
+  }
+}
+
+function normalizeRnodeFrequencyHz(value: unknown, region: RnodeRegion): number {
+  const frequencyHz = Number(value);
+  return Number.isFinite(frequencyHz) && frequencyHz > 0
+    ? Math.round(frequencyHz)
+    : rnodeRegionDefaultFrequencyHz(region);
 }
 
 function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRecord | null {
@@ -3369,6 +3462,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       };
 
       await register("statusChanged", toStatusChangedEvent);
+      await register("interfaceStatusChanged", toInterfaceStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);
       await register("peerResolved", toPeerRecord);
@@ -3456,6 +3550,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       paired: Boolean(result.paired),
       bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
       bondState: String(result.bondState ?? result.bond_state ?? "none"),
+      timedOut: Boolean(result.timedOut ?? result.timed_out),
     };
   }
 
@@ -3793,6 +3888,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.deleteEam({ callsign, deletedAtMs });
   }
 
+  async deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteLocalEam({ callsign, deletedAtMs });
+  }
+
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
@@ -3942,6 +4042,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      interfaces: [],
     };
   })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
@@ -4252,6 +4353,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
@@ -4492,6 +4594,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      interfaces: [],
     };
   })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
@@ -4867,6 +4970,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }

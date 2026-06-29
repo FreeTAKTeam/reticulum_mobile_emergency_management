@@ -206,7 +206,7 @@ function cycleMessage(callsign: string, field: keyof ActionMessage | string): vo
 
 function deleteMessage(callsign: string): void {
   const message = messages.value.find((item) => item.callsign === callsign);
-  if (!message || !messagesStore.canManageMessage(message)) {
+  if (!message) {
     return;
   }
   messagesStore.deleteLocal(callsign).catch(() => undefined);
