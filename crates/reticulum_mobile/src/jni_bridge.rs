@@ -3738,6 +3738,37 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEa
 }
 
 #[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLocalEamJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, request_json) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", e),
+    };
+    let payload: DeleteEamInput = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return err_result("InvalidConfig", format!("invalid eam delete payload: {e}")),
+    };
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
+    let node = ensure_node(&mut guard);
+    match node.delete_local_eam(
+        payload.callsign,
+        payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
+    ) {
+        Ok(_) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTeamSummaryJson(
     mut env: JNIEnv,
     _class: JClass,

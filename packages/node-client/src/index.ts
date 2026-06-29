@@ -873,6 +873,7 @@ export interface ReticulumNodeClient {
   getEams(): Promise<EamProjectionRecord[]>;
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
+  deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
   getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
@@ -1151,6 +1152,7 @@ interface ReticulumNodePlugin {
   getEams(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
+  deleteLocalEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
   getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
@@ -3886,6 +3888,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.deleteEam({ callsign, deletedAtMs });
   }
 
+  async deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteLocalEam({ callsign, deletedAtMs });
+  }
+
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
@@ -4346,6 +4353,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
@@ -4962,6 +4970,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }

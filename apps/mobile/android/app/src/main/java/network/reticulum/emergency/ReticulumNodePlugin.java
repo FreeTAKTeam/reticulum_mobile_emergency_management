@@ -468,7 +468,7 @@ public class ReticulumNodePlugin extends Plugin {
                 getContext(),
                 receiver,
                 new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
-                ContextCompat.RECEIVER_NOT_EXPORTED
+                ContextCompat.RECEIVER_EXPORTED
             );
 
             final boolean bondingStarted = device.getBondState() == BluetoothDevice.BOND_BONDING || device.createBond();
@@ -1183,6 +1183,21 @@ public class ReticulumNodePlugin extends Plugin {
             call,
             "Failed to delete EAM.",
             service -> service.deleteEamJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void deleteLocalEam(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("callsign", call.getString("callsign"));
+        final Long deletedAtMs = call.getLong("deletedAtMs");
+        if (deletedAtMs != null) {
+            payload.put("deletedAtMs", deletedAtMs);
+        }
+        runIntServiceCall(
+            call,
+            "Failed to delete local EAM.",
+            service -> service.deleteLocalEamJson(payload.toString())
         );
     }
 
