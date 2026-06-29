@@ -24,6 +24,26 @@ enum SendOutcome {
 
 enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Acknowledged", "Failed", "TimedOut" };
 
+enum TransportDeliveryState {
+  "Queued",
+  "Sending",
+  "SentDirect",
+  "SentToPropagation",
+  "TransportDelivered",
+  "Failed",
+  "TimedOut",
+  "Cancelled"
+};
+
+enum ApplicationAckState {
+  "NotRequired",
+  "Waiting",
+  "Accepted",
+  "Completed",
+  "Rejected",
+  "Failed"
+};
+
 enum SendMode { "Auto", "DirectOnly", "PropagationOnly" };
 
 enum LxmfDeliveryMethod { "Direct", "Opportunistic", "Propagated" };
@@ -214,6 +234,8 @@ dictionary LxmfDeliveryUpdate {
   string? event_uid;
   string? mission_uid;
   LxmfDeliveryStatus status;
+  TransportDeliveryState transport_state;
+  ApplicationAckState application_ack_state;
   LxmfDeliveryMethod method;
   LxmfDeliveryRepresentation representation;
   string? relay_destination_hex;
@@ -269,10 +291,16 @@ dictionary MessageRecord {
   MessageDirection direction;
   string destination_hex;
   string? source_hex;
+  string? requested_destination_hex;
+  string? delivery_destination_hex;
+  string? recipient_identity_hex;
+  string? last_wire_message_id_hex;
   string? title;
   string body_utf8;
   MessageMethod method;
   MessageState state;
+  TransportDeliveryState transport_state;
+  ApplicationAckState application_ack_state;
   string? detail;
   u64? sent_at_ms;
   u64? received_at_ms;

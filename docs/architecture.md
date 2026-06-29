@@ -38,7 +38,7 @@ sequenceDiagram
             alt No tracked LXMF delivery destination
                 S8UI->>S8Node: Log warning\n"skipped peer, no LXMF delivery destination"
             else LXMF delivery destination available
-                S8UI->>S8Node: sendBytes(destination=lxfm/delivery,\nfieldsBase64=mission.registry.*,\nbytes=EMPTY)
+                S8UI->>S8Node: sendBytes(destination=lxmf/delivery,\nfieldsBase64=mission.registry.*,\nbytes=EMPTY)
                 S8Node->>S8RT: Native send request
                 S8RT->>S8RT: Build LXMF message\nmission.registry.mission.upsert (ensure mission)\nmission.registry.log_entry.upsert (event payload)\nextract commandId / correlationId / eventUid
                 S8RT->>RNS: Send LXMF wire message
@@ -139,6 +139,7 @@ sequenceDiagram
 - Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
 - Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over canonical LXMF delivery destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
 - Telemetry and events require the peer's REM-capable `lxmf.delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly. Legacy app destinations are inbound compatibility aliases, not routing targets.
+- REM capability parsing is centralized in the native runtime and accepts the legacy text announce app data (`R3AKT,EMergencyMessages,Telemetry;name=...`) plus the structured msgpack/hex layouts produced by LXMF-compatible peers. The app must not infer an LXMF route from a generic app destination.
 - Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
 
 ## Checklist / Excheck Flow

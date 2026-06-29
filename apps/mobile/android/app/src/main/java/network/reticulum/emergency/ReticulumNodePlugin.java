@@ -76,6 +76,9 @@ public class ReticulumNodePlugin extends Plugin {
             return;
         }
         final JSObject safePayload = payload == null ? new JSObject() : payload;
+        if (!NativeEventBackpressure.shouldDispatchToUi(eventName, safePayload)) {
+            return;
+        }
         mirrorEventToLogcat(eventName, safePayload);
         notifyListeners(eventName, safePayload);
     };

@@ -143,6 +143,40 @@ pub enum LxmfDeliveryStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransportDeliveryState {
+    Queued {},
+    Sending {},
+    SentDirect {},
+    SentToPropagation {},
+    TransportDelivered {},
+    Failed {},
+    TimedOut {},
+    Cancelled {},
+}
+
+impl Default for TransportDeliveryState {
+    fn default() -> Self {
+        Self::Queued {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplicationAckState {
+    NotRequired {},
+    Waiting {},
+    Accepted {},
+    Completed {},
+    Rejected {},
+    Failed {},
+}
+
+impl Default for ApplicationAckState {
+    fn default() -> Self {
+        Self::NotRequired {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SendMode {
     Auto {},
     DirectOnly {},
@@ -445,6 +479,8 @@ pub struct LxmfDeliveryUpdate {
     pub event_uid: Option<String>,
     pub mission_uid: Option<String>,
     pub status: LxmfDeliveryStatus,
+    pub transport_state: TransportDeliveryState,
+    pub application_ack_state: ApplicationAckState,
     pub method: LxmfDeliveryMethod,
     pub representation: LxmfDeliveryRepresentation,
     pub relay_destination_hex: Option<String>,
@@ -504,10 +540,22 @@ pub struct MessageRecord {
     pub direction: MessageDirection,
     pub destination_hex: String,
     pub source_hex: Option<String>,
+    #[serde(default)]
+    pub requested_destination_hex: Option<String>,
+    #[serde(default)]
+    pub delivery_destination_hex: Option<String>,
+    #[serde(default)]
+    pub recipient_identity_hex: Option<String>,
+    #[serde(default)]
+    pub last_wire_message_id_hex: Option<String>,
     pub title: Option<String>,
     pub body_utf8: String,
     pub method: MessageMethod,
     pub state: MessageState,
+    #[serde(default)]
+    pub transport_state: TransportDeliveryState,
+    #[serde(default)]
+    pub application_ack_state: ApplicationAckState,
     pub detail: Option<String>,
     pub sent_at_ms: Option<u64>,
     pub received_at_ms: Option<u64>,

@@ -95,6 +95,48 @@ test("delivery acknowledgement timeout does not mark the node not ready", () => 
   );
 });
 
+test("generic native IO errors do not mark an otherwise running node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "IoError",
+      message: "io error",
+    }),
+    false,
+  );
+});
+
+test("inbound LXMF decode failures do not mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "LxmfDecodeError",
+      message:
+        "Failed to decode LXMF payload for destination ff3a663b9ec6eee06cf7aff905d8f130: decode error: invalid payload structure",
+    }),
+    false,
+  );
+});
+
+test("per-announce persistence failures do not mark transport readiness failed", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "IoError",
+      message: "failed to persist announce destination=abc reason=io error",
+    }),
+    false,
+  );
+});
+
+test("per-peer event replication enqueue failures do not mark the node not ready", () => {
+  assert.equal(
+    nodeErrorIndicatesReadinessError({
+      code: "NotRunning",
+      message:
+        "event replication enqueue failed destination=e3f1c3f63adef0c0d771ddff8b0eeed5 uid=evt-550b463e-f236-421a-aa23-cdde407b0a52 reason=network error",
+    }),
+    false,
+  );
+});
+
 test("unrecoverable node runtime failures still mark the node not ready", () => {
   assert.equal(
     nodeErrorIndicatesReadinessError({

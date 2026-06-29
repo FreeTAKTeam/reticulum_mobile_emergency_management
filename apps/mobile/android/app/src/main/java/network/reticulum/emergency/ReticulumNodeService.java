@@ -20,6 +20,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
@@ -76,6 +77,7 @@ public final class ReticulumNodeService extends Service {
     private static final int SOS_NOTIFICATION_ID = 41002;
     private static final int BACKGROUND_NOTIFICATION_BASE_ID = 47000;
     private static final long RUNTIME_RESTORE_TIMEOUT_MS = 15_000L;
+    private static final long FOREGROUND_NOTIFICATION_MIN_UPDATE_MS = 5_000L;
 
     private final IBinder binder = new LocalBinder();
     private final CopyOnWriteArraySet<ServiceEventListener> listeners = new CopyOnWriteArraySet<>();
@@ -136,6 +138,8 @@ public final class ReticulumNodeService extends Service {
     private String latestSyncStatusJson = "";
     private String latestSosStatusJson = "";
     private String latestRuntimeErrorJson = "";
+    private long lastForegroundNotificationUpdateMs = 0L;
+    private String lastForegroundNotificationFingerprint = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
     private RemWatchStatusServer watchStatusServer;
     private final Set<String> seenEamKeys = new HashSet<>();
@@ -247,7 +251,7 @@ public final class ReticulumNodeService extends Service {
         return appUiForeground.get();
     }
 
-    public synchronized int startNode(String configJson) {
+    public int startNode(String configJson) {
         try {
             final ResolvedConfig resolved = resolveConfig(configJson);
             initializeBridgeStorage(resolved.storageDir);
@@ -296,7 +300,7 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    public synchronized int stopNode() {
+    public int stopNode() {
         stopPoller();
         final int result = ReticulumBridge.stop();
         clearDesiredRunning();
@@ -308,7 +312,7 @@ public final class ReticulumNodeService extends Service {
         return result;
     }
 
-    public synchronized int restartNode(String configJson) {
+    public int restartNode(String configJson) {
         try {
             final ResolvedConfig resolved = resolveConfig(configJson);
             promoteServiceForRuntime();
@@ -338,31 +342,31 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    public synchronized String getStatusJson() {
+    public String getStatusJson() {
         return ReticulumBridge.getStatusJson();
     }
 
-    public synchronized int connectPeer(String destinationHex) {
+    public int connectPeer(String destinationHex) {
         return ReticulumBridge.connectPeer(destinationHex);
     }
 
-    public synchronized int disconnectPeer(String destinationHex) {
+    public int disconnectPeer(String destinationHex) {
         return ReticulumBridge.disconnectPeer(destinationHex);
     }
 
-    public synchronized int announceNow() {
+    public int announceNow() {
         return ReticulumBridge.announceNow();
     }
 
-    public synchronized int requestPeerIdentity(String destinationHex) {
+    public int requestPeerIdentity(String destinationHex) {
         return ReticulumBridge.requestPeerIdentity(destinationHex);
     }
 
-    public synchronized int sendJson(String payloadJson) {
+    public int sendJson(String payloadJson) {
         return ReticulumBridge.sendJson(payloadJson);
     }
 
-    public synchronized String sendLxmfJson(String payloadJson) {
+    public String sendLxmfJson(String payloadJson) {
         return ReticulumBridge.sendLxmfJson(payloadJson);
     }
 
@@ -374,27 +378,27 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.decodePluginLxmfFieldsJson(primaryAndroidAbi(), payloadJson);
     }
 
-    public synchronized int retryLxmfJson(String payloadJson) {
+    public int retryLxmfJson(String payloadJson) {
         return ReticulumBridge.retryLxmfJson(payloadJson);
     }
 
-    public synchronized int cancelLxmfJson(String payloadJson) {
+    public int cancelLxmfJson(String payloadJson) {
         return ReticulumBridge.cancelLxmfJson(payloadJson);
     }
 
-    public synchronized int broadcastBase64(String bytesBase64) {
+    public int broadcastBase64(String bytesBase64) {
         return ReticulumBridge.broadcastBase64(bytesBase64);
     }
 
-    public synchronized int setActivePropagationNodeJson(String payloadJson) {
+    public int setActivePropagationNodeJson(String payloadJson) {
         return ReticulumBridge.setActivePropagationNodeJson(payloadJson);
     }
 
-    public synchronized int requestLxmfSyncJson(String payloadJson) {
+    public int requestLxmfSyncJson(String payloadJson) {
         return ReticulumBridge.requestLxmfSyncJson(payloadJson);
     }
 
-    public synchronized String listAnnouncesJson() {
+    public String listAnnouncesJson() {
         return ReticulumBridge.listAnnouncesJson();
     }
 
@@ -447,47 +451,47 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.grantPluginPermissionsJson(primaryAndroidAbi(), payloadJson);
     }
 
-    public synchronized String listPeersJson() {
+    public String listPeersJson() {
         return ReticulumBridge.listPeersJson();
     }
 
-    public synchronized String listConversationsJson() {
+    public String listConversationsJson() {
         return ReticulumBridge.listConversationsJson();
     }
 
-    public synchronized String listMessagesJson(String payloadJson) {
+    public String listMessagesJson(String payloadJson) {
         return ReticulumBridge.listMessagesJson(payloadJson);
     }
 
-    public synchronized int deleteConversationJson(String payloadJson) {
+    public int deleteConversationJson(String payloadJson) {
         return ReticulumBridge.deleteConversationJson(payloadJson);
     }
 
-    public synchronized String getLxmfSyncStatusJson() {
+    public String getLxmfSyncStatusJson() {
         return ReticulumBridge.getLxmfSyncStatusJson();
     }
 
-    public synchronized String listTelemetryDestinationsJson() {
+    public String listTelemetryDestinationsJson() {
         return ReticulumBridge.listTelemetryDestinationsJson();
     }
 
-    public synchronized String legacyImportCompletedJson() {
+    public String legacyImportCompletedJson() {
         return ReticulumBridge.legacyImportCompletedJson();
     }
 
-    public synchronized int importLegacyStateJson(String payloadJson) {
+    public int importLegacyStateJson(String payloadJson) {
         return ReticulumBridge.importLegacyStateJson(payloadJson);
     }
 
-    public synchronized String getAppSettingsJson() {
+    public String getAppSettingsJson() {
         return ReticulumBridge.getAppSettingsJson();
     }
 
-    public synchronized int setAppSettingsJson(String payloadJson) {
+    public int setAppSettingsJson(String payloadJson) {
         return ReticulumBridge.setAppSettingsJson(payloadJson);
     }
 
-    public synchronized String getWatchStatusServerSettingsJson() {
+    public String getWatchStatusServerSettingsJson() {
         try {
             return currentWatchStatusServerStateJson().toString();
         } catch (JSONException ex) {
@@ -495,7 +499,7 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    public synchronized int setWatchStatusServerSettingsJson(String payloadJson) {
+    public int setWatchStatusServerSettingsJson(String payloadJson) {
         try {
             final JSONObject payload = new JSONObject(nonEmptyJson(payloadJson, "{}"));
             final RemWatchStatusServerSettings current = readWatchStatusServerSettings();
@@ -515,7 +519,7 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    public synchronized String getWatchStatusServerStateJson() {
+    public String getWatchStatusServerStateJson() {
         try {
             return currentWatchStatusServerStateJson().toString();
         } catch (JSONException ex) {
@@ -523,127 +527,127 @@ public final class ReticulumNodeService extends Service {
         }
     }
 
-    public synchronized String getSavedPeersJson() {
+    public String getSavedPeersJson() {
         return ReticulumBridge.getSavedPeersJson();
     }
 
-    public synchronized int setSavedPeersJson(String payloadJson) {
+    public int setSavedPeersJson(String payloadJson) {
         return ReticulumBridge.setSavedPeersJson(payloadJson);
     }
 
-    public synchronized String getOperationalSummaryJson() {
+    public String getOperationalSummaryJson() {
         return ReticulumBridge.getOperationalSummaryJson();
     }
 
-    public synchronized String getChecklistsJson(String payloadJson) {
+    public String getChecklistsJson(String payloadJson) {
         return ReticulumBridge.getChecklistsJson(payloadJson);
     }
 
-    public synchronized String getChecklistJson(String payloadJson) {
+    public String getChecklistJson(String payloadJson) {
         return ReticulumBridge.getChecklistJson(payloadJson);
     }
 
-    public synchronized String getChecklistTemplatesJson(String payloadJson) {
+    public String getChecklistTemplatesJson(String payloadJson) {
         return ReticulumBridge.getChecklistTemplatesJson(payloadJson);
     }
 
-    public synchronized String importChecklistTemplateCsvJson(String payloadJson) {
+    public String importChecklistTemplateCsvJson(String payloadJson) {
         return ReticulumBridge.importChecklistTemplateCsvJson(payloadJson);
     }
 
-    public synchronized int createChecklistFromTemplateJson(String payloadJson) {
+    public int createChecklistFromTemplateJson(String payloadJson) {
         return ReticulumBridge.createChecklistFromTemplateJson(payloadJson);
     }
 
-    public synchronized int createOnlineChecklistJson(String payloadJson) {
+    public int createOnlineChecklistJson(String payloadJson) {
         return ReticulumBridge.createOnlineChecklistJson(payloadJson);
     }
 
-    public synchronized int updateChecklistJson(String payloadJson) {
+    public int updateChecklistJson(String payloadJson) {
         return ReticulumBridge.updateChecklistJson(payloadJson);
     }
 
-    public synchronized int deleteChecklistJson(String payloadJson) {
+    public int deleteChecklistJson(String payloadJson) {
         return ReticulumBridge.deleteChecklistJson(payloadJson);
     }
 
-    public synchronized int joinChecklistJson(String payloadJson) {
+    public int joinChecklistJson(String payloadJson) {
         return ReticulumBridge.joinChecklistJson(payloadJson);
     }
 
-    public synchronized int uploadChecklistJson(String payloadJson) {
+    public int uploadChecklistJson(String payloadJson) {
         return ReticulumBridge.uploadChecklistJson(payloadJson);
     }
 
-    public synchronized int setChecklistTaskStatusJson(String payloadJson) {
+    public int setChecklistTaskStatusJson(String payloadJson) {
         return ReticulumBridge.setChecklistTaskStatusJson(payloadJson);
     }
 
-    public synchronized int addChecklistTaskRowJson(String payloadJson) {
+    public int addChecklistTaskRowJson(String payloadJson) {
         return ReticulumBridge.addChecklistTaskRowJson(payloadJson);
     }
 
-    public synchronized int deleteChecklistTaskRowJson(String payloadJson) {
+    public int deleteChecklistTaskRowJson(String payloadJson) {
         return ReticulumBridge.deleteChecklistTaskRowJson(payloadJson);
     }
 
-    public synchronized int setChecklistTaskRowStyleJson(String payloadJson) {
+    public int setChecklistTaskRowStyleJson(String payloadJson) {
         return ReticulumBridge.setChecklistTaskRowStyleJson(payloadJson);
     }
 
-    public synchronized int setChecklistTaskCellJson(String payloadJson) {
+    public int setChecklistTaskCellJson(String payloadJson) {
         return ReticulumBridge.setChecklistTaskCellJson(payloadJson);
     }
 
-    public synchronized String getEamsJson() {
+    public String getEamsJson() {
         return ReticulumBridge.getEamsJson();
     }
 
-    public synchronized int upsertEamJson(String payloadJson) {
+    public int upsertEamJson(String payloadJson) {
         return ReticulumBridge.upsertEamJson(payloadJson);
     }
 
-    public synchronized int deleteEamJson(String payloadJson) {
+    public int deleteEamJson(String payloadJson) {
         return ReticulumBridge.deleteEamJson(payloadJson);
     }
 
-    public synchronized String getEamTeamSummaryJson(String payloadJson) {
+    public String getEamTeamSummaryJson(String payloadJson) {
         return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
     }
 
-    public synchronized String getEamReadinessSummaryJson() {
+    public String getEamReadinessSummaryJson() {
         return ReticulumBridge.getEamReadinessSummaryJson();
     }
 
-    public synchronized String getEventsJson() {
+    public String getEventsJson() {
         return ReticulumBridge.getEventsJson();
     }
 
-    public synchronized int upsertEventJson(String payloadJson) {
+    public int upsertEventJson(String payloadJson) {
         return ReticulumBridge.upsertEventJson(payloadJson);
     }
 
-    public synchronized int deleteEventJson(String payloadJson) {
+    public int deleteEventJson(String payloadJson) {
         return ReticulumBridge.deleteEventJson(payloadJson);
     }
 
-    public synchronized String getTelemetryPositionsJson() {
+    public String getTelemetryPositionsJson() {
         return ReticulumBridge.getTelemetryPositionsJson();
     }
 
-    public synchronized int recordLocalTelemetryFixJson(String payloadJson) {
+    public int recordLocalTelemetryFixJson(String payloadJson) {
         return ReticulumBridge.recordLocalTelemetryFixJson(payloadJson);
     }
 
-    public synchronized int deleteLocalTelemetryJson(String payloadJson) {
+    public int deleteLocalTelemetryJson(String payloadJson) {
         return ReticulumBridge.deleteLocalTelemetryJson(payloadJson);
     }
 
-    public synchronized String getSosSettingsJson() {
+    public String getSosSettingsJson() {
         return ReticulumBridge.getSosSettingsJson();
     }
 
-    public synchronized int setSosSettingsJson(String payloadJson) {
+    public int setSosSettingsJson(String payloadJson) {
         final int result = ReticulumBridge.setSosSettingsJson(payloadJson);
         if (result == 0) {
             applyCurrentSosPlatformSettings();
@@ -651,66 +655,66 @@ public final class ReticulumNodeService extends Service {
         return result;
     }
 
-    public synchronized int setSosPinJson(String payloadJson) {
+    public int setSosPinJson(String payloadJson) {
         return ReticulumBridge.setSosPinJson(payloadJson);
     }
 
-    public synchronized String getSosStatusJson() {
+    public String getSosStatusJson() {
         return ReticulumBridge.getSosStatusJson();
     }
 
-    public synchronized String triggerSosJson(String payloadJson) {
+    public String triggerSosJson(String payloadJson) {
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.submitTelemetrySnapshot();
         }
         return ReticulumBridge.triggerSosJson(payloadJson);
     }
 
-    public synchronized String deactivateSosJson(String payloadJson) {
+    public String deactivateSosJson(String payloadJson) {
         return ReticulumBridge.deactivateSosJson(payloadJson);
     }
 
-    public synchronized int submitSosTelemetryJson(String payloadJson) {
+    public int submitSosTelemetryJson(String payloadJson) {
         return ReticulumBridge.submitSosTelemetryJson(payloadJson);
     }
 
-    public synchronized String submitSosAccelerometerJson(String payloadJson) {
+    public String submitSosAccelerometerJson(String payloadJson) {
         return ReticulumBridge.submitSosAccelerometerJson(payloadJson);
     }
 
-    public synchronized String submitSosScreenEventJson(String payloadJson) {
+    public String submitSosScreenEventJson(String payloadJson) {
         return ReticulumBridge.submitSosScreenEventJson(payloadJson);
     }
 
-    public synchronized String listSosAlertsJson() {
+    public String listSosAlertsJson() {
         return ReticulumBridge.listSosAlertsJson();
     }
 
-    public synchronized String listSosLocationsJson() {
+    public String listSosLocationsJson() {
         return ReticulumBridge.listSosLocationsJson();
     }
 
-    public synchronized String listSosAudioJson() {
+    public String listSosAudioJson() {
         return ReticulumBridge.listSosAudioJson();
     }
 
-    public synchronized int recordSosAudioJson(String payloadJson) {
+    public int recordSosAudioJson(String payloadJson) {
         return ReticulumBridge.recordSosAudioJson(payloadJson);
     }
 
-    public synchronized int setAnnounceCapabilities(String capabilityString) {
+    public int setAnnounceCapabilities(String capabilityString) {
         return ReticulumBridge.setAnnounceCapabilities(capabilityString);
     }
 
-    public synchronized int setLogLevel(String levelString) {
+    public int setLogLevel(String levelString) {
         return ReticulumBridge.setLogLevel(levelString);
     }
 
-    public synchronized int refreshHubDirectory() {
+    public int refreshHubDirectory() {
         return ReticulumBridge.refreshHubDirectory();
     }
 
-    public synchronized String takeLastErrorJson() {
+    public String takeLastErrorJson() {
         return ReticulumBridge.takeLastErrorJson();
     }
 
@@ -999,6 +1003,9 @@ public final class ReticulumNodeService extends Service {
     }
 
     private void dispatchEventToListeners(String eventName, JSObject payload) {
+        if (!NativeEventBackpressure.shouldDispatchToUi(eventName, payload)) {
+            return;
+        }
         for (ServiceEventListener listener : listeners) {
             mainHandler.post(() -> listener.onNodeEvent(eventName, payload));
         }
@@ -1251,6 +1258,10 @@ public final class ReticulumNodeService extends Service {
     }
 
     private Notification buildRuntimeNotification(boolean running) {
+        return buildRuntimeNotification(running, buildRuntimeNotificationBody(running));
+    }
+
+    private Notification buildRuntimeNotification(boolean running, String body) {
         final Intent launchIntent = new Intent(this, MainActivity.class);
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         final PendingIntent contentIntent = PendingIntent.getActivity(
@@ -1270,12 +1281,14 @@ public final class ReticulumNodeService extends Service {
         );
 
         final String title = running ? "Mesh node running" : "Starting mesh node";
-        final String body = buildRuntimeNotificationBody(running);
+        final String safeBody = body == null || body.trim().isEmpty()
+            ? getString(R.string.app_name)
+            : body;
 
         return new NotificationCompat.Builder(this, RUNTIME_CHANNEL_ID)
             .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentText(safeBody)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(safeBody))
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(running)
             .setOnlyAlertOnce(true)
@@ -1303,9 +1316,23 @@ public final class ReticulumNodeService extends Service {
         if (!isNodeRunning()) {
             return;
         }
+        final String body = buildRuntimeNotificationBody(true);
+        final String fingerprint = "running|" + body;
+        final long now = SystemClock.elapsedRealtime();
+        synchronized (this) {
+            if (fingerprint.equals(lastForegroundNotificationFingerprint)) {
+                return;
+            }
+            final long elapsed = now - lastForegroundNotificationUpdateMs;
+            if (lastForegroundNotificationUpdateMs > 0L && elapsed < FOREGROUND_NOTIFICATION_MIN_UPDATE_MS) {
+                return;
+            }
+            lastForegroundNotificationUpdateMs = now;
+            lastForegroundNotificationFingerprint = fingerprint;
+        }
         NotificationManagerCompat.from(this).notify(
             FOREGROUND_NOTIFICATION_ID,
-            buildRuntimeNotification(true)
+            buildRuntimeNotification(true, body)
         );
     }
 

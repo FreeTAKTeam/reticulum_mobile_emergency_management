@@ -30,6 +30,7 @@ const DELIVERY_ERROR_LOG_PATTERNS = [
   /\bsend_bytes failed\b/i,
   /\bsend_bytes failed\b.*\breason=invalid config\b/i,
   /\bbroadcast_bytes failed\b/i,
+  /\b(?:event|event delete|checklist|eam|eam delete|telemetry|sos) replication enqueue failed\b/i,
 ];
 
 const PROPAGATION_RELAY_ERROR_LOG_PATTERNS = [
@@ -72,6 +73,5 @@ export function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean
     return true;
   }
   return event.code === "InternalError"
-    || event.code === "IoError"
     || event.code === "NotRunning";
 }

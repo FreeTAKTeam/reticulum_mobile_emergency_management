@@ -13,6 +13,7 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::mpsc;
 
+use crate::announce_metadata::has_capability_token;
 use crate::app_state::{canonicalize_chat_message, AppStateStore, ConversationPeerResolver};
 use crate::delivery_policy;
 use crate::event_bus::EventBus;
@@ -35,7 +36,7 @@ use crate::sos::{
 use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ChecklistCreateFromTemplateRequest,
+    AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
     ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
@@ -47,7 +48,7 @@ use crate::types::{
     ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
     SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
     SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord, TrustedPluginPublisherRecord,
+    TelemetryPositionRecord, TransportDeliveryState, TrustedPluginPublisherRecord,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -459,22 +460,6 @@ fn effective_hub_mode(
             }
         }
     }
-}
-
-fn has_capability_token(app_data: Option<&str>, capability: &str) -> bool {
-    let requested = capability.trim();
-    if requested.is_empty() {
-        return false;
-    }
-
-    app_data.is_some_and(|value| {
-        value
-            .split([';', ','])
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-            .filter(|token| !token.to_ascii_lowercase().starts_with("name="))
-            .any(|token| token.eq_ignore_ascii_case(requested))
-    })
 }
 
 fn telemetry_targets_from_peers(
@@ -2975,6 +2960,10 @@ fn run_sos_fanout(
             direction: MessageDirection::Outbound {},
             destination_hex: destination_hex.clone(),
             source_hex: Some(status.lxmf_destination_hex.clone()),
+            requested_destination_hex: Some(destination_hex.clone()),
+            delivery_destination_hex: Some(destination_hex.clone()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some(message_id_hex.clone()),
             title: Some("SOS Emergency".to_string()),
             body_utf8: body.clone(),
             method: if matches!(target.send_mode, SendMode::PropagationOnly {}) {
@@ -2983,6 +2972,8 @@ fn run_sos_fanout(
                 MessageMethod::Direct {}
             },
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: Some(format!("sos:{}", crate::sos::sos_kind_label(kind))),
             sent_at_ms: Some(now),
             received_at_ms: None,
@@ -6578,6 +6569,41 @@ mod tests {
         assert!(inner.plugin_runtime.is_none());
     }
 
+    #[test]
+    fn node_capability_check_accepts_msgpack_hex_app_data() {
+        let payload = MsgPackValue::Array(vec![
+            MsgPackValue::from("Msgpack Peer"),
+            MsgPackValue::Map(vec![(
+                MsgPackValue::from("caps"),
+                MsgPackValue::Array(vec![
+                    MsgPackValue::from("R3AKT"),
+                    MsgPackValue::from("EMergencyMessages"),
+                    MsgPackValue::from("Telemetry"),
+                ]),
+            )]),
+        ]);
+        let app_data = hex::encode(rmp_serde::to_vec(&payload).expect("msgpack"));
+
+        assert!(has_capability_token(Some(app_data.as_str()), "telemetry"));
+        assert!(peer_supports_mission_traffic(&PeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            identity_hex: None,
+            lxmf_destination_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
+            display_name: None,
+            app_data: Some(app_data),
+            state: crate::types::PeerState::Disconnected {},
+            saved: false,
+            stale: false,
+            active_link: false,
+            last_resolution_error: None,
+            last_resolution_attempt_at_ms: None,
+            last_seen_at_ms: 1,
+            announce_last_seen_at_ms: Some(1),
+            lxmf_last_seen_at_ms: Some(1),
+            hub_derived: false,
+        }));
+    }
+
     struct TcpRelayHandle {
         addr: SocketAddr,
         shutdown: Arc<Notify>,
@@ -9784,10 +9810,16 @@ schema = "schemas/bad_status.schema.json"
             direction: MessageDirection::Outbound {},
             destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             source_hex: Some("cccccccccccccccccccccccccccccccc".to_string()),
+            requested_destination_hex: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            delivery_destination_hex: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
             title: Some("check-in".to_string()),
             body_utf8: "Hello world".to_string(),
             method: MessageMethod::Direct {},
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: None,
             sent_at_ms: Some(1_700_000_000_300),
             received_at_ms: None,
@@ -9946,10 +9978,16 @@ schema = "schemas/bad_status.schema.json"
             direction: MessageDirection::Outbound {},
             destination_hex: "DEST-1".to_string(),
             source_hex: None,
+            requested_destination_hex: Some("DEST-1".to_string()),
+            delivery_destination_hex: Some("DEST-1".to_string()),
+            recipient_identity_hex: None,
+            last_wire_message_id_hex: Some("msg-1".to_string()),
             title: Some("Hello".to_string()),
             body_utf8: "hello from pre-start".to_string(),
             method: MessageMethod::Direct {},
             state: MessageState::Queued {},
+            transport_state: TransportDeliveryState::Queued {},
+            application_ack_state: ApplicationAckState::Waiting {},
             detail: Some("queued".to_string()),
             sent_at_ms: Some(1),
             received_at_ms: None,

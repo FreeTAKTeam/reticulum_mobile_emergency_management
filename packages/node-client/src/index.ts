@@ -15,6 +15,22 @@ export type SendOutcome =
   | "DroppedEncryptFailed"
   | "DroppedNoRoute";
 export type LxmfDeliveryStatus = "Sent" | "SentToPropagation" | "Acknowledged" | "Failed" | "TimedOut";
+export type TransportDeliveryState =
+  | "Queued"
+  | "Sending"
+  | "SentDirect"
+  | "SentToPropagation"
+  | "TransportDelivered"
+  | "Failed"
+  | "TimedOut"
+  | "Cancelled";
+export type ApplicationAckState =
+  | "NotRequired"
+  | "Waiting"
+  | "Accepted"
+  | "Completed"
+  | "Rejected"
+  | "Failed";
 export type SendMode = "Auto" | "DirectOnly" | "PropagationOnly";
 export type LxmfDeliveryMethod = "Direct" | "Opportunistic" | "Propagated";
 export type LxmfDeliveryRepresentation = "Packet" | "Resource";
@@ -194,6 +210,8 @@ export interface LxmfDeliveryEvent {
   eventUid?: string;
   missionUid?: string;
   status: LxmfDeliveryStatus;
+  transportState: TransportDeliveryState;
+  applicationAckState: ApplicationAckState;
   method: LxmfDeliveryMethod;
   representation: LxmfDeliveryRepresentation;
   relayDestinationHex?: string;
@@ -209,10 +227,16 @@ export interface MessageRecord {
   direction: MessageDirection;
   destinationHex: string;
   sourceHex?: string;
+  requestedDestinationHex?: string;
+  deliveryDestinationHex?: string;
+  recipientIdentityHex?: string;
+  lastWireMessageIdHex?: string;
   title?: string;
   bodyUtf8: string;
   method: MessageMethod;
   state: MessageState;
+  transportState: TransportDeliveryState;
+  applicationAckState: ApplicationAckState;
   detail?: string;
   sentAtMs?: number;
   receivedAtMs?: number;
@@ -1648,6 +1672,38 @@ function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
     : "Failed";
 }
 
+function toTransportDeliveryState(raw: unknown): TransportDeliveryState {
+  const value = String(raw ?? "");
+  const valid: TransportDeliveryState[] = [
+    "Queued",
+    "Sending",
+    "SentDirect",
+    "SentToPropagation",
+    "TransportDelivered",
+    "Failed",
+    "TimedOut",
+    "Cancelled",
+  ];
+  return valid.includes(value as TransportDeliveryState)
+    ? (value as TransportDeliveryState)
+    : "Queued";
+}
+
+function toApplicationAckState(raw: unknown): ApplicationAckState {
+  const value = String(raw ?? "");
+  const valid: ApplicationAckState[] = [
+    "NotRequired",
+    "Waiting",
+    "Accepted",
+    "Completed",
+    "Rejected",
+    "Failed",
+  ];
+  return valid.includes(value as ApplicationAckState)
+    ? (value as ApplicationAckState)
+    : "NotRequired";
+}
+
 function toLxmfDeliveryMethod(raw: unknown): LxmfDeliveryMethod {
   const value = String(raw ?? "");
   const valid: LxmfDeliveryMethod[] = ["Direct", "Opportunistic", "Propagated"];
@@ -1709,6 +1765,12 @@ function toLxmfDeliveryEvent(raw: Record<string, unknown>): LxmfDeliveryEvent {
           ? raw.mission_uid
           : undefined,
     status: toLxmfDeliveryStatus(raw.status),
+    transportState: toTransportDeliveryState(
+      hasValue(raw.transportState) ? raw.transportState : raw.transport_state,
+    ),
+    applicationAckState: toApplicationAckState(
+      hasValue(raw.applicationAckState) ? raw.applicationAckState : raw.application_ack_state,
+    ),
     method: toLxmfDeliveryMethod(raw.method),
     representation: toLxmfDeliveryRepresentation(raw.representation),
     relayDestinationHex: toOptionalHex(
@@ -1801,6 +1863,18 @@ function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
       raw.sourceHex !== undefined || raw.source_hex !== undefined
         ? normalizeHex(String(raw.sourceHex ?? raw.source_hex ?? ""))
         : undefined,
+    requestedDestinationHex: toOptionalHex(
+      raw.requestedDestinationHex ?? raw.requested_destination_hex,
+    ),
+    deliveryDestinationHex: toOptionalHex(
+      raw.deliveryDestinationHex ?? raw.delivery_destination_hex,
+    ),
+    recipientIdentityHex: toOptionalHex(
+      raw.recipientIdentityHex ?? raw.recipient_identity_hex,
+    ),
+    lastWireMessageIdHex: toOptionalHex(
+      raw.lastWireMessageIdHex ?? raw.last_wire_message_id_hex,
+    ),
     title:
       typeof raw.title === "string"
         ? raw.title
@@ -1808,6 +1882,8 @@ function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
     bodyUtf8: String(raw.bodyUtf8 ?? raw.body_utf8 ?? ""),
     method: toMessageMethod(raw.method),
     state: toMessageState(raw.state),
+    transportState: toTransportDeliveryState(raw.transportState ?? raw.transport_state),
+    applicationAckState: toApplicationAckState(raw.applicationAckState ?? raw.application_ack_state),
     detail:
       typeof raw.detail === "string"
         ? raw.detail
@@ -4456,10 +4532,15 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       conversationId: destinationHex,
       direction: "Outbound",
       destinationHex,
+      requestedDestinationHex: destinationHex,
+      deliveryDestinationHex: destinationHex,
+      lastWireMessageIdHex: messageIdHex,
       title: request.title,
       bodyUtf8: request.bodyUtf8,
       method: "Direct",
       state: this.connected.has(destinationHex) ? "Delivered" : "Failed",
+      transportState: this.connected.has(destinationHex) ? "TransportDelivered" : "Failed",
+      applicationAckState: this.connected.has(destinationHex) ? "Accepted" : "Failed",
       detail: this.connected.has(destinationHex) ? "web mock delivery" : "web mock missing route",
       sentAtMs: now,
       updatedAtMs: now,
@@ -5073,10 +5154,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       conversationId: destinationHex,
       direction: "Outbound",
       destinationHex,
+      requestedDestinationHex: destinationHex,
+      deliveryDestinationHex: destinationHex,
+      lastWireMessageIdHex: messageIdHex,
       title: request.title,
       bodyUtf8: request.bodyUtf8,
       method: "Direct",
       state: "SentDirect",
+      transportState: "SentDirect",
+      applicationAckState: "Waiting",
       sentAtMs: now,
       updatedAtMs: now,
     });
@@ -5086,10 +5172,15 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
         conversationId: destinationHex,
         direction: "Outbound",
         destinationHex,
+        requestedDestinationHex: destinationHex,
+        deliveryDestinationHex: destinationHex,
+        lastWireMessageIdHex: messageIdHex,
         title: request.title,
         bodyUtf8: request.bodyUtf8,
         method: "Direct",
-        state: "Delivered",
+        state: "SentDirect",
+        transportState: "TransportDelivered",
+        applicationAckState: "Waiting",
         detail: "mock transport receipt",
         sentAtMs: now,
         updatedAtMs: Date.now(),

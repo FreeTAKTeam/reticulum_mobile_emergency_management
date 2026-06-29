@@ -1,28 +1,123 @@
-name: Rust
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  LXMF_RS_REF: 00f03294bccc4485949233916c5143156f70bbee
 
 jobs:
-  build:
-
+  web:
+    name: Web and TypeScript
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/checkout@v4
-      with:
-        repository: FreeTAKTeam/LXMF-rs
-        path: LXMF-rs
-    - name: Link LXMF dependency path
-      run: ln -s "$GITHUB_WORKSPACE/LXMF-rs" "$GITHUB_WORKSPACE/../LXMF-rs"
-    - name: Build
-      run: cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
-    - name: Run tests
-      run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
+      - name: Check out mobile app
+        uses: actions/checkout@v6
+        with:
+          path: rem
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: rem/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: rem
+        run: npm ci
+
+      - name: Build node client
+        working-directory: rem
+        run: npm run node-client:build
+
+      - name: Typecheck mobile app
+        working-directory: rem
+        run: npm --workspace apps/mobile run typecheck
+
+      - name: Build web app
+        working-directory: rem
+        run: npm run web:build
+
+  e2e:
+    name: Playwright Smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out mobile app
+        uses: actions/checkout@v6
+        with:
+          path: rem
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: rem/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: rem
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: rem
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright smoke tests
+        working-directory: rem
+        env:
+          CHOKIDAR_USEPOLLING: "1"
+        run: npm run test:e2e -- e2e/android-back-navigation.spec.ts
+
+  rust:
+    name: Rust Runtime
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out mobile app
+        uses: actions/checkout@v6
+        with:
+          path: rem
+
+      - name: Check out LXMF-rs
+        uses: actions/checkout@v6
+        with:
+          repository: FreeTAKTeam/LXMF-rs
+          path: LXMF-rs
+          ref: ${{ env.LXMF_RS_REF }}
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: rustfmt, clippy
+
+      - name: Check locked Rust dependencies
+        working-directory: rem
+        run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+
+      - name: Check Rust formatting
+        working-directory: rem
+        run: cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+
+      - name: Run clippy
+        working-directory: rem
+        run: cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets
+
+      - name: Run Rust tests
+        working-directory: rem
+        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
