@@ -764,11 +764,16 @@ export const useNodeStore = defineStore("node", () => {
       summary.rnodeAvailable ? "rnode-rx" : "rnode-no-rx",
       summary.otherAvailableCount,
     ].join("|");
+    const previousBlockingMessage = lastRnodeBlockingMessage;
+    const fingerprintChanged = fingerprint !== lastRnodeInterfaceFingerprint;
 
     if (summary.severity === "blocking") {
       if (message) {
-        lastRnodeBlockingMessage = message;
         setReadinessError(message, at);
+        if (fingerprintChanged && previousBlockingMessage && previousBlockingMessage !== message) {
+          appendNodeControlEntry("Error", message, at);
+        }
+        lastRnodeBlockingMessage = message;
       }
     } else if (
       lastRnodeBlockingMessage
@@ -778,7 +783,7 @@ export const useNodeStore = defineStore("node", () => {
       lastRnodeBlockingMessage = "";
     }
 
-    if (fingerprint === lastRnodeInterfaceFingerprint) {
+    if (!fingerprintChanged) {
       return;
     }
     lastRnodeInterfaceFingerprint = fingerprint;
