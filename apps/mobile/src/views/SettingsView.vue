@@ -849,7 +849,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <section class="config-section" aria-labelledby="lora-interface-heading">
           <div class="config-section-header">
             <h3 id="lora-interface-heading">LoRa / RNode</h3>
-            <p>Paired Android Bluetooth device and REM radio profile.</p>
+            <p>Phone-to-RNode Bluetooth LE hardware link; not phone-to-phone Bluetooth mesh.</p>
           </div>
 
           <div class="grid">
@@ -935,7 +935,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 
         <p class="section-note">
           Save TCP or LoRa changes, then restart REM before validating interface traffic.
-          When TCP and LoRa are both active, Reticulum selects the route.
+          LoRa-only traffic is logged as not ready; when TCP and LoRa are both active, Reticulum selects the route.
         </p>
 
         <div class="grid propagation-grid">

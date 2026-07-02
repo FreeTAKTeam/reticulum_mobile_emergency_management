@@ -14,6 +14,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
@@ -259,7 +260,7 @@ public final class ReticulumNodeService extends Service {
                     persistDesiredRunning(true, resolved);
                     ensurePoller();
                     refreshLatestRuntimeState();
-                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+                    startRuntimeForeground(true, resolved.resolvedJson);
                     emitCachedStateToAll();
                     emitProjectionRefreshSweepToAll();
                     return 0;
@@ -269,7 +270,7 @@ public final class ReticulumNodeService extends Service {
                     return restartResult;
                 }
             } else {
-                promoteServiceForRuntime();
+                promoteServiceForRuntime(resolved.resolvedJson);
                 final int startResult = ReticulumBridge.start(resolved.resolvedJson);
                 if (startResult != 0) {
                     cleanupFailedRuntimeStart();
@@ -284,7 +285,7 @@ public final class ReticulumNodeService extends Service {
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+            startRuntimeForeground(true, resolved.resolvedJson);
             emitCachedStateToAll();
             emitProjectionRefreshSweepToAll();
             return 0;
@@ -314,7 +315,7 @@ public final class ReticulumNodeService extends Service {
     public int restartNode(String configJson) {
         try {
             final ResolvedConfig resolved = resolveConfig(configJson);
-            promoteServiceForRuntime();
+            promoteServiceForRuntime(resolved.resolvedJson);
             final int result = ReticulumBridge.restart(resolved.resolvedJson);
             if (result != 0) {
                 return result;
@@ -327,7 +328,7 @@ public final class ReticulumNodeService extends Service {
             primeOperationalNotificationState();
             refreshLatestRuntimeState();
             ensurePoller();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+            startRuntimeForeground(true, resolved.resolvedJson);
             emitCachedStateToAll();
             emitProjectionRefreshSweepToAll();
             return 0;
@@ -678,7 +679,7 @@ public final class ReticulumNodeService extends Service {
             return;
         }
 
-        promoteServiceForRuntime();
+        promoteServiceForRuntime(persistedConfig);
         final AtomicBoolean restoreCompleted = new AtomicBoolean(false);
         mainHandler.postDelayed(() -> {
             if (restoreCompleted.get() || !restoreRunning.get()) {
@@ -695,7 +696,7 @@ public final class ReticulumNodeService extends Service {
                     ensurePoller();
                     clearRuntimeReadinessFailure();
                     refreshLatestRuntimeState();
-                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
+                    startRuntimeForeground(true, persistedConfig);
                     emitCachedStateToAll();
                     emitProjectionRefreshSweepToAll();
                     return;
@@ -1196,10 +1197,38 @@ public final class ReticulumNodeService extends Service {
         manager.createNotificationChannel(sosChannel);
     }
 
-    private void promoteServiceForRuntime() {
+    private void promoteServiceForRuntime(String configJson) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(false));
+            startRuntimeForeground(false, configJson);
         }
+    }
+
+    private void startRuntimeForeground(boolean running) {
+        startRuntimeForeground(running, activeRuntimeConfigJson());
+    }
+
+    private void startRuntimeForeground(boolean running, String configJson) {
+        final Notification notification = buildRuntimeNotification(running);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                FOREGROUND_NOTIFICATION_ID,
+                notification,
+                runtimeForegroundServiceType(configJson)
+            );
+            return;
+        }
+        startForeground(FOREGROUND_NOTIFICATION_ID, notification);
+    }
+
+    private int runtimeForegroundServiceType(String configJson) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return 0;
+        }
+        int foregroundType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+        if (rnodeEnabledInConfig(configJson) && hasBluetoothConnectPermission()) {
+            foregroundType |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+        }
+        return foregroundType;
     }
 
     private Notification buildRuntimeNotification(boolean running) {
@@ -1250,6 +1279,10 @@ public final class ReticulumNodeService extends Service {
             final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
             final JSONObject sync = new JSONObject(nonEmptyJson(latestSyncStatusJson, "{}"));
             final String name = status.optString("name", getString(R.string.app_name));
+            final String rnodeLabel = rnodeNotificationLabel(status);
+            if (!rnodeLabel.isEmpty()) {
+                return name + " | " + rnodeLabel;
+            }
             final String phase = sync.optString("phase", "Idle");
             return name + " | Sync " + phase;
         } catch (JSONException ex) {
@@ -1279,6 +1312,75 @@ public final class ReticulumNodeService extends Service {
             FOREGROUND_NOTIFICATION_ID,
             buildRuntimeNotification(true, body)
         );
+    }
+
+    private String rnodeNotificationLabel(JSONObject status) {
+        if (!rnodeEnabledInConfig(activeRuntimeConfigJson())) {
+            return "";
+        }
+        final JSONArray interfaces = status.optJSONArray("interfaces");
+        boolean rnodeReceiving = false;
+        int otherReceiving = 0;
+        if (interfaces != null) {
+            for (int index = 0; index < interfaces.length(); index += 1) {
+                final JSONObject item = interfaces.optJSONObject(index);
+                if (item == null || !interfaceIsReceiving(item)) {
+                    continue;
+                }
+                if (interfaceIsRnodeBle(item)) {
+                    rnodeReceiving = true;
+                } else {
+                    otherReceiving += 1;
+                }
+            }
+        }
+        if (!rnodeReceiving && otherReceiving > 0) {
+            return "RNode degraded: no BLE traffic";
+        }
+        if (!rnodeReceiving) {
+            return "REM not ready: RNode not receiving";
+        }
+        if (otherReceiving == 0) {
+            return "REM not ready: LoRa only";
+        }
+        return "";
+    }
+
+    private boolean interfaceIsReceiving(JSONObject item) {
+        return "connected".equals(item.optString("state", ""))
+            && (
+                optLongAny(item, "rxPackets", "rx_packets", 0L) > 0L
+                || optLongAny(item, "rxBytes", "rx_bytes", 0L) > 0L
+                || optLongAny(item, "lastActivityMs", "last_activity_ms", 0L) > 0L
+            );
+    }
+
+    private boolean interfaceIsRnodeBle(JSONObject item) {
+        final String kind = item.optString("kind", "");
+        final String label = item.optString("label", "");
+        return "rnode_ble".equals(kind) || label.toLowerCase(Locale.US).startsWith("rnode-ble:");
+    }
+
+    private String activeRuntimeConfigJson() {
+        if (lastResolvedConfigJson != null && !lastResolvedConfigJson.trim().isEmpty()) {
+            return lastResolvedConfigJson;
+        }
+        return preferences == null ? "" : preferences.getString(PREF_LAST_CONFIG, "");
+    }
+
+    private boolean rnodeEnabledInConfig(String configJson) {
+        if (configJson == null || configJson.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            final JSONObject config = new JSONObject(configJson);
+            final JSONObject rnode = config.optJSONObject("rnode");
+            return rnode != null
+                && rnode.optBoolean("enabled", false)
+                && !rnode.optString("peripheralId", "").trim().isEmpty();
+        } catch (JSONException ex) {
+            return false;
+        }
     }
 
     private void maybeNotifyInboundUpdate(String eventName, JSObject payload) {
@@ -1735,6 +1837,13 @@ public final class ReticulumNodeService extends Service {
             return fallback;
         }
         return item.optInt(camelKey, item.optInt(snakeKey, fallback));
+    }
+
+    private long optLongAny(JSONObject item, String camelKey, String snakeKey, long fallback) {
+        if (item == null) {
+            return fallback;
+        }
+        return item.optLong(camelKey, item.optLong(snakeKey, fallback));
     }
 
     private ResolvedConfig resolveConfig(String rawConfigJson) throws JSONException {

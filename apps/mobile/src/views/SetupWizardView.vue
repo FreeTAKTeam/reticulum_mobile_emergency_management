@@ -188,7 +188,7 @@ onMounted(() => {
           <div class="section-heading">
             <p class="eyebrow">RNode Bluetooth LoRa</p>
             <h1>LoRa Interface</h1>
-            <p>Pair an RNode over Bluetooth LE and choose the shared REM radio profile.</p>
+            <p>Pair phone-to-RNode Bluetooth LE hardware and choose the shared REM radio profile.</p>
           </div>
           <label class="toggle-card">
             <input v-model="wizard.draft.rnode.enabled" type="checkbox" />

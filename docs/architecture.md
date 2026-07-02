@@ -454,6 +454,7 @@ Rollback gate:
 ### RNode Bluetooth LoRa Interface
 
 REM can run an Android-paired RNode as an additional Reticulum LoRa interface over Bluetooth LE.
+RNode-over-BLE is the phone-to-RNode hardware link only; it is not phone-to-phone Bluetooth mesh and must not be described that way in UI or release notes.
 
 Ownership split:
 - Rust owns the active transport interface. `runtime.rs` spawns the LXMF-rs `NativeRnodeBleKissInterface` beside configured TCP client interfaces when `AppSettingsRecord.rnode.enabled` is true.
@@ -467,9 +468,37 @@ REM profile mapping:
 
 Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM defaults to `US915` with `REM-LF-RURAL-v1`; setup may infer `EU868` from location or timezone before saving.
 
-Mixed TCP and LoRa behavior for the 1.2 release:
+Current BLE capability statement:
+- Android BLE supports permission request, Nordic UART service scan, pairing hand-off, paired-device listing, stale peripheral repair when exactly one bonded RNode is present, and runtime startup from the persisted RNode settings.
+- Rust initializes `btleplug` from `JNI_OnLoad`, derives `NativeRnodeBleKissInterface` from `RnodeSettingsRecord`, validates LoRa region/profile/frequency, and retries the BLE interface after disconnect.
+- `RnodeSettingsRecord` carries `enabled`, `peripheral_id`, `display_name`, `region`, `profile`, and `frequency_hz`. RNode firmware 1.86 is the current hardware test target, but REM does not block startup on a firmware-version check.
+- Available interface means configured, connected, and receiving traffic (`rxPackets`, `rxBytes`, or `lastActivityMs` updated by the native runtime).
+
+Reliability gaps and degraded states:
+- RNode permission revocation, Bluetooth off, stale peripheral ids, and BLE disconnects must not be hidden. They appear in the Android foreground notification and in the Settings node-control log.
+- If another configured interface is active and receiving traffic, RNode degradation is non-blocking and uses the label `RNode LoRa degraded: Bluetooth LE interface is configured but not receiving traffic.`
+- If RNode LoRa is configured but no interface is receiving traffic, REM is not ready and uses the label `REM not ready: RNode LoRa is configured but no active interface is receiving traffic.`
+- If RNode LoRa is the only active receiving interface, REM is not ready and uses the label `REM not ready: RNode LoRa is the only active receiving interface.`
+- Mixed TCP and LoRa mode remains route-neutral; Reticulum chooses the outbound interface.
+
+Android service and permission recommendations:
+- The node foreground service declares `connectedDevice|dataSync`. Runtime startup requests `connectedDevice` only when RNode is configured and Bluetooth connect permission is currently granted, so permission revocation can degrade the node instead of crashing foreground-service promotion.
+- BLE permission flow should request Bluetooth scan/connect before device discovery, re-check Bluetooth connect before start/restart, and surface revoked permission as RNode degradation when another receiving interface is available or as not-ready when LoRa is the only configured path.
+
+RNode hardware test plan:
+- Pair a physical RNode with Android, select it in Settings, save LoRa settings, restart REM, and confirm the Settings log records the RNode interface.
+- Use an RNode 1.86 device for the primary matrix, but verify that REM does not enforce a blocking firmware version gate.
+- Confirm `rxPackets`, `rxBytes`, or `lastActivityMs` changes after Reticulum announce traffic over the RNode.
+- Revoke Bluetooth permission, disable Bluetooth, power-cycle the RNode, and remove/re-pair the bonded device to verify degradation labels, stale-id repair, and recovery.
+
+Reconnect test plan:
+- Start REM with RNode LoRa enabled and desired-running persisted; force process recreation or reboot and verify the service restores the RNode connection without a manual start.
+- Disconnect or power-cycle the RNode while REM is running and verify Rust removes the interface, logs the disconnect, retries, and republishes the interface after traffic resumes.
+- Validate three states: RNode degraded with TCP receiving, REM not ready with no receiving interface, and REM not ready with LoRa-only receiving.
+
+Mixed TCP and LoRa behavior:
 - REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
-- TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
+- TCP-only and mixed TCP+LoRa are ready when at least one non-RNode interface is configured, active, and receiving traffic. LoRa-only can receive Reticulum traffic, but REM readiness remains not-ready because RNode-over-BLE is a hardware interface, not phone-to-phone BLE mesh or a replacement for the rest of REM's transport readiness.
 - REM acts as a Reticulum transport node by default by enabling Reticulum packet retransmit on the runtime transport. Operators can turn off transport-node forwarding in Settings without changing broadcast discovery.
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
