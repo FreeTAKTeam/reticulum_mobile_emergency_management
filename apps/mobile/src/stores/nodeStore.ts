@@ -86,6 +86,7 @@ import {
   logIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
+  summarizeRnodeInterfaceState,
 } from "../utils/readinessErrors";
 import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
 
@@ -647,6 +648,8 @@ export const useNodeStore = defineStore("node", () => {
   let refreshOperationalSummaryQueued = false;
   let refreshOperationalSummaryLastRunAt = 0;
   let initPromise: Promise<void> | null = null;
+  let lastRnodeInterfaceFingerprint = "";
+  let lastRnodeBlockingMessage = "";
   const startupSettling = ref(false);
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
@@ -750,6 +753,45 @@ export const useNodeStore = defineStore("node", () => {
   function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
     return hasConfiguredNonTcpInterface(settings)
       && nodeErrorIndicatesTcpInterfaceReadinessError(event);
+  }
+
+  function applyRnodeInterfaceReadiness(at = nowMs()): void {
+    const summary = summarizeRnodeInterfaceState(status.value, settings);
+    const message = asTrimmedString(summary.message);
+    const fingerprint = [
+      summary.severity,
+      message,
+      summary.rnodeAvailable ? "rnode-rx" : "rnode-no-rx",
+      summary.otherAvailableCount,
+    ].join("|");
+
+    if (summary.severity === "blocking") {
+      if (message) {
+        lastRnodeBlockingMessage = message;
+        setReadinessError(message, at);
+      }
+    } else if (
+      lastRnodeBlockingMessage
+      && asTrimmedString(readinessError.value) === lastRnodeBlockingMessage
+    ) {
+      clearReadinessError();
+      lastRnodeBlockingMessage = "";
+    }
+
+    if (fingerprint === lastRnodeInterfaceFingerprint) {
+      return;
+    }
+    lastRnodeInterfaceFingerprint = fingerprint;
+
+    if (summary.severity === "degraded" && message) {
+      appendNodeControlEntry("Warn", message, at);
+    } else if (summary.severity === "ready" && summary.rnodeConfigured) {
+      appendNodeControlEntry(
+        "Info",
+        `RNode LoRa available with ${summary.otherAvailableCount} other receiving interface${summary.otherAvailableCount === 1 ? "" : "s"}.`,
+        at,
+      );
+    }
   }
 
   function errorMessage(error: unknown): string {
@@ -1968,6 +2010,7 @@ export const useNodeStore = defineStore("node", () => {
         } else if (event.status.running && !statusError) {
           clearReadinessError();
         }
+        applyRnodeInterfaceReadiness();
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
       }),
       nodeClient.on("interfaceStatusChanged", (event: InterfaceStatusChangedEvent) => {
@@ -1978,6 +2021,7 @@ export const useNodeStore = defineStore("node", () => {
           ...status.value,
           interfaces: event.status.state === "disconnected" ? current : [...current, event.status],
         });
+        applyRnodeInterfaceReadiness();
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         upsertNativeAnnounceRecord(event);
@@ -2195,6 +2239,7 @@ export const useNodeStore = defineStore("node", () => {
       );
       setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
+      applyRnodeInterfaceReadiness();
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
@@ -2250,6 +2295,7 @@ export const useNodeStore = defineStore("node", () => {
       );
       setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
+      applyRnodeInterfaceReadiness();
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();

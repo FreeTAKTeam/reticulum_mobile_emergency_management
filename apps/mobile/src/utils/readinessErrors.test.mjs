@@ -13,6 +13,7 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   hasConfiguredNonTcpInterface,
+  summarizeRnodeInterfaceState,
   logIndicatesReadinessError,
   nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
@@ -199,4 +200,138 @@ test("disabled RNode is not a configured non-TCP interface", () => {
     }),
     false,
   );
+});
+
+test("RNode is not available until it is connected and receiving traffic", () => {
+  const summary = summarizeRnodeInterfaceState(
+    {
+      running: true,
+      interfaces: [
+        {
+          interfaceHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          label: "rnode-ble:Field RNode",
+          kind: "rnode_ble",
+          state: "connected",
+          rxPackets: 0,
+          rxBytes: 0,
+          lastActivityMs: 0,
+        },
+      ],
+    },
+    {
+      rnode: {
+        enabled: true,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    },
+  );
+
+  assert.equal(summary.severity, "blocking");
+  assert.equal(summary.rnodeAvailable, false);
+  assert.equal(summary.otherAvailableCount, 0);
+});
+
+test("LoRa-only receiving traffic keeps REM not ready", () => {
+  const summary = summarizeRnodeInterfaceState(
+    {
+      running: true,
+      interfaces: [
+        {
+          interfaceHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          label: "rnode-ble:Field RNode",
+          kind: "rnode_ble",
+          state: "connected",
+          rxPackets: 2,
+          rxBytes: 128,
+          lastActivityMs: Date.now(),
+        },
+      ],
+    },
+    {
+      rnode: {
+        enabled: true,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    },
+  );
+
+  assert.equal(summary.severity, "blocking");
+  assert.equal(summary.rnodeAvailable, true);
+  assert.equal(summary.otherAvailableCount, 0);
+});
+
+test("RNode degradation is non-blocking when another interface is available", () => {
+  const summary = summarizeRnodeInterfaceState(
+    {
+      running: true,
+      interfaces: [
+        {
+          interfaceHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          label: "rnode-ble:Field RNode",
+          kind: "rnode_ble",
+          state: "connected",
+          rxPackets: 0,
+          rxBytes: 0,
+          lastActivityMs: 0,
+        },
+        {
+          interfaceHex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          label: "rns.beleth.net:4242",
+          kind: "tcp_client",
+          state: "connected",
+          rxPackets: 5,
+          rxBytes: 512,
+          lastActivityMs: Date.now(),
+        },
+      ],
+    },
+    {
+      rnode: {
+        enabled: true,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    },
+  );
+
+  assert.equal(summary.severity, "degraded");
+  assert.equal(summary.rnodeAvailable, false);
+  assert.equal(summary.otherAvailableCount, 1);
+});
+
+test("RNode is ready when LoRa and another interface are both receiving", () => {
+  const summary = summarizeRnodeInterfaceState(
+    {
+      running: true,
+      interfaces: [
+        {
+          interfaceHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          label: "rnode-ble:Field RNode",
+          kind: "rnode_ble",
+          state: "connected",
+          rxPackets: 2,
+          rxBytes: 128,
+          lastActivityMs: Date.now(),
+        },
+        {
+          interfaceHex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          label: "rns.beleth.net:4242",
+          kind: "tcp_client",
+          state: "connected",
+          rxPackets: 5,
+          rxBytes: 512,
+          lastActivityMs: Date.now(),
+        },
+      ],
+    },
+    {
+      rnode: {
+        enabled: true,
+        peripheralId: "48:CA:43:38:BC:E1",
+      },
+    },
+  );
+
+  assert.equal(summary.severity, "ready");
+  assert.equal(summary.rnodeAvailable, true);
+  assert.equal(summary.otherAvailableCount, 1);
 });
