@@ -537,6 +537,7 @@ export const useMessagesStore = defineStore("messages", () => {
     const key = keyFor(normalizedCallsign);
     const existing = byCallsign.value[key];
     const deletedAt = nowMs();
+    const canReplicateDelete = !existing || canManageMessage(existing);
 
     if (existing) {
       byCallsign.value = {
@@ -560,7 +561,11 @@ export const useMessagesStore = defineStore("messages", () => {
 
     const client = getProjectionClient(nodeStore.settings.clientMode);
     try {
-      await client.deleteEam(normalizedCallsign, deletedAt);
+      if (canReplicateDelete) {
+        await client.deleteEam(normalizedCallsign, deletedAt);
+      } else {
+        await client.deleteLocalEam(normalizedCallsign, deletedAt);
+      }
       await refreshAll();
     } catch (error) {
       await refreshAll();

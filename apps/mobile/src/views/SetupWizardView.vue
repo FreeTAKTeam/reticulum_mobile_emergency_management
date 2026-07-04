@@ -230,6 +230,23 @@ onMounted(() => {
           >
             {{ wizard.rnodeUsbPairing.value ? "Pairing via USB" : "Pair via USB" }}
           </button>
+          <div class="server-list" v-if="wizard.rnodeUsbDevices.value.length > 0">
+            <button
+              v-for="device in wizard.rnodeUsbDevices.value"
+              :key="`usb-${device.deviceId}`"
+              type="button"
+              class="server-option device-option"
+              @click="wizard.selectRnodeUsbDevice(device)"
+            >
+              <span class="server-copy">
+                <strong>{{ device.productName || device.deviceName || `USB ${device.deviceId}` }}</strong>
+                <span>{{ wizard.rnodeUsbDeviceDetail(device) }}</span>
+              </span>
+              <span class="bootstrap-badge">
+                {{ wizard.selectedRnodeUsbDeviceId.value === device.deviceId ? "Selected" : "USB" }}
+              </span>
+            </button>
+          </div>
           <div class="server-list" v-if="wizard.rnodePairedDevices.value.length > 0">
             <button
               v-for="device in wizard.rnodePairedDevices.value"

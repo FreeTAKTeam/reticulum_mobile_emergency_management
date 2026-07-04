@@ -431,6 +431,7 @@ public class ReticulumNodePlugin extends Plugin {
             call.reject("deviceId is required.");
             return;
         }
+        final String bluetoothDeviceId = call.getString("bluetoothDeviceId", "");
         bridgeExecutor.execute(() -> {
             try {
                 final RNodeUsbControlManager.PairingModeResult pairingMode =
@@ -457,7 +458,17 @@ public class ReticulumNodePlugin extends Plugin {
                     call.resolve(payload);
                     return;
                 }
-                pairFirstScannedRnodeWithPin(call, pairingMode.pin);
+                if (bluetoothDeviceId == null || bluetoothDeviceId.trim().isEmpty()) {
+                    final JSObject payload = new JSObject();
+                    payload.put("pairingModeStarted", pairingMode.pairingModeStarted);
+                    payload.put("pin", pairingMode.pin);
+                    payload.put("manualPinRequired", true);
+                    payload.put("paired", false);
+                    payload.put("message", "RNode pairing mode started. Select the matching Bluetooth RNode before using USB-assisted auto-pairing.");
+                    call.resolve(payload);
+                    return;
+                }
+                pairSelectedBluetoothDeviceWithPin(call, bluetoothDeviceId, pairingMode.pin);
             } catch (Exception ex) {
                 call.reject("USB-assisted RNode pairing failed.", ex);
             }
@@ -1177,6 +1188,21 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void deleteLocalEam(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("callsign", call.getString("callsign"));
+        final Long deletedAtMs = call.getLong("deletedAtMs");
+        if (deletedAtMs != null) {
+            payload.put("deletedAtMs", deletedAtMs);
+        }
+        runIntServiceCall(
+            call,
+            "Failed to delete local EAM.",
+            service -> service.deleteLocalEamJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
     public void getEamTeamSummary(PluginCall call) {
         final JSObject payload = new JSObject();
         payload.put("teamUid", call.getString("teamUid"));
@@ -1484,7 +1510,7 @@ public class ReticulumNodePlugin extends Plugin {
         notifyListeners("rnodeUsbPairingPin", payload);
     }
 
-    private void pairFirstScannedRnodeWithPin(PluginCall call, String pin) {
+    private void pairSelectedBluetoothDeviceWithPin(PluginCall call, String bluetoothDeviceId, String pin) {
         final BluetoothAdapter adapter = bluetoothAdapter();
         if (adapter == null || !adapter.isEnabled()) {
             final JSObject payload = new JSObject();
@@ -1496,77 +1522,20 @@ public class ReticulumNodePlugin extends Plugin {
             call.resolve(payload);
             return;
         }
-        final BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
-        if (scanner == null) {
+        try {
+            final BluetoothDevice device = adapter.getRemoteDevice(bluetoothDeviceId.trim());
+            pairBluetoothDeviceWithPin(call, device, null, pin);
+        } catch (IllegalArgumentException ex) {
             final JSObject payload = new JSObject();
             payload.put("pairingModeStarted", true);
             payload.put("pin", pin);
             payload.put("paired", false);
             payload.put("manualPinRequired", true);
-            payload.put("message", "Bluetooth LE scanning is unavailable; enter the PIN in Android Bluetooth settings.");
+            payload.put("message", "Selected Bluetooth RNode address is invalid; enter the PIN in Android Bluetooth settings.");
             call.resolve(payload);
-            return;
-        }
-
-        notifyRnodeUsbPairingStatus("Scanning for RNode Bluetooth advertisements");
-        final Handler handler = new Handler(Looper.getMainLooper());
-        final AtomicBoolean finished = new AtomicBoolean(false);
-        final ScanCallback callback =
-            new ScanCallback() {
-                @Override
-                public void onScanResult(int callbackType, ScanResult result) {
-                    if (!finished.compareAndSet(false, true)) {
-                        return;
-                    }
-                    try {
-                        scanner.stopScan(this);
-                    } catch (Exception ex) {
-                        Log.w(TAG, "Failed to stop RNode USB pairing BLE scan", ex);
-                    }
-                    pairBluetoothDeviceWithPin(call, result.getDevice(), result.getRssi(), pin);
-                }
-
-                @Override
-                public void onScanFailed(int errorCode) {
-                    if (!finished.compareAndSet(false, true)) {
-                        return;
-                    }
-                    final JSObject payload = new JSObject();
-                    payload.put("pairingModeStarted", true);
-                    payload.put("pin", pin);
-                    payload.put("paired", false);
-                    payload.put("manualPinRequired", true);
-                    payload.put("message", "RNode Bluetooth scan failed: " + errorCode);
-                    call.resolve(payload);
-                }
-            };
-
-        final List<ScanFilter> filters = new ArrayList<>();
-        filters.add(new ScanFilter.Builder().setServiceUuid(ParcelUuid.fromString(RNODE_UART_SERVICE_UUID)).build());
-        final ScanSettings settings = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
-        try {
-            scanner.startScan(filters, settings, callback);
         } catch (SecurityException ex) {
             call.reject("Bluetooth permission denied.", ex);
-            return;
         }
-        handler.postDelayed(() -> {
-            if (!finished.compareAndSet(false, true)) {
-                return;
-            }
-            try {
-                scanner.stopScan(callback);
-            } catch (Exception ex) {
-                Log.w(TAG, "Failed to stop RNode USB pairing BLE scan", ex);
-            }
-            final JSObject payload = new JSObject();
-            payload.put("pairingModeStarted", true);
-            payload.put("pin", pin);
-            payload.put("paired", false);
-            payload.put("manualPinRequired", true);
-            payload.put("message", "RNode pairing mode started, but REM did not discover the BLE advertisement. Enter the PIN manually.");
-            call.resolve(payload);
-        }, Math.max(1_000L, DEFAULT_RNODE_SCAN_TIMEOUT_MS));
     }
 
     private void pairBluetoothDeviceWithPin(PluginCall call, BluetoothDevice device, Integer rssi, String pin) {

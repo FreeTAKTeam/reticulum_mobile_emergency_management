@@ -100,6 +100,7 @@ const rnodeScanning = ref(false);
 const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
 const rnodeUsbPairing = ref(false);
 const rnodeUsbDevices = ref<RnodeUsbDeviceRecord[]>([]);
+const selectedRnodeUsbDeviceId = ref<number | null>(null);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
@@ -376,6 +377,17 @@ function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
   return parts.join(" | ");
 }
 
+function rnodeUsbDeviceDetail(device: RnodeUsbDeviceRecord): string {
+  const parts = [
+    device.productName || device.manufacturerName || device.deviceName,
+    device.serialNumber ? `S/N ${device.serialNumber}` : "",
+    `VID ${device.vendorId.toString(16).padStart(4, "0")}`,
+    `PID ${device.productId.toString(16).padStart(4, "0")}`,
+    device.hasPermission ? "USB allowed" : "USB permission needed",
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
 async function loadPairedRnodeDevices(): Promise<void> {
   if (rnodePairedLoading.value) {
     return;
@@ -457,6 +469,11 @@ async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
   form.rnodeDisplayName = device.name || device.address;
 }
 
+function selectRnodeUsbDevice(device: RnodeUsbDeviceRecord): void {
+  selectedRnodeUsbDeviceId.value = device.deviceId;
+  rnodeScanFeedback.value = `Selected USB RNode ${device.productName || device.deviceName || device.deviceId}.`;
+}
+
 async function pairRnodeViaUsb(): Promise<void> {
   if (rnodeUsbPairing.value) {
     return;
@@ -469,11 +486,17 @@ async function pairRnodeViaUsb(): Promise<void> {
   try {
     const devices = await listRnodeUsbDevices();
     rnodeUsbDevices.value = devices;
-    const device = devices[0];
+    const selectedDevice = devices.find((candidate) => candidate.deviceId === selectedRnodeUsbDeviceId.value);
+    if (devices.length > 1 && !selectedDevice) {
+      rnodeScanFeedback.value = "Select the USB RNode to use, then pair via USB.";
+      return;
+    }
+    const device = selectedDevice ?? devices[0];
     if (!device) {
       rnodeScanFeedback.value = "No USB RNode found. Connect the RNode by USB and grant Android USB access.";
       return;
     }
+    selectedRnodeUsbDeviceId.value = device.deviceId;
     if (!device.hasPermission) {
       const permission = await requestRnodeUsbPermission(device.deviceId);
       if (!permission.granted) {
@@ -482,7 +505,8 @@ async function pairRnodeViaUsb(): Promise<void> {
       }
     }
     rnodeScanFeedback.value = "Starting RNode Bluetooth pairing mode over USB...";
-    const result = await startRnodeUsbBluetoothPairing(device.deviceId);
+    const bluetoothDeviceId = form.rnodePeripheralId.trim() || undefined;
+    const result = await startRnodeUsbBluetoothPairing(device.deviceId, bluetoothDeviceId);
     if (result.paired) {
       form.rnodeEnabled = true;
       form.rnodePeripheralId = result.id || result.address;
@@ -946,6 +970,23 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
                 <p class="server-endpoint">{{ rnodeDeviceDetail(device) }}</p>
               </div>
               <span class="bootstrap-badge">RNode</span>
+            </button>
+          </div>
+          <div v-if="rnodeUsbDevices.length > 0" class="server-list">
+            <button
+              v-for="device in rnodeUsbDevices"
+              :key="`usb-${device.deviceId}`"
+              type="button"
+              class="server-option device-option"
+              @click="selectRnodeUsbDevice(device)"
+            >
+              <div class="server-option-body">
+                <p class="server-name">{{ device.productName || device.deviceName || `USB ${device.deviceId}` }}</p>
+                <p class="server-endpoint">{{ rnodeUsbDeviceDetail(device) }}</p>
+              </div>
+              <span class="bootstrap-badge">
+                {{ selectedRnodeUsbDeviceId === device.deviceId ? "Selected" : "USB" }}
+              </span>
             </button>
           </div>
           <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>

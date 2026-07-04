@@ -110,6 +110,7 @@ export function useSetupWizard() {
   const rnodeDevices = shallowRef<RnodeBleDeviceRecord[]>([]);
   const rnodeUsbPairing = shallowRef(false);
   const rnodeUsbDevices = shallowRef<RnodeUsbDeviceRecord[]>([]);
+  const selectedRnodeUsbDeviceId = shallowRef<number | null>(null);
   const permissions = reactive<SetupPermissionSnapshot>({
     location: "prompt",
     notifications: "prompt",
@@ -227,6 +228,17 @@ export function useSetupWizard() {
     return parts.join(" | ");
   }
 
+  function rnodeUsbDeviceDetail(device: RnodeUsbDeviceRecord): string {
+    const parts = [
+      device.productName || device.manufacturerName || device.deviceName,
+      device.serialNumber ? `S/N ${device.serialNumber}` : "",
+      `VID ${device.vendorId.toString(16).padStart(4, "0")}`,
+      `PID ${device.productId.toString(16).padStart(4, "0")}`,
+      device.hasPermission ? "USB allowed" : "USB permission needed",
+    ].filter(Boolean);
+    return parts.join(" | ");
+  }
+
   async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
     if (permissions.bluetooth !== "granted") {
       permissions.bluetooth = await requestRnodeBluetoothPermission();
@@ -310,6 +322,11 @@ export function useSetupWizard() {
     draft.rnode.displayName = device.name || device.address;
   }
 
+  function selectRnodeUsbDevice(device: RnodeUsbDeviceRecord): void {
+    selectedRnodeUsbDeviceId.value = device.deviceId;
+    feedback.value = `Selected USB RNode ${device.productName || device.deviceName || device.deviceId}.`;
+  }
+
   async function pairRnodeViaUsb(): Promise<void> {
     if (rnodeUsbPairing.value) {
       return;
@@ -322,11 +339,17 @@ export function useSetupWizard() {
     try {
       const devices = await listRnodeUsbDevices();
       rnodeUsbDevices.value = devices;
-      const device = devices[0];
+      const selectedDevice = devices.find((candidate) => candidate.deviceId === selectedRnodeUsbDeviceId.value);
+      if (devices.length > 1 && !selectedDevice) {
+        feedback.value = "Select the USB RNode to use, then pair via USB.";
+        return;
+      }
+      const device = selectedDevice ?? devices[0];
       if (!device) {
         feedback.value = "No USB RNode found. Connect the RNode by USB and grant Android USB access.";
         return;
       }
+      selectedRnodeUsbDeviceId.value = device.deviceId;
       if (!device.hasPermission) {
         const permission = await requestRnodeUsbPermission(device.deviceId);
         if (!permission.granted) {
@@ -335,7 +358,8 @@ export function useSetupWizard() {
         }
       }
       feedback.value = "Starting RNode Bluetooth pairing mode over USB...";
-      const result = await startRnodeUsbBluetoothPairing(device.deviceId);
+      const bluetoothDeviceId = draft.rnode.peripheralId.trim() || undefined;
+      const result = await startRnodeUsbBluetoothPairing(device.deviceId, bluetoothDeviceId);
       if (result.paired) {
         draft.rnode.enabled = true;
         draft.rnode.peripheralId = result.id || result.address;
@@ -431,11 +455,13 @@ export function useSetupWizard() {
     rnodePairedDevices,
     rnodePairedLoading,
     rnodeDevices,
+    rnodeUsbDeviceDetail,
     rnodeUsbDevices,
     rnodeUsbPairing,
     rnodeProfiles: RNODE_PROFILE_SPECS,
     rnodeScanning,
     saving,
+    selectedRnodeUsbDeviceId,
     selectedTcpEndpointSet,
     sosFloatingButtonEnabled,
     steps,
@@ -451,6 +477,7 @@ export function useSetupWizard() {
     loadPairedRnodeDevices,
     scanRnodeDevices,
     selectRnodeDevice,
+    selectRnodeUsbDevice,
     pairRnodeViaUsb,
     setTcpEndpoint,
   };

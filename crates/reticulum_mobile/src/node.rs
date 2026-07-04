@@ -5203,6 +5203,19 @@ impl Node {
         Ok(())
     }
 
+    pub fn delete_local_eam(&self, callsign: String, deleted_at_ms: u64) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner.app_state.delete_eam(&callsign, deleted_at_ms)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        let summary = inner.app_state.bump_projection_revision(
+            ProjectionScope::OperationalSummary {},
+            None,
+            Some("eam-deleted-local".to_string()),
+        )?;
+        emit_projection_invalidation(&inner.bus, summary);
+        Ok(())
+    }
+
     pub fn get_eam_team_summary(
         &self,
         team_uid: String,

@@ -50,7 +50,7 @@ export async function requestRnodeUsbPermission(deviceId: number): Promise<{ dev
   return createReticulumNodeClient().requestRnodeUsbPermission(deviceId);
 }
 
-export async function startRnodeUsbBluetoothPairing(deviceId: number): Promise<RnodeUsbPairResult> {
+export async function startRnodeUsbBluetoothPairing(deviceId: number, bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
   if (!Capacitor.isNativePlatform()) {
     return {
       id: "",
@@ -62,7 +62,7 @@ export async function startRnodeUsbBluetoothPairing(deviceId: number): Promise<R
       message: "USB-assisted pairing is available only on Android.",
     };
   }
-  return createReticulumNodeClient().startRnodeUsbBluetoothPairing(deviceId);
+  return createReticulumNodeClient().startRnodeUsbBluetoothPairing(deviceId, bluetoothDeviceId);
 }
 
 export async function cancelRnodeUsbBluetoothPairing(deviceId?: number): Promise<void> {

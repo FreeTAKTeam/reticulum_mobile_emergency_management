@@ -771,7 +771,7 @@ export interface ReticulumNodeClient {
   pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
   listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]>;
   requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }>;
-  startRnodeUsbBluetoothPairing(deviceId: number): Promise<RnodeUsbPairResult>;
+  startRnodeUsbBluetoothPairing(deviceId: number, bluetoothDeviceId?: string): Promise<RnodeUsbPairResult>;
   cancelRnodeUsbBluetoothPairing(deviceId?: number): Promise<void>;
   connectPeer(destinationHex: string): Promise<void>;
   disconnectPeer(destinationHex: string): Promise<void>;
@@ -880,6 +880,7 @@ export interface ReticulumNodeClient {
   getEams(): Promise<EamProjectionRecord[]>;
   upsertEam(eam: EamProjectionRecord): Promise<void>;
   deleteEam(callsign: string, deletedAtMs?: number): Promise<void>;
+  deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void>;
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
   getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
@@ -1045,7 +1046,7 @@ interface ReticulumNodePlugin {
   pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
   listRnodeUsbDevices(): Promise<{ items?: RnodeUsbDeviceRecord[] }>;
   requestRnodeUsbPermission(options: { deviceId: number }): Promise<Record<string, unknown>>;
-  startRnodeUsbBluetoothPairing(options: { deviceId: number }): Promise<Record<string, unknown>>;
+  startRnodeUsbBluetoothPairing(options: { deviceId: number; bluetoothDeviceId?: string }): Promise<Record<string, unknown>>;
   cancelRnodeUsbBluetoothPairing(options?: { deviceId?: number }): Promise<void>;
   connectPeer(options: { destinationHex: string }): Promise<void>;
   disconnectPeer(options: { destinationHex: string }): Promise<void>;
@@ -1161,6 +1162,7 @@ interface ReticulumNodePlugin {
   getEams(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEam(options: { eam: Record<string, unknown> }): Promise<void>;
   deleteEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
+  deleteLocalEam(options: { callsign: string; deletedAtMs?: number }): Promise<void>;
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
   getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
@@ -3504,9 +3506,9 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     };
   }
 
-  async startRnodeUsbBluetoothPairing(deviceId: number): Promise<RnodeUsbPairResult> {
+  async startRnodeUsbBluetoothPairing(deviceId: number, bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
     await this.ready();
-    const result = await this.plugin.startRnodeUsbBluetoothPairing({ deviceId });
+    const result = await this.plugin.startRnodeUsbBluetoothPairing({ deviceId, bluetoothDeviceId });
     return {
       id: String(result.id ?? result.address ?? ""),
       address: String(result.address ?? result.id ?? ""),
@@ -3858,6 +3860,11 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.plugin.deleteEam({ callsign, deletedAtMs });
   }
 
+  async deleteLocalEam(callsign: string, deletedAtMs?: number): Promise<void> {
+    await this.ready();
+    await this.plugin.deleteLocalEam({ callsign, deletedAtMs });
+  }
+
   async getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null> {
     await this.ready();
     return toEamTeamSummaryRecord(await this.plugin.getEamTeamSummary({ teamUid }));
@@ -4132,7 +4139,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return { deviceId, granted: false };
   }
 
-  async startRnodeUsbBluetoothPairing(deviceId: number): Promise<RnodeUsbPairResult> {
+  async startRnodeUsbBluetoothPairing(deviceId: number, _bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
     return {
       id: "",
       address: "",
@@ -4339,6 +4346,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
@@ -4742,7 +4750,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     return { deviceId, granted: false };
   }
 
-  async startRnodeUsbBluetoothPairing(deviceId: number): Promise<RnodeUsbPairResult> {
+  async startRnodeUsbBluetoothPairing(deviceId: number, _bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
     return {
       id: "",
       address: "",
@@ -4976,6 +4984,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
+  async deleteLocalEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }

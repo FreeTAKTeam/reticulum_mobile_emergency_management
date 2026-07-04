@@ -553,6 +553,10 @@ public final class ReticulumNodeService extends Service {
         return ReticulumBridge.deleteEamJson(payloadJson);
     }
 
+    public int deleteLocalEamJson(String payloadJson) {
+        return ReticulumBridge.deleteLocalEamJson(payloadJson);
+    }
+
     public String getEamTeamSummaryJson(String payloadJson) {
         return ReticulumBridge.getEamTeamSummaryJson(payloadJson);
     }
