@@ -64,15 +64,13 @@ public class ReticulumNodePlugin extends Plugin {
     private static final String RNODE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     private static final long SERVICE_BIND_TIMEOUT_MS = 10_000L;
     private static final long DEFAULT_RNODE_SCAN_TIMEOUT_MS = 8_000L;
-    private static final long RNODE_PAIR_TIMEOUT_MS = 30_000L;
 
     private volatile ReticulumNodeService boundService;
     private volatile boolean serviceBound = false;
     private volatile boolean serviceListenerRegistered = false;
     private volatile boolean bridgeForeground = true;
+    private volatile RNodeUsbControlManager rnodeUsbControlManager;
     private CompletableFuture<ReticulumNodeService> serviceFuture = new CompletableFuture<>();
-    private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Map<String, PendingRnodePairing> pendingRnodePairings = new LinkedHashMap<>();
 
     private final ExecutorService bridgeExecutor = Executors.newFixedThreadPool(4);
     private final ReticulumNodeService.ServiceEventListener serviceEventListener = (eventName, payload) -> {
@@ -133,61 +131,6 @@ public class ReticulumNodePlugin extends Plugin {
         }
     };
 
-    private static final class PendingRnodePairing {
-        final PluginCall call;
-        final BroadcastReceiver receiver;
-        Runnable timeout;
-
-        PendingRnodePairing(PluginCall call, BroadcastReceiver receiver) {
-            this.call = call;
-            this.receiver = receiver;
-        }
-    }
-
-    private void cancelPendingRnodePairings() {
-        final List<PendingRnodePairing> pending;
-        synchronized (pendingRnodePairings) {
-            pending = new ArrayList<>(pendingRnodePairings.values());
-            pendingRnodePairings.clear();
-        }
-        for (PendingRnodePairing pairing : pending) {
-            if (pairing.timeout != null) {
-                mainHandler.removeCallbacks(pairing.timeout);
-            }
-            try {
-                getContext().unregisterReceiver(pairing.receiver);
-            } catch (IllegalArgumentException ignored) {
-                // Receiver may already be unregistered by a terminal bond-state event.
-            }
-        }
-    }
-
-    private void finishPendingRnodePairing(String address, BluetoothDevice device, boolean timedOut) {
-        final PendingRnodePairing pending;
-        synchronized (pendingRnodePairings) {
-            pending = pendingRnodePairings.remove(address);
-        }
-        if (pending == null) {
-            return;
-        }
-        if (pending.timeout != null) {
-            mainHandler.removeCallbacks(pending.timeout);
-        }
-        try {
-            getContext().unregisterReceiver(pending.receiver);
-        } catch (IllegalArgumentException ignored) {
-            // Receiver may already be unregistered during plugin teardown.
-        }
-        final JSObject payload = new JSObject();
-        payload.put("id", device.getAddress());
-        payload.put("address", device.getAddress());
-        payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
-        payload.put("bondingStarted", true);
-        payload.put("bondState", bondStateLabel(device.getBondState()));
-        payload.put("timedOut", timedOut);
-        pending.call.resolve(payload);
-    }
-
     @Override
     public void load() {
         super.load();
@@ -232,7 +175,10 @@ public class ReticulumNodePlugin extends Plugin {
             boundService.setAppUiForeground(false);
         }
         unregisterServiceListener();
-        cancelPendingRnodePairings();
+        final RNodeUsbControlManager manager = rnodeUsbControlManager;
+        if (manager != null) {
+            manager.cancel();
+        }
         unbindFromService();
         bridgeExecutor.shutdownNow();
         super.handleOnDestroy();
@@ -424,70 +370,125 @@ public class ReticulumNodePlugin extends Plugin {
         }
         try {
             final BluetoothDevice device = adapter.getRemoteDevice(id.trim());
-            final String address = device.getAddress();
             final JSObject payload = new JSObject();
-            payload.put("id", address);
-            payload.put("address", address);
+            payload.put("id", device.getAddress());
+            payload.put("address", device.getAddress());
             payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
             if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                 payload.put("bondState", "bonded");
-                payload.put("bondingStarted", false);
-                payload.put("timedOut", false);
                 call.resolve(payload);
                 return;
             }
-            synchronized (pendingRnodePairings) {
-                if (pendingRnodePairings.containsKey(address)) {
-                    call.reject("Bluetooth pairing is already pending for this RNode.");
-                    return;
-                }
-            }
-
-            final BroadcastReceiver receiver = new BroadcastReceiver() {
-                @Override
-                public void onReceive(Context context, Intent intent) {
-                    if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) {
-                        return;
-                    }
-                    final BluetoothDevice changedDevice = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                    if (changedDevice == null || !address.equals(changedDevice.getAddress())) {
-                        return;
-                    }
-                    final int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, changedDevice.getBondState());
-                    if (state == BluetoothDevice.BOND_BONDED || state == BluetoothDevice.BOND_NONE) {
-                        finishPendingRnodePairing(address, changedDevice, false);
-                    }
-                }
-            };
-            final PendingRnodePairing pending = new PendingRnodePairing(call, receiver);
-            pending.timeout = () -> finishPendingRnodePairing(address, device, true);
-            synchronized (pendingRnodePairings) {
-                pendingRnodePairings.put(address, pending);
-            }
-            ContextCompat.registerReceiver(
-                getContext(),
-                receiver,
-                new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED),
-                ContextCompat.RECEIVER_EXPORTED
-            );
-
-            final boolean bondingStarted = device.getBondState() == BluetoothDevice.BOND_BONDING || device.createBond();
+            final boolean bondingStarted = device.createBond();
             if (!bondingStarted) {
-                synchronized (pendingRnodePairings) {
-                    pendingRnodePairings.remove(address);
-                }
-                try {
-                    getContext().unregisterReceiver(receiver);
-                } catch (IllegalArgumentException ignored) {
-                    // Receiver was not registered or was already removed.
-                }
                 call.reject("Android did not start Bluetooth pairing for this RNode.");
                 return;
             }
-            mainHandler.postDelayed(pending.timeout, RNODE_PAIR_TIMEOUT_MS);
+            payload.put("bondingStarted", true);
+            payload.put("bondState", bondStateLabel(device.getBondState()));
+            call.resolve(payload);
         } catch (IllegalArgumentException ex) {
             call.reject("Invalid Bluetooth device id.", ex);
         }
+    }
+
+    @PluginMethod
+    public void listRnodeUsbDevices(PluginCall call) {
+        bridgeExecutor.execute(() -> {
+            final JSArray items = new JSArray();
+            for (RNodeUsbControlManager.UsbDeviceRecord device : rnodeUsbControlManager().listDevices()) {
+                items.put(rnodeUsbDevicePayload(device));
+            }
+            final JSObject payload = new JSObject();
+            payload.put("items", items);
+            call.resolve(payload);
+        });
+    }
+
+    @PluginMethod
+    public void requestRnodeUsbPermission(PluginCall call) {
+        final int deviceId = call.getInt("deviceId", -1);
+        if (deviceId < 0) {
+            call.reject("deviceId is required.");
+            return;
+        }
+        rnodeUsbControlManager().requestPermission(deviceId, granted -> {
+            final JSObject payload = new JSObject();
+            payload.put("deviceId", deviceId);
+            payload.put("granted", granted);
+            call.resolve(payload);
+        });
+    }
+
+    @PluginMethod
+    public void startRnodeUsbBluetoothPairing(PluginCall call) {
+        if (!hasRnodeBluetoothPermission()) {
+            call.reject("Bluetooth permission denied.");
+            return;
+        }
+        final int deviceId = call.getInt("deviceId", -1);
+        if (deviceId < 0) {
+            call.reject("deviceId is required.");
+            return;
+        }
+        final String bluetoothDeviceId = call.getString("bluetoothDeviceId", "");
+        bridgeExecutor.execute(() -> {
+            try {
+                final RNodeUsbControlManager.PairingModeResult pairingMode =
+                    rnodeUsbControlManager()
+                        .enterBluetoothPairingMode(
+                            deviceId,
+                            new RNodeUsbControlManager.PairingModeListener() {
+                                @Override
+                                public void onStatus(String status) {
+                                    notifyRnodeUsbPairingStatus(status);
+                                }
+
+                                @Override
+                                public void onPin(String pin) {
+                                    notifyRnodeUsbPairingPin(pin);
+                                }
+                            }
+                        );
+                if (pairingMode.pin == null || pairingMode.pin.trim().isEmpty()) {
+                    final JSObject payload = new JSObject();
+                    payload.put("pairingModeStarted", pairingMode.pairingModeStarted);
+                    payload.put("manualPinRequired", true);
+                    payload.put("paired", false);
+                    call.resolve(payload);
+                    return;
+                }
+                if (bluetoothDeviceId == null || bluetoothDeviceId.trim().isEmpty()) {
+                    final JSObject payload = new JSObject();
+                    payload.put("pairingModeStarted", pairingMode.pairingModeStarted);
+                    payload.put("pin", pairingMode.pin);
+                    payload.put("manualPinRequired", true);
+                    payload.put("paired", false);
+                    payload.put("message", "RNode pairing mode started. Select the matching Bluetooth RNode before using USB-assisted auto-pairing.");
+                    call.resolve(payload);
+                    return;
+                }
+                pairSelectedBluetoothDeviceWithPin(call, bluetoothDeviceId, pairingMode.pin);
+            } catch (Exception ex) {
+                call.reject("USB-assisted RNode pairing failed.", ex);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void cancelRnodeUsbBluetoothPairing(PluginCall call) {
+        rnodeUsbControlManager().cancel();
+        final int deviceId = call.getInt("deviceId", -1);
+        if (deviceId >= 0) {
+            bridgeExecutor.execute(() -> {
+                try {
+                    rnodeUsbControlManager().exitBluetoothPairingMode(deviceId);
+                } catch (Exception ex) {
+                    Log.w(TAG, "Failed to exit RNode Bluetooth pairing mode", ex);
+                }
+            });
+        }
+        call.resolve();
     }
 
     @PluginMethod
@@ -1473,6 +1474,211 @@ public class ReticulumNodePlugin extends Plugin {
 
     private void resetServiceFuture() {
         serviceFuture = new CompletableFuture<>();
+    }
+
+    private RNodeUsbControlManager rnodeUsbControlManager() {
+        RNodeUsbControlManager manager = rnodeUsbControlManager;
+        if (manager == null) {
+            manager = new RNodeUsbControlManager(getContext());
+            rnodeUsbControlManager = manager;
+        }
+        return manager;
+    }
+
+    private JSObject rnodeUsbDevicePayload(RNodeUsbControlManager.UsbDeviceRecord device) {
+        final JSObject payload = new JSObject();
+        payload.put("deviceId", device.deviceId);
+        payload.put("vendorId", device.vendorId);
+        payload.put("productId", device.productId);
+        payload.put("deviceName", device.deviceName == null ? "" : device.deviceName);
+        payload.put("manufacturerName", device.manufacturerName == null ? "" : device.manufacturerName);
+        payload.put("productName", device.productName == null ? "" : device.productName);
+        payload.put("serialNumber", device.serialNumber == null ? "" : device.serialNumber);
+        payload.put("hasPermission", device.hasPermission);
+        return payload;
+    }
+
+    private void notifyRnodeUsbPairingStatus(String status) {
+        final JSObject payload = new JSObject();
+        payload.put("status", status);
+        notifyListeners("rnodeUsbPairingStatus", payload);
+    }
+
+    private void notifyRnodeUsbPairingPin(String pin) {
+        final JSObject payload = new JSObject();
+        payload.put("pin", pin);
+        notifyListeners("rnodeUsbPairingPin", payload);
+    }
+
+    private void pairSelectedBluetoothDeviceWithPin(PluginCall call, String bluetoothDeviceId, String pin) {
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            final JSObject payload = new JSObject();
+            payload.put("pairingModeStarted", true);
+            payload.put("pin", pin);
+            payload.put("paired", false);
+            payload.put("manualPinRequired", true);
+            payload.put("message", "Bluetooth is unavailable; enter the PIN in Android Bluetooth settings.");
+            call.resolve(payload);
+            return;
+        }
+        try {
+            final BluetoothDevice device = adapter.getRemoteDevice(bluetoothDeviceId.trim());
+            pairBluetoothDeviceWithPin(call, device, null, pin);
+        } catch (IllegalArgumentException ex) {
+            final JSObject payload = new JSObject();
+            payload.put("pairingModeStarted", true);
+            payload.put("pin", pin);
+            payload.put("paired", false);
+            payload.put("manualPinRequired", true);
+            payload.put("message", "Selected Bluetooth RNode address is invalid; enter the PIN in Android Bluetooth settings.");
+            call.resolve(payload);
+        } catch (SecurityException ex) {
+            call.reject("Bluetooth permission denied.", ex);
+        }
+    }
+
+    private void pairBluetoothDeviceWithPin(PluginCall call, BluetoothDevice device, Integer rssi, String pin) {
+        if (device == null) {
+            call.reject("RNode Bluetooth scan returned no device.");
+            return;
+        }
+        final String address = device.getAddress();
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final Handler handler = new Handler(Looper.getMainLooper());
+        notifyRnodeUsbPairingStatus("Pairing with discovered RNode");
+
+        if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+            final JSObject payload = rnodeBluetoothDevicePayload(device, rssi, null);
+            payload.put("pairingModeStarted", true);
+            payload.put("pin", pin);
+            payload.put("paired", true);
+            payload.put("bondState", "bonded");
+            call.resolve(payload);
+            return;
+        }
+
+        final BroadcastReceiver receiver =
+            new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    final String action = intent.getAction();
+                    final BluetoothDevice eventDevice =
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                            ? intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class)
+                            : intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    if (eventDevice == null || !address.equalsIgnoreCase(eventDevice.getAddress())) {
+                        return;
+                    }
+
+                    if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(action)) {
+                        handlePairingRequest(this, eventDevice, pin);
+                        return;
+                    }
+
+                    if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
+                        return;
+                    }
+                    final int bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE);
+                    if (bondState == BluetoothDevice.BOND_BONDED && finished.compareAndSet(false, true)) {
+                        unregisterReceiverQuietly(this);
+                        final JSObject payload = rnodeBluetoothDevicePayload(eventDevice, rssi, null);
+                        payload.put("pairingModeStarted", true);
+                        payload.put("pin", pin);
+                        payload.put("paired", true);
+                        payload.put("bondState", "bonded");
+                        call.resolve(payload);
+                    } else if (bondState == BluetoothDevice.BOND_NONE && finished.compareAndSet(false, true)) {
+                        unregisterReceiverQuietly(this);
+                        final JSObject payload = new JSObject();
+                        payload.put("pairingModeStarted", true);
+                        payload.put("pin", pin);
+                        payload.put("paired", false);
+                        payload.put("manualPinRequired", true);
+                        payload.put("bondState", "none");
+                        payload.put("message", "Android rejected the RNode bond; enter the PIN manually if prompted.");
+                        call.resolve(payload);
+                    }
+                }
+            };
+
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_PAIRING_REQUEST);
+        filter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY - 1);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getContext().registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            getContext().registerReceiver(receiver, filter);
+        }
+
+        try {
+            final boolean started = createBondWithPreferredTransport(device);
+            if (!started && finished.compareAndSet(false, true)) {
+                unregisterReceiverQuietly(receiver);
+                final JSObject payload = new JSObject();
+                payload.put("pairingModeStarted", true);
+                payload.put("pin", pin);
+                payload.put("paired", false);
+                payload.put("manualPinRequired", true);
+                payload.put("message", "Android did not start Bluetooth pairing for this RNode.");
+                call.resolve(payload);
+                return;
+            }
+        } catch (SecurityException ex) {
+            unregisterReceiverQuietly(receiver);
+            call.reject("Bluetooth permission denied.", ex);
+            return;
+        }
+
+        handler.postDelayed(() -> {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            unregisterReceiverQuietly(receiver);
+            final JSObject payload = new JSObject();
+            payload.put("pairingModeStarted", true);
+            payload.put("pin", pin);
+            payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
+            payload.put("manualPinRequired", device.getBondState() != BluetoothDevice.BOND_BONDED);
+            payload.put("bondState", bondStateLabel(device.getBondState()));
+            payload.put("message", "Timed out waiting for Android to complete RNode Bluetooth pairing.");
+            call.resolve(payload);
+        }, 45_000L);
+    }
+
+    private void handlePairingRequest(BroadcastReceiver receiver, BluetoothDevice device, String pin) {
+        try {
+            if (pin != null && !pin.isEmpty()) {
+                device.setPin(pin.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                receiver.abortBroadcast();
+                notifyRnodeUsbPairingStatus("Submitted RNode Bluetooth PIN to Android");
+            }
+        } catch (SecurityException ex) {
+            Log.w(TAG, "Bluetooth permission denied while setting RNode PIN", ex);
+        } catch (Exception ex) {
+            Log.w(TAG, "Failed to set RNode Bluetooth PIN", ex);
+        }
+    }
+
+    private boolean createBondWithPreferredTransport(BluetoothDevice device) {
+        try {
+            final java.lang.reflect.Method createBond = BluetoothDevice.class.getMethod("createBond", int.class);
+            final int transport = device.getType() == BluetoothDevice.DEVICE_TYPE_CLASSIC ? 1 : 2;
+            final Object result = createBond.invoke(device, transport);
+            return Boolean.TRUE.equals(result);
+        } catch (Exception ex) {
+            Log.w(TAG, "createBond(transport) failed, falling back to createBond()", ex);
+            return device.createBond();
+        }
+    }
+
+    private void unregisterReceiverQuietly(BroadcastReceiver receiver) {
+        try {
+            getContext().unregisterReceiver(receiver);
+        } catch (IllegalArgumentException ignored) {
+            // Already unregistered.
+        }
     }
 
     private void runIntServiceCall(

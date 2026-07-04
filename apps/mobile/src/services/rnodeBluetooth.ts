@@ -1,7 +1,13 @@
 import { Capacitor } from "@capacitor/core";
-import { createReticulumNodeClient, type RnodeBleDeviceRecord, type RnodeBlePairResult } from "@reticulum/node-client";
+import {
+  createReticulumNodeClient,
+  type RnodeBleDeviceRecord,
+  type RnodeBlePairResult,
+  type RnodeUsbDeviceRecord,
+  type RnodeUsbPairResult,
+} from "@reticulum/node-client";
 
-export type { RnodeBleDeviceRecord, RnodeBlePairResult };
+export type { RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult };
 
 export async function scanRnodeBleDevices(timeoutMs = 8000): Promise<RnodeBleDeviceRecord[]> {
   if (!Capacitor.isNativePlatform()) {
@@ -25,8 +31,43 @@ export async function pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult
       paired: false,
       bondingStarted: false,
       bondState: "unavailable",
-      timedOut: false,
     };
   }
   return createReticulumNodeClient().pairRnodeBleDevice(id);
+}
+
+export async function listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> {
+  if (!Capacitor.isNativePlatform()) {
+    return [];
+  }
+  return createReticulumNodeClient().listRnodeUsbDevices();
+}
+
+export async function requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }> {
+  if (!Capacitor.isNativePlatform()) {
+    return { deviceId, granted: false };
+  }
+  return createReticulumNodeClient().requestRnodeUsbPermission(deviceId);
+}
+
+export async function startRnodeUsbBluetoothPairing(deviceId: number, bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
+  if (!Capacitor.isNativePlatform()) {
+    return {
+      id: "",
+      address: "",
+      paired: false,
+      pairingModeStarted: false,
+      manualPinRequired: false,
+      bondState: "unavailable",
+      message: "USB-assisted pairing is available only on Android.",
+    };
+  }
+  return createReticulumNodeClient().startRnodeUsbBluetoothPairing(deviceId, bluetoothDeviceId);
+}
+
+export async function cancelRnodeUsbBluetoothPairing(deviceId?: number): Promise<void> {
+  if (!Capacitor.isNativePlatform()) {
+    return;
+  }
+  await createReticulumNodeClient().cancelRnodeUsbBluetoothPairing(deviceId);
 }

@@ -34,6 +34,7 @@ type ChecklistNotificationWork = {
 };
 
 const CHECKLIST_NOTIFICATION_DEBOUNCE_MS = 2_000;
+const TASK_SUBMISSION_KEY_SEPARATOR = "::";
 
 function getProjectionClient(clientMode: "auto" | "capacitor"): ReticulumNodeClient {
   const cache = globalThis as ProjectionClientCache;
@@ -52,6 +53,10 @@ function normalizeMissionUid(value: string): string {
   return normalized || `mission-${Date.now().toString(36)}`;
 }
 
+function taskSubmissionKey(checklistUid: string, taskUid: string): string {
+  return `${checklistUid.trim()}${TASK_SUBMISSION_KEY_SEPARATOR}${taskUid.trim()}`;
+}
+
 export const useChecklistsStore = defineStore("checklists", () => {
   const nodeStore = useNodeStore();
   const live = ref<RuntimeChecklistRecord[]>([]);
@@ -63,6 +68,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
   const loadingLive = ref(false);
   const loadingTemplates = ref(false);
   const loadingDetailIds = ref<Record<string, boolean>>({});
+  const submittedTaskKeys = ref<Record<string, true>>({});
   const trackedDetailIds = new Set<string>();
   const cleanups: Array<() => void> = [];
 
@@ -76,6 +82,41 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   function client(): ReticulumNodeClient {
     return getProjectionClient(nodeStore.settings.clientMode);
+  }
+
+  function markTaskSubmitted(checklistUid: string, taskUid: string): void {
+    const key = taskSubmissionKey(checklistUid, taskUid);
+    if (!key.includes(TASK_SUBMISSION_KEY_SEPARATOR) || key.endsWith(TASK_SUBMISSION_KEY_SEPARATOR)) {
+      return;
+    }
+    submittedTaskKeys.value = {
+      ...submittedTaskKeys.value,
+      [key]: true,
+    };
+  }
+
+  function clearTaskSubmitted(checklistUid: string, taskUid: string): void {
+    const key = taskSubmissionKey(checklistUid, taskUid);
+    if (!(key in submittedTaskKeys.value)) {
+      return;
+    }
+    const next = { ...submittedTaskKeys.value };
+    delete next[key];
+    submittedTaskKeys.value = next;
+  }
+
+  function submittedTaskIdsForChecklist(checklistUid: string): ReadonlySet<string> {
+    const normalizedUid = checklistUid.trim();
+    if (!normalizedUid) {
+      return new Set<string>();
+    }
+    const prefix = `${normalizedUid}${TASK_SUBMISSION_KEY_SEPARATOR}`;
+    return new Set(
+      Object.keys(submittedTaskKeys.value)
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => key.slice(prefix.length))
+        .filter((taskUid) => taskUid.length > 0),
+    );
   }
 
   function activeTaskCount(record: Pick<RuntimeChecklistRecord, "tasks">): number {
@@ -487,14 +528,24 @@ export const useChecklistsStore = defineStore("checklists", () => {
     taskUid: string;
     userStatus: "PENDING" | "COMPLETE";
   }): Promise<void> {
-    await ensureJoined(input.checklistUid);
-    await client().setChecklistTaskStatus({
-      checklistUid: input.checklistUid,
-      taskUid: input.taskUid,
-      userStatus: input.userStatus,
-      changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
-    });
-    await refreshAfterMutation(input.checklistUid);
+    const shouldShowSubmitted = input.userStatus === "COMPLETE";
+    if (shouldShowSubmitted) {
+      markTaskSubmitted(input.checklistUid, input.taskUid);
+    }
+    try {
+      await ensureJoined(input.checklistUid);
+      await client().setChecklistTaskStatus({
+        checklistUid: input.checklistUid,
+        taskUid: input.taskUid,
+        userStatus: input.userStatus,
+        changedByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
+      });
+      await refreshAfterMutation(input.checklistUid);
+    } finally {
+      if (shouldShowSubmitted) {
+        clearTaskSubmitted(input.checklistUid, input.taskUid);
+      }
+    }
   }
 
   async function addTaskRow(input: {
@@ -575,6 +626,7 @@ export const useChecklistsStore = defineStore("checklists", () => {
     getChecklistById,
     getChecklistDetailById,
     getTemplateById,
+    submittedTaskIdsForChecklist,
     importTemplateCsv,
     createFromTemplate,
     updateChecklist,

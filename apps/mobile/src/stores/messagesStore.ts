@@ -16,12 +16,12 @@ import {
   truncateNotificationBody,
 } from "../services/operationalNotifications";
 import type { ActionMessage, EamStatus, EamTeamSummary, EamWireStatus } from "../types/domain";
+import { applyActionMessageStatusCycle } from "../utils/actionMessageStatus";
 import { DEFAULT_R3AKT_TEAM_COLOR, normalizeR3aktTeamColor } from "../utils/r3akt";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
-const STATUS_ROTATION: EamStatus[] = ["Unknown", "Green", "Yellow", "Red"];
 
 type StoredMessages = Record<string, ActionMessage>;
 type TeamStatusBuckets = Partial<Record<EamWireStatus, number>>;
@@ -578,17 +578,16 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!current || current.deletedAt || !canManageMessage(current)) {
       return;
     }
-    const nextStatusKey = String(field);
-    if (!nextStatusKey.endsWith("Status")) {
+    const updated = applyActionMessageStatusCycle(current, field, nextLocalUpdatedAt(current.updatedAt));
+    if (!updated) {
       return;
     }
-    const currentStatus = normalizeStatus(current[field]);
-    const currentIndex = STATUS_ROTATION.indexOf(currentStatus);
-    const nextStatus = STATUS_ROTATION[(currentIndex + 1) % STATUS_ROTATION.length];
-    void upsertLocal({
-      ...current,
-      [field]: nextStatus,
-    });
+    byCallsign.value = {
+      ...byCallsign.value,
+      [keyFor(updated.callsign)]: cloneMessage(updated),
+    };
+    webPersist();
+    void upsertLocal(updated);
   }
 
   async function requestList(): Promise<void> {

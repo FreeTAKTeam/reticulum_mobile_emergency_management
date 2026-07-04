@@ -188,7 +188,7 @@ onMounted(() => {
           <div class="section-heading">
             <p class="eyebrow">RNode Bluetooth LoRa</p>
             <h1>LoRa Interface</h1>
-            <p>Pair phone-to-RNode Bluetooth LE hardware and choose the shared REM radio profile.</p>
+            <p>Pair an RNode over Bluetooth LE and choose the shared REM radio profile.</p>
           </div>
           <label class="toggle-card">
             <input v-model="wizard.draft.rnode.enabled" type="checkbox" />
@@ -222,6 +222,31 @@ onMounted(() => {
           >
             {{ wizard.rnodeScanning.value ? "Scanning" : "Scan RNode BLE" }}
           </button>
+          <button
+            type="button"
+            class="secondary-action inline-action"
+            :disabled="wizard.rnodeUsbPairing.value"
+            @click="wizard.pairRnodeViaUsb"
+          >
+            {{ wizard.rnodeUsbPairing.value ? "Pairing via USB" : "Pair via USB" }}
+          </button>
+          <div class="server-list" v-if="wizard.rnodeUsbDevices.value.length > 0">
+            <button
+              v-for="device in wizard.rnodeUsbDevices.value"
+              :key="`usb-${device.deviceId}`"
+              type="button"
+              class="server-option device-option"
+              @click="wizard.selectRnodeUsbDevice(device)"
+            >
+              <span class="server-copy">
+                <strong>{{ device.productName || device.deviceName || `USB ${device.deviceId}` }}</strong>
+                <span>{{ wizard.rnodeUsbDeviceDetail(device) }}</span>
+              </span>
+              <span class="bootstrap-badge">
+                {{ wizard.selectedRnodeUsbDeviceId.value === device.deviceId ? "Selected" : "USB" }}
+              </span>
+            </button>
+          </div>
           <div class="server-list" v-if="wizard.rnodePairedDevices.value.length > 0">
             <button
               v-for="device in wizard.rnodePairedDevices.value"
@@ -255,13 +280,8 @@ onMounted(() => {
           <label class="field-block">
             <span>Region</span>
             <select v-model="wizard.draft.rnode.region">
-              <option
-                v-for="region in wizard.rnodeRegions"
-                :key="region.id"
-                :value="region.id"
-              >
-                {{ region.id }} - {{ region.label }}
-              </option>
+              <option value="US915">US915</option>
+              <option value="EU868">EU868</option>
             </select>
           </label>
           <button type="button" class="secondary-action inline-action" @click="wizard.inferRnodeRegion">

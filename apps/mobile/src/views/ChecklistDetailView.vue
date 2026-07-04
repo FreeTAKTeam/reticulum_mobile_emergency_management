@@ -43,12 +43,15 @@ const checklistRecord = computed(() => {
   }
   return isLiveChecklistRecord(record) ? runtimeChecklistToUi(record) : runtimeTemplateToUi(record);
 });
+const submittedTaskIds = computed(() => checklistsStore.submittedTaskIdsForChecklist(checklistId.value));
 const checklistDetail = computed(() => {
   const record = checklistRuntimeRecord.value;
   if (!record) {
     return undefined;
   }
-  return isLiveChecklistRecord(record) ? runtimeChecklistDetailToUi(record) : runtimeTemplateDetailToUi(record);
+  return isLiveChecklistRecord(record)
+    ? runtimeChecklistDetailToUi(record, { submittedTaskIds: submittedTaskIds.value })
+    : runtimeTemplateDetailToUi(record);
 });
 const visibleTasks = computed<ChecklistTask[]>(() => checklistDetail.value?.tasks ?? []);
 const isCurrentParticipant = computed(() => {
@@ -71,6 +74,9 @@ function taskStatusClass(status: ChecklistTaskStatus): string {
 }
 
 function taskStatusLabel(status: ChecklistTaskStatus): string {
+  if (status === "submitted") {
+    return "Submitted";
+  }
   if (status === "late") {
     return "Late";
   }
@@ -394,7 +400,7 @@ onMounted(() => {
                 class="task-toggle"
                 :class="taskStatusClass(task.status)"
                 :aria-label="`Mark ${task.title} as completed`"
-                :disabled="isTemplatePreview || task.status === 'completed' || isMutating"
+                :disabled="isTemplatePreview || task.status === 'completed' || task.status === 'submitted' || isMutating"
                 @click="completeTask(task.id)"
               >
                 <svg v-if="task.status === 'completed'" viewBox="0 0 24 24" fill="none">
@@ -726,6 +732,10 @@ onMounted(() => {
   background: var(--task-accent, #ef4e60);
 }
 
+.task-card.task-submitted::before {
+  background: var(--task-accent, #ffd36e);
+}
+
 .task-card.task-completed::before {
   background: var(--task-accent, #2ebf7c);
 }
@@ -757,6 +767,12 @@ onMounted(() => {
 
 .task-toggle.task-late {
   color: #ff6475;
+}
+
+.task-toggle.task-submitted {
+  background: rgb(75 54 13 / 82%);
+  border-color: rgb(255 211 110 / 48%);
+  color: #ffd36e;
 }
 
 .task-toggle.task-completed {
@@ -852,6 +868,12 @@ onMounted(() => {
   color: #ff6475;
 }
 
+.task-status-pill.task-submitted {
+  background: rgb(75 54 13 / 82%);
+  border-color: rgb(255 211 110 / 48%);
+  color: #ffd36e;
+}
+
 .task-status-pill.task-completed {
   background: rgb(14 67 42 / 82%);
   border-color: rgb(71 214 145 / 40%);
@@ -887,6 +909,10 @@ onMounted(() => {
 
 .task-meta-alert {
   color: #ff6475;
+}
+
+.task-meta-submitted {
+  color: #ffd36e;
 }
 
 .task-meta-done {

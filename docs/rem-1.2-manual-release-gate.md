@@ -22,13 +22,11 @@ Validate the full workflow set in each mode:
 
 | Mode | Source phone | Target phone | Pass condition |
 | --- | --- | --- | --- |
-| LoRa-only | RNode LoRa enabled, TCP disabled | RNode LoRa enabled, TCP disabled | Validate RNode traffic and the `REM not ready: RNode LoRa is the only active receiving interface.` degraded state. |
+| LoRa-only | RNode LoRa enabled, TCP disabled | RNode LoRa enabled, TCP disabled | Announce, connect, and workflow delivery all use LoRa-capable paths. |
 | TCP-only | TCP enabled, RNode LoRa disabled | TCP enabled, RNode LoRa disabled | Announce, connect, and workflow delivery all use TCP-capable paths. |
 | Mixed TCP+LoRa | TCP and RNode LoRa enabled on the source | One target TCP-only and one target LoRa-only | The same workflow update from the mixed source reaches both targets. |
 
 After changing TCP or LoRa settings, save settings and restart REM before validating traffic. Restart-free interface reconfiguration is not required for 1.2 final.
-
-RNode-over-BLE is the phone-to-RNode hardware link only. It is not phone-to-phone Bluetooth mesh. Treat RNode firmware 1.86 as the current hardware validation target, but do not fail the gate solely because firmware version metadata is absent or different.
 
 ## Diagnostic ADB Control
 
