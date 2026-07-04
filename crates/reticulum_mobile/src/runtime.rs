@@ -3765,7 +3765,7 @@ fn lxmf_sdk_announce_record_from_raw(
 ) -> LxmfSdkAnnounceRecord {
     let destination_kind = destination_kind.into();
     let display_name = if destination_kind == DESTINATION_KIND_LXMF_DELIVERY {
-        display_name_from_delivery_app_data(app_data).unwrap_or(None)
+        display_name_from_delivery_app_data(app_data).into_display_name_option()
     } else {
         None
     };
@@ -3778,6 +3778,22 @@ fn lxmf_sdk_announce_record_from_raw(
         hops,
         interface_hex: interface_hex.into(),
         received_at_ms,
+    }
+}
+
+trait IntoDisplayNameOption {
+    fn into_display_name_option(self) -> Option<String>;
+}
+
+impl IntoDisplayNameOption for Option<String> {
+    fn into_display_name_option(self) -> Option<String> {
+        self
+    }
+}
+
+impl<E> IntoDisplayNameOption for Result<Option<String>, E> {
+    fn into_display_name_option(self) -> Option<String> {
+        self.unwrap_or(None)
     }
 }
 
