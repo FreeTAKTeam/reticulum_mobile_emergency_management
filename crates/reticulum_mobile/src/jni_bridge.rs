@@ -20,11 +20,11 @@ use crate::types::{
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
     EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, InterfaceStatusRecord, LegacyImportPayload, LogLevel,
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord,
-    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
+    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
     TransportDeliveryState,
@@ -98,7 +98,6 @@ struct RnodeSettingsInput {
     display_name: Option<String>,
     region: Option<String>,
     profile: Option<String>,
-    frequency_hz: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -642,25 +641,7 @@ fn normalize_rnode_region(value: Option<String>) -> String {
         .as_str()
     {
         "EU868" => "EU868".to_string(),
-        "AU915" => "AU915".to_string(),
-        "AS923" => "AS923".to_string(),
-        "IN865" => "IN865".to_string(),
-        "KR920" => "KR920".to_string(),
-        "RU864" => "RU864".to_string(),
-        "US915" => "US915".to_string(),
         _ => "US915".to_string(),
-    }
-}
-
-fn default_rnode_frequency_hz(region: &str) -> u64 {
-    match region {
-        "EU868" => 868_000_000,
-        "AS923" => 923_000_000,
-        "IN865" => 865_000_000,
-        "KR920" => 920_000_000,
-        "RU864" => 864_000_000,
-        "AU915" | "US915" => 915_000_000,
-        _ => 915_000_000,
     }
 }
 
@@ -674,16 +655,11 @@ fn normalize_rnode_profile(value: Option<String>) -> String {
 
 fn to_rnode_settings_record(input: Option<RnodeSettingsInput>) -> RnodeSettingsRecord {
     let input = input.unwrap_or_default();
-    let region = normalize_rnode_region(input.region);
     RnodeSettingsRecord {
         enabled: input.enabled.unwrap_or(false),
         peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
         display_name: input.display_name.unwrap_or_default().trim().to_string(),
-        frequency_hz: input
-            .frequency_hz
-            .filter(|frequency_hz| *frequency_hz > 0)
-            .unwrap_or_else(|| default_rnode_frequency_hz(&region)),
-        region,
+        region: normalize_rnode_region(input.region),
         profile: normalize_rnode_profile(input.profile),
     }
 }
@@ -1170,23 +1146,9 @@ fn status_to_json(status: NodeStatus) -> String {
         "name": status.name,
         "identityHex": status.identity_hex,
         "appDestinationHex": status.app_destination_hex,
-        "lxmfDestinationHex": status.lxmf_destination_hex,
-        "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
+        "lxmfDestinationHex": status.lxmf_destination_hex
     })
     .to_string()
-}
-
-fn interface_status_json(status: InterfaceStatusRecord) -> serde_json::Value {
-    json!({
-        "interfaceHex": status.interface_hex,
-        "label": status.label,
-        "kind": status.kind,
-        "state": status.state,
-        "lastError": status.last_error,
-        "rxPackets": status.rx_packets,
-        "rxBytes": status.rx_bytes,
-        "lastActivityMs": status.last_activity_ms
-    })
 }
 
 fn peer_state_to_str(state: PeerState) -> &'static str {
@@ -1306,8 +1268,7 @@ fn rnode_settings_json(settings: &RnodeSettingsRecord) -> serde_json::Value {
         "peripheralId": settings.peripheral_id,
         "displayName": settings.display_name,
         "region": settings.region,
-        "profile": settings.profile,
-        "frequencyHz": settings.frequency_hz
+        "profile": settings.profile
     })
 }
 
@@ -1883,15 +1844,8 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                     "name": status.name,
                     "identityHex": status.identity_hex,
                     "appDestinationHex": status.app_destination_hex,
-                    "lxmfDestinationHex": status.lxmf_destination_hex,
-                    "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
+                    "lxmfDestinationHex": status.lxmf_destination_hex
                 }
-            }),
-        ),
-        NodeEvent::InterfaceStatusChanged { status } => (
-            "interfaceStatusChanged",
-            json!({
-                "status": interface_status_json(status)
             }),
         ),
         NodeEvent::AnnounceReceived {
@@ -2177,7 +2131,6 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
-                interfaces: Vec::new(),
             }
         }
     };
@@ -3726,37 +3679,6 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEa
     };
     let node = ensure_node(&mut guard);
     match node.delete_eam(
-        payload.callsign,
-        payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
-    ) {
-        Ok(_) => ok_result(),
-        Err(err) => {
-            set_last_node_error(err);
-            RESULT_ERR
-        }
-    }
-}
-
-#[no_mangle]
-pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLocalEamJson(
-    mut env: JNIEnv,
-    _class: JClass,
-    request_json: JString,
-) -> jint {
-    let raw = match jstring_to_rust(&mut env, request_json) {
-        Ok(v) => v,
-        Err(e) => return err_result("InvalidConfig", e),
-    };
-    let payload: DeleteEamInput = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(e) => return err_result("InvalidConfig", format!("invalid eam delete payload: {e}")),
-    };
-    let mut guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = ensure_node(&mut guard);
-    match node.delete_local_eam(
         payload.callsign,
         payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
     ) {

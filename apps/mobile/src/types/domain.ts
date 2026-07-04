@@ -291,7 +291,7 @@ export interface HubSettings {
   refreshIntervalSeconds: number;
 }
 
-export type RnodeRegion = "US915" | "EU868" | "AU915" | "AS923" | "IN865" | "KR920" | "RU864";
+export type RnodeRegion = "US915" | "EU868";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 
 export interface RnodeSettings {
@@ -300,7 +300,6 @@ export interface RnodeSettings {
   displayName: string;
   region: RnodeRegion;
   profile: RnodeProfileId;
-  frequencyHz: number;
 }
 
 export interface NodeUiSettings {

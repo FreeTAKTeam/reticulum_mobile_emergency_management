@@ -8,8 +8,8 @@ import type {
 export type ChecklistSegment = "live" | "templates";
 export type ChecklistStatus = "active" | "late" | "completed";
 export type ChecklistFilter = "all" | ChecklistStatus;
-export type ChecklistTaskStatus = "pending" | "late" | "completed";
-export type ChecklistTaskMetaTone = "clock" | "alert" | "done";
+export type ChecklistTaskStatus = "pending" | "late" | "completed" | "submitted";
+export type ChecklistTaskMetaTone = "clock" | "alert" | "done" | "submitted";
 
 export interface ChecklistRecord {
   id: string;
@@ -61,6 +61,10 @@ export interface ChecklistDetail {
   pendingLabel: string;
   tasksHeading: string;
   tasks: ChecklistTask[];
+}
+
+export interface ChecklistTaskPresentationOptions {
+  submittedTaskIds?: ReadonlySet<string>;
 }
 
 export function formatChecklistTimestamp(value?: string): string {
@@ -172,8 +176,13 @@ function templateMetadataLines(record: RuntimeChecklistTemplateRecord): string[]
 export function runtimeChecklistTaskToUi(
   task: RuntimeChecklistTaskRecord,
   columns: RuntimeChecklistColumnRecord[] = [],
+  options: ChecklistTaskPresentationOptions = {},
 ): ChecklistTask {
-  const status = checklistTaskStatusFromRuntime(task.taskStatus);
+  const runtimeStatus = checklistTaskStatusFromRuntime(task.taskStatus);
+  const status =
+    runtimeStatus !== "completed" && options.submittedTaskIds?.has(task.taskUid)
+      ? "submitted"
+      : runtimeStatus;
   const title = findTaskValue(task, "col-task")
     ?? findTaskValue(task, "col-item")
     ?? task.legacyValue
@@ -183,7 +192,9 @@ export function runtimeChecklistTaskToUi(
     ?? task.notes
     ?? "No additional task details.";
   let metaLabel = "Pending action";
-  if (status === "completed") {
+  if (status === "submitted") {
+    metaLabel = "Submitted";
+  } else if (status === "completed") {
     metaLabel = task.completedAt
       ? `Completed ${formatChecklistTimestamp(task.completedAt)}`
       : "Completed";
@@ -201,7 +212,13 @@ export function runtimeChecklistTaskToUi(
     description,
     status,
     metaLabel,
-    metaTone: status === "completed" ? "done" : status === "late" ? "alert" : "clock",
+    metaTone: status === "submitted"
+      ? "submitted"
+      : status === "completed"
+        ? "done"
+        : status === "late"
+          ? "alert"
+          : "clock",
     primaryColumnUid: findPrimaryTaskColumnUid(task),
     rowBackgroundColor: task.rowBackgroundColor ?? undefined,
     lineBreakEnabled: task.lineBreakEnabled ?? false,
@@ -257,7 +274,10 @@ export function runtimeTemplateToUi(record: RuntimeChecklistTemplateRecord): Che
   };
 }
 
-export function runtimeChecklistDetailToUi(record: RuntimeChecklistRecord): ChecklistDetail {
+export function runtimeChecklistDetailToUi(
+  record: RuntimeChecklistRecord,
+  options: ChecklistTaskPresentationOptions = {},
+): ChecklistDetail {
   return {
     id: record.uid,
     heroTitle: record.name,
@@ -269,7 +289,7 @@ export function runtimeChecklistDetailToUi(record: RuntimeChecklistRecord): Chec
     tasksHeading: "Tasks",
     tasks: record.tasks
       .filter((task) => !task.deletedAt)
-      .map((task) => runtimeChecklistTaskToUi(task, record.columns)),
+      .map((task) => runtimeChecklistTaskToUi(task, record.columns, options)),
   };
 }
 

@@ -200,18 +200,6 @@ dictionary NodeStatus {
   string identity_hex;
   string app_destination_hex;
   string lxmf_destination_hex;
-  sequence<InterfaceStatusRecord> interfaces;
-};
-
-dictionary InterfaceStatusRecord {
-  string interface_hex;
-  string label;
-  string kind;
-  string state;
-  string? last_error;
-  u64 rx_packets;
-  u64 rx_bytes;
-  u64 last_activity_ms;
 };
 
 dictionary PeerChange {
@@ -374,7 +362,6 @@ dictionary RnodeSettingsRecord {
   string display_name;
   string region;
   string profile;
-  u64 frequency_hz;
 };
 
 dictionary AppSettingsRecord {
@@ -782,7 +769,6 @@ dictionary OperationalNotice {
 [Enum]
 interface NodeEvent {
   StatusChanged(NodeStatus status);
-  InterfaceStatusChanged(InterfaceStatusRecord status);
   AnnounceReceived(
     string destination_hex,
     string identity_hex,

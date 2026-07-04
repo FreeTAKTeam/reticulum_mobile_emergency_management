@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref, useTemplateRef, watch } from "vue";
+import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
 import { useRouter } from "vue-router";
 
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
@@ -11,16 +11,18 @@ import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 import {
   RNODE_PROFILE_SPECS,
-  RNODE_REGION_SPECS,
   normalizeRnodeSettings,
-  resolveRnodeFrequencyForRegionChange,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
 import {
   listPairedRnodeBluetoothDevices,
   scanRnodeBleDevices,
   pairRnodeBleDevice,
+  listRnodeUsbDevices,
+  requestRnodeUsbPermission,
+  startRnodeUsbBluetoothPairing,
   type RnodeBleDeviceRecord,
+  type RnodeUsbDeviceRecord,
 } from "../services/rnodeBluetooth";
 import { requestRnodeBluetoothPermission } from "../services/setupPermissions";
 
@@ -72,7 +74,6 @@ const form = reactive({
   rnodeDisplayName: nodeStore.settings.rnode.displayName,
   rnodeRegion: nodeStore.settings.rnode.region,
   rnodeProfile: nodeStore.settings.rnode.profile,
-  rnodeFrequencyHz: nodeStore.settings.rnode.frequencyHz,
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
@@ -97,6 +98,8 @@ const rnodePairedLoading = ref(false);
 const rnodePairedDevices = ref<RnodeBleDeviceRecord[]>([]);
 const rnodeScanning = ref(false);
 const rnodeDevices = ref<RnodeBleDeviceRecord[]>([]);
+const rnodeUsbPairing = ref(false);
+const rnodeUsbDevices = ref<RnodeUsbDeviceRecord[]>([]);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
 
@@ -152,11 +155,8 @@ const normalizedRnodeSettings = computed(() =>
     displayName: form.rnodeDisplayName,
     region: form.rnodeRegion,
     profile: form.rnodeProfile,
-    frequencyHz: form.rnodeFrequencyHz,
   }),
 );
-
-const rnodeFrequencyMhz = computed(() => (normalizedRnodeSettings.value.frequencyHz / 1_000_000).toFixed(3));
 
 const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 
@@ -432,10 +432,6 @@ async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
   if (!device.paired) {
     try {
       const pairResult = await pairRnodeBleDevice(deviceId);
-      if (pairResult.timedOut) {
-        rnodeScanFeedback.value = "Bluetooth pairing did not finish within 30 seconds. Confirm the Android prompt, then try again.";
-        return;
-      }
       if (!pairResult.paired && !pairResult.bondingStarted) {
         rnodeScanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
         return;
@@ -461,6 +457,54 @@ async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
   form.rnodeDisplayName = device.name || device.address;
 }
 
+async function pairRnodeViaUsb(): Promise<void> {
+  if (rnodeUsbPairing.value) {
+    return;
+  }
+  if (!(await ensureBluetoothPermissionForRnode())) {
+    return;
+  }
+  rnodeUsbPairing.value = true;
+  rnodeScanFeedback.value = "Looking for USB-connected RNodes...";
+  try {
+    const devices = await listRnodeUsbDevices();
+    rnodeUsbDevices.value = devices;
+    const device = devices[0];
+    if (!device) {
+      rnodeScanFeedback.value = "No USB RNode found. Connect the RNode by USB and grant Android USB access.";
+      return;
+    }
+    if (!device.hasPermission) {
+      const permission = await requestRnodeUsbPermission(device.deviceId);
+      if (!permission.granted) {
+        rnodeScanFeedback.value = "USB permission denied for the RNode.";
+        return;
+      }
+    }
+    rnodeScanFeedback.value = "Starting RNode Bluetooth pairing mode over USB...";
+    const result = await startRnodeUsbBluetoothPairing(device.deviceId);
+    if (result.paired) {
+      form.rnodeEnabled = true;
+      form.rnodePeripheralId = result.id || result.address;
+      form.rnodeDisplayName = result.id || result.address || "RNode";
+      rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
+      rnodeScanFeedback.value = "RNode paired over USB-assisted Bluetooth.";
+      return;
+    }
+    if (result.pin) {
+      rnodeScanFeedback.value = result.message || `RNode pairing mode started. Enter PIN ${result.pin} if Android prompts for it.`;
+    } else if (result.manualPinRequired) {
+      rnodeScanFeedback.value = result.message || "RNode pairing mode started. Enter the PIN shown on the RNode if Android prompts for it.";
+    } else {
+      rnodeScanFeedback.value = result.message || "USB-assisted RNode pairing did not complete.";
+    }
+  } catch (error: unknown) {
+    rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    rnodeUsbPairing.value = false;
+  }
+}
+
 function onHubCandidateSelected(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
   form.hubIdentityHash = value.trim();
@@ -484,7 +528,6 @@ function syncSettingsForm(): void {
   form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
   form.rnodeRegion = nodeStore.settings.rnode.region;
   form.rnodeProfile = nodeStore.settings.rnode.profile;
-  form.rnodeFrequencyHz = nodeStore.settings.rnode.frequencyHz;
   form.telemetryEnabled = nodeStore.settings.telemetry.enabled;
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;
@@ -497,28 +540,6 @@ function syncSettingsForm(): void {
   form.hubRefreshIntervalSeconds = nodeStore.settings.hub.refreshIntervalSeconds;
   syncWatchStatusServerForm();
 }
-
-function formatInterfaceActivity(at: number): string {
-  if (!Number.isFinite(at) || at <= 0) {
-    return "No RX yet";
-  }
-  return new Date(at).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-watch(
-  () => form.rnodeRegion,
-  (nextRegion, previousRegion) => {
-    form.rnodeFrequencyHz = resolveRnodeFrequencyForRegionChange(
-      previousRegion,
-      nextRegion,
-      Number(form.rnodeFrequencyHz),
-    );
-  },
-);
 
 onMounted(() => {
   void nodeStore.init()
@@ -849,7 +870,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         <section class="config-section" aria-labelledby="lora-interface-heading">
           <div class="config-section-header">
             <h3 id="lora-interface-heading">LoRa / RNode</h3>
-            <p>Phone-to-RNode Bluetooth LE hardware link; not phone-to-phone Bluetooth mesh.</p>
+            <p>Paired Android Bluetooth device and REM radio profile.</p>
           </div>
 
           <div class="grid">
@@ -868,15 +889,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             <label>
               Region
               <select v-model="form.rnodeRegion">
-                <option v-for="region in RNODE_REGION_SPECS" :key="region.id" :value="region.id">
-                  {{ region.id }} - {{ region.label }}
-                </option>
+                <option value="US915">US915</option>
+                <option value="EU868">EU868</option>
               </select>
-            </label>
-            <label>
-              Frequency
-              <input v-model.number="form.rnodeFrequencyHz" type="number" min="100000000" max="1100000000" step="1" />
-              <span class="field-hint">{{ rnodeFrequencyMhz }} MHz</span>
             </label>
             <label>
               REM LoRa profile
@@ -898,6 +913,9 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
             </button>
             <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
               {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+            </button>
+            <button type="button" :disabled="rnodeUsbPairing" @click="pairRnodeViaUsb">
+              {{ rnodeUsbPairing ? "Pairing via USB" : "Pair via USB" }}
             </button>
           </div>
           <div v-if="rnodePairedDevices.length > 0" class="server-list">
@@ -935,7 +953,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
 
         <p class="section-note">
           Save TCP or LoRa changes, then restart REM before validating interface traffic.
-          LoRa-only traffic is logged as not ready; when TCP and LoRa are both active, Reticulum selects the route.
+          When TCP and LoRa are both active, Reticulum selects the route.
         </p>
 
         <div class="grid propagation-grid">
@@ -1253,19 +1271,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
         <p v-if="runtimeFeedback" class="feedback">{{ runtimeFeedback }}</p>
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
-        <div v-if="nodeStore.status.interfaces.length > 0" class="active-endpoints">
-          <article
-            v-for="iface in nodeStore.status.interfaces"
-            :key="iface.interfaceHex"
-            class="active-endpoint"
-          >
-            <span>
-              {{ iface.label || iface.interfaceHex }}
-              <small>{{ iface.kind }} | {{ iface.state }} | RX {{ iface.rxPackets }} / {{ iface.rxBytes }} bytes | {{ formatInterfaceActivity(iface.lastActivityMs) }}</small>
-              <small v-if="iface.lastError">{{ iface.lastError }}</small>
-            </span>
-          </article>
-        </div>
         <div class="log-list">
           <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
             <time :datetime="new Date(entry.at).toISOString()">{{ formatLogTimestamp(entry.at) }}</time>
@@ -1536,14 +1541,6 @@ h1 {
   color: #90aad4;
   font-family: var(--font-body);
   margin: 0.65rem 0 0.8rem;
-}
-
-.field-hint {
-  color: #90aad4;
-  display: block;
-  font-family: var(--font-body);
-  font-size: 0.82rem;
-  margin-top: 0.25rem;
 }
 
 .config-section {
