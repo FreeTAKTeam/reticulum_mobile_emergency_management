@@ -14,6 +14,7 @@ import {
   normalizeRnodeSettings,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
+import { selectUsbBondedRnodeCandidate } from "../utils/rnodeUsbPairing";
 import {
   listPairedRnodeBluetoothDevices,
   scanRnodeBleDevices,
@@ -62,6 +63,8 @@ const SETUP_STEPS: SetupWizardStep[] = [
 ];
 
 const DEFAULT_TELEMETRY_PUBLISH_INTERVAL_SECONDS = 360;
+const USB_BOND_POLL_ATTEMPTS = 15;
+const USB_BOND_POLL_DELAY_MS = 2_000;
 
 export function normalizeWizardTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
   const parsed = Math.trunc(Number(value));
@@ -327,6 +330,32 @@ export function useSetupWizard() {
     feedback.value = `Selected USB RNode ${device.productName || device.deviceName || device.deviceId}.`;
   }
 
+  function selectPairedRnodeForDraft(device: RnodeBleDeviceRecord): void {
+    const deviceId = device.id || device.address;
+    draft.rnode.enabled = true;
+    draft.rnode.peripheralId = deviceId;
+    draft.rnode.displayName = device.name || device.address || deviceId;
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function waitForUsbBondedRnodeCandidate(beforePairing: RnodeBleDeviceRecord[]): Promise<RnodeBleDeviceRecord | undefined> {
+    for (let attempt = 0; attempt < USB_BOND_POLL_ATTEMPTS; attempt += 1) {
+      const pairedDevices = await listPairedRnodeBluetoothDevices().catch(() => []);
+      rnodePairedDevices.value = pairedDevices;
+      const candidate = selectUsbBondedRnodeCandidate(beforePairing, pairedDevices);
+      if (candidate) {
+        return candidate;
+      }
+      if (attempt + 1 < USB_BOND_POLL_ATTEMPTS) {
+        await delay(USB_BOND_POLL_DELAY_MS);
+      }
+    }
+    return undefined;
+  }
+
   async function pairRnodeViaUsb(): Promise<void> {
     if (rnodeUsbPairing.value) {
       return;
@@ -334,7 +363,11 @@ export function useSetupWizard() {
     if (!(await ensureBluetoothPermissionForRnode())) {
       return;
     }
+    const pairedBeforeUsb = await listPairedRnodeBluetoothDevices().catch(() => []);
     rnodeUsbPairing.value = true;
+    rnodePairedDevices.value = [];
+    rnodeDevices.value = [];
+    rnodeUsbDevices.value = [];
     feedback.value = "Looking for USB-connected RNodes...";
     try {
       const devices = await listRnodeUsbDevices();
@@ -361,9 +394,12 @@ export function useSetupWizard() {
       const bluetoothDeviceId = draft.rnode.peripheralId.trim() || undefined;
       const result = await startRnodeUsbBluetoothPairing(device.deviceId, bluetoothDeviceId);
       if (result.paired) {
-        draft.rnode.enabled = true;
-        draft.rnode.peripheralId = result.id || result.address;
-        draft.rnode.displayName = result.id || result.address || "RNode";
+        selectPairedRnodeForDraft({
+          id: result.id || result.address,
+          address: result.address || result.id,
+          name: result.id || result.address || "RNode",
+          paired: true,
+        });
         feedback.value = "RNode paired over USB-assisted Bluetooth.";
         rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
         return;
@@ -374,6 +410,11 @@ export function useSetupWizard() {
         feedback.value = result.message || "RNode pairing mode started. Enter the PIN shown on the RNode if Android prompts for it.";
       } else {
         feedback.value = result.message || "USB-assisted RNode pairing did not complete.";
+      }
+      const bondedDevice = await waitForUsbBondedRnodeCandidate(pairedBeforeUsb);
+      if (bondedDevice) {
+        selectPairedRnodeForDraft(bondedDevice);
+        feedback.value = `RNode paired over USB and selected ${bondedDevice.name || bondedDevice.address || bondedDevice.id}.`;
       }
     } catch (error: unknown) {
       feedback.value = error instanceof Error ? error.message : String(error);

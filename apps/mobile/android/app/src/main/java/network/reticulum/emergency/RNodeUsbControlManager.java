@@ -144,7 +144,8 @@ final class RNodeUsbControlManager {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE
                 : PendingIntent.FLAG_UPDATE_CURRENT;
-        final PendingIntent intent = PendingIntent.getBroadcast(context, deviceId, new Intent(ACTION_USB_PERMISSION), flags);
+        final Intent permissionIntent = new Intent(ACTION_USB_PERMISSION).setPackage(context.getPackageName());
+        final PendingIntent intent = PendingIntent.getBroadcast(context, deviceId, permissionIntent, flags);
         usbManager.requestPermission(device, intent);
     }
 

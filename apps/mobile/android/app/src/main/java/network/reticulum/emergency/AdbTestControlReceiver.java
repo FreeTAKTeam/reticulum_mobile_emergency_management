@@ -26,6 +26,11 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
             return;
         }
 
+        final Intent receivedIntent = new Intent(intent);
+        new Thread(() -> handleAction(receivedIntent), "rem-adb-test-control").start();
+    }
+
+    private static void handleAction(Intent intent) {
         final String action = intent.getAction();
         try {
             if (ACTION_ANNOUNCE.equals(action)) {

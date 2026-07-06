@@ -412,12 +412,16 @@ public class ReticulumNodePlugin extends Plugin {
             call.reject("deviceId is required.");
             return;
         }
-        rnodeUsbControlManager().requestPermission(deviceId, granted -> {
-            final JSObject payload = new JSObject();
-            payload.put("deviceId", deviceId);
-            payload.put("granted", granted);
-            call.resolve(payload);
-        });
+        try {
+            rnodeUsbControlManager().requestPermission(deviceId, granted -> {
+                final JSObject payload = new JSObject();
+                payload.put("deviceId", deviceId);
+                payload.put("granted", granted);
+                call.resolve(payload);
+            });
+        } catch (RuntimeException ex) {
+            call.reject("USB permission request failed.", ex);
+        }
     }
 
     @PluginMethod

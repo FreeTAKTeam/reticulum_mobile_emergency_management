@@ -230,6 +230,7 @@ onMounted(() => {
           >
             {{ wizard.rnodeUsbPairing.value ? "Pairing via USB" : "Pair via USB" }}
           </button>
+          <p v-if="wizard.feedback.value" class="feedback">{{ wizard.feedback.value }}</p>
           <div class="server-list" v-if="wizard.rnodeUsbDevices.value.length > 0">
             <button
               v-for="device in wizard.rnodeUsbDevices.value"
@@ -505,7 +506,7 @@ onMounted(() => {
         </section>
       </article>
 
-      <p v-if="wizard.feedback.value" class="feedback">{{ wizard.feedback.value }}</p>
+      <p v-if="wizard.feedback.value && wizard.activeStep.value.id !== 'rnode'" class="feedback">{{ wizard.feedback.value }}</p>
 
       <footer class="wizard-actions">
         <button

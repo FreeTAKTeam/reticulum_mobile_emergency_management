@@ -14,6 +14,7 @@ import {
   normalizeRnodeSettings,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
+import { selectUsbBondedRnodeCandidate } from "../utils/rnodeUsbPairing";
 import {
   listPairedRnodeBluetoothDevices,
   scanRnodeBleDevices,
@@ -103,6 +104,8 @@ const rnodeUsbDevices = ref<RnodeUsbDeviceRecord[]>([]);
 const selectedRnodeUsbDeviceId = ref<number | null>(null);
 const peerListFileInput = useTemplateRef<HTMLInputElement>("peerListFileInput");
 const nodeControlPanel = useTemplateRef<HTMLDetailsElement>("nodeControlPanel");
+const USB_BOND_POLL_ATTEMPTS = 15;
+const USB_BOND_POLL_DELAY_MS = 2_000;
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 
@@ -474,6 +477,32 @@ function selectRnodeUsbDevice(device: RnodeUsbDeviceRecord): void {
   rnodeScanFeedback.value = `Selected USB RNode ${device.productName || device.deviceName || device.deviceId}.`;
 }
 
+function selectPairedRnodeForSettings(device: RnodeBleDeviceRecord): void {
+  const deviceId = device.id || device.address;
+  form.rnodeEnabled = true;
+  form.rnodePeripheralId = deviceId;
+  form.rnodeDisplayName = device.name || device.address || deviceId;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function waitForUsbBondedRnodeCandidate(beforePairing: RnodeBleDeviceRecord[]): Promise<RnodeBleDeviceRecord | undefined> {
+  for (let attempt = 0; attempt < USB_BOND_POLL_ATTEMPTS; attempt += 1) {
+    const pairedDevices = await listPairedRnodeBluetoothDevices().catch(() => []);
+    rnodePairedDevices.value = pairedDevices;
+    const candidate = selectUsbBondedRnodeCandidate(beforePairing, pairedDevices);
+    if (candidate) {
+      return candidate;
+    }
+    if (attempt + 1 < USB_BOND_POLL_ATTEMPTS) {
+      await delay(USB_BOND_POLL_DELAY_MS);
+    }
+  }
+  return undefined;
+}
+
 async function pairRnodeViaUsb(): Promise<void> {
   if (rnodeUsbPairing.value) {
     return;
@@ -481,7 +510,11 @@ async function pairRnodeViaUsb(): Promise<void> {
   if (!(await ensureBluetoothPermissionForRnode())) {
     return;
   }
+  const pairedBeforeUsb = await listPairedRnodeBluetoothDevices().catch(() => []);
   rnodeUsbPairing.value = true;
+  rnodePairedDevices.value = [];
+  rnodeDevices.value = [];
+  rnodeUsbDevices.value = [];
   rnodeScanFeedback.value = "Looking for USB-connected RNodes...";
   try {
     const devices = await listRnodeUsbDevices();
@@ -508,11 +541,14 @@ async function pairRnodeViaUsb(): Promise<void> {
     const bluetoothDeviceId = form.rnodePeripheralId.trim() || undefined;
     const result = await startRnodeUsbBluetoothPairing(device.deviceId, bluetoothDeviceId);
     if (result.paired) {
-      form.rnodeEnabled = true;
-      form.rnodePeripheralId = result.id || result.address;
-      form.rnodeDisplayName = result.id || result.address || "RNode";
+      selectPairedRnodeForSettings({
+        id: result.id || result.address,
+        address: result.address || result.id,
+        name: result.id || result.address || "RNode",
+        paired: true,
+      });
       rnodePairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
-      rnodeScanFeedback.value = "RNode paired over USB-assisted Bluetooth.";
+      rnodeScanFeedback.value = "RNode paired over USB-assisted Bluetooth. Save settings to connect.";
       return;
     }
     if (result.pin) {
@@ -521,6 +557,11 @@ async function pairRnodeViaUsb(): Promise<void> {
       rnodeScanFeedback.value = result.message || "RNode pairing mode started. Enter the PIN shown on the RNode if Android prompts for it.";
     } else {
       rnodeScanFeedback.value = result.message || "USB-assisted RNode pairing did not complete.";
+    }
+    const bondedDevice = await waitForUsbBondedRnodeCandidate(pairedBeforeUsb);
+    if (bondedDevice) {
+      selectPairedRnodeForSettings(bondedDevice);
+      rnodeScanFeedback.value = `RNode paired over USB and selected ${bondedDevice.name || bondedDevice.address || bondedDevice.id}. Save settings to connect.`;
     }
   } catch (error: unknown) {
     rnodeScanFeedback.value = error instanceof Error ? error.message : String(error);
@@ -942,6 +983,7 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
               {{ rnodeUsbPairing ? "Pairing via USB" : "Pair via USB" }}
             </button>
           </div>
+          <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
           <div v-if="rnodePairedDevices.length > 0" class="server-list">
             <button
               v-for="device in rnodePairedDevices"
@@ -989,7 +1031,6 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
               </span>
             </button>
           </div>
-          <p v-if="rnodeScanFeedback" class="feedback">{{ rnodeScanFeedback }}</p>
         </section>
 
         <p class="section-note">

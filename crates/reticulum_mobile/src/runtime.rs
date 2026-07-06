@@ -8971,6 +8971,7 @@ fn normalize_rnode_region(region: &str) -> &'static str {
 #[cfg(target_os = "android")]
 fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
     let mut config = LoraConfig::for_region(normalize_rnode_region(&settings.region))
+        .into_lora_config_option()
         .unwrap_or_else(LoraConfig::us915_default);
     match settings.profile.trim() {
         "REM-MF-URBAN-v1" => {
@@ -8991,6 +8992,25 @@ fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, Strin
     }
     config.validate()?;
     Ok(config)
+}
+
+#[cfg(target_os = "android")]
+trait IntoLoraConfigOption {
+    fn into_lora_config_option(self) -> Option<LoraConfig>;
+}
+
+#[cfg(target_os = "android")]
+impl IntoLoraConfigOption for Option<LoraConfig> {
+    fn into_lora_config_option(self) -> Option<LoraConfig> {
+        self
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<E> IntoLoraConfigOption for Result<Option<LoraConfig>, E> {
+    fn into_lora_config_option(self) -> Option<LoraConfig> {
+        self.unwrap_or(None)
+    }
 }
 
 #[cfg(target_os = "android")]
