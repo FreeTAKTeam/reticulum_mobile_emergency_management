@@ -88,7 +88,7 @@ import {
   nodeErrorIndicatesReadinessError,
   summarizeRnodeInterfaceState,
 } from "../utils/readinessErrors";
-import { statusHasReceivingInterface } from "../utils/startupInterfaces";
+import { statusHasRuntimeReceiveReadiness } from "../utils/startupInterfaces";
 import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
@@ -2994,7 +2994,9 @@ export const useNodeStore = defineStore("node", () => {
   const ready = computed(() =>
     status.value.running
     && !readinessErrorMessage.value
-    && statusHasReceivingInterface(status.value),
+    && statusHasRuntimeReceiveReadiness(status.value, {
+      requiresInterfaceTelemetry: runtimeProfile !== "web",
+    }),
   );
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(

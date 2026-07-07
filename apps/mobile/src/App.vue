@@ -29,8 +29,9 @@ import {
   STARTUP_INTERFACE_LOADING_DETAIL,
   STARTUP_INTERFACE_LOADING_SUMMARY,
   buildStartupInterfaceItems,
-  statusHasReceivingInterface,
+  statusHasRuntimeReceiveReadiness,
 } from "./utils/startupInterfaces";
+import { supportsNativeNodeRuntime } from "./utils/runtimeProfile";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -179,7 +180,9 @@ const startupConfiguredInterfaceItems = computed(() =>
 );
 const startupInterfacesNeedGrace = computed(() =>
   startupConfiguredInterfaceItems.value.length > 0
-  && !statusHasReceivingInterface(nodeStore.status),
+  && !statusHasRuntimeReceiveReadiness(nodeStore.status, {
+    requiresInterfaceTelemetry: supportsNativeNodeRuntime,
+  }),
 );
 const menuOpen = shallowRef(false);
 const splashMinimumElapsed = shallowRef(false);

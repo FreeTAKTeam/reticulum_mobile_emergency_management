@@ -158,3 +158,15 @@ export function statusHasReceivingInterface(
   const interfaces = Array.isArray(status?.interfaces) ? status.interfaces : [];
   return interfaces.some(interfaceIsReceiving);
 }
+
+export function statusHasRuntimeReceiveReadiness(
+  status: Pick<NodeStatus, "running" | "interfaces"> | null | undefined,
+  options: { requiresInterfaceTelemetry: boolean },
+): boolean {
+  if (!status?.running) {
+    return false;
+  }
+  return options.requiresInterfaceTelemetry
+    ? statusHasReceivingInterface(status)
+    : true;
+}

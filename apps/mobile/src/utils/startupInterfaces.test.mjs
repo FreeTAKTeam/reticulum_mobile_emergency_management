@@ -11,7 +11,11 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const { buildStartupInterfaceItems, statusHasReceivingInterface } = await import(moduleUrl);
+const {
+  buildStartupInterfaceItems,
+  statusHasReceivingInterface,
+  statusHasRuntimeReceiveReadiness,
+} = await import(moduleUrl);
 
 const configuredSettings = {
   tcpClients: ["rns.example.net:4242"],
@@ -161,6 +165,64 @@ test("readiness requires a connected interface with RX activity", () => {
         },
       ],
     }),
+    true,
+  );
+});
+
+test("native runtime readiness requires receiving interface telemetry", () => {
+  assert.equal(
+    statusHasRuntimeReceiveReadiness(
+      {
+        running: true,
+        interfaces: [],
+      },
+      { requiresInterfaceTelemetry: true },
+    ),
+    false,
+  );
+
+  assert.equal(
+    statusHasRuntimeReceiveReadiness(
+      {
+        running: true,
+        interfaces: [
+          {
+            interfaceHex: "02",
+            label: "rnode-ble:RNode",
+            kind: "rnode_ble",
+            state: "connected",
+            rxPackets: 1,
+            rxBytes: 48,
+            lastActivityMs: 1000,
+          },
+        ],
+      },
+      { requiresInterfaceTelemetry: true },
+    ),
+    true,
+  );
+});
+
+test("web runtime readiness can use running status without interface telemetry", () => {
+  assert.equal(
+    statusHasRuntimeReceiveReadiness(
+      {
+        running: false,
+        interfaces: [],
+      },
+      { requiresInterfaceTelemetry: false },
+    ),
+    false,
+  );
+
+  assert.equal(
+    statusHasRuntimeReceiveReadiness(
+      {
+        running: true,
+        interfaces: [],
+      },
+      { requiresInterfaceTelemetry: false },
+    ),
     true,
   );
 });
