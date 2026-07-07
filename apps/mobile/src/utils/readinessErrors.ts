@@ -43,9 +43,13 @@ export function logIndicatesPropagationRelayError(message: string): boolean {
 }
 
 export function hasConfiguredNonTcpInterface(
-  settings: { rnode?: { enabled?: unknown; peripheralId?: unknown } | null } | null | undefined,
+  settings: { rnode?: { enabled?: unknown; connectionMode?: unknown; peripheralId?: unknown } | null } | null | undefined,
 ): boolean {
   const rnode = settings?.rnode;
+  const connectionMode = String(rnode?.connectionMode ?? "ble").trim().toLowerCase();
+  if (connectionMode === "tcp" || connectionMode === "wifi" || connectionMode === "wi-fi") {
+    return false;
+  }
   return Boolean(rnode?.enabled) && String(rnode?.peripheralId ?? "").trim().length > 0;
 }
 

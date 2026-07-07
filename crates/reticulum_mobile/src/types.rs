@@ -408,16 +408,59 @@ pub struct NodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RnodeSettingsRecord {
     pub enabled: bool,
+    #[serde(default = "default_rnode_connection_mode")]
+    pub connection_mode: String,
     pub peripheral_id: String,
     pub display_name: String,
     pub region: String,
     pub profile: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RnodeConnectionMode {
+    #[default]
+    Ble,
+    BluetoothClassic,
+    Usb,
+    Tcp,
+}
+
+impl RnodeConnectionMode {
+    pub fn from_str(value: &str) -> Self {
+        match value
+            .trim()
+            .to_lowercase()
+            .replace([' ', '-'], "_")
+            .as_str()
+        {
+            "bluetooth_classic" | "bluetoothclassic" | "classic" | "spp" | "rfcomm"
+            | "bluetooth" => Self::BluetoothClassic,
+            "usb" | "serial" => Self::Usb,
+            "tcp" | "wifi" | "wi_fi" => Self::Tcp,
+            _ => Self::Ble,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ble => "ble",
+            Self::BluetoothClassic => "bluetooth_classic",
+            Self::Usb => "usb",
+            Self::Tcp => "tcp",
+        }
+    }
+}
+
+fn default_rnode_connection_mode() -> String {
+    RnodeConnectionMode::Ble.as_str().to_string()
+}
+
 impl Default for RnodeSettingsRecord {
     fn default() -> Self {
         Self {
             enabled: false,
+            connection_mode: default_rnode_connection_mode(),
             peripheral_id: String::new(),
             display_name: String::new(),
             region: "US915".to_string(),

@@ -358,6 +358,7 @@ dictionary ChecklistSettingsRecord {
 
 dictionary RnodeSettingsRecord {
   boolean enabled;
+  string connection_mode;
   string peripheral_id;
   string display_name;
   string region;

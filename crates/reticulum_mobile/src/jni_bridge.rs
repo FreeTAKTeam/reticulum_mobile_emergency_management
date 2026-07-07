@@ -23,8 +23,8 @@ use crate::types::{
     HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
     MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode, RnodeSettingsRecord,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
     TransportDeliveryState,
@@ -94,6 +94,7 @@ struct NodeConfigInput {
 #[serde(rename_all = "camelCase")]
 struct RnodeSettingsInput {
     enabled: Option<bool>,
+    connection_mode: Option<String>,
     peripheral_id: Option<String>,
     display_name: Option<String>,
     region: Option<String>,
@@ -653,10 +654,17 @@ fn normalize_rnode_profile(value: Option<String>) -> String {
     }
 }
 
+fn normalize_rnode_connection_mode(value: Option<String>) -> String {
+    RnodeConnectionMode::from_str(value.as_deref().unwrap_or_default())
+        .as_str()
+        .to_string()
+}
+
 fn to_rnode_settings_record(input: Option<RnodeSettingsInput>) -> RnodeSettingsRecord {
     let input = input.unwrap_or_default();
     RnodeSettingsRecord {
         enabled: input.enabled.unwrap_or(false),
+        connection_mode: normalize_rnode_connection_mode(input.connection_mode),
         peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
         display_name: input.display_name.unwrap_or_default().trim().to_string(),
         region: normalize_rnode_region(input.region),
@@ -1265,6 +1273,7 @@ fn telemetry_settings_json(settings: &TelemetrySettingsRecord) -> serde_json::Va
 fn rnode_settings_json(settings: &RnodeSettingsRecord) -> serde_json::Value {
     json!({
         "enabled": settings.enabled,
+        "connectionMode": settings.connection_mode,
         "peripheralId": settings.peripheral_id,
         "displayName": settings.display_name,
         "region": settings.region,
