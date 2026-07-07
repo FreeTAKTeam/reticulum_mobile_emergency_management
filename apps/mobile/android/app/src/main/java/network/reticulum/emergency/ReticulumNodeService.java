@@ -1756,6 +1756,11 @@ public final class ReticulumNodeService extends Service {
         if (rnode == null || !rnode.optBoolean("enabled", false)) {
             return;
         }
+        if (!RNodeConnectionModes.usesBluetoothRepair(
+            rnode.optString("connectionMode", rnode.optString("connection_mode", ""))
+        )) {
+            return;
+        }
         final String configuredId = rnode.optString("peripheralId", "").trim();
         if (configuredId.isEmpty() || !hasBluetoothConnectPermission()) {
             return;

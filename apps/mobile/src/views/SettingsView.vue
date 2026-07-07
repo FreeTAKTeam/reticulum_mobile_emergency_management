@@ -153,13 +153,16 @@ const runtimeSummary = computed(() => {
 });
 
 const normalizedRnodeSettings = computed(() =>
-  normalizeRnodeSettings({
-    enabled: form.rnodeEnabled,
-    peripheralId: form.rnodePeripheralId,
-    displayName: form.rnodeDisplayName,
-    region: form.rnodeRegion,
-    profile: form.rnodeProfile,
-  }),
+  normalizeRnodeSettings(
+    {
+      enabled: form.rnodeEnabled,
+      peripheralId: form.rnodePeripheralId,
+      displayName: form.rnodeDisplayName,
+      region: form.rnodeRegion,
+      profile: form.rnodeProfile,
+    },
+    nodeStore.settings.rnode,
+  ),
 );
 
 const hubAnnounceCandidates = computed(() => nodeStore.hubAnnounceCandidates);

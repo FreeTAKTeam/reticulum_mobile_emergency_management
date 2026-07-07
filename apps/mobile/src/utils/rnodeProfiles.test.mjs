@@ -43,3 +43,33 @@ test("normalizes RNode USB and TCP modes without changing selected device", () =
   assert.equal(normalizeRnodeSettings({ enabled: true, connectionMode: "usb", peripheralId: "USB:123" }).connectionMode, "usb");
   assert.equal(normalizeRnodeSettings({ enabled: true, connectionMode: "tcp", peripheralId: "rnode.local" }).connectionMode, "tcp");
 });
+
+test("preserves fallback RNode connection mode when normalizing partial settings", () => {
+  assert.deepEqual(
+    normalizeRnodeSettings(
+      {
+        enabled: true,
+        peripheralId: " 48:CA:43:38:BC:E1 ",
+        displayName: " Field RNode ",
+        region: "EU868",
+        profile: "REM-MF-URBAN-v1",
+      },
+      {
+        enabled: true,
+        connectionMode: "bluetooth_classic",
+        peripheralId: "stale",
+        displayName: "stale",
+        region: "US915",
+        profile: "REM-LF-RURAL-v1",
+      },
+    ),
+    {
+      enabled: true,
+      connectionMode: "bluetooth_classic",
+      peripheralId: "48:CA:43:38:BC:E1",
+      displayName: "Field RNode",
+      region: "EU868",
+      profile: "REM-MF-URBAN-v1",
+    },
+  );
+});

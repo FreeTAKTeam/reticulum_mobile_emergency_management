@@ -84,15 +84,18 @@ export function normalizeRnodeProfile(value: unknown): RnodeProfileId {
 
 export function normalizeRnodeSettings(
   value: Partial<RnodeSettings> | Record<string, unknown> | null | undefined,
+  defaults: RnodeSettings = DEFAULT_RNODE_SETTINGS,
 ): RnodeSettings {
   const raw = (value ?? {}) as Partial<RnodeSettings> & Record<string, unknown>;
   return {
-    enabled: Boolean(raw.enabled),
-    connectionMode: normalizeRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
-    peripheralId: String(raw.peripheralId ?? "").trim(),
-    displayName: String(raw.displayName ?? "").trim(),
-    region: normalizeRnodeRegion(raw.region),
-    profile: normalizeRnodeProfile(raw.profile),
+    enabled: Boolean(raw.enabled ?? defaults.enabled),
+    connectionMode: normalizeRnodeConnectionMode(
+      raw.connectionMode ?? raw.connection_mode ?? raw.mode ?? defaults.connectionMode,
+    ),
+    peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? defaults.peripheralId ?? "").trim(),
+    displayName: String(raw.displayName ?? raw.display_name ?? defaults.displayName ?? "").trim(),
+    region: normalizeRnodeRegion(raw.region ?? defaults.region),
+    profile: normalizeRnodeProfile(raw.profile ?? defaults.profile),
   };
 }
 
