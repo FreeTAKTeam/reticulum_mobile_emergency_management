@@ -200,3 +200,16 @@ test("disabled RNode is not a configured non-TCP interface", () => {
     false,
   );
 });
+
+test("enabled TCP RNode is not counted as a non-TCP interface", () => {
+  assert.equal(
+    hasConfiguredNonTcpInterface({
+      rnode: {
+        enabled: true,
+        connectionMode: "tcp",
+        peripheralId: "rnode.local",
+      },
+    }),
+    false,
+  );
+});

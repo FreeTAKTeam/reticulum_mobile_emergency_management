@@ -1,4 +1,4 @@
-import type { RnodeProfileId, RnodeRegion, RnodeSettings } from "../types/domain";
+import type { RnodeConnectionMode, RnodeProfileId, RnodeRegion, RnodeSettings } from "../types/domain";
 
 export interface RnodeProfileSpec {
   id: RnodeProfileId;
@@ -34,11 +34,37 @@ export const RNODE_PROFILE_SPECS: RnodeProfileSpec[] = [
 
 export const DEFAULT_RNODE_SETTINGS: RnodeSettings = {
   enabled: false,
+  connectionMode: "ble",
   peripheralId: "",
   displayName: "",
   region: "US915",
   profile: "REM-LF-RURAL-v1",
 };
+
+export function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMode {
+  switch (String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_")) {
+    case "bluetooth_classic":
+    case "bluetoothclassic":
+    case "classic":
+    case "spp":
+    case "rfcomm":
+    case "bluetooth":
+      return "bluetooth_classic";
+    case "usb":
+    case "serial":
+      return "usb";
+    case "tcp":
+    case "wifi":
+    case "wi_fi":
+      return "tcp";
+    case "ble":
+    case "bluetooth_le":
+    case "le":
+    case "gatt":
+    default:
+      return "ble";
+  }
+}
 
 export function normalizeRnodeRegion(value: unknown): RnodeRegion {
   return String(value ?? "").trim().toUpperCase() === "EU868" ? "EU868" : "US915";
@@ -59,9 +85,10 @@ export function normalizeRnodeProfile(value: unknown): RnodeProfileId {
 export function normalizeRnodeSettings(
   value: Partial<RnodeSettings> | Record<string, unknown> | null | undefined,
 ): RnodeSettings {
-  const raw = value ?? {};
+  const raw = (value ?? {}) as Partial<RnodeSettings> & Record<string, unknown>;
   return {
     enabled: Boolean(raw.enabled),
+    connectionMode: normalizeRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
     peripheralId: String(raw.peripheralId ?? "").trim(),
     displayName: String(raw.displayName ?? "").trim(),
     region: normalizeRnodeRegion(raw.region),

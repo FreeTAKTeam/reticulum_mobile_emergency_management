@@ -4,6 +4,7 @@ export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
 export type RnodeRegion = "US915" | "EU868";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
+export type RnodeConnectionMode = "ble" | "bluetooth_classic" | "usb" | "tcp";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
@@ -79,6 +80,7 @@ export type SosMessageKind = "Active" | "Update" | "Cancelled";
 
 export interface RnodeSettingsRecord {
   enabled: boolean;
+  connectionMode: RnodeConnectionMode;
   peripheralId: string;
   displayName: string;
   region: RnodeRegion;
@@ -960,6 +962,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
   hubRefreshIntervalSeconds: 3600,
   rnode: {
     enabled: false,
+    connectionMode: "ble",
     peripheralId: "",
     displayName: "",
     region: "US915",
@@ -1980,12 +1983,38 @@ function normalizeRnodeProfile(value: unknown): RnodeProfileId {
   }
 }
 
+function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMode {
+  switch (String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_")) {
+    case "bluetooth_classic":
+    case "bluetoothclassic":
+    case "classic":
+    case "spp":
+    case "rfcomm":
+    case "bluetooth":
+      return "bluetooth_classic";
+    case "usb":
+    case "serial":
+      return "usb";
+    case "tcp":
+    case "wifi":
+    case "wi_fi":
+      return "tcp";
+    case "ble":
+    case "bluetooth_le":
+    case "le":
+    case "gatt":
+    default:
+      return "ble";
+  }
+}
+
 function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
   return {
     enabled: Boolean(raw.enabled),
+    connectionMode: normalizeRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
     peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
     displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
     region: normalizeRnodeRegion(raw.region),

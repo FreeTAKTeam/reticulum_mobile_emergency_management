@@ -293,9 +293,11 @@ export interface HubSettings {
 
 export type RnodeRegion = "US915" | "EU868";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
+export type RnodeConnectionMode = "ble" | "bluetooth_classic" | "usb" | "tcp";
 
 export interface RnodeSettings {
   enabled: boolean;
+  connectionMode: RnodeConnectionMode;
   peripheralId: string;
   displayName: string;
   region: RnodeRegion;

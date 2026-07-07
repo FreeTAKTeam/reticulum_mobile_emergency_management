@@ -74,9 +74,9 @@ use crate::types::{
     HubDirectorySnapshot, HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
     LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
     MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeSettingsRecord, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
+    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode, RnodeSettingsRecord,
+    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord,
+    SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -9066,6 +9066,27 @@ fn spawn_rnode_ble_interface(
     if !settings.enabled {
         return;
     }
+    match RnodeConnectionMode::from_str(&settings.connection_mode) {
+        RnodeConnectionMode::Ble => {}
+        RnodeConnectionMode::BluetoothClassic => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: "RNode Bluetooth Classic/SPP is selected, but the Android SPP backend is not wired into REM yet.".to_string(),
+            });
+            return;
+        }
+        RnodeConnectionMode::Usb => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: "RNode USB is selected, but the Android USB serial transport backend is not wired into REM yet.".to_string(),
+            });
+            return;
+        }
+        RnodeConnectionMode::Tcp => {
+            info!("rnode_ble: RNode TCP mode selected; skipping Android BLE interface spawn");
+            return;
+        }
+    }
     if let Err(error) = rnode_ble_wiring_from_settings(&settings) {
         bus.emit(NodeEvent::Error {
             code: "InvalidConfig".to_string(),
@@ -9159,9 +9180,24 @@ fn spawn_rnode_ble_interface(
     if !settings.enabled {
         return;
     }
+    let connection_mode = RnodeConnectionMode::from_str(&settings.connection_mode);
+    if matches!(connection_mode, RnodeConnectionMode::Tcp) {
+        return;
+    }
     bus.emit(NodeEvent::Error {
         code: "InvalidConfig".to_string(),
-        message: "RNode Bluetooth LoRa is only available on Android builds.".to_string(),
+        message: match connection_mode {
+            RnodeConnectionMode::Ble => {
+                "RNode BLE LoRa is only available on Android builds.".to_string()
+            }
+            RnodeConnectionMode::BluetoothClassic => {
+                "RNode Bluetooth Classic/SPP is only available after a platform SPP backend is configured.".to_string()
+            }
+            RnodeConnectionMode::Usb => {
+                "RNode USB serial is only available after a platform USB backend is configured.".to_string()
+            }
+            RnodeConnectionMode::Tcp => unreachable!(),
+        },
     });
 }
 
@@ -14568,6 +14604,7 @@ mod tests {
     fn rnode_ble_wiring_derives_kiss_and_native_settings_from_rem_settings() {
         let settings = RnodeSettingsRecord {
             enabled: true,
+            connection_mode: RnodeConnectionMode::Ble.as_str().to_string(),
             peripheral_id: "AA:BB:CC:DD:EE:FF".to_string(),
             display_name: "Field RNode".to_string(),
             region: "EU868".to_string(),
@@ -14596,6 +14633,7 @@ mod tests {
     fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
         let settings = RnodeSettingsRecord {
             enabled: true,
+            connection_mode: RnodeConnectionMode::Ble.as_str().to_string(),
             peripheral_id: "AA:BB:CC:DD:EE:FF".to_string(),
             display_name: " ".to_string(),
             region: "US915".to_string(),

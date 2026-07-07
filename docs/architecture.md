@@ -453,12 +453,21 @@ Rollback gate:
 
 ### RNode Bluetooth LoRa Interface
 
-REM can run an Android-paired RNode as an additional Reticulum LoRa interface over Bluetooth LE.
+REM can run an Android-paired RNode as an additional Reticulum LoRa interface. RNode Bluetooth LE, RNode Bluetooth Classic/SPP, RNode USB serial, and RNode TCP are tracked as explicit connection modes instead of treating every Bluetooth path as BLE.
 
 Ownership split:
-- Rust owns the active transport interface. `runtime.rs` spawns the LXMF-rs `NativeRnodeBleKissInterface` beside configured TCP client interfaces when `AppSettingsRecord.rnode.enabled` is true.
-- Android owns platform permission and discovery UX. `ReticulumNodePlugin` requests Bluetooth permissions, scans BLE peripherals advertising the RNode Nordic UART service, and returns device id/name/RSSI/bond state to Vue.
-- TypeScript owns only setup/settings drafts and persists the selected RNode identifier, display name, region, and profile.
+- Rust owns the active transport interface. `runtime.rs` spawns the LXMF-rs `NativeRnodeBleKissInterface` beside configured TCP client interfaces only when `AppSettingsRecord.rnode.enabled` is true and `rnode.connection_mode` is `ble`.
+- Android owns platform permission and discovery UX. `ReticulumNodePlugin` requests Bluetooth permissions, scans BLE peripherals advertising the RNode Nordic UART service, and returns device id/name/RSSI/bond state to Vue for BLE. Bluetooth Classic/SPP will use a separate Android backend rather than GATT characteristics.
+- TypeScript owns only setup/settings drafts and persists the selected RNode connection mode, identifier, display name, region, and profile.
+- LXMF-rs separates the GATT bearer from the stream bearer. BLE uses `rnode_ble` with Nordic UART characteristic writes/notifications; Bluetooth Classic uses the `rnode_spp` KISS runtime with a stream-oriented backend contract (`connect`, byte `write`, byte `read`).
+
+Mode behavior:
+- `ble` is the legacy-compatible default and is the only mode that currently starts the Android BLE LoRa interface.
+- `bluetooth_classic` is carried through settings and rejected with an explicit backend-not-wired error in REM until the Android SPP backend is connected to LXMF-rs.
+- `usb` is carried through settings and rejected with an explicit backend-not-wired error until the Android USB serial backend is connected.
+- `tcp` is treated as a TCP-mode RNode setting and does not cause REM to spawn or readiness-count a non-TCP RNode Bluetooth interface.
+
+Phone-to-phone BLE mesh remains separate from RNode BLE. RNode BLE is a phone-to-radio peripheral path; phone-to-phone BLE mesh should be modeled as its own Reticulum/LXMF bearer with Android discovery, permissions, and lifecycle separate from RNode pairing and LoRa profile settings.
 
 REM profile mapping:
 - `REM-MF-URBAN-v1`: `bandwidth = 250000`, `spreadingfactor = 9`, `codingrate = 5`
