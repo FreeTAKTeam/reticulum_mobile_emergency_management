@@ -416,19 +416,14 @@ pub struct RnodeSettingsRecord {
     pub profile: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RnodeConnectionMode {
+    #[default]
     Ble,
     BluetoothClassic,
     Usb,
     Tcp,
-}
-
-impl Default for RnodeConnectionMode {
-    fn default() -> Self {
-        Self::Ble
-    }
 }
 
 impl RnodeConnectionMode {

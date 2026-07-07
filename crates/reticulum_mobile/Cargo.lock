@@ -212,8 +212,6 @@ dependencies = [
  "objc2-core-bluetooth",
  "objc2-foundation",
  "once_cell",
- "serde",
- "serde_bytes",
  "static_assertions",
  "thiserror 2.0.18",
  "tokio",
@@ -1200,11 +1198,11 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lxmf-reference"
-version = "0.7.0"
+version = "0.5.2"
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.7.0"
+version = "0.5.2"
 dependencies = [
  "hex",
  "hmac",
@@ -1219,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.7.0"
+version = "0.5.2"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1676,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.7.0"
+version = "0.5.2"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1684,7 +1682,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.7.0"
+version = "0.5.2"
 dependencies = [
  "aes",
  "cbc",
@@ -1703,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.7.0"
+version = "0.5.2"
 dependencies = [
  "aes",
  "base64",
@@ -2609,7 +2607,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
 dependencies = [
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 
