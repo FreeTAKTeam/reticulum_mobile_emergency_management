@@ -14,6 +14,7 @@ import {
   type NodeConfig,
   type NodeClientEvents,
   type NodeErrorEvent,
+  type InterfaceStatusChangedEvent,
   type NodeLogEvent,
   type NodeStatus,
   type PeerChangedEvent,
@@ -85,7 +86,9 @@ import {
   logIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
+  summarizeRnodeInterfaceState,
 } from "../utils/readinessErrors";
+import { statusHasReceivingInterface } from "../utils/startupInterfaces";
 import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
 
 const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
@@ -106,6 +109,7 @@ const EMPTY_STATUS: NodeStatus = {
   appDestinationHex: "",
   lxmfDestinationHex: "",
   lastError: undefined,
+  interfaces: [],
 };
 
 const EMPTY_SYNC_STATUS: SyncStatus = {
@@ -264,6 +268,7 @@ function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
     appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
     lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
     lastError: lastError || undefined,
+    interfaces: Array.isArray(value?.interfaces) ? value.interfaces : [],
   };
 }
 
@@ -644,6 +649,8 @@ export const useNodeStore = defineStore("node", () => {
   let refreshOperationalSummaryQueued = false;
   let refreshOperationalSummaryLastRunAt = 0;
   let initPromise: Promise<void> | null = null;
+  let lastRnodeInterfaceFingerprint = "";
+  let lastRnodeBlockingMessage = "";
   const startupSettling = ref(false);
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
@@ -722,8 +729,27 @@ export const useNodeStore = defineStore("node", () => {
     lastError.value = "";
   }
 
+  function messageIsCurrentReadinessError(message: string, currentReadinessError: string): boolean {
+    const trimmed = asTrimmedString(message);
+    if (!trimmed) {
+      return false;
+    }
+    return trimmed === currentReadinessError
+      || trimmed === `Node marked not ready: ${currentReadinessError}`;
+  }
+
   function clearReadinessError(): void {
+    const previous = asTrimmedString(readinessError.value);
     readinessError.value = "";
+    if (!previous) {
+      return;
+    }
+    if (messageIsCurrentReadinessError(lastError.value, previous)) {
+      clearLastError();
+    }
+    nodeControlEntries.value = nodeControlEntries.value.filter(
+      (entry) => !messageIsCurrentReadinessError(entry.message, previous),
+    );
   }
 
   function setReadinessError(message: string, at = nowMs()): void {
@@ -747,6 +773,52 @@ export const useNodeStore = defineStore("node", () => {
   function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
     return hasConfiguredNonTcpInterface(settings)
       && nodeErrorIndicatesTcpInterfaceReadinessError(event);
+  }
+
+  function applyRnodeInterfaceReadiness(at = nowMs()): void {
+    const summary = summarizeRnodeInterfaceState(status.value, settings);
+    const message = asTrimmedString(summary.message);
+    const fingerprint = [
+      summary.severity,
+      message,
+      summary.rnodeAvailable ? "rnode-rx" : "rnode-no-rx",
+      summary.otherAvailableCount,
+    ].join("|");
+    const previousBlockingMessage = lastRnodeBlockingMessage;
+    const fingerprintChanged = fingerprint !== lastRnodeInterfaceFingerprint;
+
+    if (summary.severity === "blocking") {
+      if (message) {
+        setReadinessError(message, at);
+        if (fingerprintChanged && previousBlockingMessage && previousBlockingMessage !== message) {
+          appendNodeControlEntry("Warn", message, at);
+        }
+        lastRnodeBlockingMessage = message;
+      }
+    } else {
+      if (readinessError.value) {
+        clearReadinessError();
+      }
+      lastRnodeBlockingMessage = "";
+    }
+
+    if (!fingerprintChanged) {
+      return;
+    }
+    lastRnodeInterfaceFingerprint = fingerprint;
+
+    if (summary.severity === "degraded" && message) {
+      appendNodeControlEntry("Warn", message, at);
+    } else if (summary.severity === "ready" && summary.rnodeConfigured) {
+      const otherInterfaceText = summary.otherAvailableCount === 0
+        ? "no other receiving interfaces"
+        : `${summary.otherAvailableCount} other receiving interface${summary.otherAvailableCount === 1 ? "" : "s"}`;
+      appendNodeControlEntry(
+        "Info",
+        `RNode LoRa available with ${otherInterfaceText}.`,
+        at,
+      );
+    }
   }
 
   function errorMessage(error: unknown): string {
@@ -1454,11 +1526,37 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
 
+    const legacyCounts = {
+      savedPeers: legacyState.payload.savedPeers.length,
+      eams: legacyState.payload.eams.length,
+      events: legacyState.payload.events.length,
+      messages: legacyState.payload.messages.length,
+      telemetryPositions: legacyState.payload.telemetryPositions.length,
+    };
+    const nativeHasImportedLegacyState = async (): Promise<boolean> => {
+      const [summary, savedPeers] = await Promise.all([
+        client.value!.getOperationalSummary(),
+        client.value!.getSavedPeers(),
+      ]);
+      return savedPeers.length >= legacyCounts.savedPeers
+        && summary.eamCount >= legacyCounts.eams
+        && summary.eventCount >= legacyCounts.events
+        && summary.messageCount >= legacyCounts.messages
+        && summary.telemetryCount >= legacyCounts.telemetryPositions;
+    };
+
     const completed = await client.value.legacyImportCompleted();
-    if (!completed) {
+    if (!completed || !(await nativeHasImportedLegacyState())) {
       await client.value.importLegacyState(legacyState.payload);
     }
-    clearLegacyProjectionStorage();
+    if (await nativeHasImportedLegacyState()) {
+      clearLegacyProjectionStorage();
+    } else {
+      appendLog(
+        "Warn",
+        "[startup] legacy projection import left WebView storage intact because native verification did not match.",
+      );
+    }
   }
 
   function recordLivePresence(
@@ -1965,7 +2063,18 @@ export const useNodeStore = defineStore("node", () => {
         } else if (event.status.running && !statusError) {
           clearReadinessError();
         }
+        applyRnodeInterfaceReadiness();
         void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
+      }),
+      nodeClient.on("interfaceStatusChanged", (event: InterfaceStatusChangedEvent) => {
+        const current = status.value.interfaces.filter(
+          (entry) => entry.interfaceHex !== event.status.interfaceHex,
+        );
+        status.value = normalizeNodeStatus({
+          ...status.value,
+          interfaces: event.status.state === "disconnected" ? current : [...current, event.status],
+        });
+        applyRnodeInterfaceReadiness();
       }),
       nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
         upsertNativeAnnounceRecord(event);
@@ -2183,6 +2292,7 @@ export const useNodeStore = defineStore("node", () => {
       );
       setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
+      applyRnodeInterfaceReadiness();
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
@@ -2238,6 +2348,7 @@ export const useNodeStore = defineStore("node", () => {
       );
       setNodeConfigRestartRequired(false);
       await refreshStatusSnapshot(8, 250);
+      applyRnodeInterfaceReadiness();
       await refreshMessagingState();
       await refreshAnnounceState();
       await refreshOperationalSummaryProjection();
@@ -2880,7 +2991,11 @@ export const useNodeStore = defineStore("node", () => {
 
   const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
   const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
-  const ready = computed(() => status.value.running && !readinessErrorMessage.value);
+  const ready = computed(() =>
+    status.value.running
+    && !readinessErrorMessage.value
+    && statusHasReceivingInterface(status.value),
+  );
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(
     () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),

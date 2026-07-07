@@ -71,12 +71,13 @@ use crate::types::{
     ChecklistColumnType, ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey,
     ChecklistTaskRecord, ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord,
     EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord,
-    HubDirectorySnapshot, HubMode, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
-    LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod,
-    MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode, RnodeSettingsRecord,
-    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord,
-    SosMessageKind, SyncPhase, SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
+    HubDirectorySnapshot, HubMode, InterfaceStatusRecord, LogLevel, LxmfDeliveryMethod,
+    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState, ProjectionScope,
+    RnodeConnectionMode, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
+    TelemetryPositionRecord, TransportDeliveryState,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -3318,7 +3319,57 @@ impl InterfaceTrafficSample {
     }
 }
 
-type ActiveInterfaceRegistry = Arc<TokioMutex<HashMap<AddressHash, String>>>;
+type ActiveInterfaceRegistry = Arc<TokioMutex<HashMap<AddressHash, InterfaceStatusRecord>>>;
+
+fn interface_status_kind(label: &str) -> &'static str {
+    if interface_label_is_rnode_ble(label) {
+        "rnode_ble"
+    } else {
+        "tcp_client"
+    }
+}
+
+fn new_interface_status(
+    interface: AddressHash,
+    label: String,
+    state: &'static str,
+) -> InterfaceStatusRecord {
+    let kind = interface_status_kind(&label).to_string();
+    InterfaceStatusRecord {
+        interface_hex: interface.to_hex_string(),
+        label,
+        kind,
+        state: state.to_string(),
+        last_error: None,
+        rx_packets: 0,
+        rx_bytes: 0,
+        last_activity_ms: 0,
+    }
+}
+
+async fn publish_interface_registry_snapshot(
+    active_interface_registry: &ActiveInterfaceRegistry,
+    status: &Arc<Mutex<NodeStatus>>,
+    bus: &EventBus,
+    changed: Option<InterfaceStatusRecord>,
+) {
+    let mut interfaces = active_interface_registry
+        .lock()
+        .await
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    interfaces.sort_by(|left, right| left.label.cmp(&right.label));
+    if let Ok(mut guard) = status.lock() {
+        guard.interfaces = interfaces;
+        bus.emit(NodeEvent::StatusChanged {
+            status: guard.clone(),
+        });
+    }
+    if let Some(status) = changed {
+        bus.emit(NodeEvent::InterfaceStatusChanged { status });
+    }
+}
 
 fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
     configured_seconds.max(MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
@@ -3327,6 +3378,8 @@ fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
 fn spawn_interface_traffic_monitor(
     transport: Arc<Transport>,
     active_interface_registry: ActiveInterfaceRegistry,
+    status: Arc<Mutex<NodeStatus>>,
+    bus: EventBus,
 ) {
     tokio::spawn(async move {
         let mut rx = transport.iface_rx();
@@ -3338,13 +3391,25 @@ fn spawn_interface_traffic_monitor(
                     if samples.is_empty() {
                         continue;
                     }
-                    let endpoints = active_interface_registry.lock().await.clone();
+                    let mut changed = Vec::new();
                     let mut rows = samples.drain().collect::<Vec<_>>();
                     rows.sort_by_key(|(_, sample)| std::cmp::Reverse(sample.bytes));
+                    {
+                        let mut endpoints = active_interface_registry.lock().await;
+                        for (interface, sample) in rows.iter() {
+                            if let Some(record) = endpoints.get_mut(interface) {
+                                record.rx_packets = record.rx_packets.saturating_add(sample.packets);
+                                record.rx_bytes = record.rx_bytes.saturating_add(sample.bytes);
+                                record.last_activity_ms = now_ms();
+                                changed.push(record.clone());
+                            }
+                        }
+                    }
                     for (interface, sample) in rows {
+                        let endpoints = active_interface_registry.lock().await;
                         let endpoint = endpoints
                             .get(&interface)
-                            .map(String::as_str)
+                            .map(|record| record.label.as_str())
                             .unwrap_or("unknown");
                         info!(
                             "[iface][rx] endpoint=<{}> iface={} packets={} bytes={} announces={} data={} proofs={} link_requests={}",
@@ -3357,6 +3422,15 @@ fn spawn_interface_traffic_monitor(
                             sample.proofs,
                             sample.link_requests,
                         );
+                    }
+                    for status_update in changed {
+                        publish_interface_registry_snapshot(
+                            &active_interface_registry,
+                            &status,
+                            &bus,
+                            Some(status_update),
+                        )
+                        .await;
                     }
                 }
                 message = rx.recv() => {
@@ -7128,18 +7202,20 @@ async fn has_active_reticulum_interface(state: &NodeRuntimeState) -> bool {
 }
 
 fn active_interfaces_include_relay_transport(
-    active_interfaces: &HashMap<AddressHash, String>,
+    active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>,
 ) -> bool {
     active_interfaces
         .values()
-        .any(|interface| !interface_label_is_rnode_ble(interface))
+        .any(|interface| !interface_label_is_rnode_ble(&interface.label))
 }
 
-fn active_interfaces_are_rnode_ble_only(active_interfaces: &HashMap<AddressHash, String>) -> bool {
+fn active_interfaces_are_rnode_ble_only(
+    active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>,
+) -> bool {
     !active_interfaces.is_empty()
         && active_interfaces
             .values()
-            .all(|interface| interface_label_is_rnode_ble(interface))
+            .all(|interface| interface_label_is_rnode_ble(&interface.label))
 }
 
 fn interface_label_is_rnode_ble(interface: &str) -> bool {
@@ -7147,12 +7223,12 @@ fn interface_label_is_rnode_ble(interface: &str) -> bool {
 }
 
 fn active_interface_is_rnode_ble(
-    active_interfaces: &HashMap<AddressHash, String>,
+    active_interfaces: &HashMap<AddressHash, InterfaceStatusRecord>,
     interface: &AddressHash,
 ) -> bool {
     active_interfaces
         .get(interface)
-        .is_some_and(|label| interface_label_is_rnode_ble(label))
+        .is_some_and(|status| interface_label_is_rnode_ble(&status.label))
 }
 
 fn link_connect_timeout(rnode_route: bool) -> Duration {
@@ -9062,6 +9138,7 @@ fn spawn_rnode_ble_interface(
     bus: EventBus,
     settings: RnodeSettingsRecord,
     active_interface_registry: ActiveInterfaceRegistry,
+    status: Arc<Mutex<NodeStatus>>,
 ) {
     if !settings.enabled {
         return;
@@ -9135,10 +9212,18 @@ fn spawn_rnode_ble_interface(
                 .await
                 .new_context_with_role_and_mode(adapter, IfaceRole::Unicast, InterfaceMode::Full);
             let iface = *context.channel.address();
+            let status_update = new_interface_status(iface, label.clone(), "connected");
             active_interface_registry
                 .lock()
                 .await
-                .insert(iface, label.clone());
+                .insert(iface, status_update.clone());
+            publish_interface_registry_snapshot(
+                &active_interface_registry,
+                &status,
+                &bus,
+                Some(status_update),
+            )
+            .await;
             info!(
                 "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
                 label, peripheral_id, settings.region, settings.profile, iface
@@ -9154,10 +9239,22 @@ fn spawn_rnode_ble_interface(
 
             let active_for_task = active.clone();
             let registry_for_task = active_interface_registry.clone();
+            let status_for_task = status.clone();
+            let bus_for_task = bus.clone();
             let label_for_task = label.clone();
             tokio::spawn(async move {
                 NativeRnodeBleKissInterface::spawn(context).await;
-                registry_for_task.lock().await.remove(&iface);
+                let removed = registry_for_task.lock().await.remove(&iface);
+                if let Some(mut removed) = removed {
+                    removed.state = "disconnected".to_string();
+                    publish_interface_registry_snapshot(
+                        &registry_for_task,
+                        &status_for_task,
+                        &bus_for_task,
+                        Some(removed),
+                    )
+                    .await;
+                }
                 active_for_task.store(false, Ordering::Release);
                 warn!(
                     "rnode_ble: stopped interface label={} iface={}; retrying",
@@ -9176,6 +9273,7 @@ fn spawn_rnode_ble_interface(
     bus: EventBus,
     settings: RnodeSettingsRecord,
     _active_interface_registry: ActiveInterfaceRegistry,
+    _status: Arc<Mutex<NodeStatus>>,
 ) {
     if !settings.enabled {
         return;
@@ -9255,12 +9353,28 @@ async fn any_tcp_endpoint_reachable(endpoints: &[String]) -> bool {
 
 async fn unregister_tcp_client_endpoint(
     active_interface_registry: &ActiveInterfaceRegistry,
+    status: &Arc<Mutex<NodeStatus>>,
+    bus: &EventBus,
     endpoint: &str,
 ) {
-    active_interface_registry
-        .lock()
-        .await
-        .retain(|_, registered_endpoint| registered_endpoint != endpoint);
+    let removed = {
+        let mut registry = active_interface_registry.lock().await;
+        let remove_keys = registry
+            .iter()
+            .filter_map(|(interface, registered)| {
+                (registered.label == endpoint).then_some(*interface)
+            })
+            .collect::<Vec<_>>();
+        remove_keys
+            .into_iter()
+            .filter_map(|interface| registry.remove(&interface))
+            .collect::<Vec<_>>()
+    };
+    for mut removed in removed {
+        removed.state = "disconnected".to_string();
+        publish_interface_registry_snapshot(active_interface_registry, status, bus, Some(removed))
+            .await;
+    }
 }
 
 fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
@@ -9275,6 +9389,8 @@ fn spawn_tcp_client_interface_manager(
     transport: Arc<Transport>,
     connect_addr: String,
     active_interface_registry: ActiveInterfaceRegistry,
+    status: Arc<Mutex<NodeStatus>>,
+    bus: EventBus,
 ) {
     tokio::spawn(async move {
         let active = Arc::new(AtomicBool::new(false));
@@ -9293,20 +9409,35 @@ fn spawn_tcp_client_interface_manager(
                 let active_for_task = active.clone();
                 let task_addr = connect_addr.clone();
                 let registry_for_task = active_interface_registry.clone();
+                let status_for_task = status.clone();
+                let bus_for_task = bus.clone();
                 let iface = transport.iface_manager().lock().await.spawn(
                     TcpClient::new_from_stream(connect_addr.clone(), stream),
                     move |context| async move {
                         TcpClient::spawn(context).await;
-                        unregister_tcp_client_endpoint(&registry_for_task, task_addr.as_str())
-                            .await;
+                        unregister_tcp_client_endpoint(
+                            &registry_for_task,
+                            &status_for_task,
+                            &bus_for_task,
+                            task_addr.as_str(),
+                        )
+                        .await;
                         active_for_task.store(false, Ordering::Release);
                         info!("tcp_client: stopped interface for <{}>", task_addr);
                     },
                 );
+                let status_update = new_interface_status(iface, connect_addr.clone(), "connected");
                 active_interface_registry
                     .lock()
                     .await
-                    .insert(iface, connect_addr.clone());
+                    .insert(iface, status_update.clone());
+                publish_interface_registry_snapshot(
+                    &active_interface_registry,
+                    &status,
+                    &bus,
+                    Some(status_update),
+                )
+                .await;
                 info!(
                     "tcp_client: connected interface endpoint=<{}> iface={}",
                     connect_addr, iface
@@ -9439,13 +9570,20 @@ pub async fn run_node(
     let transport = Arc::new(transport);
     let active_interface_registry: ActiveInterfaceRegistry =
         Arc::new(TokioMutex::new(HashMap::new()));
-    spawn_interface_traffic_monitor(transport.clone(), active_interface_registry.clone());
+    spawn_interface_traffic_monitor(
+        transport.clone(),
+        active_interface_registry.clone(),
+        status.clone(),
+        bus.clone(),
+    );
     let tcp_client_endpoints = configured_tcp_client_endpoints(config.tcp_clients.as_slice());
     for endpoint in tcp_client_endpoints.iter().cloned() {
         spawn_tcp_client_interface_manager(
             transport.clone(),
             endpoint,
             active_interface_registry.clone(),
+            status.clone(),
+            bus.clone(),
         );
     }
     spawn_rnode_ble_interface(
@@ -9453,6 +9591,7 @@ pub async fn run_node(
         bus.clone(),
         config.rnode.clone(),
         active_interface_registry.clone(),
+        status.clone(),
     );
 
     let _legacy_app_destination_hex = app_destination
@@ -11233,33 +11372,64 @@ mod tests {
         let registry: ActiveInterfaceRegistry = Arc::new(TokioMutex::new(HashMap::from([
             (
                 AddressHash::new_from_slice(&[1u8; 16]),
-                "rns.beleth.net:4242".to_string(),
+                new_interface_status(
+                    AddressHash::new_from_slice(&[1u8; 16]),
+                    "rns.beleth.net:4242".to_string(),
+                    "connected",
+                ),
             ),
             (
                 AddressHash::new_from_slice(&[2u8; 16]),
-                "rns.beleth.net:4242".to_string(),
+                new_interface_status(
+                    AddressHash::new_from_slice(&[2u8; 16]),
+                    "rns.beleth.net:4242".to_string(),
+                    "connected",
+                ),
             ),
             (
                 AddressHash::new_from_slice(&[3u8; 16]),
-                "dfw.us.g00n.cloud:6969".to_string(),
+                new_interface_status(
+                    AddressHash::new_from_slice(&[3u8; 16]),
+                    "dfw.us.g00n.cloud:6969".to_string(),
+                    "connected",
+                ),
             ),
         ])));
+        let status = Arc::new(Mutex::new(NodeStatus {
+            running: true,
+            name: "test".to_string(),
+            identity_hex: String::new(),
+            app_destination_hex: String::new(),
+            lxmf_destination_hex: String::new(),
+            interfaces: Vec::new(),
+        }));
+        let bus = EventBus::new();
+        let rx = bus.subscribe();
 
-        unregister_tcp_client_endpoint(&registry, "rns.beleth.net:4242").await;
+        unregister_tcp_client_endpoint(&registry, &status, &bus, "rns.beleth.net:4242").await;
 
         let guard = registry.lock().await;
         assert_eq!(guard.len(), 1);
         assert_eq!(
-            guard.get(&AddressHash::new_from_slice(&[3u8; 16])),
-            Some(&"dfw.us.g00n.cloud:6969".to_string()),
+            guard
+                .get(&AddressHash::new_from_slice(&[3u8; 16]))
+                .map(|status| status.label.as_str()),
+            Some("dfw.us.g00n.cloud:6969"),
         );
+        assert!(rx
+            .try_iter()
+            .any(|event| matches!(event, NodeEvent::InterfaceStatusChanged { status } if status.state == "disconnected")));
     }
 
     #[test]
     fn active_relay_transport_requires_non_rnode_ble_interface() {
         let rnode_only = HashMap::from([(
             AddressHash::new_from_slice(&[1u8; 16]),
-            "rnode-ble:RNode 4339".to_string(),
+            new_interface_status(
+                AddressHash::new_from_slice(&[1u8; 16]),
+                "rnode-ble:RNode 4339".to_string(),
+                "connected",
+            ),
         )]);
         assert!(!active_interfaces_include_relay_transport(&rnode_only));
         assert!(active_interfaces_are_rnode_ble_only(&rnode_only));
@@ -11272,11 +11442,19 @@ mod tests {
         let with_tcp = HashMap::from([
             (
                 AddressHash::new_from_slice(&[1u8; 16]),
-                "rnode-ble:RNode 4339".to_string(),
+                new_interface_status(
+                    AddressHash::new_from_slice(&[1u8; 16]),
+                    "rnode-ble:RNode 4339".to_string(),
+                    "connected",
+                ),
             ),
             (
                 AddressHash::new_from_slice(&[2u8; 16]),
-                "rns.beleth.net:4242".to_string(),
+                new_interface_status(
+                    AddressHash::new_from_slice(&[2u8; 16]),
+                    "rns.beleth.net:4242".to_string(),
+                    "connected",
+                ),
             ),
         ]);
         assert!(active_interfaces_include_relay_transport(&with_tcp));

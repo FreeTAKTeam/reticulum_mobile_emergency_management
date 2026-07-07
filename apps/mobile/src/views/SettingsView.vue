@@ -120,6 +120,17 @@ function formatLogTimestamp(at: number): string {
   });
 }
 
+function formatInterfaceActivity(at: number): string {
+  if (!Number.isFinite(at) || at <= 0) {
+    return "No RX yet";
+  }
+  return new Date(at).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
   TCP_COMMUNITY_SERVERS.map((server) => ({
     name: server.name,
@@ -1356,6 +1367,19 @@ async function onPeerListFileSelected(event: Event): Promise<void> {
         </div>
         <p v-if="runtimeFeedback" class="feedback">{{ runtimeFeedback }}</p>
         <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
+        <div v-if="nodeStore.status.interfaces.length > 0" class="active-endpoints">
+          <article
+            v-for="iface in nodeStore.status.interfaces"
+            :key="iface.interfaceHex"
+            class="active-endpoint"
+          >
+            <span>
+              {{ iface.label || iface.interfaceHex }}
+              <small>{{ iface.kind }} | {{ iface.state }} | RX {{ iface.rxPackets }} / {{ iface.rxBytes }} bytes | {{ formatInterfaceActivity(iface.lastActivityMs) }}</small>
+              <small v-if="iface.lastError">{{ iface.lastError }}</small>
+            </span>
+          </article>
+        </div>
         <div class="log-list">
           <p v-for="entry in nodeStore.nodeControlEntries" :key="entry.at" class="log">
             <time :datetime="new Date(entry.at).toISOString()">{{ formatLogTimestamp(entry.at) }}</time>
@@ -1800,6 +1824,18 @@ textarea {
   justify-content: space-between;
   letter-spacing: 0.03em;
   padding: 0.44rem 0.58rem;
+}
+
+.active-endpoint span {
+  display: grid;
+  gap: 0.14rem;
+}
+
+.active-endpoint small {
+  color: #89a8d4;
+  font-family: var(--font-body);
+  font-size: 0.74rem;
+  letter-spacing: 0;
 }
 
 .inline-remove {
