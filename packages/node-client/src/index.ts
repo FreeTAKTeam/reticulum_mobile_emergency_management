@@ -150,6 +150,18 @@ export interface NodeStatus {
   appDestinationHex: string;
   lxmfDestinationHex: string;
   lastError?: string;
+  interfaces: InterfaceStatusRecord[];
+}
+
+export interface InterfaceStatusRecord {
+  interfaceHex: string;
+  label: string;
+  kind: string;
+  state: string;
+  lastError?: string;
+  rxPackets: number;
+  rxBytes: number;
+  lastActivityMs: number;
 }
 
 export interface PeerChange {
@@ -173,6 +185,10 @@ export interface PeerChange {
 
 export interface StatusChangedEvent {
   status: NodeStatus;
+}
+
+export interface InterfaceStatusChangedEvent {
+  status: InterfaceStatusRecord;
 }
 
 export interface AnnounceReceivedEvent {
@@ -737,6 +753,7 @@ export interface NodeErrorEvent {
 
 export interface NodeClientEvents {
   statusChanged: StatusChangedEvent;
+  interfaceStatusChanged: InterfaceStatusChangedEvent;
   announceReceived: AnnounceReceivedEvent;
   peerChanged: PeerChangedEvent;
   peerResolved: PeerRecord;
@@ -1265,6 +1282,7 @@ function encodeBytesToBase64(value: Uint8Array): string {
 }
 
 function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
+  const interfacesRaw = raw.interfaces ?? raw.interface_statuses;
   return {
     running: Boolean(raw.running),
     name: String(raw.name ?? ""),
@@ -1281,6 +1299,30 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
         : typeof raw.last_error === "string"
           ? raw.last_error
           : undefined,
+    interfaces: Array.isArray(interfacesRaw)
+      ? interfacesRaw.map((entry) => toInterfaceStatusRecord(entry)).filter((entry) => entry.interfaceHex.length > 0)
+      : [],
+  };
+}
+
+function toInterfaceStatusRecord(raw: unknown): InterfaceStatusRecord {
+  const record = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  return {
+    interfaceHex: String(record.interfaceHex ?? record.interface_hex ?? ""),
+    label: String(record.label ?? ""),
+    kind: String(record.kind ?? ""),
+    state: String(record.state ?? ""),
+    lastError:
+      typeof record.lastError === "string"
+        ? record.lastError
+        : typeof record.last_error === "string"
+          ? record.last_error
+          : undefined,
+    rxPackets: Number(record.rxPackets ?? record.rx_packets ?? 0),
+    rxBytes: Number(record.rxBytes ?? record.rx_bytes ?? 0),
+    lastActivityMs: Number(record.lastActivityMs ?? record.last_activity_ms ?? 0),
   };
 }
 
@@ -1338,6 +1380,11 @@ function toStatusChangedEvent(raw: Record<string, unknown>): StatusChangedEvent 
   const statusRaw =
     (raw.status as Record<string, unknown> | undefined) ?? raw;
   return { status: toNodeStatus(statusRaw) };
+}
+
+function toInterfaceStatusChangedEvent(raw: Record<string, unknown>): InterfaceStatusChangedEvent {
+  const statusRaw = raw.status ?? raw;
+  return { status: toInterfaceStatusRecord(statusRaw) };
 }
 
 function toAnnounceReceivedEvent(
@@ -3430,6 +3477,7 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       };
 
       await register("statusChanged", toStatusChangedEvent);
+      await register("interfaceStatusChanged", toInterfaceStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);
       await register("peerResolved", toPeerRecord);
@@ -4043,6 +4091,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      interfaces: [],
     };
   })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;
@@ -4616,6 +4665,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      interfaces: [],
     };
   })();
   private capabilities = DEFAULT_NODE_CONFIG.announceCapabilities;

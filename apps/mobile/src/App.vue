@@ -25,6 +25,13 @@ import {
 } from "./utils/androidBackNavigation";
 import { appVersion } from "./utils/appVersion";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
+import {
+  STARTUP_INTERFACE_LOADING_DETAIL,
+  STARTUP_INTERFACE_LOADING_SUMMARY,
+  buildStartupInterfaceItems,
+  statusHasRuntimeReceiveReadiness,
+} from "./utils/startupInterfaces";
+import { supportsNativeNodeRuntime } from "./utils/runtimeProfile";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -35,6 +42,11 @@ const telemetryStore = useTelemetryStore();
 const sosStore = useSosStore();
 const route = useRoute();
 const router = useRouter();
+const startupInterfaceMockEnabled = computed(() => route.query.mock === "splash-interface-loading");
+const startupSplashMockEnabled = computed(() => route.query.mock === "splash-screen");
+const startupMockEnabled = computed(() => (
+  startupSplashMockEnabled.value || startupInterfaceMockEnabled.value
+));
 
 function normalizedBluetoothId(value: string): string {
   return value
@@ -135,7 +147,7 @@ onMounted(async () => {
     if (setupCompleted && nodeStore.settings.telemetry.enabled) {
       await telemetryStore.requestStartupPermission();
     }
-    if (!setupCompleted && route.path !== "/setup") {
+    if (!setupCompleted && route.path !== "/setup" && !startupMockEnabled.value) {
       await router.replace("/setup");
     }
   } catch (error: unknown) {
@@ -162,10 +174,25 @@ interface NavigationItem {
   icon: AppIcon;
 }
 
+const startupInterfaceItems = computed(() => buildStartupInterfaceItems(nodeStore.status, nodeStore.settings));
+const startupConfiguredInterfaceItems = computed(() =>
+  startupInterfaceItems.value.filter((item) => item.id !== "local" && item.state !== "disabled"),
+);
+const startupInterfacesNeedGrace = computed(() =>
+  startupConfiguredInterfaceItems.value.length > 0
+  && !statusHasRuntimeReceiveReadiness(nodeStore.status, {
+    requiresInterfaceTelemetry: supportsNativeNodeRuntime,
+  }),
+);
 const menuOpen = shallowRef(false);
 const splashMinimumElapsed = shallowRef(false);
 const startupComplete = shallowRef(false);
-const showSplash = computed(() => !splashMinimumElapsed.value || !startupComplete.value);
+const showSplash = computed(() => (
+  startupMockEnabled.value
+  || !splashMinimumElapsed.value
+  || !startupComplete.value
+  || startupInterfacesNeedGrace.value
+));
 let splashTimer: number | undefined;
 let androidBackButtonListener: { remove: () => Promise<void> } | undefined;
 
@@ -497,7 +524,14 @@ onUnmounted(() => {
         </button>
       </nav>
       <SosOverlay v-if="!setupActive" />
-      <SplashScreen v-if="showSplash" :version="appVersion" />
+      <SplashScreen
+        v-if="showSplash"
+        :version="appVersion"
+        :interface-loading="startupInterfaceMockEnabled || showSplash"
+        :interface-items="startupInterfaceItems"
+        :loading-message="STARTUP_INTERFACE_LOADING_SUMMARY"
+        :loading-detail="STARTUP_INTERFACE_LOADING_DETAIL"
+      />
     </div>
   </div>
 </template>

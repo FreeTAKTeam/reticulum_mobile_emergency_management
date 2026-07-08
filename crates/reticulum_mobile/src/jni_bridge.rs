@@ -20,14 +20,14 @@ use crate::types::{
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
     EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, LegacyImportPayload, LogLevel, LxmfDeliveryMethod,
-    LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection,
-    MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus,
-    PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode, RnodeSettingsRecord,
-    SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
-    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
-    SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord, TelemetrySettingsRecord,
-    TransportDeliveryState,
+    HubMode, HubSettingsRecord, InterfaceStatusRecord, LegacyImportPayload, LogLevel,
+    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode,
+    RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord,
+    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
+    SosState, SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord,
+    TelemetrySettingsRecord, TransportDeliveryState,
 };
 
 const RESULT_OK: jint = 0;
@@ -1154,9 +1154,23 @@ fn status_to_json(status: NodeStatus) -> String {
         "name": status.name,
         "identityHex": status.identity_hex,
         "appDestinationHex": status.app_destination_hex,
-        "lxmfDestinationHex": status.lxmf_destination_hex
+        "lxmfDestinationHex": status.lxmf_destination_hex,
+        "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
     })
     .to_string()
+}
+
+fn interface_status_json(status: InterfaceStatusRecord) -> serde_json::Value {
+    json!({
+        "interfaceHex": status.interface_hex,
+        "label": status.label,
+        "kind": status.kind,
+        "state": status.state,
+        "lastError": status.last_error,
+        "rxPackets": status.rx_packets,
+        "rxBytes": status.rx_bytes,
+        "lastActivityMs": status.last_activity_ms
+    })
 }
 
 fn peer_state_to_str(state: PeerState) -> &'static str {
@@ -1853,8 +1867,15 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                     "name": status.name,
                     "identityHex": status.identity_hex,
                     "appDestinationHex": status.app_destination_hex,
-                    "lxmfDestinationHex": status.lxmf_destination_hex
+                    "lxmfDestinationHex": status.lxmf_destination_hex,
+                    "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
                 }
+            }),
+        ),
+        NodeEvent::InterfaceStatusChanged { status } => (
+            "interfaceStatusChanged",
+            json!({
+                "status": interface_status_json(status)
             }),
         ),
         NodeEvent::AnnounceReceived {
@@ -2140,6 +2161,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                interfaces: Vec::new(),
             }
         }
     };

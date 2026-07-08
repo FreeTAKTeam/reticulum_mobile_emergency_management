@@ -476,6 +476,19 @@ pub struct NodeStatus {
     pub identity_hex: String,
     pub app_destination_hex: String,
     pub lxmf_destination_hex: String,
+    pub interfaces: Vec<InterfaceStatusRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceStatusRecord {
+    pub interface_hex: String,
+    pub label: String,
+    pub kind: String,
+    pub state: String,
+    pub last_error: Option<String>,
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub last_activity_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1152,6 +1165,9 @@ pub struct OperationalSummary {
 pub enum NodeEvent {
     StatusChanged {
         status: NodeStatus,
+    },
+    InterfaceStatusChanged {
+        status: InterfaceStatusRecord,
     },
     AnnounceReceived {
         destination_hex: String,

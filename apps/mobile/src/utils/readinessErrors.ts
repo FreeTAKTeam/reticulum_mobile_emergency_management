@@ -1,4 +1,15 @@
-import type { NodeErrorEvent } from "@reticulum/node-client";
+import type { InterfaceStatusRecord, NodeErrorEvent, NodeStatus } from "@reticulum/node-client";
+
+export type RnodeInterfaceSeverity = "disabled" | "pending" | "blocking" | "degraded" | "ready";
+
+export interface RnodeInterfaceSummary {
+  severity: RnodeInterfaceSeverity;
+  message?: string;
+  notificationLabel?: string;
+  rnodeConfigured: boolean;
+  rnodeAvailable: boolean;
+  otherAvailableCount: number;
+}
 
 const GLOBAL_READINESS_ERROR_LOG_PATTERNS = [
   /\bnode runtime failed\b/i,
@@ -51,6 +62,72 @@ export function hasConfiguredNonTcpInterface(
     return false;
   }
   return Boolean(rnode?.enabled) && String(rnode?.peripheralId ?? "").trim().length > 0;
+}
+
+function interfaceIsRnodeBle(record: Pick<InterfaceStatusRecord, "kind" | "label">): boolean {
+  return record.kind === "rnode_ble" || record.label.toLowerCase().startsWith("rnode-ble:");
+}
+
+function interfaceIsReceiving(record: Pick<InterfaceStatusRecord, "state" | "rxPackets" | "rxBytes" | "lastActivityMs">): boolean {
+  return record.state === "connected"
+    && (
+      Number(record.rxPackets) > 0
+      || Number(record.rxBytes) > 0
+      || Number(record.lastActivityMs) > 0
+    );
+}
+
+export function summarizeRnodeInterfaceState(
+  status: Pick<NodeStatus, "running" | "interfaces"> | null | undefined,
+  settings: { rnode?: { enabled?: unknown; connectionMode?: unknown; peripheralId?: unknown } | null } | null | undefined,
+): RnodeInterfaceSummary {
+  const interfaces = Array.isArray(status?.interfaces) ? status.interfaces : [];
+  const rnodeAvailable = interfaces.some((entry) => interfaceIsRnodeBle(entry) && interfaceIsReceiving(entry));
+  const otherAvailableCount = interfaces.filter((entry) => !interfaceIsRnodeBle(entry) && interfaceIsReceiving(entry)).length;
+  const anyInterfaceAvailable = rnodeAvailable || otherAvailableCount > 0;
+  const rnodeConfigured = hasConfiguredNonTcpInterface(settings);
+
+  if (status?.running && anyInterfaceAvailable) {
+    return {
+      severity: "ready",
+      rnodeConfigured,
+      rnodeAvailable,
+      otherAvailableCount,
+    };
+  }
+
+  if (!rnodeConfigured) {
+    return {
+      severity: "disabled",
+      rnodeConfigured: false,
+      rnodeAvailable: false,
+      otherAvailableCount: 0,
+    };
+  }
+  if (!status?.running) {
+    return {
+      severity: "pending",
+      rnodeConfigured: true,
+      rnodeAvailable: false,
+      otherAvailableCount: 0,
+    };
+  }
+  if (!rnodeAvailable) {
+    return {
+      severity: "blocking",
+      message: "REM not ready: RNode LoRa is configured but no active interface is receiving traffic.",
+      notificationLabel: "REM not ready: RNode not receiving",
+      rnodeConfigured: true,
+      rnodeAvailable,
+      otherAvailableCount,
+    };
+  }
+  return {
+    severity: "ready",
+    rnodeConfigured: true,
+    rnodeAvailable,
+    otherAvailableCount,
+  };
 }
 
 export function logIndicatesTcpInterfaceReadinessError(message: string): boolean {
