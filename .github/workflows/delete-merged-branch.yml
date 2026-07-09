@@ -1,0 +1,66 @@
+name: Delete Merged PR Branch
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-branch:
+    name: Delete branch after merge
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete merged pull request branch
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            const branch = pullRequest.head.ref;
+            const sourceRepository = pullRequest.head.repo.full_name;
+            const targetRepository = context.payload.repository.full_name;
+            const defaultBranch = context.payload.repository.default_branch;
+
+            if (sourceRepository !== targetRepository) {
+              core.notice(`Skipping ${branch}; it belongs to fork ${sourceRepository}.`);
+              return;
+            }
+
+            if (branch === defaultBranch) {
+              core.notice(`Skipping ${branch}; it is the default branch.`);
+              return;
+            }
+
+            const ref = `heads/${branch}`;
+            const isMissingRefError = (error) =>
+              error.status === 404 ||
+              (error.status === 422 &&
+                error.response?.data?.message?.includes("Reference does not exist"));
+
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref,
+              });
+
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref,
+              });
+              core.notice(`Deleted merged pull request branch ${branch}.`);
+            } catch (error) {
+              if (isMissingRefError(error)) {
+                core.notice(`Skipping ${branch}; it was already deleted.`);
+                return;
+              }
+
+              throw error;
+            }
