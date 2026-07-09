@@ -13,18 +13,25 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   buildStartupInterfaceItems,
-  statusHasReceivingInterface,
   statusHasRuntimeReceiveReadiness,
 } = await import(moduleUrl);
 
-const configuredSettings = {
-  tcpClients: ["rns.example.net:4242"],
-  rnode: {
-    enabled: true,
-    connectionMode: "ble",
-    peripheralId: "00:11:22:33:44:55",
-  },
-};
+function status(state, interfaces, running = true) {
+  return {
+    running,
+    readiness: { state, interfaces },
+  };
+}
+
+function record(id, state, detail, lastError) {
+  return {
+    id,
+    label: id === "rnode" ? "LoRa" : id === "tcp" ? "TCP community" : "Reticulum Net",
+    state,
+    detail,
+    lastError,
+  };
+}
 
 function itemById(items, id) {
   const item = items.find((entry) => entry.id === id);
@@ -32,197 +39,42 @@ function itemById(items, id) {
   return item;
 }
 
-test("disabled comes from interface configuration", () => {
+test("renders typed runtime interface readiness without inferring from traffic", () => {
   const items = buildStartupInterfaceItems(
-    {
-      running: true,
-      interfaces: [],
-    },
-    {
-      tcpClients: [],
-      rnode: {
-        enabled: false,
-        connectionMode: "ble",
-        peripheralId: "",
-      },
-    },
-  );
-
-  assert.equal(itemById(items, "rnode").state, "disabled");
-  assert.equal(itemById(items, "tcp").state, "disabled");
-  assert.equal(itemById(items, "local").state, "loading");
-});
-
-test("configured interfaces load before backend interface records arrive", () => {
-  const items = buildStartupInterfaceItems(
-    {
-      running: true,
-      interfaces: [],
-    },
-    configuredSettings,
+    status("Pending", [
+      record("rnode", "Pending", "Waiting for RNode"),
+      record("tcp", "Disabled", "No TCP interface configured"),
+      record("local", "Ready", "Runtime is ready"),
+    ]),
+    {},
   );
 
   assert.equal(itemById(items, "rnode").state, "loading");
-  assert.equal(itemById(items, "tcp").state, "loading");
-  assert.equal(itemById(items, "local").state, "loading");
-});
-
-test("connected interfaces wait until RX activity is reported", () => {
-  const items = buildStartupInterfaceItems(
-    {
-      running: true,
-      interfaces: [
-        {
-          interfaceHex: "01",
-          label: "rnode-ble:RNode",
-          kind: "rnode_ble",
-          state: "connected",
-          rxPackets: 0,
-          rxBytes: 0,
-          lastActivityMs: 0,
-        },
-        {
-          interfaceHex: "02",
-          label: "rns.example.net:4242",
-          kind: "tcp_client",
-          state: "connected",
-          rxPackets: 0,
-          rxBytes: 0,
-          lastActivityMs: 0,
-        },
-      ],
-    },
-    configuredSettings,
-  );
-
-  assert.equal(itemById(items, "rnode").state, "waiting");
-  assert.equal(itemById(items, "tcp").state, "waiting");
-  assert.equal(itemById(items, "local").state, "waiting");
-});
-
-test("RX activity marks the receiving interface and Reticulum Net ready", () => {
-  const items = buildStartupInterfaceItems(
-    {
-      running: true,
-      interfaces: [
-        {
-          interfaceHex: "01",
-          label: "rnode-ble:RNode",
-          kind: "rnode_ble",
-          state: "connected",
-          rxPackets: 0,
-          rxBytes: 0,
-          lastActivityMs: 0,
-        },
-        {
-          interfaceHex: "02",
-          label: "rns.example.net:4242",
-          kind: "tcp_client",
-          state: "connected",
-          rxPackets: 4,
-          rxBytes: 512,
-          lastActivityMs: 1000,
-        },
-      ],
-    },
-    configuredSettings,
-  );
-
-  assert.equal(itemById(items, "rnode").state, "waiting");
-  assert.equal(itemById(items, "tcp").state, "ready");
+  assert.equal(itemById(items, "tcp").state, "disabled");
   assert.equal(itemById(items, "local").state, "ready");
 });
 
-test("readiness requires a connected interface with RX activity", () => {
-  assert.equal(
-    statusHasReceivingInterface({
-      interfaces: [
-        {
-          interfaceHex: "01",
-          label: "rnode-ble:RNode",
-          kind: "rnode_ble",
-          state: "disconnected",
-          rxPackets: 4,
-          rxBytes: 512,
-          lastActivityMs: 1000,
-        },
-      ],
-    }),
-    false,
+test("surfaces failed and unsupported interface details", () => {
+  const items = buildStartupInterfaceItems(
+    status("Failed", [
+      record("rnode", "Unsupported", "Classic is unsupported"),
+      record("tcp", "Failed", "Interface failed", "connection refused"),
+    ]),
+    {},
   );
 
-  assert.equal(
-    statusHasReceivingInterface({
-      interfaces: [
-        {
-          interfaceHex: "02",
-          label: "rnode-ble:RNode",
-          kind: "rnode_ble",
-          state: "connected",
-          rxPackets: 1,
-          rxBytes: 48,
-          lastActivityMs: 1000,
-        },
-      ],
-    }),
-    true,
-  );
+  assert.equal(itemById(items, "rnode").state, "unsupported");
+  assert.equal(itemById(items, "tcp").state, "failed");
+  assert.equal(itemById(items, "tcp").detail, "connection refused");
 });
 
-test("native runtime readiness requires receiving interface telemetry", () => {
-  assert.equal(
-    statusHasRuntimeReceiveReadiness(
-      {
-        running: true,
-        interfaces: [],
-      },
-      { requiresInterfaceTelemetry: true },
-    ),
-    false,
-  );
-
-  assert.equal(
-    statusHasRuntimeReceiveReadiness(
-      {
-        running: true,
-        interfaces: [
-          {
-            interfaceHex: "02",
-            label: "rnode-ble:RNode",
-            kind: "rnode_ble",
-            state: "connected",
-            rxPackets: 1,
-            rxBytes: 48,
-            lastActivityMs: 1000,
-          },
-        ],
-      },
-      { requiresInterfaceTelemetry: true },
-    ),
-    true,
-  );
+test("runtime readiness uses the typed aggregate state", () => {
+  assert.equal(statusHasRuntimeReceiveReadiness(status("Pending", [], true)), false);
+  assert.equal(statusHasRuntimeReceiveReadiness(status("Failed", [], true)), false);
+  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], false)), false);
+  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], true)), true);
 });
 
-test("web runtime readiness can use running status without interface telemetry", () => {
-  assert.equal(
-    statusHasRuntimeReceiveReadiness(
-      {
-        running: false,
-        interfaces: [],
-      },
-      { requiresInterfaceTelemetry: false },
-    ),
-    false,
-  );
-
-  assert.equal(
-    statusHasRuntimeReceiveReadiness(
-      {
-        running: true,
-        interfaces: [],
-      },
-      { requiresInterfaceTelemetry: false },
-    ),
-    true,
-  );
+test("web and mock runtimes can report ready without interface telemetry", () => {
+  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], true)), true);
 });

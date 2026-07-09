@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
 
 permissions:
   contents: read
@@ -16,7 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  LXMF_RS_REF: 00f03294bccc4485949233916c5143156f70bbee
+  LXMF_RS_REF: bd380f62753a8a829839af166d2bbdae40974ee7
 
 jobs:
   web:
@@ -84,7 +86,7 @@ jobs:
         run: npm run test:e2e -- e2e/android-back-navigation.spec.ts
 
   rust:
-    name: Rust Runtime
+    name: Rust Runtime (pinned LXMF)
     runs-on: ubuntu-latest
 
     steps:
@@ -99,6 +101,46 @@ jobs:
           repository: FreeTAKTeam/LXMF-rs
           path: LXMF-rs
           ref: ${{ env.LXMF_RS_REF }}
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: rustfmt, clippy
+
+      - name: Check locked Rust dependencies
+        working-directory: rem
+        run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+
+      - name: Check Rust formatting
+        working-directory: rem
+        run: cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+
+      - name: Run clippy
+        working-directory: rem
+        run: cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets
+
+      - name: Run Rust tests
+        working-directory: rem
+        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
+
+  rust-current-lxmf:
+    name: Rust Runtime (current LXMF main)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out mobile app
+        uses: actions/checkout@v6
+        with:
+          path: rem
+
+      - name: Check out current LXMF-rs main
+        uses: actions/checkout@v6
+        with:
+          repository: FreeTAKTeam/LXMF-rs
+          path: LXMF-rs
+          ref: main
 
       - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@stable

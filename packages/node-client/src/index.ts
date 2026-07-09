@@ -5,6 +5,7 @@ export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
 export type RnodeRegion = "US915" | "EU868";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type RnodeConnectionMode = "ble" | "bluetooth_classic" | "usb" | "tcp";
+export type RuntimeReadinessState = "Pending" | "Ready" | "Failed" | "Unsupported" | "Disabled";
 export type PeerState = "Connecting" | "Connected" | "Disconnected";
 export type AnnounceDestinationKind = "app" | "lxmf_delivery" | "lxmf_propagation" | "other";
 export type AnnounceClass = "PeerApp" | "RchHubServer" | "PropagationNode" | "LxmfDelivery" | "Other";
@@ -150,7 +151,21 @@ export interface NodeStatus {
   appDestinationHex: string;
   lxmfDestinationHex: string;
   lastError?: string;
+  readiness: RuntimeReadinessSnapshot;
   interfaces: InterfaceStatusRecord[];
+}
+
+export interface RuntimeInterfaceReadinessRecord {
+  id: string;
+  label: string;
+  state: RuntimeReadinessState;
+  detail: string;
+  lastError?: string;
+}
+
+export interface RuntimeReadinessSnapshot {
+  state: RuntimeReadinessState;
+  interfaces: RuntimeInterfaceReadinessRecord[];
 }
 
 export interface InterfaceStatusRecord {
@@ -1299,9 +1314,56 @@ function toNodeStatus(raw: Record<string, unknown>): NodeStatus {
         : typeof raw.last_error === "string"
           ? raw.last_error
           : undefined,
+    readiness: toRuntimeReadinessSnapshot(raw.readiness),
     interfaces: Array.isArray(interfacesRaw)
       ? interfacesRaw.map((entry) => toInterfaceStatusRecord(entry)).filter((entry) => entry.interfaceHex.length > 0)
       : [],
+  };
+}
+
+function toRuntimeReadinessState(raw: unknown): RuntimeReadinessState {
+  switch (enumVariantName(raw)) {
+    case "Ready":
+      return "Ready";
+    case "Failed":
+      return "Failed";
+    case "Unsupported":
+      return "Unsupported";
+    case "Disabled":
+      return "Disabled";
+    case "Pending":
+    default:
+      return "Pending";
+  }
+}
+
+function toRuntimeReadinessSnapshot(raw: unknown): RuntimeReadinessSnapshot {
+  const record = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const interfaces = Array.isArray(record.interfaces)
+    ? record.interfaces.map((entry): RuntimeInterfaceReadinessRecord => {
+        const item = entry && typeof entry === "object" && !Array.isArray(entry)
+          ? entry as Record<string, unknown>
+          : {};
+        return {
+          id: String(item.id ?? ""),
+          label: String(item.label ?? ""),
+          state: toRuntimeReadinessState(item.state),
+          detail: String(item.detail ?? ""),
+          lastError: typeof item.lastError === "string"
+            ? item.lastError
+            : typeof item.last_error === "string"
+              ? item.last_error
+              : undefined,
+        };
+      })
+    : [];
+  return {
+    state: Object.keys(record).length > 0
+      ? toRuntimeReadinessState(record.state)
+      : "Pending",
+    interfaces,
   };
 }
 
@@ -2030,8 +2092,12 @@ function normalizeRnodeProfile(value: unknown): RnodeProfileId {
   }
 }
 
-function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMode {
-  switch (String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_")) {
+export function parseRnodeConnectionMode(value: unknown): RnodeConnectionMode {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) {
+    return "ble";
+  }
+  switch (normalized) {
     case "bluetooth_classic":
     case "bluetoothclassic":
     case "classic":
@@ -2050,18 +2116,19 @@ function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMode {
     case "bluetooth_le":
     case "le":
     case "gatt":
-    default:
       return "ble";
+    default:
+      throw new TypeError(`Unsupported RNode connection mode: ${String(value)}`);
   }
 }
 
-function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
+export function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
   return {
     enabled: Boolean(raw.enabled),
-    connectionMode: normalizeRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
+    connectionMode: parseRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
     peripheralId: String(raw.peripheralId ?? raw.peripheral_id ?? "").trim(),
     displayName: String(raw.displayName ?? raw.display_name ?? "").trim(),
     region: normalizeRnodeRegion(raw.region),
@@ -4081,6 +4148,20 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
   }
 }
 
+function browserRuntimeReadiness(running: boolean): RuntimeReadinessSnapshot {
+  return {
+    state: running ? "Ready" : "Pending",
+    interfaces: [
+      {
+        id: "local",
+        label: "Reticulum Net",
+        state: running ? "Ready" : "Pending",
+        detail: running ? "Browser runtime is ready" : "Browser runtime is starting",
+      },
+    ],
+  };
+}
+
 class WebReticulumNodeClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
   private status: NodeStatus = (() => {
@@ -4091,6 +4172,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      readiness: browserRuntimeReadiness(false),
       interfaces: [],
     };
   })();
@@ -4145,6 +4227,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
       ...this.status,
       running: true,
       name: config.name,
+      readiness: browserRuntimeReadiness(true),
     };
     this.emitter.emit("statusChanged", { status: { ...this.status } });
     this.emitter.emit("log", {
@@ -4171,6 +4254,7 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     this.status = {
       ...this.status,
       running: false,
+      readiness: browserRuntimeReadiness(false),
     };
     this.emitter.emit("statusChanged", { status: { ...this.status } });
   }
@@ -4665,6 +4749,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       identityHex: randomHex32(),
       appDestinationHex: lxmfDestinationHex,
       lxmfDestinationHex,
+      readiness: browserRuntimeReadiness(false),
       interfaces: [],
     };
   })();
@@ -4753,6 +4838,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
       ...this.status,
       running: true,
       name: config.name,
+      readiness: browserRuntimeReadiness(true),
     };
     this.capabilities = config.announceCapabilities;
     this.emitter.emit("statusChanged", { status: { ...this.status } });
@@ -4780,6 +4866,7 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
     this.status = {
       ...this.status,
       running: false,
+      readiness: browserRuntimeReadiness(false),
     };
     this.connected.clear();
     this.stopMockAnnounces();

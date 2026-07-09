@@ -463,6 +463,7 @@ Ownership split:
 
 Mode behavior:
 - `ble` is the legacy-compatible default and is the only mode that currently starts the Android BLE LoRa interface.
+- A missing legacy connection-mode field migrates to `ble`; an explicitly unknown value is rejected as `InvalidConfig` at the node-client/JNI/Rust boundary instead of being silently converted to BLE.
 - `bluetooth_classic` is carried through settings and rejected with an explicit backend-not-wired error in REM until the Android SPP backend is connected to LXMF-rs.
 - `usb` is carried through settings and rejected with an explicit backend-not-wired error until the Android USB serial backend is connected.
 - `tcp` is treated as a TCP-mode RNode setting and does not cause REM to spawn or readiness-count a non-TCP RNode Bluetooth interface.
@@ -479,6 +480,7 @@ Region mapping is `US915` -> `915000000` Hz and `EU868` -> `868000000` Hz. REM d
 Mixed TCP and LoRa behavior for the 1.2 release:
 - REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
 - TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. A failure on one configured interface must not make the node globally not ready while another configured interface remains usable.
+- `NodeStatus.readiness` is the authoritative startup contract. Rust reports the aggregate state and one record per configured interface as `Pending`, `Ready`, `Failed`, `Unsupported`, or `Disabled`; Vue renders these records and does not derive fatal readiness from log text or packet counters. Browser and mock clients publish a ready local-runtime record without native interface telemetry.
 - REM acts as a Reticulum transport node by default by enabling Reticulum packet retransmit on the runtime transport. Operators can turn off transport-node forwarding in Settings without changing broadcast discovery.
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.

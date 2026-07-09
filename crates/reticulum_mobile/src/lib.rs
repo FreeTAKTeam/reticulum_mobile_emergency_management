@@ -35,6 +35,7 @@ pub use types::{
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
     NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary, PeerChange,
     PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, RnodeSettingsRecord,
+    RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot, RuntimeReadinessState,
     SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,

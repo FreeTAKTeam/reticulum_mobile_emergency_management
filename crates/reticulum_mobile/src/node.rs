@@ -37,10 +37,10 @@ use crate::types::{
     EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
-    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord, TransportDeliveryState,
+    ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord,
+    SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord,
+    SosTriggerSource, SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -120,6 +120,7 @@ impl NodeConfigFingerprint {
         if name.is_empty() {
             return Err(NodeError::InvalidConfig {});
         }
+        crate::types::RnodeConnectionMode::parse(Some(&config.rnode.connection_mode))?;
 
         Ok(Self {
             name: name.to_string(),
@@ -140,19 +141,21 @@ impl NodeConfigFingerprint {
     }
 }
 
-fn create_app_state_store(storage_dir: Option<&str>) -> AppStateStore {
+fn create_app_state_store(storage_dir: Option<&str>) -> Result<AppStateStore, NodeError> {
+    let fallback = std::env::temp_dir()
+        .join("reticulum_mobile_app_state")
+        .to_string_lossy()
+        .to_string();
+    create_app_state_store_with_fallback(storage_dir, fallback.as_str())
+}
+
+fn create_app_state_store_with_fallback(
+    storage_dir: Option<&str>,
+    fallback: &str,
+) -> Result<AppStateStore, NodeError> {
     match AppStateStore::new(storage_dir) {
-        Ok(store) => store,
-        Err(_) => {
-            let fallback = std::env::temp_dir()
-                .join("reticulum_mobile_app_state")
-                .to_string_lossy()
-                .to_string();
-            match AppStateStore::new(Some(&fallback)) {
-                Ok(store) => store,
-                Err(_) => panic!("failed to initialize app state store"),
-            }
-        }
+        Ok(store) => Ok(store),
+        Err(_) => AppStateStore::new(Some(fallback)).map_err(|_| NodeError::IoError {}),
     }
 }
 
@@ -2807,18 +2810,12 @@ pub struct Node {
     inner: Mutex<NodeInner>,
 }
 
-impl Default for Node {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Node {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, NodeError> {
         Self::with_storage_dir(None)
     }
 
-    pub(crate) fn with_storage_dir(storage_dir: Option<&str>) -> Self {
+    pub(crate) fn with_storage_dir(storage_dir: Option<&str>) -> Result<Self, NodeError> {
         NodeLogger::install();
 
         let initial = NodeStatus {
@@ -2827,12 +2824,13 @@ impl Node {
             identity_hex: String::new(),
             app_destination_hex: String::new(),
             lxmf_destination_hex: String::new(),
+            readiness: RuntimeReadinessSnapshot::default(),
             interfaces: Vec::new(),
         };
 
-        Self {
+        Ok(Self {
             inner: Mutex::new(NodeInner {
-                app_state: create_app_state_store(storage_dir),
+                app_state: create_app_state_store(storage_dir)?,
                 bus: EventBus::new(),
                 status: Arc::new(Mutex::new(initial)),
                 peers_snapshot: Arc::new(Mutex::new(Vec::new())),
@@ -2852,7 +2850,7 @@ impl Node {
                 cmd_tx: None,
                 priority_cmd_tx: None,
             }),
-        }
+        })
     }
 
     pub(crate) fn initialize_storage(&self, storage_dir: Option<&str>) -> Result<(), NodeError> {
@@ -2860,7 +2858,7 @@ impl Node {
         if inner.runtime.is_some() {
             return Ok(());
         }
-        inner.app_state = create_app_state_store(storage_dir);
+        inner.app_state = create_app_state_store(storage_dir)?;
         Ok(())
     }
 
@@ -2896,6 +2894,7 @@ impl Node {
                 identity_hex: identity.address_hash().to_hex_string(),
                 app_destination_hex: lxmf_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
+                readiness: RuntimeReadinessSnapshot::for_config(&config)?,
                 interfaces: Vec::new(),
             };
         }
@@ -2930,7 +2929,7 @@ impl Node {
             }
         };
 
-        inner.app_state = create_app_state_store(config.storage_dir.as_deref());
+        inner.app_state = create_app_state_store(config.storage_dir.as_deref())?;
         if let Some(prestart_state) = prestart_state {
             inner.app_state.import_legacy_state(&prestart_state)?;
         }
@@ -3029,6 +3028,7 @@ impl Node {
 
         if let Ok(mut guard) = status.lock() {
             guard.running = false;
+            guard.refresh_readiness();
             bus.emit(NodeEvent::StatusChanged {
                 status: guard.clone(),
             });
@@ -3067,6 +3067,7 @@ impl Node {
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                readiness: RuntimeReadinessSnapshot::default(),
                 interfaces: Vec::new(),
             };
         };
@@ -3081,6 +3082,7 @@ impl Node {
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                readiness: RuntimeReadinessSnapshot::default(),
                 interfaces: Vec::new(),
             })
     }
@@ -6034,6 +6036,28 @@ mod tests {
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
     #[test]
+    fn app_state_initialization_returns_io_error_when_primary_and_fallback_fail() {
+        let root = std::env::temp_dir().join(format!(
+            "rem-storage-failure-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        std::fs::create_dir_all(&root).expect("create storage failure root");
+        let primary = root.join("primary-is-a-file");
+        let fallback = root.join("fallback-is-a-file");
+        std::fs::write(&primary, b"not a directory").expect("write primary blocker");
+        std::fs::write(&fallback, b"not a directory").expect("write fallback blocker");
+
+        let result = create_app_state_store_with_fallback(
+            Some(primary.to_string_lossy().as_ref()),
+            fallback.to_string_lossy().as_ref(),
+        );
+
+        assert!(matches!(result, Err(NodeError::IoError {})));
+        std::fs::remove_dir_all(root).expect("remove storage failure root");
+    }
+
+    #[test]
     fn node_capability_check_accepts_msgpack_hex_app_data() {
         let payload = MsgPackValue::Array(vec![
             MsgPackValue::from("Msgpack Peer"),
@@ -6283,7 +6307,7 @@ mod tests {
     fn trigger_sos_rebroadcasts_existing_active_incident() {
         let storage_dir = prepare_storage_dir("sos-active-rebroadcast");
         let storage_dir_text = storage_dir.to_string_lossy().to_string();
-        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");
         let (tx, mut rx) = mpsc::channel(4);
         let mut settings = default_sos_settings();
         settings.enabled = true;
@@ -6358,7 +6382,7 @@ mod tests {
     fn trigger_sos_uses_priority_command_lane_when_available() {
         let storage_dir = prepare_storage_dir("sos-priority-command-lane");
         let storage_dir_text = storage_dir.to_string_lossy().to_string();
-        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");
         let (normal_tx, mut normal_rx) = mpsc::channel(4);
         let (priority_tx, mut priority_rx) = mpsc::channel(4);
         let mut settings = default_sos_settings();
@@ -6461,7 +6485,7 @@ mod tests {
     fn trigger_sos_fans_out_to_all_current_saved_peers() {
         let storage_dir = prepare_storage_dir("sos-multi-peer-fanout");
         let storage_dir_text = storage_dir.to_string_lossy().to_string();
-        let node = Node::with_storage_dir(Some(storage_dir_text.as_str()));
+        let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");
         let (tx, mut rx) = mpsc::channel(4);
         let mut settings = default_sos_settings();
         settings.enabled = true;
@@ -6923,6 +6947,7 @@ mod tests {
     #[test]
     fn checklist_upload_snapshot_uses_compressed_msgpack_content_not_command_fields() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixel".to_string(),
             identity_hex: "11111111111111111111111111111111".to_string(),
@@ -7213,7 +7238,7 @@ mod tests {
         let node_a_storage = prepare_storage_dir(&format!("{test_name}_a"));
         let node_b_storage = prepare_storage_dir(&format!("{test_name}_b"));
 
-        let node_a = Node::new();
+        let node_a = Node::new().expect("node a storage");
         node_a
             .start(build_config(
                 &format!("{test_name}-a"),
@@ -7222,7 +7247,7 @@ mod tests {
             ))
             .expect("start node a");
 
-        let node_b = Node::new();
+        let node_b = Node::new().expect("node b storage");
         node_b
             .start(build_config(
                 &format!("{test_name}-b"),
@@ -7253,7 +7278,7 @@ mod tests {
         let _guard = test_lock().lock().await;
         let relay = TcpRelayHandle::start().await;
         let storage = prepare_storage_dir("sync_no_active_relay");
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
         node.start(build_config(
             "sync-no-active-relay",
             storage.as_path(),
@@ -7398,6 +7423,7 @@ mod tests {
 
     fn build_status_for_tests() -> NodeStatus {
         NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Atlas-1".to_string(),
             identity_hex: "99999999999999999999999999999999".to_string(),
@@ -8085,6 +8111,7 @@ mod tests {
     #[test]
     fn build_eam_replication_payload_emits_numeric_lxmf_command_field() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixel".to_string(),
             identity_hex: "11111111111111111111111111111111".to_string(),
@@ -8120,6 +8147,7 @@ mod tests {
         use reticulum::transport::identity::PrivateIdentity;
 
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixelcorvo".to_string(),
             identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
@@ -8258,6 +8286,7 @@ mod tests {
     #[test]
     fn event_replication_payload_uses_compact_mecp_envelope_with_compatible_metadata() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixel".to_string(),
             identity_hex: "11111111111111111111111111111111".to_string(),
@@ -8360,6 +8389,7 @@ mod tests {
     #[test]
     fn populate_eam_defaults_uses_local_app_hash_and_team_color_hash() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixel".to_string(),
             identity_hex: "11111111111111111111111111111111".to_string(),
@@ -8427,6 +8457,7 @@ mod tests {
         use reticulum::transport::identity::PrivateIdentity;
 
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "Pixelcorvo".to_string(),
             identity_hex: "e6fcf8f02e290ed46f88a729460dfffc".to_string(),
@@ -8778,7 +8809,7 @@ mod tests {
     async fn app_state_queries_and_writes_work_before_start() {
         let _guard = test_lock().lock().await;
         let _cwd = isolate_current_dir("prestart_app_state");
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
 
         let settings = sample_app_settings();
         let peer = sample_saved_peer();
@@ -8846,7 +8877,7 @@ mod tests {
     async fn runtime_only_commands_still_fail_before_start() {
         let _guard = test_lock().lock().await;
         let _cwd = isolate_current_dir("prestart_runtime_commands");
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
 
         assert!(matches!(
             node.connect_peer("ABCDEF".to_string()),
@@ -8875,7 +8906,7 @@ mod tests {
             storage_dir.as_path(),
             relay.address().as_str(),
         );
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
 
         node.start(config.clone()).expect("initial start");
         node.start(config.clone())
@@ -8899,7 +8930,7 @@ mod tests {
         let _cwd = isolate_current_dir("start_restart_changed");
         let relay = rt.block_on(TcpRelayHandle::start());
         let storage_dir = prepare_storage_dir("start_restart_changed");
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
         let config = build_config(
             "start-restart",
             storage_dir.as_path(),
@@ -8936,7 +8967,7 @@ mod tests {
             storage_dir.as_path(),
             relay.address().as_str(),
         );
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
 
         node.start(config.clone()).expect("initial start");
         node.restart(config).expect("restart while running");
@@ -8963,7 +8994,7 @@ mod tests {
             storage_dir.as_path(),
             relay.address().as_str(),
         );
-        let node = Node::new();
+        let node = Node::new().expect("node storage");
 
         node.start(config).expect("initial start");
         wait_until_running(&node);
@@ -9025,7 +9056,8 @@ mod tests {
     #[test]
     fn pre_start_app_state_queries_use_initialized_storage() {
         let storage_dir = prepare_storage_dir("pre_start_app_state");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
 
         let settings = build_app_settings();
         let saved_peer = build_saved_peer();
@@ -9098,7 +9130,8 @@ mod tests {
     #[test]
     fn start_reuses_pre_initialized_storage_directory() {
         let storage_dir = prepare_storage_dir("pre_start_storage_reuse");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
         let settings = build_app_settings();
 
         node.set_app_settings(settings.clone())
@@ -9117,7 +9150,8 @@ mod tests {
     #[test]
     fn runtime_commands_still_fail_before_start() {
         let storage_dir = prepare_storage_dir("runtime_not_running");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
 
         assert!(matches!(
             node.connect_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
@@ -10681,6 +10715,7 @@ mod tests {
     #[test]
     fn event_replication_targets_only_include_intentional_peers() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -10738,6 +10773,7 @@ mod tests {
     #[test]
     fn event_replication_targets_try_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -10778,6 +10814,7 @@ mod tests {
     #[test]
     fn event_replication_targets_use_relay_for_fresh_route_without_active_link_when_relay_exists() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -10917,6 +10954,7 @@ mod tests {
     #[test]
     fn event_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -10992,6 +11030,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_only_include_intentional_peers() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11049,6 +11088,7 @@ mod tests {
     #[test]
     fn mission_replication_targets_prioritize_current_saved_peers_before_stale_stored_routes() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "poco".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11467,6 +11507,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_use_propagation_for_saved_stored_route_without_discovered_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11542,6 +11583,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_include_saved_reachable_peer_without_active_link_when_no_relay() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11582,6 +11624,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_include_saved_direct_peer_without_lxmf_snapshot() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11631,6 +11674,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_keep_direct_peer_when_relay_is_active_before_lxmf_route_is_known() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11677,6 +11721,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_keep_direct_peer_before_lxmf_announce_is_current() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11712,6 +11757,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11750,6 +11796,7 @@ mod tests {
     #[test]
     fn event_replication_targets_use_propagation_for_saved_stored_route_without_active_link() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11882,6 +11929,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11899,6 +11947,7 @@ mod tests {
     #[test]
     fn eam_replication_targets_use_saved_lxmf_profile_without_current_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11929,6 +11978,7 @@ mod tests {
     #[test]
     fn replication_targets_skip_saved_peer_without_mission_capabilities() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11966,6 +12016,7 @@ mod tests {
     #[test]
     fn event_replication_targets_skip_saved_peer_without_current_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -11983,6 +12034,7 @@ mod tests {
     #[test]
     fn event_replication_targets_use_saved_lxmf_profile_without_current_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -12014,6 +12066,7 @@ mod tests {
     fn checklist_participant_targets_use_propagation_for_current_unsaved_source_when_relay_exists()
     {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -12060,6 +12113,7 @@ mod tests {
     #[test]
     fn checklist_participant_targets_skip_source_without_current_peer() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -12084,6 +12138,7 @@ mod tests {
     fn checklist_participant_targets_keep_direct_return_path_when_relay_is_active_before_lxmf_route_is_known(
     ) {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -12121,6 +12176,7 @@ mod tests {
     #[test]
     fn checklist_participant_targets_include_current_participants_when_direct_target_exists() {
         let status = NodeStatus {
+            readiness: RuntimeReadinessSnapshot::default(),
             running: true,
             name: "pixel".to_string(),
             identity_hex: "22222222222222222222222222222222".to_string(),
@@ -12683,7 +12739,8 @@ mod tests {
     #[test]
     fn create_online_checklist_rejects_invalid_payload_before_local_persist() {
         let storage_dir = prepare_storage_dir("checklist-create-prevalidate");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
         {
             let inner = node.inner.lock().expect("node inner");
             let mut status = inner.status.lock().expect("status");
@@ -12711,7 +12768,8 @@ mod tests {
     #[test]
     fn join_checklist_updates_local_participants_immediately() {
         let storage_dir = prepare_storage_dir("checklist-join-local");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
         {
             let inner = node.inner.lock().expect("node inner");
             let mut status = inner.status.lock().expect("status");
@@ -12756,7 +12814,8 @@ mod tests {
     #[test]
     fn list_active_checklists_supports_created_at_desc() {
         let storage_dir = prepare_storage_dir("checklist-created-at-desc");
-        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()));
+        let node = Node::with_storage_dir(Some(storage_dir.to_string_lossy().as_ref()))
+            .expect("node storage");
 
         node.create_online_checklist(ChecklistCreateOnlineRequest {
             checklist_uid: Some("chk-old".to_string()),

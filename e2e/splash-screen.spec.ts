@@ -39,7 +39,7 @@ test("can mock interface loading on the current splash screen", async ({ page })
   await expect(interfaceLoading).toBeVisible();
   await expect(interfaceLoading.getByText("Interfaces are loading")).toBeVisible();
   await expect(page.getByTestId("splash-loading-animation")).toBeVisible();
-  await expect(interfaceLoading.getByText("Waiting for active links to report traffic.")).toBeVisible();
+  await expect(interfaceLoading.getByText("Waiting for configured interfaces to finish starting.")).toBeVisible();
   await expect(page.getByTestId("splash-interface-rnode")).toContainText("LoRa");
   await expect(page.getByTestId("splash-interface-rnode")).toContainText("loading");
   await expect(page.getByTestId("splash-interface-tcp")).toContainText("TCP community");

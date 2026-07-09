@@ -427,18 +427,23 @@ pub enum RnodeConnectionMode {
 }
 
 impl RnodeConnectionMode {
-    pub fn from_str(value: &str) -> Self {
-        match value
+    pub fn parse(value: Option<&str>) -> Result<Self, NodeError> {
+        let normalized = value.unwrap_or_default().trim();
+        if normalized.is_empty() {
+            return Ok(Self::Ble);
+        }
+        match normalized
             .trim()
             .to_lowercase()
             .replace([' ', '-'], "_")
             .as_str()
         {
             "bluetooth_classic" | "bluetoothclassic" | "classic" | "spp" | "rfcomm"
-            | "bluetooth" => Self::BluetoothClassic,
-            "usb" | "serial" => Self::Usb,
-            "tcp" | "wifi" | "wi_fi" => Self::Tcp,
-            _ => Self::Ble,
+            | "bluetooth" => Ok(Self::BluetoothClassic),
+            "usb" | "serial" => Ok(Self::Usb),
+            "tcp" | "wifi" | "wi_fi" => Ok(Self::Tcp),
+            "ble" | "bluetooth_le" | "le" | "gatt" => Ok(Self::Ble),
+            _ => Err(NodeError::InvalidConfig {}),
         }
     }
 
@@ -449,6 +454,225 @@ impl RnodeConnectionMode {
             Self::Usb => "usb",
             Self::Tcp => "tcp",
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RuntimeReadinessState {
+    #[default]
+    Pending,
+    Ready,
+    Failed,
+    Unsupported,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeInterfaceReadinessRecord {
+    pub id: String,
+    pub label: String,
+    pub state: RuntimeReadinessState,
+    pub detail: String,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeReadinessSnapshot {
+    pub state: RuntimeReadinessState,
+    pub interfaces: Vec<RuntimeInterfaceReadinessRecord>,
+}
+
+impl RuntimeReadinessSnapshot {
+    pub fn for_config(config: &NodeConfig) -> Result<Self, NodeError> {
+        let rnode_mode = RnodeConnectionMode::parse(Some(&config.rnode.connection_mode))?;
+        let rnode = if !config.rnode.enabled {
+            readiness_record(
+                "rnode",
+                "LoRa",
+                RuntimeReadinessState::Disabled,
+                "RNode disabled",
+            )
+        } else {
+            match rnode_mode {
+                RnodeConnectionMode::Ble => readiness_record(
+                    "rnode",
+                    "LoRa",
+                    RuntimeReadinessState::Pending,
+                    "Waiting for the RNode BLE interface",
+                ),
+                RnodeConnectionMode::BluetoothClassic => readiness_record(
+                    "rnode",
+                    "LoRa",
+                    RuntimeReadinessState::Unsupported,
+                    "RNode Bluetooth Classic/SPP is not supported by the REM runtime",
+                ),
+                RnodeConnectionMode::Usb => readiness_record(
+                    "rnode",
+                    "LoRa",
+                    RuntimeReadinessState::Unsupported,
+                    "RNode USB serial is not supported by the REM runtime",
+                ),
+                RnodeConnectionMode::Tcp => readiness_record(
+                    "rnode",
+                    "LoRa",
+                    RuntimeReadinessState::Unsupported,
+                    "RNode TCP mode is not supported by the REM runtime",
+                ),
+            }
+        };
+        let tcp = if config
+            .tcp_clients
+            .iter()
+            .any(|value| !value.trim().is_empty())
+        {
+            readiness_record(
+                "tcp",
+                "TCP community",
+                RuntimeReadinessState::Pending,
+                "Waiting for a configured TCP interface",
+            )
+        } else {
+            readiness_record(
+                "tcp",
+                "TCP community",
+                RuntimeReadinessState::Disabled,
+                "No TCP interface configured",
+            )
+        };
+        let local = readiness_record(
+            "local",
+            "Reticulum Net",
+            RuntimeReadinessState::Pending,
+            "Runtime is starting",
+        );
+        let mut snapshot = Self {
+            state: RuntimeReadinessState::Pending,
+            interfaces: vec![rnode, tcp, local],
+        };
+        snapshot.refresh(false, &[]);
+        Ok(snapshot)
+    }
+
+    pub fn refresh(&mut self, running: bool, interfaces: &[InterfaceStatusRecord]) {
+        for readiness in &mut self.interfaces {
+            if matches!(
+                readiness.state,
+                RuntimeReadinessState::Disabled | RuntimeReadinessState::Unsupported
+            ) {
+                continue;
+            }
+            if readiness.id == "local" {
+                readiness.state = if running {
+                    RuntimeReadinessState::Ready
+                } else {
+                    RuntimeReadinessState::Pending
+                };
+                readiness.detail = if running {
+                    "Runtime is ready".to_string()
+                } else {
+                    "Runtime is starting".to_string()
+                };
+                readiness.last_error = None;
+                continue;
+            }
+            let matching = interfaces
+                .iter()
+                .filter(|record| interface_matches_readiness(readiness.id.as_str(), record))
+                .collect::<Vec<_>>();
+            if matching
+                .iter()
+                .any(|record| record.state.eq_ignore_ascii_case("connected"))
+            {
+                readiness.state = RuntimeReadinessState::Ready;
+                readiness.detail = "Interface connected".to_string();
+                readiness.last_error = None;
+            } else if let Some(error) = matching.iter().find_map(|record| record.last_error.clone())
+            {
+                readiness.state = RuntimeReadinessState::Failed;
+                readiness.detail = "Interface failed".to_string();
+                readiness.last_error = Some(error);
+            } else {
+                readiness.state = RuntimeReadinessState::Pending;
+                readiness.detail = "Waiting for interface startup".to_string();
+                readiness.last_error = None;
+            }
+        }
+        self.recompute_state(running);
+    }
+
+    pub fn set_interface_state(
+        &mut self,
+        id: &str,
+        state: RuntimeReadinessState,
+        detail: String,
+        last_error: Option<String>,
+        running: bool,
+    ) {
+        if let Some(record) = self.interfaces.iter_mut().find(|record| record.id == id) {
+            record.state = state;
+            record.detail = detail;
+            record.last_error = last_error;
+        }
+        self.recompute_state(running);
+    }
+
+    fn recompute_state(&mut self, running: bool) {
+        let local_ready = running
+            && self
+                .interfaces
+                .iter()
+                .any(|record| record.id == "local" && record.state == RuntimeReadinessState::Ready);
+        let configured = self
+            .interfaces
+            .iter()
+            .filter(|record| {
+                record.id != "local" && record.state != RuntimeReadinessState::Disabled
+            })
+            .collect::<Vec<_>>();
+        self.state = if local_ready
+            && (configured.is_empty()
+                || configured
+                    .iter()
+                    .any(|record| record.state == RuntimeReadinessState::Ready))
+        {
+            RuntimeReadinessState::Ready
+        } else if configured
+            .iter()
+            .any(|record| record.state == RuntimeReadinessState::Failed)
+        {
+            RuntimeReadinessState::Failed
+        } else if configured
+            .iter()
+            .any(|record| record.state == RuntimeReadinessState::Unsupported)
+        {
+            RuntimeReadinessState::Unsupported
+        } else {
+            RuntimeReadinessState::Pending
+        };
+    }
+}
+
+fn readiness_record(
+    id: &str,
+    label: &str,
+    state: RuntimeReadinessState,
+    detail: &str,
+) -> RuntimeInterfaceReadinessRecord {
+    RuntimeInterfaceReadinessRecord {
+        id: id.to_string(),
+        label: label.to_string(),
+        state,
+        detail: detail.to_string(),
+        last_error: None,
+    }
+}
+
+fn interface_matches_readiness(id: &str, record: &InterfaceStatusRecord) -> bool {
+    let kind = record.kind.trim().to_ascii_lowercase();
+    match id {
+        "rnode" => kind == "rnode" || kind.starts_with("rnode_"),
+        "tcp" => kind == "tcp" || kind == "tcp_client",
+        _ => false,
     }
 }
 
@@ -476,7 +700,25 @@ pub struct NodeStatus {
     pub identity_hex: String,
     pub app_destination_hex: String,
     pub lxmf_destination_hex: String,
+    pub readiness: RuntimeReadinessSnapshot,
     pub interfaces: Vec<InterfaceStatusRecord>,
+}
+
+impl NodeStatus {
+    pub fn refresh_readiness(&mut self) {
+        self.readiness.refresh(self.running, &self.interfaces);
+    }
+
+    pub fn set_interface_readiness(
+        &mut self,
+        id: &str,
+        state: RuntimeReadinessState,
+        detail: String,
+        last_error: Option<String>,
+    ) {
+        self.readiness
+            .set_interface_state(id, state, detail, last_error, self.running);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1243,7 +1485,9 @@ pub enum NodeEvent {
 mod tests {
     use super::{
         ChecklistColumnType, ChecklistMode, ChecklistOriginType, ChecklistSystemColumnKey,
-        ChecklistTaskStatus, ChecklistUserTaskStatus, HubMode,
+        ChecklistTaskStatus, ChecklistUserTaskStatus, HubMode, InterfaceStatusRecord, NodeError,
+        RnodeConnectionMode, RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot,
+        RuntimeReadinessState,
     };
 
     #[test]
@@ -1310,5 +1554,103 @@ mod tests {
                 .expect("deserialize task status"),
             ChecklistTaskStatus::Late {}
         ));
+    }
+
+    #[test]
+    fn rnode_connection_mode_defaults_only_when_legacy_value_is_missing() {
+        assert_eq!(
+            RnodeConnectionMode::parse(None).expect("missing legacy mode"),
+            RnodeConnectionMode::Ble
+        );
+        assert_eq!(
+            RnodeConnectionMode::parse(Some("classic")).expect("classic alias"),
+            RnodeConnectionMode::BluetoothClassic
+        );
+        assert!(matches!(
+            RnodeConnectionMode::parse(Some("carrier-pigeon")),
+            Err(NodeError::InvalidConfig {})
+        ));
+    }
+
+    #[test]
+    fn runtime_readiness_transitions_from_pending_to_ready_from_typed_interface_state() {
+        let mut snapshot = RuntimeReadinessSnapshot {
+            state: RuntimeReadinessState::Pending,
+            interfaces: vec![
+                RuntimeInterfaceReadinessRecord {
+                    id: "rnode".to_string(),
+                    label: "LoRa".to_string(),
+                    state: RuntimeReadinessState::Pending,
+                    detail: "Starting".to_string(),
+                    last_error: None,
+                },
+                RuntimeInterfaceReadinessRecord {
+                    id: "local".to_string(),
+                    label: "Reticulum Net".to_string(),
+                    state: RuntimeReadinessState::Pending,
+                    detail: "Starting".to_string(),
+                    last_error: None,
+                },
+            ],
+        };
+        snapshot.refresh(
+            true,
+            &[InterfaceStatusRecord {
+                interface_hex: "01".to_string(),
+                label: "rnode-ble:Field RNode".to_string(),
+                kind: "rnode_ble".to_string(),
+                state: "connected".to_string(),
+                last_error: None,
+                rx_packets: 0,
+                rx_bytes: 0,
+                last_activity_ms: 0,
+            }],
+        );
+
+        assert_eq!(snapshot.state, RuntimeReadinessState::Ready);
+        assert!(snapshot
+            .interfaces
+            .iter()
+            .all(|record| record.state == RuntimeReadinessState::Ready));
+    }
+
+    #[test]
+    fn runtime_readiness_stays_ready_when_one_of_multiple_interfaces_is_usable() {
+        let mut snapshot = RuntimeReadinessSnapshot {
+            state: RuntimeReadinessState::Pending,
+            interfaces: vec![
+                RuntimeInterfaceReadinessRecord {
+                    id: "rnode".to_string(),
+                    label: "LoRa".to_string(),
+                    state: RuntimeReadinessState::Ready,
+                    detail: "Connected".to_string(),
+                    last_error: None,
+                },
+                RuntimeInterfaceReadinessRecord {
+                    id: "tcp".to_string(),
+                    label: "TCP community".to_string(),
+                    state: RuntimeReadinessState::Pending,
+                    detail: "Starting".to_string(),
+                    last_error: None,
+                },
+                RuntimeInterfaceReadinessRecord {
+                    id: "local".to_string(),
+                    label: "Reticulum Net".to_string(),
+                    state: RuntimeReadinessState::Ready,
+                    detail: "Ready".to_string(),
+                    last_error: None,
+                },
+            ],
+        };
+        snapshot.set_interface_state(
+            "tcp",
+            RuntimeReadinessState::Failed,
+            "Unavailable".to_string(),
+            Some("connection refused".to_string()),
+            true,
+        );
+
+        assert_eq!(snapshot.state, RuntimeReadinessState::Ready);
+        assert_eq!(snapshot.interfaces[1].state, RuntimeReadinessState::Failed);
     }
 }
