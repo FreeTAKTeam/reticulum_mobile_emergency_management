@@ -75,9 +75,9 @@ use crate::types::{
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState, ProjectionScope,
-    RnodeConnectionMode, RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase, SyncStatus,
-    TelemetryPositionRecord, TransportDeliveryState,
+    RnodeConnectionMode, RnodeSettingsRecord, RuntimeReadinessState, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
+    SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -3362,6 +3362,7 @@ async fn publish_interface_registry_snapshot(
     interfaces.sort_by(|left, right| left.label.cmp(&right.label));
     if let Ok(mut guard) = status.lock() {
         guard.interfaces = interfaces;
+        guard.refresh_readiness();
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
         });
@@ -9143,7 +9144,25 @@ fn spawn_rnode_ble_interface(
     if !settings.enabled {
         return;
     }
-    match RnodeConnectionMode::from_str(&settings.connection_mode) {
+    let connection_mode = match RnodeConnectionMode::parse(Some(&settings.connection_mode)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            set_runtime_interface_readiness(
+                &status,
+                &bus,
+                "rnode",
+                RuntimeReadinessState::Failed,
+                "RNode configuration is invalid".to_string(),
+                Some(error.to_string()),
+            );
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("Invalid RNode connection mode: {error}"),
+            });
+            return;
+        }
+    };
+    match connection_mode {
         RnodeConnectionMode::Ble => {}
         RnodeConnectionMode::BluetoothClassic => {
             bus.emit(NodeEvent::Error {
@@ -9165,6 +9184,14 @@ fn spawn_rnode_ble_interface(
         }
     }
     if let Err(error) = rnode_ble_wiring_from_settings(&settings) {
+        set_runtime_interface_readiness(
+            &status,
+            &bus,
+            "rnode",
+            RuntimeReadinessState::Failed,
+            "RNode interface configuration failed".to_string(),
+            Some(error.clone()),
+        );
         bus.emit(NodeEvent::Error {
             code: "InvalidConfig".to_string(),
             message: if error.starts_with("RNode Bluetooth") {
@@ -9188,6 +9215,14 @@ fn spawn_rnode_ble_interface(
             let wiring = match rnode_ble_wiring_from_settings(&settings) {
                 Ok(wiring) => wiring,
                 Err(error) => {
+                    set_runtime_interface_readiness(
+                        &status,
+                        &bus,
+                        "rnode",
+                        RuntimeReadinessState::Failed,
+                        "RNode interface configuration failed".to_string(),
+                        Some(error.clone()),
+                    );
                     bus.emit(NodeEvent::Error {
                         code: "InvalidConfig".to_string(),
                         message: if error.starts_with("RNode Bluetooth") {
@@ -9273,18 +9308,25 @@ fn spawn_rnode_ble_interface(
     bus: EventBus,
     settings: RnodeSettingsRecord,
     _active_interface_registry: ActiveInterfaceRegistry,
-    _status: Arc<Mutex<NodeStatus>>,
+    status: Arc<Mutex<NodeStatus>>,
 ) {
     if !settings.enabled {
         return;
     }
-    let connection_mode = RnodeConnectionMode::from_str(&settings.connection_mode);
+    let connection_mode = match RnodeConnectionMode::parse(Some(&settings.connection_mode)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("Invalid RNode connection mode: {error}"),
+            });
+            return;
+        }
+    };
     if matches!(connection_mode, RnodeConnectionMode::Tcp) {
         return;
     }
-    bus.emit(NodeEvent::Error {
-        code: "InvalidConfig".to_string(),
-        message: match connection_mode {
+    let message = match connection_mode {
             RnodeConnectionMode::Ble => {
                 "RNode BLE LoRa is only available on Android builds.".to_string()
             }
@@ -9295,7 +9337,18 @@ fn spawn_rnode_ble_interface(
                 "RNode USB serial is only available after a platform USB backend is configured.".to_string()
             }
             RnodeConnectionMode::Tcp => unreachable!(),
-        },
+        };
+    set_runtime_interface_readiness(
+        &status,
+        &bus,
+        "rnode",
+        RuntimeReadinessState::Unsupported,
+        message.clone(),
+        Some(message.clone()),
+    );
+    bus.emit(NodeEvent::Error {
+        code: "InvalidConfig".to_string(),
+        message,
     });
 }
 
@@ -9377,8 +9430,16 @@ async fn unregister_tcp_client_endpoint(
     }
 }
 
-fn emit_status_changed(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
-    if let Ok(guard) = status.lock() {
+fn set_runtime_interface_readiness(
+    status: &Arc<Mutex<NodeStatus>>,
+    bus: &EventBus,
+    id: &str,
+    state: RuntimeReadinessState,
+    detail: String,
+    last_error: Option<String>,
+) {
+    if let Ok(mut guard) = status.lock() {
+        guard.set_interface_readiness(id, state, detail, last_error);
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
         });
@@ -9473,7 +9534,12 @@ fn spawn_tcp_client_readiness_monitor(
                         LogLevel::Info {},
                         format!("Reticulum TCP data path restored: {}", endpoints.join(",")),
                     );
-                    emit_status_changed(&status, &bus);
+                    if let Ok(mut guard) = status.lock() {
+                        guard.refresh_readiness();
+                        bus.emit(NodeEvent::StatusChanged {
+                            status: guard.clone(),
+                        });
+                    }
                 }
                 data_path_down = false;
             } else if !data_path_down {
@@ -9490,6 +9556,14 @@ fn spawn_tcp_client_readiness_monitor(
                         "Reticulum TCP data path unavailable: {}",
                         endpoints.join(",")
                     ),
+                );
+                set_runtime_interface_readiness(
+                    &status,
+                    &bus,
+                    "tcp",
+                    RuntimeReadinessState::Failed,
+                    "Configured TCP endpoints are unreachable".to_string(),
+                    Some(message),
                 );
                 data_path_down = true;
             }
@@ -9760,6 +9834,7 @@ pub async fn run_node(
 
     if let Ok(mut guard) = status.lock() {
         guard.running = true;
+        guard.refresh_readiness();
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
         });
@@ -10466,6 +10541,7 @@ pub async fn run_node(
             Command::Stop { resp } => {
                 if let Ok(mut guard) = status.lock() {
                     guard.running = false;
+                    guard.refresh_readiness();
                     bus.emit(NodeEvent::StatusChanged {
                         status: guard.clone(),
                     });
@@ -11284,6 +11360,7 @@ pub async fn run_node(
 
     if let Ok(mut guard) = status.lock() {
         guard.running = false;
+        guard.refresh_readiness();
         bus.emit(NodeEvent::StatusChanged {
             status: guard.clone(),
         });
@@ -11396,6 +11473,7 @@ mod tests {
             ),
         ])));
         let status = Arc::new(Mutex::new(NodeStatus {
+            readiness: crate::types::RuntimeReadinessSnapshot::default(),
             running: true,
             name: "test".to_string(),
             identity_hex: String::new(),

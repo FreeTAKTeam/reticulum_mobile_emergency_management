@@ -44,6 +44,13 @@ test("normalizes RNode USB and TCP modes without changing selected device", () =
   assert.equal(normalizeRnodeSettings({ enabled: true, connectionMode: "tcp", peripheralId: "rnode.local" }).connectionMode, "tcp");
 });
 
+test("rejects an explicitly unknown RNode connection mode", () => {
+  assert.throws(
+    () => normalizeRnodeConnectionMode("carrier-pigeon"),
+    /Unsupported RNode connection mode/,
+  );
+});
+
 test("preserves fallback RNode connection mode when normalizing partial settings", () => {
   assert.deepEqual(
     normalizeRnodeSettings(

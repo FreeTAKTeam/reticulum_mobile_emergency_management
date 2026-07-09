@@ -24,7 +24,8 @@ use crate::types::{
     LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, PeerChange, PeerRecord, PeerState, ProjectionScope, RnodeConnectionMode,
-    RnodeSettingsRecord, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord,
+    RnodeSettingsRecord, RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot,
+    RuntimeReadinessState, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord,
     SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
     SosState, SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord,
     TelemetrySettingsRecord, TransportDeliveryState,
@@ -54,14 +55,49 @@ struct BridgeState {
     subscription: Option<Arc<EventSubscription>>,
 }
 
-fn ensure_node(guard: &mut BridgeState) -> &Node {
-    guard.node.get_or_insert_with(Node::new)
+fn ensure_node(guard: &mut BridgeState) -> Result<&Node, NodeError> {
+    if guard.node.is_none() {
+        guard.node = Some(Node::new()?);
+    }
+    guard.node.as_ref().ok_or(NodeError::InternalError {})
 }
 
-fn ensure_node_with_storage<'a>(guard: &'a mut BridgeState, storage_dir: Option<&str>) -> &'a Node {
-    guard
-        .node
-        .get_or_insert_with(|| Node::with_storage_dir(storage_dir))
+fn ensure_node_with_storage<'a>(
+    guard: &'a mut BridgeState,
+    storage_dir: Option<&str>,
+) -> Result<&'a Node, NodeError> {
+    if guard.node.is_none() {
+        guard.node = Some(Node::with_storage_dir(storage_dir)?);
+    }
+    guard.node.as_ref().ok_or(NodeError::InternalError {})
+}
+
+trait JniNodeFailure {
+    fn node_failure() -> Self;
+}
+
+impl JniNodeFailure for jint {
+    fn node_failure() -> Self {
+        RESULT_ERR
+    }
+}
+
+impl JniNodeFailure for jstring {
+    fn node_failure() -> Self {
+        ptr::null_mut()
+    }
+}
+
+macro_rules! ensure_node_or_return {
+    ($guard:expr) => {
+        match ensure_node($guard) {
+            Ok(node) => node,
+            Err(error) => {
+                set_last_node_error(error);
+                return <_ as JniNodeFailure>::node_failure();
+            }
+        }
+    };
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -654,26 +690,26 @@ fn normalize_rnode_profile(value: Option<String>) -> String {
     }
 }
 
-fn normalize_rnode_connection_mode(value: Option<String>) -> String {
-    RnodeConnectionMode::from_str(value.as_deref().unwrap_or_default())
-        .as_str()
-        .to_string()
+fn normalize_rnode_connection_mode(value: Option<String>) -> Result<String, NodeError> {
+    RnodeConnectionMode::parse(value.as_deref()).map(|mode| mode.as_str().to_string())
 }
 
-fn to_rnode_settings_record(input: Option<RnodeSettingsInput>) -> RnodeSettingsRecord {
+fn to_rnode_settings_record(
+    input: Option<RnodeSettingsInput>,
+) -> Result<RnodeSettingsRecord, NodeError> {
     let input = input.unwrap_or_default();
-    RnodeSettingsRecord {
+    Ok(RnodeSettingsRecord {
         enabled: input.enabled.unwrap_or(false),
-        connection_mode: normalize_rnode_connection_mode(input.connection_mode),
+        connection_mode: normalize_rnode_connection_mode(input.connection_mode)?,
         peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
         display_name: input.display_name.unwrap_or_default().trim().to_string(),
         region: normalize_rnode_region(input.region),
         profile: normalize_rnode_profile(input.profile),
-    }
+    })
 }
 
-fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
-    NodeConfig {
+fn parse_node_config(input: NodeConfigInput) -> Result<NodeConfig, NodeError> {
+    Ok(NodeConfig {
         name: input
             .name
             .map(|v| v.trim().to_string())
@@ -729,8 +765,8 @@ fn parse_node_config(input: NodeConfigInput) -> NodeConfig {
             }
         }),
         hub_refresh_interval_seconds: input.hub_refresh_interval_seconds.unwrap_or(3600).max(1),
-        rnode: to_rnode_settings_record(input.rnode),
-    }
+        rnode: to_rnode_settings_record(input.rnode)?,
+    })
 }
 
 #[no_mangle]
@@ -765,7 +801,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initiali
         }
     };
 
-    let node = ensure_node_with_storage(&mut guard, storage_dir.as_deref());
+    let node = match ensure_node_with_storage(&mut guard, storage_dir.as_deref()) {
+        Ok(node) => node,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
     match node.initialize_storage(storage_dir.as_deref()) {
         Ok(()) => RESULT_OK,
         Err(err) => {
@@ -923,8 +965,8 @@ fn to_sos_telemetry_record(input: SosTelemetryInput) -> SosDeviceTelemetryRecord
     }
 }
 
-fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
-    AppSettingsRecord {
+fn to_app_settings_record(input: AppSettingsInput) -> Result<AppSettingsRecord, NodeError> {
+    Ok(AppSettingsRecord {
         display_name: input.display_name,
         auto_connect_saved: input.auto_connect_saved,
         announce_capabilities: input.announce_capabilities,
@@ -953,8 +995,8 @@ fn to_app_settings_record(input: AppSettingsInput) -> AppSettingsRecord {
                 .unwrap_or(crate::types::DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES)
                 .max(1),
         },
-        rnode: to_rnode_settings_record(Some(input.rnode)),
-    }
+        rnode: to_rnode_settings_record(Some(input.rnode))?,
+    })
 }
 
 fn to_eam_projection_record(input: EamProjectionInput) -> EamProjectionRecord {
@@ -1155,9 +1197,43 @@ fn status_to_json(status: NodeStatus) -> String {
         "identityHex": status.identity_hex,
         "appDestinationHex": status.app_destination_hex,
         "lxmfDestinationHex": status.lxmf_destination_hex,
+        "readiness": runtime_readiness_json(status.readiness),
         "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
     })
     .to_string()
+}
+
+fn runtime_readiness_state_str(state: RuntimeReadinessState) -> &'static str {
+    match state {
+        RuntimeReadinessState::Pending => "Pending",
+        RuntimeReadinessState::Ready => "Ready",
+        RuntimeReadinessState::Failed => "Failed",
+        RuntimeReadinessState::Unsupported => "Unsupported",
+        RuntimeReadinessState::Disabled => "Disabled",
+    }
+}
+
+fn runtime_interface_readiness_json(
+    readiness: RuntimeInterfaceReadinessRecord,
+) -> serde_json::Value {
+    json!({
+        "id": readiness.id,
+        "label": readiness.label,
+        "state": runtime_readiness_state_str(readiness.state),
+        "detail": readiness.detail,
+        "lastError": readiness.last_error,
+    })
+}
+
+fn runtime_readiness_json(readiness: RuntimeReadinessSnapshot) -> serde_json::Value {
+    json!({
+        "state": runtime_readiness_state_str(readiness.state),
+        "interfaces": readiness
+            .interfaces
+            .into_iter()
+            .map(runtime_interface_readiness_json)
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn interface_status_json(status: InterfaceStatusRecord) -> serde_json::Value {
@@ -1868,6 +1944,7 @@ fn event_to_wire_json(event: NodeEvent) -> String {
                     "identityHex": status.identity_hex,
                     "appDestinationHex": status.app_destination_hex,
                     "lxmfDestinationHex": status.lxmf_destination_hex,
+                    "readiness": runtime_readiness_json(status.readiness),
                     "interfaces": status.interfaces.into_iter().map(interface_status_json).collect::<Vec<_>>()
                 }
             }),
@@ -2061,7 +2138,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
-    let config = parse_node_config(input);
+    let config = match parse_node_config(input) {
+        Ok(config) => config,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
 
     let mut guard = match bridge_state().lock() {
         Ok(v) => v,
@@ -2069,7 +2152,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
     };
 
     let subscription = {
-        let node = ensure_node(&mut guard);
+        let node = ensure_node_or_return!(&mut guard);
         if let Err(err) = node.start(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -2119,7 +2202,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", format!("invalid node config JSON: {e}")),
     };
-    let config = parse_node_config(input);
+    let config = match parse_node_config(input) {
+        Ok(config) => config,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
 
     let mut guard = match bridge_state().lock() {
         Ok(v) => v,
@@ -2127,7 +2216,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
     };
 
     let subscription = {
-        let node = ensure_node(&mut guard);
+        let node = ensure_node_or_return!(&mut guard);
         if let Err(err) = node.restart(config) {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -2161,6 +2250,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
                 identity_hex: String::new(),
                 app_destination_hex: String::new(),
                 lxmf_destination_hex: String::new(),
+                readiness: RuntimeReadinessSnapshot::default(),
                 interfaces: Vec::new(),
             }
         }
@@ -2694,7 +2784,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConv
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_conversations() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -2740,7 +2830,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_messages(payload.conversation_id) {
         Ok(items) => ok_json_result(
             &mut env,
@@ -2786,7 +2876,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCo
             return 1;
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_conversation(payload.conversation_id) {
         Ok(()) => 0,
         Err(err) => {
@@ -2869,7 +2959,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_legacyIm
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.legacy_import_completed() {
         Ok(completed) => ok_json_result(&mut env, &json!({ "completed": completed })),
         Err(err) => {
@@ -2902,7 +2992,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLe
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     let messages = match payload
         .messages
         .unwrap_or_default()
@@ -2916,8 +3006,15 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLe
             return RESULT_ERR;
         }
     };
+    let settings = match payload.settings.map(to_app_settings_record).transpose() {
+        Ok(settings) => settings,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
     let legacy = LegacyImportPayload {
-        settings: payload.settings.map(to_app_settings_record),
+        settings,
         saved_peers: payload
             .saved_peers
             .unwrap_or_default()
@@ -2965,7 +3062,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getAppSe
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_app_settings() {
         Ok(Some(settings)) => ok_json_result(&mut env, &app_settings_json(&settings)),
         Ok(None) => ok_json_result(&mut env, &json!({ "settings": null })),
@@ -2994,8 +3091,15 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAppSe
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
-    match node.set_app_settings(to_app_settings_record(payload)) {
+    let node = ensure_node_or_return!(&mut guard);
+    let settings = match to_app_settings_record(payload) {
+        Ok(settings) => settings,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
+    match node.set_app_settings(settings) {
         Ok(_) => ok_result(),
         Err(err) => {
             set_last_node_error(err);
@@ -3016,7 +3120,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSaved
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_saved_peers() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -3047,7 +3151,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     let peers = payload
         .saved_peers
         .into_iter()
@@ -3074,7 +3178,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getOpera
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_operational_summary() {
         Ok(summary) => ok_json_result(&mut env, &operational_summary_json(&summary)),
         Err(err) => {
@@ -3114,7 +3218,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_active_checklists(Some(ChecklistListActiveRequest {
         search: payload.search,
         sort_by: payload.sort_by,
@@ -3160,7 +3264,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_checklist(payload.checklist_uid) {
         Ok(Some(record)) => ok_json_result(&mut env, &checklist_record_json(&record)),
         Ok(None) => ok_json_result(&mut env, &json!({ "checklist": null })),
@@ -3201,7 +3305,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_checklist_templates(Some(ChecklistTemplateListRequest {
         search: payload.search,
         sort_by: payload.sort_by,
@@ -3244,7 +3348,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned".to_string()),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.import_checklist_template_csv(to_checklist_template_import_request(payload)) {
         Ok(template) => ok_json_result(&mut env, &checklist_template_json(&template)),
         Err(err) => {
@@ -3281,7 +3385,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned".to_string()),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.create_checklist_from_template(ChecklistCreateFromTemplateRequest {
         checklist_uid: payload.checklist_uid,
         mission_uid: payload.mission_uid,
@@ -3323,7 +3427,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createOn
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.create_online_checklist(to_checklist_create_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3356,7 +3460,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_updateCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.update_checklist(to_checklist_update_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3389,7 +3493,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_checklist(ChecklistDeleteRequest {
         checklist_uid: payload.checklist_uid,
         delete_remote: payload.delete_remote,
@@ -3425,7 +3529,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_joinChec
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.join_checklist(payload.checklist_uid) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3458,7 +3562,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_uploadCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.upload_checklist(payload.checklist_uid) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3495,7 +3599,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setCheck
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.set_checklist_task_status(request) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3528,7 +3632,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_addCheck
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.add_checklist_task_row(to_checklist_task_row_add_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3561,7 +3665,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCh
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_checklist_task_row(to_checklist_task_row_delete_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3594,7 +3698,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setCheck
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.set_checklist_task_row_style(to_checklist_task_row_style_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3627,7 +3731,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setCheck
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.set_checklist_task_cell(to_checklist_task_cell_request(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3649,7 +3753,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamsJ
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_eams() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -3680,7 +3784,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEa
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.upsert_eam(to_eam_projection_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3708,7 +3812,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEa
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_eam(
         payload.callsign,
         payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
@@ -3739,7 +3843,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLo
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_local_eam(
         payload.callsign,
         payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
@@ -3782,7 +3886,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamTe
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_eam_team_summary(payload.team_uid) {
         Ok(Some(summary)) => ok_json_result(&mut env, &eam_team_summary_json(&summary)),
         Ok(None) => ok_json_result(&mut env, &json!({ "summary": null })),
@@ -3805,7 +3909,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEamRe
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_eam_readiness_summary() {
         Ok(summary) => ok_json_result(&mut env, &eam_readiness_summary_json(&summary)),
         Err(err) => {
@@ -3827,7 +3931,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEvent
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_events() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -3858,7 +3962,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEv
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.upsert_event(to_event_projection_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3891,7 +3995,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEv
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_event(
         payload.uid,
         payload.deleted_at_ms.unwrap_or_else(crate::runtime::now_ms),
@@ -3916,7 +4020,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelem
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_telemetry_positions() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -3947,7 +4051,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordLo
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.record_local_telemetry_fix(to_telemetry_position_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -3980,7 +4084,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLo
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.delete_local_telemetry(payload.callsign) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -4002,7 +4106,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSe
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_sos_settings() {
         Ok(settings) => ok_json_result(&mut env, &sos_settings_json(&settings)),
         Err(err) => {
@@ -4035,7 +4139,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosSe
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.set_sos_settings(to_sos_settings_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -4063,7 +4167,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosPi
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.set_sos_pin(payload.pin) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -4085,7 +4189,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSt
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.get_sos_status() {
         Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
         Err(err) => {
@@ -4122,7 +4226,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_triggerS
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.trigger_sos(parse_sos_trigger_source(payload.source.as_deref())) {
         Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
         Err(err) => {
@@ -4162,7 +4266,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deactiva
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.deactivate_sos(payload.pin) {
         Ok(status) => ok_json_result(&mut env, &sos_status_json(&status)),
         Err(err) => {
@@ -4195,7 +4299,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.submit_sos_device_telemetry(to_sos_telemetry_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -4235,7 +4339,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     let at_ms = payload.at_ms.unwrap_or_else(crate::runtime::now_ms);
     match node.submit_sos_accelerometer_sample(payload.x, payload.y, payload.z, at_ms) {
         Ok(Some(status)) => ok_json_result(
@@ -4277,7 +4381,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     let at_ms = payload.at_ms.unwrap_or_else(crate::runtime::now_ms);
     match node.submit_sos_screen_event(at_ms) {
         Ok(Some(status)) => ok_json_result(
@@ -4304,7 +4408,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosA
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_sos_alerts() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -4329,7 +4433,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosL
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_sos_locations() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -4354,7 +4458,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosA
             return ptr::null_mut();
         }
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.list_sos_audio() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -4385,7 +4489,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordSo
         Ok(v) => v,
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
-    let node = ensure_node(&mut guard);
+    let node = ensure_node_or_return!(&mut guard);
     match node.record_sos_audio(to_sos_audio_record(payload)) {
         Ok(_) => ok_result(),
         Err(err) => {

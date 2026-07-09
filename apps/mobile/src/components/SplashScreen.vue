@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import logoUrl from "../assets/rem-logo.png";
 
-type InterfaceLoadingState = "disabled" | "loading" | "waiting" | "ready";
+type InterfaceLoadingState = "disabled" | "loading" | "ready" | "failed" | "unsupported";
 
 interface InterfaceLoadingItem {
   id: string;
@@ -257,8 +257,7 @@ withDefaults(defineProps<{
   width: 0.62rem;
 }
 
-.interface-row-loading .interface-indicator,
-.interface-row-waiting .interface-indicator {
+.interface-row-loading .interface-indicator {
   animation: interface-pulse 1.35s ease-out infinite;
 }
 
@@ -267,8 +266,9 @@ withDefaults(defineProps<{
   box-shadow: 0 0 0 0 rgb(255 93 108 / 50%);
 }
 
-.interface-row-waiting .interface-indicator {
-  background: #ffcf5d;
+.interface-row-failed .interface-indicator,
+.interface-row-unsupported .interface-indicator {
+  background: #ff5d6c;
 }
 
 .interface-row-ready .interface-indicator {

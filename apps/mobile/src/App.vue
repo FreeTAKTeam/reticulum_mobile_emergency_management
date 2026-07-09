@@ -30,8 +30,8 @@ import {
   STARTUP_INTERFACE_LOADING_SUMMARY,
   buildStartupInterfaceItems,
   statusHasRuntimeReceiveReadiness,
+  type StartupInterfaceItem,
 } from "./utils/startupInterfaces";
-import { supportsNativeNodeRuntime } from "./utils/runtimeProfile";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -174,15 +174,22 @@ interface NavigationItem {
   icon: AppIcon;
 }
 
-const startupInterfaceItems = computed(() => buildStartupInterfaceItems(nodeStore.status, nodeStore.settings));
+const startupInterfaceItems = computed<StartupInterfaceItem[]>(() => {
+  if (startupInterfaceMockEnabled.value) {
+    return [
+      { id: "rnode", label: "LoRa", detail: "Starting radio interface", state: "loading" },
+      { id: "tcp", label: "TCP community", detail: "Starting TCP interface", state: "loading" },
+      { id: "local", label: "Reticulum Net", detail: "Starting runtime", state: "loading" },
+    ];
+  }
+  return buildStartupInterfaceItems(nodeStore.status, nodeStore.settings);
+});
 const startupConfiguredInterfaceItems = computed(() =>
   startupInterfaceItems.value.filter((item) => item.id !== "local" && item.state !== "disabled"),
 );
 const startupInterfacesNeedGrace = computed(() =>
   startupConfiguredInterfaceItems.value.length > 0
-  && !statusHasRuntimeReceiveReadiness(nodeStore.status, {
-    requiresInterfaceTelemetry: supportsNativeNodeRuntime,
-  }),
+  && !statusHasRuntimeReceiveReadiness(nodeStore.status),
 );
 const menuOpen = shallowRef(false);
 const splashMinimumElapsed = shallowRef(false);

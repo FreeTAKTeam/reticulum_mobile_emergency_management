@@ -200,7 +200,29 @@ dictionary NodeStatus {
   string identity_hex;
   string app_destination_hex;
   string lxmf_destination_hex;
+  RuntimeReadinessSnapshot readiness;
   sequence<InterfaceStatusRecord> interfaces;
+};
+
+enum RuntimeReadinessState {
+  "Pending",
+  "Ready",
+  "Failed",
+  "Unsupported",
+  "Disabled"
+};
+
+dictionary RuntimeInterfaceReadinessRecord {
+  string id;
+  string label;
+  RuntimeReadinessState state;
+  string detail;
+  string? last_error;
+};
+
+dictionary RuntimeReadinessSnapshot {
+  RuntimeReadinessState state;
+  sequence<RuntimeInterfaceReadinessRecord> interfaces;
 };
 
 dictionary InterfaceStatusRecord {
@@ -819,6 +841,7 @@ interface EventSubscription {
 };
 
 interface Node {
+  [Throws=NodeError]
   constructor();
 
   [Throws=NodeError]

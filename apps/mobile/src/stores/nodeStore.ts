@@ -109,6 +109,10 @@ const EMPTY_STATUS: NodeStatus = {
   appDestinationHex: "",
   lxmfDestinationHex: "",
   lastError: undefined,
+  readiness: {
+    state: "Pending",
+    interfaces: [],
+  },
   interfaces: [],
 };
 
@@ -268,6 +272,10 @@ function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
     appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
     lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
     lastError: lastError || undefined,
+    readiness: value?.readiness ?? {
+      state: "Pending",
+      interfaces: [],
+    },
     interfaces: Array.isArray(value?.interfaces) ? value.interfaces : [],
   };
 }
@@ -2993,10 +3001,7 @@ export const useNodeStore = defineStore("node", () => {
   const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
   const ready = computed(() =>
     status.value.running
-    && !readinessErrorMessage.value
-    && statusHasRuntimeReceiveReadiness(status.value, {
-      requiresInterfaceTelemetry: runtimeProfile !== "web",
-    }),
+    && statusHasRuntimeReceiveReadiness(status.value),
   );
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(

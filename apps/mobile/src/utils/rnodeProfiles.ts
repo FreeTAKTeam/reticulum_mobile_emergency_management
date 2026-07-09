@@ -42,7 +42,11 @@ export const DEFAULT_RNODE_SETTINGS: RnodeSettings = {
 };
 
 export function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMode {
-  switch (String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_")) {
+  const normalized = String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) {
+    return "ble";
+  }
+  switch (normalized) {
     case "bluetooth_classic":
     case "bluetoothclassic":
     case "classic":
@@ -61,8 +65,9 @@ export function normalizeRnodeConnectionMode(value: unknown): RnodeConnectionMod
     case "bluetooth_le":
     case "le":
     case "gatt":
-    default:
       return "ble";
+    default:
+      throw new TypeError(`Unsupported RNode connection mode: ${String(value)}`);
   }
 }
 
