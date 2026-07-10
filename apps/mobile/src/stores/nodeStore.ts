@@ -42,6 +42,7 @@ import {
   type HubRegistryLinkage,
 } from "../services/hubRegistryBootstrap";
 import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
+import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import {
   buildLegacyProjectionState,
   clearLegacyProjectionStorage,
@@ -648,11 +649,6 @@ export const useNodeStore = defineStore("node", () => {
   const unsubscribeClientEvents = ref<Array<() => void>>([]);
   let hubRegistryBootstrapInFlight: Promise<void> | null = null;
   let presenceTickerId: number | null = null;
-  let refreshMessagingStatePromise: Promise<void> | null = null;
-  let refreshSettingsPromise: Promise<void> | null = null;
-  let refreshSavedPeersPromise: Promise<void> | null = null;
-  let refreshOperationalSummaryPromise: Promise<void> | null = null;
-  let refreshWatchStatusServerPromise: Promise<void> | null = null;
   let refreshOperationalSummaryTimerId: number | null = null;
   let refreshOperationalSummaryQueued = false;
   let refreshOperationalSummaryLastRunAt = 0;
@@ -1319,10 +1315,7 @@ export const useNodeStore = defineStore("node", () => {
     if (!client.value) {
       return;
     }
-    if (refreshSettingsPromise) {
-      return refreshSettingsPromise;
-    }
-    refreshSettingsPromise = (async () => {
+    await projectionRefreshCoordinator.run("node:settings", async () => {
       const record = await client.value!.getAppSettings();
       if (record) {
         const normalizedSettings = normalizeAppSettingsRecord(
@@ -1337,35 +1330,22 @@ export const useNodeStore = defineStore("node", () => {
           await client.value!.setAppSettings(normalizedRecord);
         }
       }
-    })()
-      .catch((error: unknown) => {
-        appendLog("Debug", `Settings projection refresh skipped: ${errorMessage(error)}`);
-      })
-      .finally(() => {
-        refreshSettingsPromise = null;
-      });
-    return refreshSettingsPromise;
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Settings projection refresh skipped: ${errorMessage(error)}`);
+    });
   }
 
   async function refreshSavedPeersProjection(): Promise<void> {
     if (!client.value) {
       return;
     }
-    if (refreshSavedPeersPromise) {
-      return refreshSavedPeersPromise;
-    }
-    refreshSavedPeersPromise = (async () => {
+    await projectionRefreshCoordinator.run("node:saved-peers", async () => {
       const peers = await client.value!.getSavedPeers();
       logSavedPeerProjectionDelta("native projection", peers);
       applySavedPeersProjection(peers);
-    })()
-      .catch((error: unknown) => {
-        appendLog("Debug", `Saved-peer projection refresh skipped: ${errorMessage(error)}`);
-      })
-      .finally(() => {
-        refreshSavedPeersPromise = null;
-      });
-    return refreshSavedPeersPromise;
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Saved-peer projection refresh skipped: ${errorMessage(error)}`);
+    });
   }
 
   async function refreshOperationalSummaryProjection(): Promise<void> {
@@ -1373,19 +1353,11 @@ export const useNodeStore = defineStore("node", () => {
       operationalSummary.value = { ...EMPTY_OPERATIONAL_SUMMARY };
       return;
     }
-    if (refreshOperationalSummaryPromise) {
-      return refreshOperationalSummaryPromise;
-    }
-    refreshOperationalSummaryPromise = (async () => {
+    await projectionRefreshCoordinator.run("node:operational-summary", async () => {
       operationalSummary.value = await client.value!.getOperationalSummary();
-    })()
-      .catch((error: unknown) => {
-        appendLog("Debug", `Operational summary refresh skipped: ${errorMessage(error)}`);
-      })
-      .finally(() => {
-        refreshOperationalSummaryPromise = null;
-      });
-    return refreshOperationalSummaryPromise;
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Operational summary refresh skipped: ${errorMessage(error)}`);
+    });
   }
 
   async function refreshWatchStatusServerSettings(): Promise<void> {
@@ -1393,19 +1365,11 @@ export const useNodeStore = defineStore("node", () => {
       Object.assign(watchStatusServer, DEFAULT_WATCH_STATUS_SERVER);
       return;
     }
-    if (refreshWatchStatusServerPromise) {
-      return refreshWatchStatusServerPromise;
-    }
-    refreshWatchStatusServerPromise = (async () => {
+    await projectionRefreshCoordinator.run("node:watch-status-server", async () => {
       Object.assign(watchStatusServer, await client.value!.getWatchStatusServerSettings());
-    })()
-      .catch((error: unknown) => {
-        appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
-      })
-      .finally(() => {
-        refreshWatchStatusServerPromise = null;
-      });
-    return refreshWatchStatusServerPromise;
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
+    });
   }
 
   async function updateWatchStatusServerSettings(settingsRecord: WatchStatusServerSettings): Promise<void> {
@@ -2223,11 +2187,7 @@ export const useNodeStore = defineStore("node", () => {
       return;
     }
 
-    if (refreshMessagingStatePromise) {
-      return refreshMessagingStatePromise;
-    }
-
-    refreshMessagingStatePromise = (async () => {
+    await projectionRefreshCoordinator.run("node:messaging", async () => {
       const [peers, nextSyncStatus, nextTelemetryDestinations] = await Promise.all([
         client.value!.listPeers(),
         client.value!.getLxmfSyncStatus(),
@@ -2239,15 +2199,9 @@ export const useNodeStore = defineStore("node", () => {
       }
       syncStatus.value = { ...nextSyncStatus };
       telemetryDestinations.value = [...nextTelemetryDestinations];
-    })()
-      .catch((error: unknown) => {
-        appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
-      })
-      .finally(() => {
-        refreshMessagingStatePromise = null;
-      });
-
-    return refreshMessagingStatePromise;
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
+    });
   }
 
   async function init(): Promise<void> {

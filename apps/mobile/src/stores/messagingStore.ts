@@ -14,6 +14,7 @@ import {
   primeOperationalNotificationScope,
   truncateNotificationBody,
 } from "../services/operationalNotifications";
+import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -353,10 +354,6 @@ export const useMessagingStore = defineStore("messaging", () => {
   const cleanups: Array<() => void> = [];
 
   let initPromise: Promise<void> | null = null;
-  let conversationsRefreshPromise: Promise<void> | null = null;
-  let messagesRefreshPromise: Promise<void> | null = null;
-  let conversationsRefreshQueued = false;
-  let queuedMessagesConversationId: string | null = null;
 
   function persistWeb(): void {
     if (!supportsNativeNodeRuntime) {
@@ -552,52 +549,36 @@ export const useMessagingStore = defineStore("messaging", () => {
     if (!supportsNativeNodeRuntime) {
       return;
     }
-    if (conversationsRefreshPromise) {
-      conversationsRefreshQueued = true;
-      await conversationsRefreshPromise;
-      return;
-    }
-    const promise = (async () => {
+    await projectionRefreshCoordinator.run("chat:conversations", async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
-      do {
-        conversationsRefreshQueued = false;
-        nativeConversations.value = await client.listConversations();
-        const currentPending = pendingConversation.value;
-        if (currentPending) {
-          const matchedConversation = findNativeConversationByDestination(currentPending.destinationHex);
-          resolvePendingConversationFromNativeConversation(matchedConversation);
-        }
-        const currentConversationId = selectedConversationId.value.trim();
-        const matchedDraftConversation = isDraftConversationId(currentConversationId)
-          ? matchingNativeConversationForDraft(currentConversationId)
-          : null;
-        if (matchedDraftConversation && selectedConversationId.value === currentConversationId) {
-          selectedConversationId.value = matchedDraftConversation.conversationId;
-        }
-        if (!currentConversationId && nativeConversations.value.length > 0) {
-          selectedConversationId.value = nativeConversations.value[0].conversationId;
-        } else if (
-          currentConversationId
-          && !(
-            pendingConversation.value
-            && currentConversationId === pendingConversation.value.conversationId
-          )
-          && !nativeConversations.value.some(
-            (conversation) => conversation.conversationId === currentConversationId,
-          )
-        ) {
-          selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
-        }
-      } while (conversationsRefreshQueued);
-    })();
-    conversationsRefreshPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (conversationsRefreshPromise === promise) {
-        conversationsRefreshPromise = null;
+      nativeConversations.value = await client.listConversations();
+      const currentPending = pendingConversation.value;
+      if (currentPending) {
+        const matchedConversation = findNativeConversationByDestination(currentPending.destinationHex);
+        resolvePendingConversationFromNativeConversation(matchedConversation);
       }
-    }
+      const currentConversationId = selectedConversationId.value.trim();
+      const matchedDraftConversation = isDraftConversationId(currentConversationId)
+        ? matchingNativeConversationForDraft(currentConversationId)
+        : null;
+      if (matchedDraftConversation && selectedConversationId.value === currentConversationId) {
+        selectedConversationId.value = matchedDraftConversation.conversationId;
+      }
+      if (!currentConversationId && nativeConversations.value.length > 0) {
+        selectedConversationId.value = nativeConversations.value[0].conversationId;
+      } else if (
+        currentConversationId
+        && !(
+          pendingConversation.value
+          && currentConversationId === pendingConversation.value.conversationId
+        )
+        && !nativeConversations.value.some(
+          (conversation) => conversation.conversationId === currentConversationId,
+        )
+      ) {
+        selectedConversationId.value = nativeConversations.value[0]?.conversationId ?? "";
+      }
+    }, { trailing: true });
   }
 
   async function refreshMessages(conversationId = selectedConversationId.value): Promise<void> {
@@ -605,44 +586,26 @@ export const useMessagingStore = defineStore("messaging", () => {
       return;
     }
     const requestedConversationId = conversationId.trim();
-    if (messagesRefreshPromise) {
-      queuedMessagesConversationId = requestedConversationId;
-      await messagesRefreshPromise;
-      return;
-    }
-    const promise = (async () => {
+    await projectionRefreshCoordinator.run("chat:messages", async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
-      let nextConversationId = requestedConversationId;
-      do {
-        queuedMessagesConversationId = null;
-        let resolvedConversationId = nextConversationId;
-        if (!resolvedConversationId && selectedConversationId.value) {
-          resolvedConversationId = selectedConversationId.value.trim();
-        }
-        if (isDraftConversationId(resolvedConversationId)) {
-          const matchedConversation = pendingConversation.value
-            ? findNativeConversationByDestination(pendingConversation.value.destinationHex)
-            : matchingNativeConversationForDraft(resolvedConversationId);
-          if (matchedConversation) {
-            resolvedConversationId = matchedConversation.conversationId;
-            resolvePendingConversationFromNativeConversation(matchedConversation);
-          } else {
-            resolvedConversationId = canonicalConversationIdForDraft(resolvedConversationId);
-          }
-        }
-        const items = await client.listMessages(resolvedConversationId || undefined);
-        mergeFetchedMessages(items);
-        nextConversationId = queuedMessagesConversationId ?? "";
-      } while (nextConversationId);
-    })();
-    messagesRefreshPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (messagesRefreshPromise === promise) {
-        messagesRefreshPromise = null;
+      let resolvedConversationId = requestedConversationId;
+      if (!resolvedConversationId && selectedConversationId.value) {
+        resolvedConversationId = selectedConversationId.value.trim();
       }
-    }
+      if (isDraftConversationId(resolvedConversationId)) {
+        const matchedConversation = pendingConversation.value
+          ? findNativeConversationByDestination(pendingConversation.value.destinationHex)
+          : matchingNativeConversationForDraft(resolvedConversationId);
+        if (matchedConversation) {
+          resolvedConversationId = matchedConversation.conversationId;
+          resolvePendingConversationFromNativeConversation(matchedConversation);
+        } else {
+          resolvedConversationId = canonicalConversationIdForDraft(resolvedConversationId);
+        }
+      }
+      const items = await client.listMessages(resolvedConversationId || undefined);
+      mergeFetchedMessages(items);
+    }, { trailing: Boolean(requestedConversationId) });
   }
 
   async function refreshAll(): Promise<void> {
