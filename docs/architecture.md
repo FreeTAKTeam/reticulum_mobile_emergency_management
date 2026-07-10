@@ -433,8 +433,9 @@ Routing:
 
 Current wiring:
 - `runtime.rs` still owns the transport lifecycle, peer discovery, and UniFFI event emission.
-- Outbound LXMF event sends now go through `RuntimeLxmfSdk`, which wraps `lxmf-sdk`'s `Client<CompatBackend>`.
-- `CompatBackend` is a compatibility backend that implements the upstream `SdkBackend` contract against the existing local `reticulum-rs` transport and `lxmf` wire encoder.
+- Outbound LXMF sends go through `RuntimeLxmfSdk`, which wraps `lxmf-sdk`'s `Client<InProcessBackend>` from the reusable LXMF-rs `lxmf-runtime` crate.
+- `InProcessBackend` owns representation selection, direct-link activation, packet/resource transfer, propagation delivery, delivery snapshots, and SDK event/status state over the in-process `reticulum-rs` transport. REM no longer carries a second compatibility send runtime.
+- REM retains propagation-node fetch and remote-control orchestration in `sdk_bridge.rs`; that receive/control surface is not yet part of the first reusable `lxmf-runtime` slice.
 - Inbound packet reception, announce ingestion, peer state changes, hub-directory refreshes, and delivery-status transitions are mirrored into the SDK event/status model so send, receive, and delivery tracking share one internal SDK layer.
 
 Payload mapping:

@@ -9606,17 +9606,6 @@ pub async fn run_node(
         path.push("ratchets.dat");
         transport_cfg.set_ratchet_store_path(path);
     }
-    let ratchet_store_path = config
-        .storage_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .map(|mut path| {
-            path.push("ratchets.dat");
-            path
-        });
-
     let mut transport = Transport::new(transport_cfg);
     let receipt_message_ids =
         Arc::new(Mutex::new(HashMap::<String, ReceiptMessageTracking>::new()));
@@ -9718,18 +9707,20 @@ pub async fn run_node(
         projection_journal_path(config.storage_dir.as_deref()),
         bus.clone(),
     ));
-    let sdk = Arc::new(RuntimeLxmfSdk::new(
-        identity.address_hash().to_hex_string(),
-        SdkTransportState {
-            identity: identity.clone(),
-            transport: transport.clone(),
-            lxmf_destination: lxmf_destination.clone(),
-            known_destinations: known_destinations.clone(),
-            out_links: out_links.clone(),
-            active_propagation_node_hex: active_propagation_node_hex.clone(),
-            ratchet_store_path,
-        },
-    ));
+    let sdk = Arc::new(
+        RuntimeLxmfSdk::new(
+            identity.address_hash().to_hex_string(),
+            SdkTransportState {
+                identity: identity.clone(),
+                transport: transport.clone(),
+                lxmf_destination: lxmf_destination.clone(),
+                known_destinations: known_destinations.clone(),
+                out_links: out_links.clone(),
+                active_propagation_node_hex: active_propagation_node_hex.clone(),
+            },
+        )
+        .await,
+    );
 
     let state = NodeRuntimeState {
         app_state,

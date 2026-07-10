@@ -23,6 +23,7 @@ jni = "0.21"
 log = "0.4"
 lxmf = { package = "lxmf-wire", path = "../../../LXMF-rs/crates/libs/lxmf-core", default-features = false, features = ["std"] }
 lxmf-sdk = { path = "../../../LXMF-rs/crates/libs/lxmf-sdk", default-features = false, features = ["std"] }
+lxmf-runtime = { path = "../../../LXMF-rs/crates/libs/lxmf-runtime" }
 rmp-serde = "1"
 rmpv = "1"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
