@@ -17,6 +17,7 @@ import {
 } from "../services/operationalNotifications";
 import type { ActionMessage, EamStatus, EamTeamSummary, EamWireStatus } from "../types/domain";
 import { applyActionMessageStatusCycle } from "../utils/actionMessageStatus";
+import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { DEFAULT_R3AKT_TEAM_COLOR, normalizeR3aktTeamColor } from "../utils/r3akt";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
@@ -305,10 +306,6 @@ export const useMessagesStore = defineStore("messages", () => {
   const replicationInitialized = ref(false);
   const notificationsPrimed = ref(false);
 
-  let refreshPromise: Promise<void> | null = null;
-  let refreshQueued = false;
-  let teamSummaryPromise: Promise<void> | null = null;
-  let teamSummaryQueued = false;
   const cleanups: Array<() => void> = [];
 
   function webPersist(): void {
@@ -380,33 +377,17 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!supportsNativeNodeRuntime) {
       return;
     }
-    if (refreshPromise) {
-      refreshQueued = true;
-      await refreshPromise;
-      return;
-    }
-    const promise = (async () => {
-      do {
-        refreshQueued = false;
-        const client = getProjectionClient(nodeStore.settings.clientMode);
-        const [records, readinessSummary] = await Promise.all([
-          client.getEams(),
-          client.getEamReadinessSummary(),
-        ]);
-        const nextMessages = toStoredMessages(records);
-        byCallsign.value = nextMessages;
-        eamReadinessSummary.value = readinessSummary;
-        await notifyForInboundMessages(nextMessages);
-      } while (refreshQueued);
-    })();
-    refreshPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (refreshPromise === promise) {
-        refreshPromise = null;
-      }
-    }
+    await projectionRefreshCoordinator.run("eams", async () => {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      const [records, readinessSummary] = await Promise.all([
+        client.getEams(),
+        client.getEamReadinessSummary(),
+      ]);
+      const nextMessages = toStoredMessages(records);
+      byCallsign.value = nextMessages;
+      eamReadinessSummary.value = readinessSummary;
+      await notifyForInboundMessages(nextMessages);
+    }, { trailing: true });
   }
 
   async function refreshTeamSummary(): Promise<void> {
@@ -421,27 +402,10 @@ export const useMessagesStore = defineStore("messages", () => {
       return;
     }
 
-    if (teamSummaryPromise) {
-      teamSummaryQueued = true;
-      await teamSummaryPromise;
-      return;
-    }
-
-    const promise = (async () => {
-      do {
-        teamSummaryQueued = false;
-        const client = getProjectionClient(nodeStore.settings.clientMode);
-        teamSummary.value = toTeamSummary(await client.getEamTeamSummary(teamUid));
-      } while (teamSummaryQueued);
-    })();
-    teamSummaryPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (teamSummaryPromise === promise) {
-        teamSummaryPromise = null;
-      }
-    }
+    await projectionRefreshCoordinator.run("eams:team-summary", async () => {
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      teamSummary.value = toTeamSummary(await client.getEamTeamSummary(teamUid));
+    }, { trailing: true });
   }
 
   async function refreshAll(): Promise<void> {

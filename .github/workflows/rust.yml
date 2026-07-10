@@ -46,6 +46,10 @@ jobs:
         working-directory: rem
         run: npm run node-client:build
 
+      - name: Run app unit tests
+        working-directory: rem
+        run: npm run test:unit
+
       - name: Typecheck mobile app
         working-directory: rem
         run: npm --workspace apps/mobile run typecheck

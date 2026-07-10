@@ -23,6 +23,7 @@ import {
   mecpSeverityLabel,
   parseMecpMessage,
 } from "../utils/mecp";
+import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -400,7 +401,6 @@ export const useEventsStore = defineStore("events", () => {
   const replicationInitialized = ref(false);
   const notificationsPrimed = ref(false);
 
-  let refreshPromise: Promise<void> | null = null;
   const cleanups: Array<() => void> = [];
 
   function webPersist(): void {
@@ -458,11 +458,7 @@ export const useEventsStore = defineStore("events", () => {
     if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
       return;
     }
-    if (refreshPromise) {
-      await refreshPromise;
-      return;
-    }
-    const promise = (async () => {
+    await projectionRefreshCoordinator.run("events", async () => {
       const client = getProjectionClient(nodeStore.settings.clientMode);
       const records = await client.getEvents();
       const next: Record<string, EventProjectionRecord> = {};
@@ -472,15 +468,7 @@ export const useEventsStore = defineStore("events", () => {
       }
       byUid.value = next;
       await notifyForInboundEvents(next);
-    })();
-    refreshPromise = promise;
-    try {
-      await promise;
-    } finally {
-      if (refreshPromise === promise) {
-        refreshPromise = null;
-      }
-    }
+    });
   }
 
   function init(): void {

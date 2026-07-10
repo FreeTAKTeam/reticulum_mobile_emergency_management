@@ -13,6 +13,7 @@ import {
   type TelemetryPermissionState,
 } from "../services/telemetry";
 import { LEGACY_TELEMETRY_STORAGE_KEY } from "../utils/legacyState";
+import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { asNumber, asTrimmedString } from "../utils/replicationParser";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
@@ -90,7 +91,6 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   const telemetryError = ref("");
   const nodeStore = useNodeStore();
 
-  let refreshProjectionPromise: Promise<void> | null = null;
   let clockTimerId: number | null = null;
   const cleanups: Array<() => void> = [];
 
@@ -127,24 +127,16 @@ export const useTelemetryStore = defineStore("telemetry", () => {
   }
 
   async function refreshTelemetryProjection(): Promise<void> {
-    if (refreshProjectionPromise) {
-      return refreshProjectionPromise;
-    }
-    refreshProjectionPromise = (async () => {
+    await projectionRefreshCoordinator.run("telemetry", async () => {
       if (!supportsNativeNodeRuntime || !nodeStore.status.running) {
         replaceTelemetryProjection(loadLegacyPositions());
         return;
       }
       const positions = await getProjectionClient(nodeStore.settings.clientMode).getTelemetryPositions();
       replaceTelemetryProjection(positions);
-    })()
-      .catch((error: unknown) => {
-        telemetryError.value = error instanceof Error ? error.message : String(error);
-      })
-      .finally(() => {
-        refreshProjectionPromise = null;
-      });
-    return refreshProjectionPromise;
+    }).catch((error: unknown) => {
+      telemetryError.value = error instanceof Error ? error.message : String(error);
+    });
   }
 
   function buildLocalPosition(): Promise<TelemetryPosition | null> {
