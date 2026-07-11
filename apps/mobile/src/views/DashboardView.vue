@@ -114,6 +114,14 @@ const activitySummaryMetrics = computed(() => [
   },
 ]);
 
+const pluginSensorCards = computed(() => nodeStore.pluginSensors.map((sensor) => ({
+  ...sensor,
+  formattedValue: `${String(sensor.value)}${sensor.unit ? ` ${sensor.unit}` : ""}`,
+  lastSeen: sensor.sampleAtMs > 0
+    ? new Date(sensor.sampleAtMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "-",
+})));
+
 function activityHref(activity: NotificationActivityRecord): string {
   const route = activity.route?.trim();
   if (!route) {
@@ -163,6 +171,7 @@ function refreshNotificationActivities(): void {
 
 onMounted(() => {
   void checklistsStore.refreshLive();
+  void nodeStore.refreshPluginSensors();
   refreshNotificationActivities();
   unsubscribeNotificationActivity = subscribeNotificationActivity(refreshNotificationActivities);
 });
@@ -231,6 +240,21 @@ onUnmounted(() => {
 
     <section class="panel">
       <h2>Activity</h2>
+      <h3 v-if="pluginSensorCards.length" class="activity-subheading">Plugin sensors</h3>
+      <div v-if="pluginSensorCards.length" class="plugin-sensor-grid">
+        <article
+          v-for="sensor in pluginSensorCards"
+          :key="`${sensor.pluginId}:${sensor.deviceId}:${sensor.sensorType}`"
+          class="plugin-sensor-card"
+        >
+          <div>
+            <strong>{{ sensor.displayName }}</strong>
+            <span>{{ sensor.operatorRnsIdentity || sensor.sensorType }}</span>
+          </div>
+          <p>{{ sensor.formattedValue }}</p>
+          <span>{{ sensor.status }} · {{ sensor.lastSeen }}</span>
+        </article>
+      </div>
       <div class="summary-grid activity-grid">
         <RouterLink
           v-for="metric in activitySummaryMetrics"
@@ -640,6 +664,35 @@ h2 {
   color: #8ea8d1;
   font-family: var(--font-body);
   font-size: 0.78rem;
+}
+
+.plugin-sensor-grid {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.plugin-sensor-card {
+  align-items: center;
+  background: rgb(7 20 44 / 72%);
+  border: 1px solid rgb(67 106 165 / 30%);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding: 0.7rem 0.8rem;
+}
+
+.plugin-sensor-card strong,
+.plugin-sensor-card span {
+  display: block;
+}
+
+.plugin-sensor-card p {
+  color: #d5eaff;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  margin: 0;
 }
 
 .activity-item time {

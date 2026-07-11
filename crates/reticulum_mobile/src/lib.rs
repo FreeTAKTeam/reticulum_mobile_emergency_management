@@ -9,6 +9,7 @@ mod messaging_compat;
 mod mission_commands;
 mod mission_sync;
 mod node;
+mod plugin_runtime;
 mod runtime;
 mod sdk_bridge;
 mod sos;
@@ -27,19 +28,21 @@ pub use types::{
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ChecklistUserTaskStatus,
-    ConversationRecord, EamProjectionRecord, EamReadinessMessageRecord,
+    ConversationRecord, DiscoveredPluginRecord, EamProjectionRecord, EamReadinessMessageRecord,
     EamReadinessStatusMetricRecord, EamReadinessSummaryRecord, EamSourceRecord,
     EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectorySnapshot,
-    HubMode, HubSettingsRecord, InterfaceStatusRecord, LegacyImportPayload, LogLevel,
-    LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate,
-    LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
-    NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary, PeerChange,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, RnodeSettingsRecord,
+    HubMode, HubSettingsRecord, InstalledPluginRecord, InterfaceStatusRecord, LegacyImportPayload,
+    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    LxmfDeliveryUpdate, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord,
+    MessageState, NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice,
+    OperationalSummary, PeerChange, PeerRecord, PeerState, PluginCapabilityRecord,
+    PluginEventRecord, PluginLxmfSendRequest, PluginMessageDescriptorRecord, PluginSensorRecord,
+    PluginSensorSampleRequest, ProjectionInvalidation, ProjectionScope, RnodeSettingsRecord,
     RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot, RuntimeReadinessState,
     SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord, SosAudioRecord,
     SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
     SosStatusRecord, SosTriggerSource, SyncPhase, SyncStatus, TelemetryPositionRecord,
-    TelemetrySettingsRecord, TransportDeliveryState,
+    TelemetrySettingsRecord, TransportDeliveryState, TrustedPluginPublisherRecord,
 };
 
 pub fn healthcheck() -> String {

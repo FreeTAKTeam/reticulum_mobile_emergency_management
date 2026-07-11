@@ -1,0 +1,1 @@
+-keep class network.reticulum.emergency.plugin.api.** { *; }

@@ -19,6 +19,9 @@ import type {
   MessageDirection,
   ClientMode,
   ProjectionScope,
+  InstalledPluginRecord,
+  PluginCapabilityRecord,
+  PluginSensorRecord,
   SosState,
   SosTriggerSource,
   SosMessageKind,
@@ -263,6 +266,17 @@ interface ReticulumNodePlugin {
   setActivePropagationNode(options: { destinationHex?: string }): Promise<void>;
   requestLxmfSync(options: { limit?: number }): Promise<void>;
   listAnnounces(): Promise<{ items: Record<string, unknown>[] }>;
+  refreshPlugins(): Promise<{ items: Record<string, unknown>[] }>;
+  listPlugins(): Promise<{ items: Record<string, unknown>[] }>;
+  approvePluginPublisher(options: { pluginId: string; displayName?: string }): Promise<void>;
+  revokePluginPublisher(options: { fingerprint: string }): Promise<void>;
+  setPluginEnabled(options: { pluginId: string; enabled: boolean }): Promise<void>;
+  grantPluginCapabilities(options: {
+    pluginId: string;
+    capabilities: PluginCapabilityRecord;
+  }): Promise<void>;
+  openPluginConfiguration(options: { pluginId: string }): Promise<void>;
+  listPluginSensors(): Promise<{ items: Record<string, unknown>[] }>;
   listPeers(): Promise<{ items: Record<string, unknown>[] }>;
   listConversations(): Promise<{ items: Record<string, unknown>[] }>;
   listMessages(options: { conversationId?: string }): Promise<{ items: Record<string, unknown>[] }>;
@@ -389,6 +403,97 @@ const ReticulumNodePluginInstance = registerPlugin<ReticulumNodePlugin>(
 
 function normalizeHex(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function pluginRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
+  const raw = pluginRecord(value);
+  return {
+    eventsPublish: Boolean(raw.eventsPublish ?? raw.events_publish),
+    sensorsPublish: Boolean(raw.sensorsPublish ?? raw.sensors_publish),
+    lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),
+    lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
+    notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
+  };
+}
+
+function toInstalledPlugin(raw: Record<string, unknown>): InstalledPluginRecord {
+  const state = String(raw.state ?? "Discovered") as InstalledPluginRecord["state"];
+  const messages = Array.isArray(raw.messages)
+    ? raw.messages.map((entry) => {
+        const message = pluginRecord(entry);
+        return {
+          name: String(message.name ?? ""),
+          version: String(message.version ?? ""),
+          send: Boolean(message.send),
+          receive: Boolean(message.receive),
+          schema: pluginRecord(message.schema),
+        };
+      })
+    : [];
+  return {
+    pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+    displayName: String(raw.displayName ?? raw.display_name ?? ""),
+    version: String(raw.version ?? ""),
+    apiMajor: Number(raw.apiMajor ?? raw.api_major ?? 0),
+    apiMinor: Number(raw.apiMinor ?? raw.api_minor ?? 0),
+    packageName: String(raw.packageName ?? raw.package_name ?? ""),
+    serviceClassName: String(raw.serviceClassName ?? raw.service_class_name ?? ""),
+    publisherFingerprint: normalizeHex(raw.publisherFingerprint ?? raw.publisher_fingerprint),
+    publisherHistory: Array.isArray(raw.publisherHistory)
+      ? raw.publisherHistory.map((value) => normalizeHex(value))
+      : [],
+    androidPermissions: Array.isArray(raw.androidPermissions)
+      ? raw.androidPermissions.map(String)
+      : [],
+    declaredCapabilities: toPluginCapabilities(
+      raw.declaredCapabilities ?? raw.declared_capabilities,
+    ),
+    messages,
+    configurationEntrypoint:
+      typeof (raw.configurationEntrypoint ?? raw.configuration_entrypoint) === "string"
+        ? String(raw.configurationEntrypoint ?? raw.configuration_entrypoint)
+        : undefined,
+    state,
+    trusted: Boolean(raw.trusted),
+    enabled: Boolean(raw.enabled),
+    grantedCapabilities: toPluginCapabilities(
+      raw.grantedCapabilities ?? raw.granted_capabilities,
+    ),
+    diagnostic: typeof raw.diagnostic === "string" ? raw.diagnostic : undefined,
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? 0),
+  };
+}
+
+function toPluginSensor(raw: Record<string, unknown>): PluginSensorRecord {
+  const status = String(raw.status ?? "Offline") as PluginSensorRecord["status"];
+  const origin = String(raw.origin ?? "local") as PluginSensorRecord["origin"];
+  return {
+    pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+    deviceId: String(raw.deviceId ?? raw.device_id ?? ""),
+    sensorType: String(raw.sensorType ?? raw.sensor_type ?? ""),
+    displayName: String(raw.displayName ?? raw.display_name ?? ""),
+    value: raw.value,
+    unit: typeof raw.unit === "string" ? raw.unit : undefined,
+    operatorRnsIdentity:
+      typeof (raw.operatorRnsIdentity ?? raw.operator_rns_identity) === "string"
+        ? String(raw.operatorRnsIdentity ?? raw.operator_rns_identity)
+        : undefined,
+    confidence: toOptionalNumber(raw.confidence),
+    connectionState:
+      typeof (raw.connectionState ?? raw.connection_state) === "string"
+        ? String(raw.connectionState ?? raw.connection_state)
+        : undefined,
+    sampleAtMs: Number(raw.sampleAtMs ?? raw.sample_at_ms ?? 0),
+    staleAfterMs: Number(raw.staleAfterMs ?? raw.stale_after_ms ?? 0),
+    status,
+    origin,
+  };
 }
 
 function hasValue(value: unknown): boolean {
@@ -2582,6 +2687,10 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
       await register("hubDirectoryUpdated", toHubDirectoryUpdatedEvent);
       await register("operationalNotice", toOperationalNoticeEvent);
       await register("projectionInvalidated", toProjectionInvalidationEvent);
+      await register("pluginEventPublished", (raw) => ({
+        pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+        event: pluginRecord(raw.event),
+      }));
       await register("sosStatusChanged", (raw) => ({ status: toSosStatusRecord(raw) }));
       await register("sosAlertChanged", (raw) => ({ alert: toSosAlertRecord(raw) }));
       await register("sosTelemetryRequested", () => ({}));
@@ -2774,6 +2883,52 @@ class CapacitorReticulumNodeClient implements ReticulumNodeClient {
     await this.ready();
     const result = await this.plugin.listAnnounces();
     return Array.isArray(result.items) ? result.items.map(toAnnounceRecord) : [];
+  }
+
+  async refreshPlugins(): Promise<InstalledPluginRecord[]> {
+    await this.ready();
+    const result = await this.plugin.refreshPlugins();
+    return Array.isArray(result.items) ? result.items.map(toInstalledPlugin) : [];
+  }
+
+  async listPlugins(): Promise<InstalledPluginRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPlugins();
+    return Array.isArray(result.items) ? result.items.map(toInstalledPlugin) : [];
+  }
+
+  async approvePluginPublisher(pluginId: string, displayName?: string): Promise<void> {
+    await this.ready();
+    await this.plugin.approvePluginPublisher({ pluginId, displayName });
+  }
+
+  async revokePluginPublisher(fingerprint: string): Promise<void> {
+    await this.ready();
+    await this.plugin.revokePluginPublisher({ fingerprint });
+  }
+
+  async setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    await this.ready();
+    await this.plugin.setPluginEnabled({ pluginId, enabled });
+  }
+
+  async grantPluginCapabilities(
+    pluginId: string,
+    capabilities: PluginCapabilityRecord,
+  ): Promise<void> {
+    await this.ready();
+    await this.plugin.grantPluginCapabilities({ pluginId, capabilities });
+  }
+
+  async openPluginConfiguration(pluginId: string): Promise<void> {
+    await this.ready();
+    await this.plugin.openPluginConfiguration({ pluginId });
+  }
+
+  async listPluginSensors(): Promise<PluginSensorRecord[]> {
+    await this.ready();
+    const result = await this.plugin.listPluginSensors();
+    return Array.isArray(result.items) ? result.items.map(toPluginSensor) : [];
   }
 
   async listPeers(): Promise<PeerRecord[]> {
@@ -3462,6 +3617,18 @@ class WebReticulumNodeClient implements ReticulumNodeClient {
     return [];
   }
 
+  async refreshPlugins(): Promise<InstalledPluginRecord[]> { return []; }
+  async listPlugins(): Promise<InstalledPluginRecord[]> { return []; }
+  async approvePluginPublisher(_pluginId: string, _displayName?: string): Promise<void> {}
+  async revokePluginPublisher(_fingerprint: string): Promise<void> {}
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+  async grantPluginCapabilities(
+    _pluginId: string,
+    _capabilities: PluginCapabilityRecord,
+  ): Promise<void> {}
+  async openPluginConfiguration(_pluginId: string): Promise<void> {}
+  async listPluginSensors(): Promise<PluginSensorRecord[]> { return []; }
+
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
   }
@@ -4103,6 +4270,18 @@ class MockReticulumNodeClient implements ReticulumNodeClient {
   async listAnnounces(): Promise<AnnounceRecord[]> {
     return [];
   }
+
+  async refreshPlugins(): Promise<InstalledPluginRecord[]> { return []; }
+  async listPlugins(): Promise<InstalledPluginRecord[]> { return []; }
+  async approvePluginPublisher(_pluginId: string, _displayName?: string): Promise<void> {}
+  async revokePluginPublisher(_fingerprint: string): Promise<void> {}
+  async setPluginEnabled(_pluginId: string, _enabled: boolean): Promise<void> {}
+  async grantPluginCapabilities(
+    _pluginId: string,
+    _capabilities: PluginCapabilityRecord,
+  ): Promise<void> {}
+  async openPluginConfiguration(_pluginId: string): Promise<void> {}
+  async listPluginSensors(): Promise<PluginSensorRecord[]> { return []; }
 
   async listPeers(): Promise<PeerRecord[]> {
     return this.currentPeerRecords();
