@@ -23,6 +23,7 @@ crates/reticulum_mobile/reticulum-mobile/app_state.db
 apps/mobile/android/app/src/main/jniLibs/
 apps/mobile/android/uniffi/
 apps/mobile/ios/uniffi/
+apps/mobile/android/ble-heart-rate-keystore.properties
 
 # Local REM infographic artifacts
 docs/rem-capability-infographic.pdf

@@ -2,6 +2,8 @@ include ':app'
 include ':rem-plugin-sdk'
 project(':rem-plugin-sdk').projectDir = new File('../../../packages/android-plugin-sdk')
 include ':plugin-test-fixture'
+include ':ble-heart-rate-plugin'
+project(':ble-heart-rate-plugin').projectDir = new File('../../../plugins/ble-heart-rate/android')
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

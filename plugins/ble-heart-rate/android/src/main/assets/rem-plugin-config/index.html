@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BLE Heart Rate</title>
+    <link rel="stylesheet" href="config.css" />
+  </head>
+  <body>
+    <main>
+      <h1>BLE Heart Rate</h1>
+      <p class="intro">Pairing and Bluetooth permissions belong to this plugin APK. REM only receives the sensor values you grant it.</p>
+
+      <section>
+        <h2>Sensor</h2>
+        <dl>
+          <div><dt>Device</dt><dd id="device">Not paired</dd></div>
+          <div><dt>Status</dt><dd id="connection">Unknown</dd></div>
+        </dl>
+        <button id="pair" type="button">Grant permission / pair sensor</button>
+        <label>Alias <input id="alias" maxlength="80" autocomplete="off" /></label>
+        <label>Operator RNS identity <input id="operator" maxlength="128" autocomplete="off" spellcheck="false" /></label>
+        <label>Stale after (seconds) <input id="stale" type="number" min="5" max="600" step="1" /></label>
+      </section>
+
+      <section>
+        <h2>Optional LXMF sharing</h2>
+        <label class="check"><input id="sharing" type="checkbox" /> Share heart-rate samples over LXMF</label>
+        <p class="private">Off by default. REM also requires an explicit <code>lxmf.send</code> capability grant.</p>
+        <label>Destination <input id="destination" minlength="32" maxlength="32" pattern="[0-9a-fA-F]{32}" autocomplete="off" spellcheck="false" /></label>
+        <label>Delivery mode <input value="Auto" disabled /></label>
+        <label>Send interval (seconds) <input id="interval" type="number" min="5" max="3600" step="1" /></label>
+      </section>
+
+      <button id="save" class="primary" type="button">Save configuration</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="config.js"></script>
+  </body>
+</html>

@@ -78,9 +78,27 @@ jobs:
           cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --release --target x86_64-linux-android
           mkdir -p apps/mobile/android/app/src/main/jniLibs/x86_64
           cp crates/reticulum_mobile/target/x86_64-linux-android/release/libreticulum_mobile.so apps/mobile/android/app/src/main/jniLibs/x86_64/
-      - name: Build SDK and fixture APK
+      - name: Build REM, SDK, and plugin APKs
         working-directory: rem/apps/mobile/android
-        run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :app:testDebugUnitTest :app:assembleDebug
+        run: |
+          bash ./gradlew :app:testDebugUnitTest :app:assembleDebug
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" \
+            -name apksigner \
+            | sort -V | tail -n 1)"
+          echo "Using apksigner: $APKSIGNER"
+          test -x "$APKSIGNER"
+          SIGNER_REPORT="$("$APKSIGNER" verify --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk)"
+          printf '%s\n' "$SIGNER_REPORT"
+          REM_DEBUG_FINGERPRINT="$(printf '%s\n' "$SIGNER_REPORT" \
+            | awk '/certificate SHA-256 digest:/{print $NF; exit}')"
+          [[ "$REM_DEBUG_FINGERPRINT" =~ ^[0-9A-Fa-f]{64}$ ]]
+          bash ./gradlew -PremHostFingerprints="$REM_DEBUG_FINGERPRINT" \
+            :rem-plugin-sdk:assembleDebug \
+            :rem-plugin-sdk:testDebugUnitTest \
+            :plugin-test-fixture:assembleDebug \
+            :ble-heart-rate-plugin:testDebugUnitTest \
+            :ble-heart-rate-plugin:assembleDebug
       - name: Enable emulator hardware acceleration
         run: sudo chmod 666 /dev/kvm || true
       - name: Exercise plugin discovery and Binder integration
@@ -104,3 +122,7 @@ jobs:
         with:
           name: rem-plugin-test-fixture
           path: rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rem-ble-heart-rate-plugin
+          path: rem/plugins/ble-heart-rate/android/build/outputs/apk/debug/ble-heart-rate-plugin-debug.apk

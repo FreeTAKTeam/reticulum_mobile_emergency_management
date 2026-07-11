@@ -1,0 +1,71 @@
+import java.io.FileInputStream
+import java.util.Properties
+
+apply plugin: 'com.android.application'
+
+def hostPackage = project.findProperty('remHostPackage')?.toString()?.trim() ?: 'network.reticulum.emergency'
+def hostFingerprints = project.findProperty('remHostFingerprints')?.toString()?.trim() ?: ''
+def signingPropertiesFile = rootProject.file('ble-heart-rate-keystore.properties')
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+    signingProperties.load(new FileInputStream(signingPropertiesFile))
+}
+
+android {
+    namespace 'org.freetakteam.rem.plugin.bleheartrate'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId 'org.freetakteam.rem.plugin.bleheartrate'
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName '1.0.0'
+        manifestPlaceholders = [remHostPackage: hostPackage]
+        buildConfigField 'String', 'REM_HOST_PACKAGE', '"' + hostPackage + '"'
+        buildConfigField 'String', 'REM_HOST_FINGERPRINTS', '"' + hostFingerprints + '"'
+    }
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                storeFile rootProject.file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (signingPropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+        }
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseRequested = graph.allTasks.any { task ->
+        task.project == project && task.name.toLowerCase().contains('release')
+    }
+    if (releaseRequested && hostFingerprints.isEmpty()) {
+        throw new GradleException('Release plugin builds require -PremHostFingerprints=<sha256[,sha256]>')
+    }
+    if (releaseRequested && !signingPropertiesFile.exists()) {
+        throw new GradleException('Release plugin builds require ignored ble-heart-rate-keystore.properties')
+    }
+}
+
+dependencies {
+    implementation project(':rem-plugin-sdk')
+    implementation 'androidx.core:core:1.15.0'
+    testImplementation 'junit:junit:4.13.2'
+}
