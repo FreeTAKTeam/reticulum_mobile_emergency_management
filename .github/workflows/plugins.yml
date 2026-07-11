@@ -83,13 +83,16 @@ jobs:
         run: |
           bash ./gradlew :app:testDebugUnitTest :app:assembleDebug
           APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" \
-            -mindepth 2 -maxdepth 2 -type f -name apksigner \
+            -name apksigner \
             | sort -V | tail -n 1)"
+          echo "Using apksigner: $APKSIGNER"
           test -x "$APKSIGNER"
-          REM_DEBUG_FINGERPRINT="$("$APKSIGNER" verify --print-certs \
-            app/build/outputs/apk/debug/app-debug.apk \
-            | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}')"
-          test -n "$REM_DEBUG_FINGERPRINT"
+          SIGNER_REPORT="$("$APKSIGNER" verify --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk)"
+          printf '%s\n' "$SIGNER_REPORT"
+          REM_DEBUG_FINGERPRINT="$(printf '%s\n' "$SIGNER_REPORT" \
+            | awk '/certificate SHA-256 digest:/{print $NF; exit}')"
+          [[ "$REM_DEBUG_FINGERPRINT" =~ ^[0-9A-Fa-f]{64}$ ]]
           bash ./gradlew -PremHostFingerprints="$REM_DEBUG_FINGERPRINT" \
             :rem-plugin-sdk:assembleDebug \
             :rem-plugin-sdk:testDebugUnitTest \
