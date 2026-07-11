@@ -80,7 +80,23 @@ jobs:
           cp crates/reticulum_mobile/target/x86_64-linux-android/release/libreticulum_mobile.so apps/mobile/android/app/src/main/jniLibs/x86_64/
       - name: Build SDK and fixture APK
         working-directory: rem/apps/mobile/android
-        run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :ble-heart-rate-plugin:testDebugUnitTest :ble-heart-rate-plugin:assembleDebug :app:testDebugUnitTest :app:assembleDebug
+        run: |
+          bash ./gradlew :app:validateSigningDebug
+          REM_DEBUG_FINGERPRINT="$(keytool -list -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -alias androiddebugkey \
+            -storepass android \
+            -keypass android \
+            | awk -F': ' '/SHA256:/{print $2; exit}')"
+          test -n "$REM_DEBUG_FINGERPRINT"
+          bash ./gradlew -PremHostFingerprints="$REM_DEBUG_FINGERPRINT" \
+            :rem-plugin-sdk:assembleDebug \
+            :rem-plugin-sdk:testDebugUnitTest \
+            :plugin-test-fixture:assembleDebug \
+            :ble-heart-rate-plugin:testDebugUnitTest \
+            :ble-heart-rate-plugin:assembleDebug \
+            :app:testDebugUnitTest \
+            :app:assembleDebug
       - name: Enable emulator hardware acceleration
         run: sudo chmod 666 /dev/kvm || true
       - name: Exercise plugin discovery and Binder integration

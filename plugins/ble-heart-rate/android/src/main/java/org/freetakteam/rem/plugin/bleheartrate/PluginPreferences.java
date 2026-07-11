@@ -28,6 +28,7 @@ final class PluginPreferences {
     void update(JSONObject request) {
         final long staleSeconds = Math.max(5L, Math.min(600L, request.optLong("staleTimeoutSeconds", 30L)));
         final long intervalSeconds = Math.max(5L, Math.min(3_600L, request.optLong("sendIntervalSeconds", 30L)));
+        final String alias = ConfigurationPolicy.requireAlias(request.optString("alias", alias()));
         final boolean sharingEnabled = request.optBoolean("sharingEnabled", false);
         final String destination = request.optString("destination", "").trim().toLowerCase(Locale.ROOT);
         if (sharingEnabled && !destination.matches("[0-9a-f]{32}")) {
@@ -36,7 +37,7 @@ final class PluginPreferences {
             );
         }
         values.edit()
-            .putString("alias", request.optString("alias", alias()).trim())
+            .putString("alias", alias)
             .putString("operatorIdentity", request.optString("operatorRnsIdentity", operatorIdentity()).trim())
             .putLong("staleAfterMs", staleSeconds * 1_000L)
             .putBoolean("sharingEnabled", sharingEnabled)

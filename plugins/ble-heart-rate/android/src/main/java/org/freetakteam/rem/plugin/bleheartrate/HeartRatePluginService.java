@@ -39,8 +39,9 @@ public final class HeartRatePluginService extends RemPluginService {
     private final SampleRateLimiter limiter = new SampleRateLimiter();
     private final ReconnectPolicy reconnectPolicy = new ReconnectPolicy();
     private PluginPreferences preferences;
-    private IRemPluginHost host;
-    private BluetoothGatt gatt;
+    private volatile IRemPluginHost host;
+    private volatile BluetoothGatt gatt;
+    private volatile Runnable pendingReconnect;
     private String connectionState = "Disconnected";
     private long lastSharedAtMs;
     private boolean foreground;
@@ -92,6 +93,7 @@ public final class HeartRatePluginService extends RemPluginService {
     @Override
     protected void onPluginStop(String reason) {
         host = null;
+        cancelPendingReconnect();
         handler.removeCallbacksAndMessages(null);
         disconnectGatt();
         stopMonitoringForeground();
@@ -162,6 +164,7 @@ public final class HeartRatePluginService extends RemPluginService {
 
     @SuppressLint("MissingPermission")
     private void connectSelectedDevice() {
+        cancelPendingReconnect();
         if (host == null || preferences.address().isEmpty() || !hasConnectPermission()) {
             connectionState = preferences.address().isEmpty() ? "Not paired" : "Permission required";
             return;
@@ -193,7 +196,12 @@ public final class HeartRatePluginService extends RemPluginService {
         @Override
         @SuppressLint("MissingPermission")
         public void onConnectionStateChange(BluetoothGatt value, int status, int newState) {
+            if (!isCurrentGatt(value)) {
+                safeClose(value);
+                return;
+            }
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                cancelPendingReconnect();
                 reconnectPolicy.reset();
                 connectionState = "Connected";
                 value.discoverServices();
@@ -207,6 +215,10 @@ public final class HeartRatePluginService extends RemPluginService {
         @Override
         @SuppressLint("MissingPermission")
         public void onServicesDiscovered(BluetoothGatt value, int status) {
+            if (!isCurrentGatt(value)) {
+                safeClose(value);
+                return;
+            }
             final BluetoothGattService service = value.getService(HEART_RATE_SERVICE);
             final BluetoothGattCharacteristic characteristic = service == null
                 ? null
@@ -231,6 +243,10 @@ public final class HeartRatePluginService extends RemPluginService {
 
         @Override
         public void onDescriptorWrite(BluetoothGatt value, BluetoothGattDescriptor descriptor, int status) {
+            if (!isCurrentGatt(value)) {
+                safeClose(value);
+                return;
+            }
             connectionState = status == BluetoothGatt.GATT_SUCCESS ? "Subscribed" : "Subscription failed";
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 safeClose(value);
@@ -240,6 +256,7 @@ public final class HeartRatePluginService extends RemPluginService {
 
         @Override
         public void onCharacteristicChanged(BluetoothGatt value, BluetoothGattCharacteristic characteristic) {
+            if (!isCurrentGatt(value)) return;
             handleMeasurement(characteristic.getValue());
         }
 
@@ -249,6 +266,7 @@ public final class HeartRatePluginService extends RemPluginService {
             BluetoothGattCharacteristic characteristic,
             byte[] bytes
         ) {
+            if (!isCurrentGatt(value)) return;
             handleMeasurement(bytes);
         }
     };
@@ -337,14 +355,25 @@ public final class HeartRatePluginService extends RemPluginService {
         }
     }
 
-    private void scheduleReconnect() {
+    private synchronized void scheduleReconnect() {
         if (host == null) return;
+        cancelPendingReconnect();
         final long delayMs = reconnectPolicy.nextDelayMs();
         if (delayMs < 0L) {
             stopMonitoringForeground();
             return;
         }
-        handler.postDelayed(this::connectSelectedDevice, delayMs);
+        pendingReconnect = () -> {
+            pendingReconnect = null;
+            connectSelectedDevice();
+        };
+        handler.postDelayed(pendingReconnect, delayMs);
+    }
+
+    private synchronized void cancelPendingReconnect() {
+        final Runnable pending = pendingReconnect;
+        pendingReconnect = null;
+        if (pending != null) handler.removeCallbacks(pending);
     }
 
     @SuppressLint("MissingPermission")
@@ -362,6 +391,10 @@ public final class HeartRatePluginService extends RemPluginService {
     private void safeClose(BluetoothGatt value) {
         try { value.close(); } catch (Exception ignored) {}
         if (gatt == value) gatt = null;
+    }
+
+    private boolean isCurrentGatt(BluetoothGatt value) {
+        return value != null && value == gatt;
     }
 
     private boolean hasConnectPermission() {
