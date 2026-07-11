@@ -15,6 +15,9 @@ import {
   type NodeClientEvents,
   type NodeErrorEvent,
   type InterfaceStatusChangedEvent,
+  type InstalledPluginRecord,
+  type PluginCapabilityRecord,
+  type PluginSensorRecord,
   type NodeLogEvent,
   type NodeStatus,
   type PeerChangedEvent,
@@ -637,6 +640,8 @@ export const useNodeStore = defineStore("node", () => {
   const watchStatusServer = reactive<WatchStatusServerState>({ ...DEFAULT_WATCH_STATUS_SERVER });
   const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
   const telemetryDestinations = ref<string[]>([]);
+  const plugins = ref<InstalledPluginRecord[]>([]);
+  const pluginSensors = ref<PluginSensorRecord[]>([]);
   const hubRegistration = reactive<HubRegistrationSnapshot>({
     status: hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled",
     linkage: loadHubRegistryLinkage() ?? undefined,
@@ -1358,6 +1363,64 @@ export const useNodeStore = defineStore("node", () => {
     }).catch((error: unknown) => {
       appendLog("Debug", `Operational summary refresh skipped: ${errorMessage(error)}`);
     });
+  }
+
+  async function refreshPluginProjection(discover = false): Promise<void> {
+    if (!client.value) {
+      plugins.value = [];
+      return;
+    }
+    await projectionRefreshCoordinator.run("node:plugins", async () => {
+      plugins.value = discover
+        ? await client.value!.refreshPlugins()
+        : await client.value!.listPlugins();
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Plugin projection refresh skipped: ${errorMessage(error)}`);
+    });
+  }
+
+  async function refreshPluginSensors(): Promise<void> {
+    if (!client.value) {
+      pluginSensors.value = [];
+      return;
+    }
+    await projectionRefreshCoordinator.run("node:plugin-sensors", async () => {
+      pluginSensors.value = await client.value!.listPluginSensors();
+    }).catch((error: unknown) => {
+      appendLog("Debug", `Plugin sensor refresh skipped: ${errorMessage(error)}`);
+    });
+  }
+
+  async function approvePluginPublisher(pluginId: string): Promise<void> {
+    if (!client.value) return;
+    await client.value.approvePluginPublisher(pluginId);
+    await refreshPluginProjection();
+  }
+
+  async function revokePluginPublisher(fingerprint: string): Promise<void> {
+    if (!client.value) return;
+    await client.value.revokePluginPublisher(fingerprint);
+    await refreshPluginProjection();
+  }
+
+  async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
+    if (!client.value) return;
+    await client.value.setPluginEnabled(pluginId, enabled);
+    await refreshPluginProjection();
+  }
+
+  async function grantPluginCapabilities(
+    pluginId: string,
+    capabilities: PluginCapabilityRecord,
+  ): Promise<void> {
+    if (!client.value) return;
+    await client.value.grantPluginCapabilities(pluginId, capabilities);
+    await refreshPluginProjection();
+  }
+
+  async function openPluginConfiguration(pluginId: string): Promise<void> {
+    if (!client.value) return;
+    await client.value.openPluginConfiguration(pluginId);
   }
 
   async function refreshWatchStatusServerSettings(): Promise<void> {
@@ -2095,6 +2158,12 @@ export const useNodeStore = defineStore("node", () => {
           case "OperationalSummary":
             scheduleOperationalSummaryRefresh();
             break;
+          case "Plugins":
+            void refreshPluginProjection();
+            break;
+          case "PluginSensors":
+            void refreshPluginSensors();
+            break;
           default:
             break;
         }
@@ -2221,11 +2290,14 @@ export const useNodeStore = defineStore("node", () => {
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
         refreshWatchStatusServerSettings(),
+        refreshPluginProjection(true),
+        refreshPluginSensors(),
       ]);
       await syncRuntimeSnapshot("client init");
       if (presenceTickerId === null) {
         presenceTickerId = window.setInterval(() => {
           presenceNow.value = nowMs();
+          void refreshPluginSensors();
         }, PEER_PRESENCE_TICK_MS);
       }
       await refreshHubRegistrationState(false);
@@ -3360,6 +3432,8 @@ export const useNodeStore = defineStore("node", () => {
     startupSettling,
     bestPropagationNodeHex,
     telemetryDestinations,
+    plugins,
+    pluginSensors,
     savedDestinations,
     initialized,
     ready,
@@ -3376,6 +3450,13 @@ export const useNodeStore = defineStore("node", () => {
     connectAllSaved,
     disconnectAllSaved,
     refreshHubDirectory,
+    refreshPluginProjection,
+    refreshPluginSensors,
+    approvePluginPublisher,
+    revokePluginPublisher,
+    setPluginEnabled,
+    grantPluginCapabilities,
+    openPluginConfiguration,
     refreshHubRegistrationState,
     bootstrapHubRegistration,
     forgetHubRegistryLinkage,

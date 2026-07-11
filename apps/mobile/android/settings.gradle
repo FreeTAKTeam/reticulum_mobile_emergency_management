@@ -1,4 +1,7 @@
 include ':app'
+include ':rem-plugin-sdk'
+project(':rem-plugin-sdk').projectDir = new File('../../../packages/android-plugin-sdk')
+include ':plugin-test-fixture'
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

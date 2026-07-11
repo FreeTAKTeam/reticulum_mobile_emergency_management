@@ -31,6 +31,8 @@ import androidx.core.app.NotificationManagerCompat;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
 
+import network.reticulum.emergency.plugins.PluginCoordinator;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -141,6 +143,7 @@ public final class ReticulumNodeService extends Service {
     private String lastForegroundNotificationFingerprint = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
     private RemWatchStatusServer watchStatusServer;
+    private PluginCoordinator pluginCoordinator;
     private final Set<String> seenEamKeys = new HashSet<>();
     private final Set<String> seenEventKeys = new HashSet<>();
     private final Set<String> seenChecklistKeys = new HashSet<>();
@@ -157,6 +160,8 @@ public final class ReticulumNodeService extends Service {
         createNotificationChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
         watchStatusServer = new RemWatchStatusServer();
+        pluginCoordinator = new PluginCoordinator(this);
+        pluginCoordinator.refresh();
         getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         latestStatusJson = safeStatusJson();
         latestSyncStatusJson = safeSyncStatusJson();
@@ -200,6 +205,9 @@ public final class ReticulumNodeService extends Service {
         }
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
+        }
+        if (pluginCoordinator != null) {
+            pluginCoordinator.close();
         }
         getApplication().unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks);
         restoreExecutor.shutdownNow();
@@ -262,6 +270,7 @@ public final class ReticulumNodeService extends Service {
                     startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
                     emitCachedStateToAll();
                     emitProjectionRefreshSweepToAll();
+                    pluginCoordinator.setNodeRunning(true);
                     return 0;
                 }
                 final int restartResult = ReticulumBridge.restart(resolved.resolvedJson);
@@ -287,6 +296,7 @@ public final class ReticulumNodeService extends Service {
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
             emitCachedStateToAll();
             emitProjectionRefreshSweepToAll();
+            pluginCoordinator.setNodeRunning(true);
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to start node", ex);
@@ -301,6 +311,7 @@ public final class ReticulumNodeService extends Service {
 
     public int stopNode() {
         stopPoller();
+        pluginCoordinator.setNodeRunning(false);
         final int result = ReticulumBridge.stop();
         clearDesiredRunning();
         clearRuntimeReadinessFailure();
@@ -330,6 +341,7 @@ public final class ReticulumNodeService extends Service {
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
             emitCachedStateToAll();
             emitProjectionRefreshSweepToAll();
+            pluginCoordinator.setNodeRunning(true);
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to restart node", ex);
@@ -415,6 +427,54 @@ public final class ReticulumNodeService extends Service {
 
     public String listTelemetryDestinationsJson() {
         return ReticulumBridge.listTelemetryDestinationsJson();
+    }
+
+    public String refreshPluginsJson() {
+        return pluginCoordinator.refresh();
+    }
+
+    public String listPluginsJson() {
+        return pluginCoordinator.listPlugins();
+    }
+
+    public int approvePluginPublisherJson(String payloadJson) {
+        final int result = ReticulumBridge.approvePluginPublisherJson(payloadJson);
+        if (result == 0) {
+            pluginCoordinator.reconcileNow();
+        }
+        return result;
+    }
+
+    public int revokePluginPublisherJson(String payloadJson) {
+        final int result = ReticulumBridge.revokePluginPublisherJson(payloadJson);
+        if (result == 0) {
+            pluginCoordinator.reconcileNow();
+        }
+        return result;
+    }
+
+    public int setPluginEnabledJson(String payloadJson) {
+        final int result = ReticulumBridge.setPluginEnabledJson(payloadJson);
+        if (result == 0) {
+            pluginCoordinator.reconcileNow();
+        }
+        return result;
+    }
+
+    public int grantPluginCapabilitiesJson(String payloadJson) {
+        final int result = ReticulumBridge.grantPluginCapabilitiesJson(payloadJson);
+        if (result == 0) {
+            pluginCoordinator.reconcileNow();
+        }
+        return result;
+    }
+
+    public String listPluginSensorsJson() {
+        return pluginCoordinator.listSensors();
+    }
+
+    public Intent pluginConfigurationIntent(String pluginId) {
+        return pluginCoordinator.configurationIntent(pluginId);
     }
 
     public String legacyImportCompletedJson() {
@@ -757,6 +817,7 @@ public final class ReticulumNodeService extends Service {
 
     private void cleanupFailedRuntimeStart() {
         stopPoller();
+        pluginCoordinator.setNodeRunning(false);
         try {
             ReticulumBridge.stop();
         } catch (Exception ex) {
@@ -775,6 +836,7 @@ public final class ReticulumNodeService extends Service {
                 + foregroundServiceType
         );
         stopPoller();
+        pluginCoordinator.setNodeRunning(false);
         try {
             ReticulumBridge.stop();
         } catch (Exception ex) {
@@ -891,6 +953,19 @@ public final class ReticulumNodeService extends Service {
         }
         mirrorEventToLogcat(eventName, payload);
         updateCachedState(eventName, payload);
+        if ("packetReceived".equals(eventName) && pluginCoordinator != null) {
+            final String fieldsBase64 = payload.getString("fieldsBase64", "");
+            if (!fieldsBase64.isEmpty()) {
+                final String decoded = ReticulumBridge.decodePluginLxmfFieldsJson(fieldsBase64);
+                if (decoded != null && !decoded.isEmpty() && !"null".equals(decoded)) {
+                    try {
+                        pluginCoordinator.dispatchPluginLxmf(new JSONObject(decoded));
+                    } catch (JSONException error) {
+                        Logger.error(TAG, "Invalid plugin LXMF envelope", error);
+                    }
+                }
+            }
+        }
         dispatchEventToListeners(eventName, payload);
         final boolean uiForeground = isAppUiForeground();
         if ("sosAlertChanged".equals(eventName)) {
@@ -1020,6 +1095,8 @@ public final class ReticulumNodeService extends Service {
             "Messages",
             "Telemetry",
             "Sos",
+            "Plugins",
+            "PluginSensors",
         }) {
             final JSObject payload = new JSObject();
             payload.put("scope", scope);

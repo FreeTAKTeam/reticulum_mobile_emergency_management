@@ -1,0 +1,22 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'org.freetakteam.rem.plugin.fixture'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId 'org.freetakteam.rem.plugin.fixture'
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName '1.0.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation project(':rem-plugin-sdk')
+}

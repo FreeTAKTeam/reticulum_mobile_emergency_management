@@ -282,3 +282,18 @@ test("disabled RCH hub directory does not expose connected routing states", asyn
   await expect(hubPanel).not.toContainText("server forcing connected routing");
   await expect(hubPanel).not.toContainText("outbound blocked");
 });
+
+test("plugin management is present without storing plugin configuration in the web app", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings");
+
+  const pluginPanel = page.getByTestId("plugin-settings-panel");
+  await pluginPanel.locator("summary").click();
+
+  await expect(pluginPanel.getByRole("button", { name: "Refresh installed plugins" })).toBeVisible();
+  await expect(pluginPanel).toContainText("No plugin APKs were discovered");
+  const pluginSettingsKeys = await page.evaluate(() =>
+    Object.keys(window.localStorage).filter((key) => key.toLowerCase().includes("plugin")),
+  );
+  expect(pluginSettingsKeys).toEqual([]);
+});

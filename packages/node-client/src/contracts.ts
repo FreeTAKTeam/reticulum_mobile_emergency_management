@@ -64,7 +64,74 @@ export type ProjectionScope =
   | "Telemetry"
   | "Checklists"
   | "ChecklistDetail"
-  | "Sos";
+  | "Sos"
+  | "Plugins"
+  | "PluginSensors";
+
+export type PluginState =
+  | "Discovered"
+  | "Untrusted"
+  | "Disabled"
+  | "Binding"
+  | "Running"
+  | "Stopped"
+  | "Failed"
+  | "Incompatible"
+  | "Missing";
+
+export interface PluginCapabilityRecord {
+  eventsPublish: boolean;
+  sensorsPublish: boolean;
+  lxmfSend: boolean;
+  lxmfReceive: boolean;
+  notificationsRaise: boolean;
+}
+
+export interface PluginMessageDescriptorRecord {
+  name: string;
+  version: string;
+  send: boolean;
+  receive: boolean;
+  schema: Record<string, unknown>;
+}
+
+export interface InstalledPluginRecord {
+  pluginId: string;
+  displayName: string;
+  version: string;
+  apiMajor: number;
+  apiMinor: number;
+  packageName: string;
+  serviceClassName: string;
+  publisherFingerprint: string;
+  publisherHistory: string[];
+  androidPermissions: string[];
+  declaredCapabilities: PluginCapabilityRecord;
+  messages: PluginMessageDescriptorRecord[];
+  configurationEntrypoint?: string;
+  state: PluginState;
+  trusted: boolean;
+  enabled: boolean;
+  grantedCapabilities: PluginCapabilityRecord;
+  diagnostic?: string;
+  updatedAtMs: number;
+}
+
+export interface PluginSensorRecord {
+  pluginId: string;
+  deviceId: string;
+  sensorType: string;
+  displayName: string;
+  value: unknown;
+  unit?: string;
+  operatorRnsIdentity?: string;
+  confidence?: number;
+  connectionState?: string;
+  sampleAtMs: number;
+  staleAfterMs: number;
+  status: "Active" | "Stale" | "Offline";
+  origin: "local" | "remote";
+}
 
 export type SosState = "Idle" | "Countdown" | "Sending" | "Active";
 export type SosTriggerSource =
@@ -779,6 +846,7 @@ export interface NodeClientEvents {
   hubDirectoryUpdated: HubDirectoryUpdatedEvent;
   operationalNotice: NodeOperationalNoticeEvent;
   projectionInvalidated: ProjectionInvalidationEvent;
+  pluginEventPublished: { pluginId: string; event: Record<string, unknown> };
   sosStatusChanged: { status: SosStatusRecord };
   sosAlertChanged: { alert: SosAlertRecord };
   sosTelemetryRequested: Record<string, never>;
@@ -817,6 +885,14 @@ export interface ReticulumNodeClient {
   setActivePropagationNode(destinationHex?: string): Promise<void>;
   requestLxmfSync(limit?: number): Promise<void>;
   listAnnounces(): Promise<AnnounceRecord[]>;
+  refreshPlugins(): Promise<InstalledPluginRecord[]>;
+  listPlugins(): Promise<InstalledPluginRecord[]>;
+  approvePluginPublisher(pluginId: string, displayName?: string): Promise<void>;
+  revokePluginPublisher(fingerprint: string): Promise<void>;
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<void>;
+  grantPluginCapabilities(pluginId: string, capabilities: PluginCapabilityRecord): Promise<void>;
+  openPluginConfiguration(pluginId: string): Promise<void>;
+  listPluginSensors(): Promise<PluginSensorRecord[]>;
   listPeers(): Promise<PeerRecord[]>;
   listConversations(): Promise<ConversationRecord[]>;
   listMessages(conversationId?: string): Promise<MessageRecord[]>;

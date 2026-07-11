@@ -77,6 +77,16 @@ public final class ReticulumBridge {
     public static native String listSosLocationsJson();
     public static native String listSosAudioJson();
     public static native int recordSosAudioJson(String payloadJson);
+    public static native String syncDiscoveredPluginsJson(String payloadJson);
+    public static native String listPluginsJson();
+    public static native int approvePluginPublisherJson(String payloadJson);
+    public static native int revokePluginPublisherJson(String payloadJson);
+    public static native int setPluginEnabledJson(String payloadJson);
+    public static native int grantPluginCapabilitiesJson(String payloadJson);
+    public static native int setPluginRuntimeStateJson(String payloadJson);
+    public static native String listPluginSensorsJson();
+    public static native String handlePluginHostRequestJson(String payloadJson);
+    public static native String decodePluginLxmfFieldsJson(String fieldsBase64);
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();

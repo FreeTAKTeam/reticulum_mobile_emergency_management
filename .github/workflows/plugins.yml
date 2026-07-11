@@ -1,0 +1,86 @@
+name: Plugins
+
+on:
+  push:
+    branches: ["main", "codex/android-plugin-system", "codex/ble-heart-rate-plugin"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  LXMF_RS_REF: d98de3bf3eb71fa386589a6cb2c0bb38f49a69e3
+
+jobs:
+  plugin-system:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: rem
+      - uses: actions/checkout@v6
+        with:
+          repository: FreeTAKTeam/LXMF-rs
+          path: LXMF-rs
+          ref: ${{ env.LXMF_RS_REF }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: rem/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: rustfmt
+      - name: Install dependencies
+        working-directory: rem
+        run: npm ci
+      - name: Check Rust formatting
+        working-directory: rem
+        run: cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+      - name: Test plugin Rust core
+        working-directory: rem
+        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml plugin_ --no-fail-fast
+      - name: Build node client
+        working-directory: rem
+        run: npm --workspace packages/node-client run build
+      - name: Typecheck mobile UI
+        working-directory: rem
+        run: npm --workspace apps/mobile run typecheck
+      - name: Build web and mobile UI
+        working-directory: rem
+        run: npm run web:build && npm run mobile:build
+      - name: Install Playwright Chromium
+        working-directory: rem
+        run: npx playwright install --with-deps chromium
+      - name: Test plugin management UI
+        working-directory: rem
+        env:
+          CHOKIDAR_USEPOLLING: "1"
+        run: npx playwright test e2e/settings.spec.ts --grep "plugin management"
+      - name: Build SDK and fixture APK
+        working-directory: rem/apps/mobile/android
+        run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :app:testDebugUnitTest :app:assembleDebug
+      - name: Exercise plugin discovery and Binder integration
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: |
+            adb install -r rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
+            cd rem/apps/mobile/android
+            bash ./gradlew :app:connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rem-plugin-sdk
+          path: |
+            rem/packages/android-plugin-sdk/build/outputs/aar/rem-plugin-sdk-debug.aar
+            rem/packages/android-plugin-sdk/README.md
+            rem/docs/plugins/android-plugin-system.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rem-plugin-test-fixture
+          path: rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk

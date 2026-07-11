@@ -716,6 +716,128 @@ public class ReticulumNodePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void refreshPlugins(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to refresh plugins.",
+            "Native plugin catalog JSON parse failed.",
+            ReticulumNodeService::refreshPluginsJson
+        );
+    }
+
+    @PluginMethod
+    public void listPlugins(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list plugins.",
+            "Native plugin catalog JSON parse failed.",
+            ReticulumNodeService::listPluginsJson
+        );
+    }
+
+    @PluginMethod
+    public void approvePluginPublisher(PluginCall call) {
+        final String pluginId = call.getString("pluginId", "");
+        if (pluginId.isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("displayName", call.getString("displayName"));
+        runIntServiceCall(
+            call,
+            "Failed to approve plugin publisher.",
+            service -> service.approvePluginPublisherJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void revokePluginPublisher(PluginCall call) {
+        final String fingerprint = call.getString("fingerprint", "");
+        if (fingerprint.isEmpty()) {
+            call.reject("fingerprint is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("fingerprint", fingerprint);
+        runIntServiceCall(
+            call,
+            "Failed to revoke plugin publisher.",
+            service -> service.revokePluginPublisherJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void setPluginEnabled(PluginCall call) {
+        final String pluginId = call.getString("pluginId", "");
+        final Boolean enabled = call.getBoolean("enabled");
+        if (pluginId.isEmpty() || enabled == null) {
+            call.reject("pluginId and enabled are required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("enabled", enabled);
+        runIntServiceCall(
+            call,
+            "Failed to update plugin enablement.",
+            service -> service.setPluginEnabledJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void grantPluginCapabilities(PluginCall call) {
+        final String pluginId = call.getString("pluginId", "");
+        final JSObject capabilities = call.getObject("capabilities");
+        if (pluginId.isEmpty() || capabilities == null) {
+            call.reject("pluginId and capabilities are required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("pluginId", pluginId);
+        payload.put("capabilities", capabilities);
+        runIntServiceCall(
+            call,
+            "Failed to update plugin capabilities.",
+            service -> service.grantPluginCapabilitiesJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void listPluginSensors(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to list plugin sensors.",
+            "Native plugin sensor JSON parse failed.",
+            ReticulumNodeService::listPluginSensorsJson
+        );
+    }
+
+    @PluginMethod
+    public void openPluginConfiguration(PluginCall call) {
+        final String pluginId = call.getString("pluginId", "");
+        if (pluginId.isEmpty()) {
+            call.reject("pluginId is required.");
+            return;
+        }
+        bridgeExecutor.execute(() -> {
+            try {
+                final ReticulumNodeService service = awaitService();
+                final Intent intent = service.pluginConfigurationIntent(pluginId);
+                if (intent == null) {
+                    call.reject("Plugin configuration is unavailable.");
+                    return;
+                }
+                getContext().startActivity(intent);
+                call.resolve();
+            } catch (Exception error) {
+                call.reject("Failed to open plugin configuration.", error);
+            }
+        });
+    }
+
+    @PluginMethod
     public void setActivePropagationNode(PluginCall call) {
         final JSObject payload = new JSObject();
         payload.put("destinationHex", call.getString("destinationHex"));

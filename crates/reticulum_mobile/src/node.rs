@@ -33,14 +33,16 @@ use crate::types::{
     ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
     ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord,
-    EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot, HubMode,
-    LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalSummary, PeerRecord,
-    ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord,
-    SendLxmfRequest, SendMode, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord,
-    SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord,
-    SosTriggerSource, SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
+    ChecklistUpdateRequest, ConversationRecord, DiscoveredPluginRecord, EamProjectionRecord,
+    EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord,
+    HubDirectorySnapshot, HubMode, InstalledPluginRecord, LegacyImportPayload, LogLevel,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginEventRecord,
+    PluginLxmfSendRequest, PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation,
+    ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
+    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
+    TelemetryPositionRecord, TransportDeliveryState,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -5465,6 +5467,167 @@ impl Node {
     pub fn get_telemetry_positions(&self) -> Result<Vec<TelemetryPositionRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
         inner.app_state.get_telemetry_positions()
+    }
+
+    pub fn list_plugins(&self) -> Result<Vec<InstalledPluginRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.list_plugins()
+    }
+
+    pub fn sync_discovered_plugins(
+        &self,
+        plugins: Vec<DiscoveredPluginRecord>,
+    ) -> Result<Vec<InstalledPluginRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner
+            .app_state
+            .sync_discovered_plugins(plugins.as_slice())?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        inner.app_state.list_plugins()
+    }
+
+    pub fn approve_plugin_publisher(
+        &self,
+        plugin_id: &str,
+        display_name: Option<&str>,
+    ) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner
+            .app_state
+            .approve_plugin_publisher(plugin_id, display_name)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn revoke_plugin_publisher(&self, fingerprint: &str) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner.app_state.revoke_plugin_publisher(fingerprint)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner.app_state.set_plugin_enabled(plugin_id, enabled)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn grant_plugin_capabilities(
+        &self,
+        plugin_id: &str,
+        capabilities: PluginCapabilityRecord,
+    ) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner
+            .app_state
+            .grant_plugin_capabilities(plugin_id, capabilities)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn set_plugin_runtime_state(
+        &self,
+        plugin_id: &str,
+        state: &str,
+        diagnostic: Option<String>,
+    ) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let invalidation = inner
+            .app_state
+            .set_plugin_runtime_state(plugin_id, state, diagnostic)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(())
+    }
+
+    pub fn list_plugin_sensors(&self) -> Result<Vec<PluginSensorRecord>, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        inner.app_state.list_plugin_sensors()
+    }
+
+    pub fn record_plugin_sensor(
+        &self,
+        plugin_id: &str,
+        sample: PluginSensorSampleRequest,
+    ) -> Result<PluginSensorRecord, NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let (record, invalidation) = inner.app_state.record_plugin_sensor(plugin_id, sample)?;
+        emit_projection_invalidation(&inner.bus, invalidation);
+        Ok(record)
+    }
+
+    pub fn publish_plugin_event(&self, plugin_id: &str, event: JsonValue) -> Result<(), NodeError> {
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let plugin = inner
+            .app_state
+            .get_plugin(plugin_id)?
+            .ok_or(NodeError::InvalidConfig {})?;
+        if !plugin.trusted
+            || !plugin.enabled
+            || !plugin.discovered.declared_capabilities.events_publish
+            || !plugin.granted_capabilities.events_publish
+            || !event.is_object()
+        {
+            return Err(NodeError::InvalidConfig {});
+        }
+        inner.bus.emit(NodeEvent::PluginEventPublished {
+            event: PluginEventRecord {
+                plugin_id: plugin_id.to_string(),
+                event_json: serde_json::to_string(&event)
+                    .map_err(|_| NodeError::InvalidConfig {})?,
+            },
+        });
+        Ok(())
+    }
+
+    pub fn send_plugin_lxmf(&self, request: PluginLxmfSendRequest) -> Result<(), NodeError> {
+        let fields_bytes = {
+            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let plugin = inner
+                .app_state
+                .get_plugin(request.plugin_id.as_str())?
+                .ok_or(NodeError::InvalidConfig {})?;
+            if !plugin.trusted
+                || !plugin.enabled
+                || !plugin.discovered.declared_capabilities.lxmf_send
+                || !plugin.granted_capabilities.lxmf_send
+            {
+                return Err(NodeError::InvalidConfig {});
+            }
+            crate::plugin_runtime::encode_plugin_fields(
+                &plugin,
+                request.message_name.as_str(),
+                request.payload.clone(),
+            )?
+        };
+        self.send_bytes(
+            request.destination_hex,
+            request.body_utf8.into_bytes(),
+            Some(fields_bytes),
+            request.send_mode,
+        )
+    }
+
+    pub fn decode_plugin_lxmf_fields(
+        &self,
+        fields_bytes: &[u8],
+    ) -> Result<Option<crate::plugin_runtime::PluginLxmfEnvelope>, NodeError> {
+        let Some(plugin_id) = crate::plugin_runtime::plugin_id_from_fields(fields_bytes)? else {
+            return Ok(None);
+        };
+        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let plugin = inner
+            .app_state
+            .get_plugin(plugin_id.as_str())?
+            .ok_or(NodeError::InvalidConfig {})?;
+        if !plugin.trusted
+            || !plugin.enabled
+            || !plugin.discovered.declared_capabilities.lxmf_receive
+            || !plugin.granted_capabilities.lxmf_receive
+        {
+            return Err(NodeError::InvalidConfig {});
+        }
+        crate::plugin_runtime::decode_plugin_fields(fields_bytes, &plugin)
     }
 
     pub fn record_local_telemetry_fix(

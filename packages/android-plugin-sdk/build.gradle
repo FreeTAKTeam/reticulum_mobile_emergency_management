@@ -1,0 +1,25 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'network.reticulum.emergency.plugin.api'
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 23
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+
+    buildFeatures {
+        aidl true
+        buildConfig true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.9.1'
+    testImplementation 'junit:junit:4.13.2'
+}

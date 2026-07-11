@@ -133,7 +133,9 @@ enum ProjectionScope {
   "Conversations",
   "Messages",
   "Telemetry",
-  "Sos"
+  "Sos",
+  "Plugins",
+  "PluginSensors"
 };
 
 // Error surface.
@@ -800,6 +802,11 @@ dictionary OperationalNotice {
   u64 at_ms;
 };
 
+dictionary PluginEventRecord {
+  string plugin_id;
+  string event_json;
+};
+
 // Event stream from the node to the UI.
 [Enum]
 interface NodeEvent {
@@ -827,6 +834,7 @@ interface NodeEvent {
   HubDirectoryUpdated(HubDirectorySnapshot snapshot);
   OperationalNotice(OperationalNotice notice);
   ProjectionInvalidated(ProjectionInvalidation invalidation);
+  PluginEventPublished(PluginEventRecord event);
   SosStatusChanged(SosStatusRecord status);
   SosAlertChanged(SosAlertRecord alert);
   SosTelemetryRequested();
