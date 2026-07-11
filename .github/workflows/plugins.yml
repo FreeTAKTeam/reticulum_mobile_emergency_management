@@ -78,20 +78,24 @@ jobs:
           cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --release --target x86_64-linux-android
           mkdir -p apps/mobile/android/app/src/main/jniLibs/x86_64
           cp crates/reticulum_mobile/target/x86_64-linux-android/release/libreticulum_mobile.so apps/mobile/android/app/src/main/jniLibs/x86_64/
-      - name: Build SDK and fixture APK
+      - name: Build REM, SDK, and plugin APKs
         working-directory: rem/apps/mobile/android
         run: |
-          REM_DEBUG_FINGERPRINT="$(bash ./gradlew -q :app:signingReport \
-            | awk -F': ' '/^Variant: debug$/{debug=1; next} debug && /^SHA-256:/{print $2; exit}')"
+          bash ./gradlew :app:testDebugUnitTest :app:assembleDebug
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" \
+            -mindepth 2 -maxdepth 2 -type f -name apksigner \
+            | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          REM_DEBUG_FINGERPRINT="$("$APKSIGNER" verify --print-certs \
+            app/build/outputs/apk/debug/app-debug.apk \
+            | awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print $2; exit}')"
           test -n "$REM_DEBUG_FINGERPRINT"
           bash ./gradlew -PremHostFingerprints="$REM_DEBUG_FINGERPRINT" \
             :rem-plugin-sdk:assembleDebug \
             :rem-plugin-sdk:testDebugUnitTest \
             :plugin-test-fixture:assembleDebug \
             :ble-heart-rate-plugin:testDebugUnitTest \
-            :ble-heart-rate-plugin:assembleDebug \
-            :app:testDebugUnitTest \
-            :app:assembleDebug
+            :ble-heart-rate-plugin:assembleDebug
       - name: Enable emulator hardware acceleration
         run: sudo chmod 666 /dev/kvm || true
       - name: Exercise plugin discovery and Binder integration
