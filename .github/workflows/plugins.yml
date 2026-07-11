@@ -64,6 +64,18 @@ jobs:
       - name: Synchronize Capacitor Android project
         working-directory: rem/apps/mobile
         run: npx cap sync android
+      - name: Build x86_64 native bridge for emulator
+        working-directory: rem
+        run: |
+          rustup target add x86_64-linux-android
+          NDK_DIR="$(find "$ANDROID_SDK_ROOT/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$NDK_BIN/x86_64-linux-android21-clang"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK_BIN/x86_64-linux-android21-clang"
+          export CC_x86_64_linux_android="$NDK_BIN/x86_64-linux-android21-clang"
+          cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --release --target x86_64-linux-android
+          mkdir -p apps/mobile/android/app/src/main/jniLibs/x86_64
+          cp crates/reticulum_mobile/target/x86_64-linux-android/release/libreticulum_mobile.so apps/mobile/android/app/src/main/jniLibs/x86_64/
       - name: Build SDK and fixture APK
         working-directory: rem/apps/mobile/android
         run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :app:testDebugUnitTest :app:assembleDebug
@@ -74,7 +86,7 @@ jobs:
           arch: x86_64
           script: |
             adb install -r rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
-            bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:connectedDebugAndroidTest
+            bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=network.reticulum.emergency.plugins.PluginBinderIntegrationTest
       - uses: actions/upload-artifact@v4
         with:
           name: rem-plugin-sdk
