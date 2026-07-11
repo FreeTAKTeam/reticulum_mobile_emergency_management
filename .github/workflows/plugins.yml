@@ -81,13 +81,8 @@ jobs:
       - name: Build SDK and fixture APK
         working-directory: rem/apps/mobile/android
         run: |
-          bash ./gradlew :app:validateSigningDebug
-          REM_DEBUG_FINGERPRINT="$(keytool -list -v \
-            -keystore "$HOME/.android/debug.keystore" \
-            -alias androiddebugkey \
-            -storepass android \
-            -keypass android \
-            | awk -F': ' '/SHA256:/{print $2; exit}')"
+          REM_DEBUG_FINGERPRINT="$(bash ./gradlew -q :app:signingReport \
+            | awk -F': ' '/^Variant: debug$/{debug=1; next} debug && /^SHA-256:/{print $2; exit}')"
           test -n "$REM_DEBUG_FINGERPRINT"
           bash ./gradlew -PremHostFingerprints="$REM_DEBUG_FINGERPRINT" \
             :rem-plugin-sdk:assembleDebug \
