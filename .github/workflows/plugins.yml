@@ -2,7 +2,7 @@ name: Plugins
 
 on:
   push:
-    branches: ["main", "codex/android-plugin-system", "codex/ble-heart-rate-plugin"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
@@ -61,6 +61,9 @@ jobs:
         env:
           CHOKIDAR_USEPOLLING: "1"
         run: npx playwright test e2e/settings.spec.ts --grep "plugin management"
+      - name: Synchronize Capacitor Android project
+        working-directory: rem/apps/mobile
+        run: npx cap sync android
       - name: Build SDK and fixture APK
         working-directory: rem/apps/mobile/android
         run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :app:testDebugUnitTest :app:assembleDebug
