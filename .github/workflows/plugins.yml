@@ -81,6 +81,8 @@ jobs:
       - name: Build SDK and fixture APK
         working-directory: rem/apps/mobile/android
         run: bash ./gradlew :rem-plugin-sdk:assembleDebug :rem-plugin-sdk:testDebugUnitTest :plugin-test-fixture:assembleDebug :app:testDebugUnitTest :app:assembleDebug
+      - name: Enable emulator hardware acceleration
+        run: sudo chmod 666 /dev/kvm || true
       - name: Exercise plugin discovery and Binder integration
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -88,7 +90,9 @@ jobs:
           arch: x86_64
           script: |
             adb install -r rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
-            bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=network.reticulum.emergency.plugins.PluginBinderIntegrationTest
+            bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:installDebug :app:installDebugAndroidTest
+            adb logcat -c
+            adb shell am instrument -w -r -e class network.reticulum.emergency.plugins.PluginBinderIntegrationTest network.reticulum.emergency.test/androidx.test.runner.AndroidJUnitRunner || { adb logcat -d '*:E'; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: rem-plugin-sdk
