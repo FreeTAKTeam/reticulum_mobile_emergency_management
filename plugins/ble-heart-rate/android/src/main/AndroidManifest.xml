@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <package android:name="${remHostPackage}" />
+    </queries>
+
+    <application android:label="REM BLE Heart Rate" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service
+            android:name=".HeartRatePluginService"
+            android:exported="true"
+            android:foregroundServiceType="connectedDevice">
+            <intent-filter>
+                <action android:name="network.reticulum.emergency.PLUGIN_V1" />
+            </intent-filter>
+            <meta-data android:name="rem.plugin.id" android:value="org.freetakteam.rem.plugin.ble_heart_rate" />
+            <meta-data android:name="rem.plugin.displayName" android:value="BLE Heart Rate" />
+            <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
+            <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
+            <meta-data android:name="rem.plugin.apiMinor" android:value="0" />
+            <meta-data android:name="rem.plugin.capabilities" android:value="{&quot;sensorsPublish&quot;:true,&quot;lxmfSend&quot;:true,&quot;lxmfReceive&quot;:true,&quot;notificationsRaise&quot;:true}" />
+            <meta-data android:name="rem.plugin.messages" android:value="[{&quot;name&quot;:&quot;heart_rate_sample&quot;,&quot;version&quot;:&quot;1.0.0&quot;,&quot;send&quot;:true,&quot;receive&quot;:true,&quot;schema&quot;:{&quot;type&quot;:&quot;object&quot;,&quot;required&quot;:[&quot;bpm&quot;,&quot;deviceId&quot;,&quot;measuredAtMs&quot;],&quot;properties&quot;:{&quot;bpm&quot;:{&quot;type&quot;:&quot;integer&quot;},&quot;deviceId&quot;:{&quot;type&quot;:&quot;string&quot;},&quot;alias&quot;:{&quot;type&quot;:&quot;string&quot;},&quot;operatorRnsIdentity&quot;:{&quot;type&quot;:&quot;string&quot;},&quot;measuredAtMs&quot;:{&quot;type&quot;:&quot;integer&quot;}},&quot;additionalProperties&quot;:false}}]" />
+            <meta-data android:name="rem.plugin.configurationEntrypoint" android:value="rem-plugin-config/index.html" />
+        </service>
+        <activity android:name=".PairingActivity" android:exported="true" />
+    </application>
+</manifest>
