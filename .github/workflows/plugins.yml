@@ -73,6 +73,8 @@ jobs:
           test -x "$NDK_BIN/x86_64-linux-android21-clang"
           export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK_BIN/x86_64-linux-android21-clang"
           export CC_x86_64_linux_android="$NDK_BIN/x86_64-linux-android21-clang"
+          export AR_x86_64_linux_android="$NDK_BIN/llvm-ar"
+          export RANLIB_x86_64_linux_android="$NDK_BIN/llvm-ranlib"
           cargo build --manifest-path crates/reticulum_mobile/Cargo.toml --release --target x86_64-linux-android
           mkdir -p apps/mobile/android/app/src/main/jniLibs/x86_64
           cp crates/reticulum_mobile/target/x86_64-linux-android/release/libreticulum_mobile.so apps/mobile/android/app/src/main/jniLibs/x86_64/
