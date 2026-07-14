@@ -9,6 +9,7 @@ application behavior.
 
 - First-party source and test files checked: 180
 - Files above 500 physical lines: 38
+- Class declarations above 500 physical lines: 5
 - Largest files:
   - `crates/reticulum_mobile/src/runtime.rs`: 15,012 lines
   - `crates/reticulum_mobile/src/node.rs`: 13,044 lines
@@ -18,6 +19,8 @@ application behavior.
 
 Generated bindings, build output, vendored source, copied third-party Android
 code, and the Stitch visual-reference scripts are excluded from the gate.
+File and class exceptions are tracked independently so an oversized file cannot
+hide a new or growing oversized class.
 
 ## Web build
 
