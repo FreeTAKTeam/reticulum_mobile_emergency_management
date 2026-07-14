@@ -2,7 +2,6 @@
   "apps/mobile/src/stores/messagingStore.ts": 1362,
   "apps/mobile/src/stores/nodeStore.ts": 3505,
   "apps/mobile/src/views/SettingsView.vue": 2200,
-  "apps/mobile/src/views/TelemetryMapView.vue": 1389,
   "packages/node-client/src/contracts.ts": 1024,
   "packages/node-client/src/index.ts": 4555
 }
