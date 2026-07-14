@@ -42,6 +42,10 @@ jobs:
         working-directory: rem
         run: npm ci
 
+      - name: Enforce first-party source size
+        working-directory: rem
+        run: npm run check:source-size
+
       - name: Build node client
         working-directory: rem
         run: npm run node-client:build
