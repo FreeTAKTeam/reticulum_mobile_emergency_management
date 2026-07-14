@@ -3,7 +3,7 @@
     "ReticulumNodePlugin": 1523
   },
   "apps/mobile/android/app/src/main/java/network/reticulum/emergency/ReticulumNodeService.java": {
-    "ReticulumNodeService": 1306
+    "ReticulumNodeService": 1013
   },
   "packages/node-client/src/index.ts": {
     "CapacitorReticulumNodeClient": 691,
