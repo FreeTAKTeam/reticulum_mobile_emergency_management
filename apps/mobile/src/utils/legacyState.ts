@@ -17,6 +17,27 @@ import type {
 
 import type { NodeUiSettings } from "../types/domain";
 import {
+  asRecord,
+  asTrimmedString,
+  LEGACY_EAM_STORAGE_KEY,
+  LEGACY_EVENT_STORAGE_KEY,
+  LEGACY_INBOX_STORAGE_KEY,
+  LEGACY_SAVED_STORAGE_KEY,
+  LEGACY_SETTINGS_STORAGE_KEY,
+  LEGACY_TELEMETRY_STORAGE_KEY,
+  nowMs,
+  optionalNumber,
+  readJson,
+  UI_SETTINGS_STORAGE_KEY,
+} from "./legacyStorage";
+import {
+  APPLICATION_ACK_STATES,
+  MESSAGE_DIRECTIONS,
+  MESSAGE_METHODS,
+  MESSAGE_STATES,
+  TRANSPORT_DELIVERY_STATES,
+} from "./legacyMessageStates";
+import {
   ensureRequiredAnnounceCapabilities,
   isValidDestinationHex,
   normalizeDestinationHex,
@@ -34,13 +55,15 @@ import {
 } from "./tcpCommunityServers";
 import { DEFAULT_RNODE_SETTINGS, normalizeRnodeSettings } from "./rnodeProfiles";
 
-export const LEGACY_SETTINGS_STORAGE_KEY = "reticulum.mobile.settings.v1";
-export const LEGACY_SAVED_STORAGE_KEY = "reticulum.mobile.savedPeers.v1";
-export const LEGACY_EAM_STORAGE_KEY = "reticulum.mobile.messages.v1";
-export const LEGACY_EVENT_STORAGE_KEY = "reticulum.mobile.events.v1";
-export const LEGACY_INBOX_STORAGE_KEY = "reticulum.mobile.inbox.v1";
-export const LEGACY_TELEMETRY_STORAGE_KEY = "reticulum.mobile.telemetry.v1";
-export const UI_SETTINGS_STORAGE_KEY = "reticulum.mobile.uiSettings.v1";
+export {
+  LEGACY_EAM_STORAGE_KEY,
+  LEGACY_EVENT_STORAGE_KEY,
+  LEGACY_INBOX_STORAGE_KEY,
+  LEGACY_SAVED_STORAGE_KEY,
+  LEGACY_SETTINGS_STORAGE_KEY,
+  LEGACY_TELEMETRY_STORAGE_KEY,
+  UI_SETTINGS_STORAGE_KEY,
+} from "./legacyStorage";
 
 export interface NodeUiPreferences {
   clientMode: NodeUiSettings["clientMode"];
@@ -51,84 +74,7 @@ export interface LegacyProjectionState {
   uiSettings: NodeUiPreferences;
 }
 
-type JsonRecord = Record<string, unknown>;
-
-const MESSAGE_METHODS = new Set<MessageMethod>(["Direct", "Opportunistic", "Propagated", "Resource"]);
-const MESSAGE_STATES = new Set<MessageState>([
-  "Queued",
-  "PathRequested",
-  "LinkEstablishing",
-  "Sending",
-  "SentDirect",
-  "SentToPropagation",
-  "Delivered",
-  "Failed",
-  "TimedOut",
-  "Cancelled",
-  "Received",
-]);
-const MESSAGE_DIRECTIONS = new Set<MessageDirection>(["Inbound", "Outbound"]);
-const TRANSPORT_DELIVERY_STATES = new Set<TransportDeliveryState>([
-  "Queued",
-  "Sending",
-  "SentDirect",
-  "SentToPropagation",
-  "TransportDelivered",
-  "Failed",
-  "TimedOut",
-  "Cancelled",
-]);
-const APPLICATION_ACK_STATES = new Set<ApplicationAckState>([
-  "NotRequired",
-  "Waiting",
-  "Accepted",
-  "Completed",
-  "Rejected",
-  "Failed",
-]);
-const HUB_MODES = new Set<string>([
-  "Autonomous",
-  "SemiAutonomous",
-  "Connected",
-  "Disabled",
-  "RchLxmf",
-  "RchHttp",
-]);
-
-function nowMs(): number {
-  return Date.now();
-}
-
-function readJson<T>(key: string): T | null {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) {
-      return null;
-    }
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function asRecord(value: unknown): JsonRecord | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonRecord;
-}
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
-}
+const HUB_MODES = new Set<string>(["Autonomous", "SemiAutonomous", "Connected", "Disabled", "RchLxmf", "RchHttp"]);
 
 function normalizeClientMode(
   value: unknown,
