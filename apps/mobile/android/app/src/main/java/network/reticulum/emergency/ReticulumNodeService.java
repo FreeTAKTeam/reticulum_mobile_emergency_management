@@ -28,8 +28,6 @@ import network.reticulum.emergency.plugins.PluginCoordinator;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.Locale;
-import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -59,11 +57,8 @@ public final class ReticulumNodeService extends Service {
     private static final long FOREGROUND_NOTIFICATION_MIN_UPDATE_MS = 5_000L;
 
     private final IBinder binder = new LocalBinder();
-    private final CopyOnWriteArraySet<ServiceEventListener> listeners = new CopyOnWriteArraySet<>();
     private final AtomicBoolean appUiForeground = new AtomicBoolean(false);
-    private final AtomicBoolean pollerRunning = new AtomicBoolean(false);
     private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
-    private final ExecutorService pollerExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService restoreExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Application.ActivityLifecycleCallbacks activityLifecycleCallbacks =
@@ -113,10 +108,6 @@ public final class ReticulumNodeService extends Service {
     private String storageDir = "";
     private String lastResolvedConfigJson = "";
     private String lastCanonicalConfigJson = "";
-    private String latestStatusJson = "";
-    private String latestSyncStatusJson = "";
-    private String latestSosStatusJson = "";
-    private String latestRuntimeErrorJson = "";
     private long lastForegroundNotificationUpdateMs = 0L;
     private String lastForegroundNotificationFingerprint = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
@@ -124,6 +115,7 @@ public final class ReticulumNodeService extends Service {
     private PluginCoordinator pluginCoordinator;
     private ServiceNotificationController notificationController;
     private RuntimeConfigResolver configResolver;
+    private ServiceEventCoordinator eventCoordinator;
 
     @Override
     public void onCreate() {
@@ -137,18 +129,23 @@ public final class ReticulumNodeService extends Service {
             mainHandler,
             restoreExecutor,
             this::isAppUiForeground,
-            () -> latestStatusJson
+            this::latestStatusJson
         );
         notificationController.createChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
         watchStatusServer = new RemWatchStatusServer();
         pluginCoordinator = new PluginCoordinator(this);
         pluginCoordinator.refresh();
+        eventCoordinator = new ServiceEventCoordinator(
+            mainHandler,
+            notificationController,
+            pluginCoordinator,
+            sosPlatformCoordinator,
+            this::isAppUiForeground,
+            this::updateForegroundNotification
+        );
         getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
-        latestStatusJson = safeStatusJson();
-        latestSyncStatusJson = safeSyncStatusJson();
-        latestSosStatusJson = safeSosStatusJson();
-        applyCurrentSosPlatformSettings();
+        eventCoordinator.refreshLatestRuntimeState();
         applyWatchStatusServerSettings();
     }
 
@@ -181,7 +178,9 @@ public final class ReticulumNodeService extends Service {
 
     @Override
     public void onDestroy() {
-        stopPoller();
+        if (eventCoordinator != null) {
+            eventCoordinator.close();
+        }
         if (watchStatusServer != null) {
             watchStatusServer.stop();
         }
@@ -193,7 +192,6 @@ public final class ReticulumNodeService extends Service {
         }
         getApplication().unregisterActivityLifecycleCallbacks(activityLifecycleCallbacks);
         restoreExecutor.shutdownNow();
-        pollerExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -213,21 +211,11 @@ public final class ReticulumNodeService extends Service {
     }
 
     public void addListener(ServiceEventListener listener) {
-        if (listener == null) {
-            return;
-        }
-        listeners.add(listener);
-        mainHandler.post(() -> {
-            emitCachedState(listener);
-            emitProjectionRefreshSweep(listener);
-        });
+        eventCoordinator.addListener(listener);
     }
 
     public void removeListener(ServiceEventListener listener) {
-        if (listener == null) {
-            return;
-        }
-        listeners.remove(listener);
+        eventCoordinator.removeListener(listener);
     }
 
     public void setAppUiForeground(boolean foreground) {
@@ -247,11 +235,11 @@ public final class ReticulumNodeService extends Service {
             if (isNodeRunning()) {
                 if (resolved.canonicalConfig.equals(lastCanonicalConfigJson)) {
                     persistDesiredRunning(true, resolved);
-                    ensurePoller();
-                    refreshLatestRuntimeState();
+                    eventCoordinator.start();
+                    eventCoordinator.refreshLatestRuntimeState();
                     startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-                    emitCachedStateToAll();
-                    emitProjectionRefreshSweepToAll();
+                    eventCoordinator.emitCachedStateToAll();
+                    eventCoordinator.emitProjectionRefreshSweepToAll();
                     pluginCoordinator.setNodeRunning(true);
                     return 0;
                 }
@@ -271,18 +259,18 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
-            clearRuntimeReadinessFailure();
+            eventCoordinator.clearRuntimeReadinessFailure();
             notificationController.primeOperationalState();
-            refreshLatestRuntimeState();
-            ensurePoller();
+            eventCoordinator.refreshLatestRuntimeState();
+            eventCoordinator.start();
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            emitCachedStateToAll();
-            emitProjectionRefreshSweepToAll();
+            eventCoordinator.emitCachedStateToAll();
+            eventCoordinator.emitProjectionRefreshSweepToAll();
             pluginCoordinator.setNodeRunning(true);
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to start node", ex);
-            reportRuntimeReadinessFailure(
+            eventCoordinator.reportRuntimeReadinessFailure(
                 "InternalError",
                 "node runtime failed during start: " + ex.getMessage()
             );
@@ -292,13 +280,13 @@ public final class ReticulumNodeService extends Service {
     }
 
     public int stopNode() {
-        stopPoller();
+        eventCoordinator.stop();
         pluginCoordinator.setNodeRunning(false);
         final int result = ReticulumBridge.stop();
         clearDesiredRunning();
-        clearRuntimeReadinessFailure();
-        refreshLatestRuntimeState();
-        emitCachedStateToAll();
+        eventCoordinator.clearRuntimeReadinessFailure();
+        eventCoordinator.refreshLatestRuntimeState();
+        eventCoordinator.emitCachedStateToAll();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
         return result;
@@ -316,18 +304,18 @@ public final class ReticulumNodeService extends Service {
             lastResolvedConfigJson = resolved.resolvedJson;
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
-            clearRuntimeReadinessFailure();
+            eventCoordinator.clearRuntimeReadinessFailure();
             notificationController.primeOperationalState();
-            refreshLatestRuntimeState();
-            ensurePoller();
+            eventCoordinator.refreshLatestRuntimeState();
+            eventCoordinator.start();
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            emitCachedStateToAll();
-            emitProjectionRefreshSweepToAll();
+            eventCoordinator.emitCachedStateToAll();
+            eventCoordinator.emitProjectionRefreshSweepToAll();
             pluginCoordinator.setNodeRunning(true);
             return 0;
         } catch (Exception ex) {
             Logger.error(TAG, "Failed to restart node", ex);
-            reportRuntimeReadinessFailure(
+            eventCoordinator.reportRuntimeReadinessFailure(
                 "InternalError",
                 "node runtime failed during restart: " + ex.getMessage()
             );
@@ -485,7 +473,7 @@ public final class ReticulumNodeService extends Service {
 
     public int setWatchStatusServerSettingsJson(String payloadJson) {
         try {
-            final JSONObject payload = new JSONObject(nonEmptyJson(payloadJson, "{}"));
+            final JSONObject payload = new JSONObject(JsonPayloads.orFallback(payloadJson, "{}"));
             final RemWatchStatusServerSettings current = readWatchStatusServerSettings();
             final boolean enabled = payload.has("enabled") ? payload.optBoolean("enabled", current.enabled) : current.enabled;
             final int requestedPort = payload.has("port") ? payload.optInt("port", current.port) : current.port;
@@ -638,7 +626,7 @@ public final class ReticulumNodeService extends Service {
     public int setSosSettingsJson(String payloadJson) {
         final int result = ReticulumBridge.setSosSettingsJson(payloadJson);
         if (result == 0) {
-            applyCurrentSosPlatformSettings();
+            eventCoordinator.applyCurrentSosPlatformSettings();
         }
         return result;
     }
@@ -726,7 +714,7 @@ public final class ReticulumNodeService extends Service {
             if (restoreCompleted.get() || !restoreRunning.get()) {
                 return;
             }
-            reportRuntimeReadinessFailure(
+            eventCoordinator.reportRuntimeReadinessFailure(
                 "InternalError",
                 "node runtime restore timed out after " + RUNTIME_RESTORE_TIMEOUT_MS + "ms"
             );
@@ -734,25 +722,25 @@ public final class ReticulumNodeService extends Service {
         restoreExecutor.execute(() -> {
             try {
                 if (isNodeRunning()) {
-                    ensurePoller();
-                    clearRuntimeReadinessFailure();
-                    refreshLatestRuntimeState();
+                    eventCoordinator.start();
+                    eventCoordinator.clearRuntimeReadinessFailure();
+                    eventCoordinator.refreshLatestRuntimeState();
                     startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-                    emitCachedStateToAll();
-                    emitProjectionRefreshSweepToAll();
+                    eventCoordinator.emitCachedStateToAll();
+                    eventCoordinator.emitProjectionRefreshSweepToAll();
                     return;
                 }
 
                 final int result = startNode(persistedConfig);
                 if (result != 0) {
-                    reportRuntimeReadinessFailure(
+                    eventCoordinator.reportRuntimeReadinessFailure(
                         "InternalError",
                         "node runtime failed to restore after " + reason
                     );
                 }
             } catch (Exception ex) {
                 Logger.error(TAG, "Failed to restore node after " + reason, ex);
-                reportRuntimeReadinessFailure(
+                eventCoordinator.reportRuntimeReadinessFailure(
                     "InternalError",
                     "node runtime failed to restore after " + reason + ": " + ex.getMessage()
                 );
@@ -772,7 +760,9 @@ public final class ReticulumNodeService extends Service {
 
     private boolean isNodeRunning() {
         try {
-            final JSONObject payload = new JSONObject(nonEmptyJson(ReticulumBridge.getStatusJson(), "{}"));
+            final JSONObject payload = new JSONObject(
+                JsonPayloads.orFallback(ReticulumBridge.getStatusJson(), "{}")
+            );
             return payload.optBoolean("running", false);
         } catch (JSONException ex) {
             return false;
@@ -801,7 +791,7 @@ public final class ReticulumNodeService extends Service {
     }
 
     private void cleanupFailedRuntimeStart() {
-        stopPoller();
+        eventCoordinator.stop();
         pluginCoordinator.setNodeRunning(false);
         try {
             ReticulumBridge.stop();
@@ -809,18 +799,18 @@ public final class ReticulumNodeService extends Service {
             Log.w(TAG, "Failed to stop native runtime after start failure", ex);
         }
         clearDesiredRunning();
-        refreshLatestRuntimeState();
-        emitCachedStateToAll();
+        eventCoordinator.refreshLatestRuntimeState();
+        eventCoordinator.emitCachedStateToAll();
         stopForegroundAndSelf(0);
     }
 
     private synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
-        reportRuntimeReadinessFailure(
+        eventCoordinator.reportRuntimeReadinessFailure(
             "InternalError",
             "node runtime foreground service timed out; stopping Reticulum node service. type="
                 + foregroundServiceType
         );
-        stopPoller();
+        eventCoordinator.stop();
         pluginCoordinator.setNodeRunning(false);
         try {
             ReticulumBridge.stop();
@@ -828,52 +818,9 @@ public final class ReticulumNodeService extends Service {
             Log.w(TAG, "Failed to stop native runtime after foreground service timeout", ex);
         }
         clearDesiredRunning();
-        refreshLatestRuntimeState();
-        emitCachedStateToAll();
+        eventCoordinator.refreshLatestRuntimeState();
+        eventCoordinator.emitCachedStateToAll();
         stopForegroundAndSelf(startId);
-    }
-
-    private void clearRuntimeReadinessFailure() {
-        latestRuntimeErrorJson = "";
-    }
-
-    private void reportRuntimeReadinessFailure(String code, String message) {
-        final String safeCode = code == null || code.trim().isEmpty() ? "InternalError" : code;
-        final String safeMessage =
-            message == null || message.trim().isEmpty() ? "node runtime failed" : message;
-        Log.e(TAG, safeMessage);
-        final JSObject errorPayload = new JSObject();
-        errorPayload.put("code", safeCode);
-        errorPayload.put("message", safeMessage);
-        latestRuntimeErrorJson = errorPayload.toString();
-        latestStatusJson = statusJsonWithLastError(safeMessage);
-        dispatchEventToListeners("error", errorPayload);
-        final JSObject statusPayload = new JSObject();
-        try {
-            statusPayload.put("status", new JSObject(nonEmptyJson(latestStatusJson, "{}")));
-        } catch (JSONException ignored) {
-            statusPayload.put("status", new JSObject());
-        }
-        dispatchEventToListeners("statusChanged", statusPayload);
-        updateForegroundNotification();
-    }
-
-    private String statusJsonWithLastError(String message) {
-        try {
-            final JSONObject status = new JSONObject(nonEmptyJson(ReticulumBridge.getStatusJson(), "{}"));
-            status.put("running", false);
-            status.put("lastError", message);
-            return status.toString();
-        } catch (JSONException ex) {
-            final JSONObject status = new JSONObject();
-            try {
-                status.put("running", false);
-                status.put("lastError", message);
-            } catch (JSONException ignored) {
-                return "{\"running\":false}";
-            }
-            return status.toString();
-        }
     }
 
     private void stopForegroundAndSelf(int startId) {
@@ -895,232 +842,15 @@ public final class ReticulumNodeService extends Service {
         if (result != 0) {
             Logger.error(
                 TAG,
-                "Failed to initialize bridge storage: " + nonEmptyJson(ReticulumBridge.takeLastErrorJson(), "unknown"),
+                "Failed to initialize bridge storage: "
+                    + JsonPayloads.orFallback(ReticulumBridge.takeLastErrorJson(), "unknown"),
                 null
             );
         }
     }
 
-    private void ensurePoller() {
-        if (!pollerRunning.compareAndSet(false, true)) {
-            return;
-        }
-
-        pollerExecutor.execute(() -> {
-            while (pollerRunning.get()) {
-                try {
-                    final String raw = ReticulumBridge.nextEventJson(500);
-                    if (raw == null || raw.isEmpty()) {
-                        continue;
-                    }
-
-                    final JSONObject envelope = new JSONObject(raw);
-                    final String eventName = envelope.optString("event", "");
-                    JSONObject payload = envelope.optJSONObject("payload");
-                    if (payload == null) {
-                        payload = new JSONObject();
-                    }
-                    handleNativeEvent(eventName, new JSObject(payload.toString()));
-                } catch (Exception ex) {
-                    Logger.error(TAG, "Service event poll loop error", ex);
-                }
-            }
-        });
-    }
-
-    private void stopPoller() {
-        pollerRunning.set(false);
-    }
-
-    private void handleNativeEvent(String eventName, JSObject payload) {
-        if (eventName == null || eventName.isEmpty()) {
-            return;
-        }
-        mirrorEventToLogcat(eventName, payload);
-        updateCachedState(eventName, payload);
-        if ("packetReceived".equals(eventName) && pluginCoordinator != null) {
-            final String fieldsBase64 = payload.getString("fieldsBase64", "");
-            if (!fieldsBase64.isEmpty()) {
-                final String decoded = ReticulumBridge.decodePluginLxmfFieldsJson(fieldsBase64);
-                if (decoded != null && !decoded.isEmpty() && !"null".equals(decoded)) {
-                    try {
-                        pluginCoordinator.dispatchPluginLxmf(new JSONObject(decoded));
-                    } catch (JSONException error) {
-                        Logger.error(TAG, "Invalid plugin LXMF envelope", error);
-                    }
-                }
-            }
-        }
-        dispatchEventToListeners(eventName, payload);
-        final boolean uiForeground = isAppUiForeground();
-        if ("sosAlertChanged".equals(eventName)) {
-            notificationController.handleSosAlert(payload, !uiForeground);
-        } else if (!uiForeground) {
-            notificationController.handleInboundUpdate(eventName, payload);
-        }
-        if ("sosTelemetryRequested".equals(eventName) && sosPlatformCoordinator != null) {
-            sosPlatformCoordinator.submitTelemetrySnapshot();
-        }
-        if ("statusChanged".equals(eventName) || "syncUpdated".equals(eventName)) {
-            updateForegroundNotification();
-        }
-    }
-
-    private void mirrorEventToLogcat(String eventName, JSObject payload) {
-        if ("log".equals(eventName)) {
-            final String level = payload.getString("level", "Info");
-            writeLogcat(level, payload.getString("message", payload.toString()));
-            return;
-        }
-        if (
-            "lxmfDelivery".equals(eventName)
-                || "packetReceived".equals(eventName)
-                || "packetSent".equals(eventName)
-                || "announceReceived".equals(eventName)
-                || "messageReceived".equals(eventName)
-                || "sosAlertChanged".equals(eventName)
-        ) {
-            Log.i(TAG, "[" + eventName + "] " + abbreviate(payload.toString()));
-        }
-    }
-
-    private void updateCachedState(String eventName, JSObject payload) {
-        if ("statusChanged".equals(eventName)) {
-            try {
-                final JSObject status = payload.getJSObject("status", payload);
-                latestStatusJson = status.toString();
-            } catch (JSONException ignored) {
-                latestStatusJson = payload.toString();
-            }
-            return;
-        }
-        if ("syncUpdated".equals(eventName)) {
-            latestSyncStatusJson = payload.toString();
-            return;
-        }
-        if ("sosStatusChanged".equals(eventName)) {
-            try {
-                final JSObject status = payload.getJSObject("status", payload);
-                latestSosStatusJson = status.toString();
-            } catch (JSONException ignored) {
-                latestSosStatusJson = payload.toString();
-            }
-        }
-    }
-
-    private void dispatchEventToListeners(String eventName, JSObject payload) {
-        if (!NativeEventBackpressure.shouldDispatchToUi(eventName, payload)) {
-            return;
-        }
-        for (ServiceEventListener listener : listeners) {
-            mainHandler.post(() -> listener.onNodeEvent(eventName, payload));
-        }
-    }
-
-    private void emitCachedState(ServiceEventListener listener) {
-        if (listener == null) {
-            return;
-        }
-        try {
-            final JSObject statusPayload = new JSObject();
-            statusPayload.put("status", new JSObject(nonEmptyJson(latestStatusJson, "{}")));
-            listener.onNodeEvent("statusChanged", statusPayload);
-        } catch (JSONException ignored) {
-            listener.onNodeEvent("statusChanged", new JSObject());
-        }
-
-        try {
-            listener.onNodeEvent("syncUpdated", new JSObject(nonEmptyJson(latestSyncStatusJson, "{}")));
-        } catch (JSONException ignored) {
-            listener.onNodeEvent("syncUpdated", new JSObject());
-        }
-
-        try {
-            final JSObject statusPayload = new JSObject();
-            statusPayload.put("status", new JSObject(nonEmptyJson(latestSosStatusJson, "{}")));
-            listener.onNodeEvent("sosStatusChanged", statusPayload);
-        } catch (JSONException ignored) {
-            listener.onNodeEvent("sosStatusChanged", new JSObject());
-        }
-
-        if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {
-            try {
-                listener.onNodeEvent("error", new JSObject(latestRuntimeErrorJson));
-            } catch (JSONException ignored) {
-                final JSObject fallback = new JSObject();
-                fallback.put("code", "InternalError");
-                fallback.put("message", "node runtime failed");
-                listener.onNodeEvent("error", fallback);
-            }
-        }
-    }
-
-    private void emitCachedStateToAll() {
-        for (ServiceEventListener listener : listeners) {
-            emitCachedState(listener);
-        }
-    }
-
-    private void emitProjectionRefreshSweep(ServiceEventListener listener) {
-        if (listener == null) {
-            return;
-        }
-        for (String scope : new String[] {
-            "AppSettings",
-            "SavedPeers",
-            "OperationalSummary",
-            "Peers",
-            "SyncStatus",
-            "HubRegistration",
-            "Checklists",
-            "ChecklistDetail",
-            "Eams",
-            "Events",
-            "Conversations",
-            "Messages",
-            "Telemetry",
-            "Sos",
-            "Plugins",
-            "PluginSensors",
-        }) {
-            final JSObject payload = new JSObject();
-            payload.put("scope", scope);
-            payload.put("revision", 0);
-            payload.put("updatedAtMs", System.currentTimeMillis());
-            payload.put("reason", "serviceRebind");
-            listener.onNodeEvent("projectionInvalidated", payload);
-        }
-    }
-
-    private void emitProjectionRefreshSweepToAll() {
-        for (ServiceEventListener listener : listeners) {
-            emitProjectionRefreshSweep(listener);
-        }
-    }
-
-    private void refreshLatestRuntimeState() {
-        latestStatusJson = safeStatusJson();
-        latestSyncStatusJson = safeSyncStatusJson();
-        latestSosStatusJson = safeSosStatusJson();
-        applyCurrentSosPlatformSettings();
-    }
-
     private String safeStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getStatusJson(), "{}");
-    }
-
-    private String safeSyncStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getLxmfSyncStatusJson(), "{}");
-    }
-
-    private String safeSosStatusJson() {
-        return nonEmptyJson(ReticulumBridge.getSosStatusJson(), "{}");
-    }
-
-    private void applyCurrentSosPlatformSettings() {
-        if (sosPlatformCoordinator != null) {
-            sosPlatformCoordinator.applySettingsJson(nonEmptyJson(ReticulumBridge.getSosSettingsJson(), "{}"));
-        }
+        return JsonPayloads.orFallback(ReticulumBridge.getStatusJson(), "{}");
     }
 
     private RemWatchStatusServerSettings readWatchStatusServerSettings() {
@@ -1185,7 +915,7 @@ public final class ReticulumNodeService extends Service {
 
     private String safeOperationalSummaryJson() {
         try {
-            return nonEmptyJson(ReticulumBridge.getOperationalSummaryJson(), "{}");
+            return JsonPayloads.orFallback(ReticulumBridge.getOperationalSummaryJson(), "{}");
         } catch (Exception ex) {
             return "{}";
         }
@@ -1193,7 +923,7 @@ public final class ReticulumNodeService extends Service {
 
     private String safeEamReadinessSummaryJson() {
         try {
-            return nonEmptyJson(ReticulumBridge.getEamReadinessSummaryJson(), "{}");
+            return JsonPayloads.orFallback(ReticulumBridge.getEamReadinessSummaryJson(), "{}");
         } catch (Exception ex) {
             return "{}";
         }
@@ -1201,7 +931,7 @@ public final class ReticulumNodeService extends Service {
 
     private String safeEventsJson() {
         try {
-            return nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
+            return JsonPayloads.orFallback(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
         } catch (Exception ex) {
             return "{\"items\":[]}";
         }
@@ -1209,17 +939,13 @@ public final class ReticulumNodeService extends Service {
 
     private String safeTelemetryPositionsJson() {
         try {
-            return nonEmptyJson(ReticulumBridge.getTelemetryPositionsJson(), "{\"items\":[]}");
+            return JsonPayloads.orFallback(
+                ReticulumBridge.getTelemetryPositionsJson(),
+                "{\"items\":[]}"
+            );
         } catch (Exception ex) {
             return "{\"items\":[]}";
         }
-    }
-
-    private String nonEmptyJson(String raw, String fallback) {
-        if (raw == null || raw.trim().isEmpty()) {
-            return fallback;
-        }
-        return raw;
     }
 
     private void promoteServiceForRuntime() {
@@ -1273,8 +999,12 @@ public final class ReticulumNodeService extends Service {
             return "Bringing the Reticulum node online";
         }
         try {
-            final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
-            final JSONObject sync = new JSONObject(nonEmptyJson(latestSyncStatusJson, "{}"));
+            final JSONObject status = new JSONObject(
+                JsonPayloads.orFallback(latestStatusJson(), "{}")
+            );
+            final JSONObject sync = new JSONObject(
+                JsonPayloads.orFallback(latestSyncStatusJson(), "{}")
+            );
             final String name = status.optString("name", getString(R.string.app_name));
             final String phase = sync.optString("phase", "Idle");
             return name + " | Sync " + phase;
@@ -1307,36 +1037,11 @@ public final class ReticulumNodeService extends Service {
         );
     }
 
-    private String abbreviate(String value) {
-        if (value == null) {
-            return "";
-        }
-        final int maxLength = 4000;
-        if (value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength) + "...";
+    private String latestStatusJson() {
+        return eventCoordinator == null ? "{}" : eventCoordinator.latestStatusJson();
     }
 
-    private void writeLogcat(String level, String message) {
-        final int priority;
-        switch (level) {
-            case "Trace":
-            case "Debug":
-                priority = Log.DEBUG;
-                break;
-            case "Warn":
-                priority = Log.WARN;
-                break;
-            case "Error":
-                priority = Log.ERROR;
-                break;
-            case "Info":
-            default:
-                priority = Log.INFO;
-                break;
-        }
-        Log.println(priority, TAG, abbreviate(message));
+    private String latestSyncStatusJson() {
+        return eventCoordinator == null ? "{}" : eventCoordinator.latestSyncStatusJson();
     }
-
 }

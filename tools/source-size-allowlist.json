@@ -1,6 +1,6 @@
 {
   "apps/mobile/android/app/src/main/java/network/reticulum/emergency/ReticulumNodePlugin.java": 1563,
-  "apps/mobile/android/app/src/main/java/network/reticulum/emergency/ReticulumNodeService.java": 1342,
+  "apps/mobile/android/app/src/main/java/network/reticulum/emergency/ReticulumNodeService.java": 1047,
   "apps/mobile/src/App.vue": 992,
   "apps/mobile/src/components/ActionMessageItem.vue": 521,
   "apps/mobile/src/components/messaging/ConversationThread.vue": 769,

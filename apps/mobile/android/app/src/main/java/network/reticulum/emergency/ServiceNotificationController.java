@@ -207,12 +207,16 @@ final class ServiceNotificationController {
 
     private void maybeNotifyInboundEams() {
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}"));
+            final JSONObject root = new JSONObject(
+                JsonPayloads.orFallback(ReticulumBridge.getEamsJson(), "{\"items\":[]}")
+            );
             final JSONArray items = root.optJSONArray("items");
             if (items == null) {
                 return;
             }
-            final JSONObject status = new JSONObject(nonEmptyJson(statusProvider.statusJson(), "{}"));
+            final JSONObject status = new JSONObject(
+                JsonPayloads.orFallback(statusProvider.statusJson(), "{}")
+            );
             final String localIdentity = status.optString("identityHex", "").trim().toLowerCase();
             final String localAppDestination = status.optString("appDestinationHex", "").trim().toLowerCase();
             final String localName = status.optString("name", "").trim().toLowerCase();
@@ -251,12 +255,16 @@ final class ServiceNotificationController {
 
     private void maybeNotifyInboundEvents() {
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}"));
+            final JSONObject root = new JSONObject(
+                JsonPayloads.orFallback(ReticulumBridge.getEventsJson(), "{\"items\":[]}")
+            );
             final JSONArray items = root.optJSONArray("items");
             if (items == null) {
                 return;
             }
-            final JSONObject status = new JSONObject(nonEmptyJson(statusProvider.statusJson(), "{}"));
+            final JSONObject status = new JSONObject(
+                JsonPayloads.orFallback(statusProvider.statusJson(), "{}")
+            );
             final String localIdentity = status.optString("identityHex", "").trim().toLowerCase();
             final String localName = status.optString("name", "").trim().toLowerCase();
             for (int index = 0; index < items.length(); index += 1) {
@@ -297,7 +305,7 @@ final class ServiceNotificationController {
 
     private void maybeNotifyInboundChecklists() {
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(
+            final JSONObject root = new JSONObject(JsonPayloads.orFallback(
                 ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
                 "{\"items\":[]}"
             ));
@@ -305,7 +313,9 @@ final class ServiceNotificationController {
             if (items == null) {
                 return;
             }
-            final JSONObject status = new JSONObject(nonEmptyJson(statusProvider.statusJson(), "{}"));
+            final JSONObject status = new JSONObject(
+                JsonPayloads.orFallback(statusProvider.statusJson(), "{}")
+            );
             final String localIdentity = status.optString("identityHex", "").trim().toLowerCase(Locale.US);
             for (int index = 0; index < items.length(); index += 1) {
                 final JSONObject item = items.optJSONObject(index);
@@ -410,10 +420,6 @@ final class ServiceNotificationController {
         } catch (IllegalArgumentException ex) {
             return "";
         }
-    }
-
-    private String nonEmptyJson(String raw, String fallback) {
-        return raw == null || raw.trim().isEmpty() ? fallback : raw;
     }
 
     private String truncate(String value) {

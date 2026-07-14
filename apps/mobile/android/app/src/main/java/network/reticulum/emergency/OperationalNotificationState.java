@@ -68,7 +68,9 @@ final class OperationalNotificationState {
     private void primeEamKeys() {
         eamKeys.clear();
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}"));
+            final JSONObject root = new JSONObject(
+                JsonPayloads.orFallback(ReticulumBridge.getEamsJson(), "{\"items\":[]}")
+            );
             final JSONArray items = root.optJSONArray("items");
             if (items == null) {
                 return;
@@ -91,7 +93,9 @@ final class OperationalNotificationState {
     private void primeEventKeys() {
         eventKeys.clear();
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}"));
+            final JSONObject root = new JSONObject(
+                JsonPayloads.orFallback(ReticulumBridge.getEventsJson(), "{\"items\":[]}")
+            );
             final JSONArray items = root.optJSONArray("items");
             if (items == null) {
                 return;
@@ -118,7 +122,7 @@ final class OperationalNotificationState {
     private void primeChecklistKeys() {
         checklistKeys.clear();
         try {
-            final JSONObject root = new JSONObject(nonEmptyJson(
+            final JSONObject root = new JSONObject(JsonPayloads.orFallback(
                 ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
                 "{\"items\":[]}"
             ));
@@ -151,7 +155,4 @@ final class OperationalNotificationState {
         return latest;
     }
 
-    private String nonEmptyJson(String raw, String fallback) {
-        return raw == null || raw.trim().isEmpty() ? fallback : raw;
-    }
 }
