@@ -42,9 +42,7 @@ export interface HubRegistryCommandTransport {
   onPacket(listener: (event: PacketReceivedEvent) => void): () => void;
 }
 
-interface JsonRecord {
-  [key: string]: unknown;
-}
+type JsonRecord = Record<string, unknown>;
 
 interface StoredMessageRecord extends JsonRecord {
   updatedAt?: unknown;

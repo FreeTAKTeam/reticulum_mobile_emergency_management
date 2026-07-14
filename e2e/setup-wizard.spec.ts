@@ -100,6 +100,7 @@ test("operators complete first-run setup and persist core choices", async ({ pag
   expect(storedSettings.tcpClients).toContain("mesh.example.org:5151");
   expect(storedSettings.rnode).toEqual({
     enabled: true,
+    connectionMode: "ble",
     peripheralId: "AA:BB:CC:DD:EE:FF",
     displayName: "",
     region: "EU868",
