@@ -1,23 +1,16 @@
 package network.reticulum.emergency;
 
-import android.app.Notification;
-import android.app.PendingIntent;
 import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Binder;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.util.Log;
-
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Logger;
@@ -44,20 +37,13 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     private static final String TAG = "ReticulumNodeService";
     private static final String PREFS_NAME = "reticulum-node-service";
-    private static final String PREF_DESIRED_RUNNING = "desiredRunning";
-    private static final String PREF_LAST_CONFIG = "lastConfig";
-    private static final String PREF_LAST_BOOT_COUNT = "lastBootCount";
     private static final String PREF_WATCH_STATUS_SERVER_ENABLED = "watchStatusServerEnabled";
     private static final String PREF_WATCH_STATUS_SERVER_PORT = "watchStatusServerPort";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
-    private static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
-    private static final int FOREGROUND_NOTIFICATION_ID = 41001;
-    private static final long RUNTIME_RESTORE_TIMEOUT_MS = 15_000L;
-    private static final long FOREGROUND_NOTIFICATION_MIN_UPDATE_MS = 5_000L;
+    static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
 
     private final IBinder binder = new LocalBinder();
     private final AtomicBoolean appUiForeground = new AtomicBoolean(false);
-    private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
     private final ExecutorService restoreExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Application.ActivityLifecycleCallbacks activityLifecycleCallbacks =
@@ -104,25 +90,21 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         };
 
     private SharedPreferences preferences;
-    private String storageDir = "";
-    private String lastResolvedConfigJson = "";
-    private String lastCanonicalConfigJson = "";
-    private long lastForegroundNotificationUpdateMs = 0L;
-    private String lastForegroundNotificationFingerprint = "";
     private SosPlatformCoordinator sosPlatformCoordinator;
     private RemWatchStatusServer watchStatusServer;
     private PluginCoordinator pluginCoordinator;
     private ServiceNotificationController notificationController;
-    private RuntimeConfigResolver configResolver;
     private ServiceEventCoordinator eventCoordinator;
+    private NodeRuntimeLifecycleController runtimeController;
 
     @Override
     public void onCreate() {
         super.onCreate();
         preferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        configResolver = new RuntimeConfigResolver(this);
-        storageDir = configResolver.resolveStorageDir("").getAbsolutePath();
-        initializeBridgeStorage(storageDir);
+        final RuntimeConfigResolver configResolver = new RuntimeConfigResolver(this);
+        NodeRuntimeLifecycleController.initializeStorage(
+            configResolver.resolveStorageDir("").getAbsolutePath()
+        );
         notificationController = new ServiceNotificationController(
             this,
             mainHandler,
@@ -135,14 +117,24 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         watchStatusServer = new RemWatchStatusServer();
         pluginCoordinator = new PluginCoordinator(this);
         pluginCoordinator.refresh();
+        runtimeController = new NodeRuntimeLifecycleController(
+            this,
+            preferences,
+            mainHandler,
+            restoreExecutor,
+            notificationController,
+            pluginCoordinator,
+            configResolver
+        );
         eventCoordinator = new ServiceEventCoordinator(
             mainHandler,
             notificationController,
             pluginCoordinator,
             sosPlatformCoordinator,
             this::isAppUiForeground,
-            this::updateForegroundNotification
+            runtimeController::updateForegroundNotification
         );
+        runtimeController.attachEventCoordinator(eventCoordinator);
         getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         eventCoordinator.refreshLatestRuntimeState();
         applyWatchStatusServerSettings();
@@ -155,12 +147,12 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
             return START_NOT_STICKY;
         }
         if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
-            scheduleRuntimeRestore("boot");
+            runtimeController.scheduleRestore("boot");
             return START_STICKY;
         }
 
-        if (shouldBeRunning()) {
-            scheduleRuntimeRestore("process recreation");
+        if (runtimeController.shouldBeRunning()) {
+            runtimeController.scheduleRestore("process recreation");
         }
         return START_STICKY;
     }
@@ -201,12 +193,12 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     @Override
     public void onTimeout(int startId) {
-        handleForegroundServiceTimeout(startId, 0);
+        runtimeController.handleForegroundServiceTimeout(startId, 0);
     }
 
     @Override
     public void onTimeout(int startId, int foregroundServiceType) {
-        handleForegroundServiceTimeout(startId, foregroundServiceType);
+        runtimeController.handleForegroundServiceTimeout(startId, foregroundServiceType);
     }
 
     public void addListener(ServiceEventListener listener) {
@@ -228,98 +220,15 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
     }
 
     public int startNode(String configJson) {
-        try {
-            final RuntimeConfigResolver.ResolvedConfig resolved = configResolver.resolve(configJson);
-            initializeBridgeStorage(resolved.storageDir);
-            if (isNodeRunning()) {
-                if (resolved.canonicalConfig.equals(lastCanonicalConfigJson)) {
-                    persistDesiredRunning(true, resolved);
-                    eventCoordinator.start();
-                    eventCoordinator.refreshLatestRuntimeState();
-                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-                    eventCoordinator.emitCachedStateToAll();
-                    eventCoordinator.emitProjectionRefreshSweepToAll();
-                    pluginCoordinator.setNodeRunning(true);
-                    return 0;
-                }
-                final int restartResult = ReticulumBridge.restart(resolved.resolvedJson);
-                if (restartResult != 0) {
-                    return restartResult;
-                }
-            } else {
-                promoteServiceForRuntime();
-                final int startResult = ReticulumBridge.start(resolved.resolvedJson);
-                if (startResult != 0) {
-                    cleanupFailedRuntimeStart();
-                    return startResult;
-                }
-            }
-
-            lastResolvedConfigJson = resolved.resolvedJson;
-            lastCanonicalConfigJson = resolved.canonicalConfig;
-            persistDesiredRunning(true, resolved);
-            eventCoordinator.clearRuntimeReadinessFailure();
-            notificationController.primeOperationalState();
-            eventCoordinator.refreshLatestRuntimeState();
-            eventCoordinator.start();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            eventCoordinator.emitCachedStateToAll();
-            eventCoordinator.emitProjectionRefreshSweepToAll();
-            pluginCoordinator.setNodeRunning(true);
-            return 0;
-        } catch (Exception ex) {
-            Logger.error(TAG, "Failed to start node", ex);
-            eventCoordinator.reportRuntimeReadinessFailure(
-                "InternalError",
-                "node runtime failed during start: " + ex.getMessage()
-            );
-            cleanupFailedRuntimeStart();
-            return -1;
-        }
+        return runtimeController.startNode(configJson);
     }
 
     public int stopNode() {
-        eventCoordinator.stop();
-        pluginCoordinator.setNodeRunning(false);
-        final int result = ReticulumBridge.stop();
-        clearDesiredRunning();
-        eventCoordinator.clearRuntimeReadinessFailure();
-        eventCoordinator.refreshLatestRuntimeState();
-        eventCoordinator.emitCachedStateToAll();
-        stopForeground(STOP_FOREGROUND_REMOVE);
-        stopSelf();
-        return result;
+        return runtimeController.stopNode();
     }
 
     public int restartNode(String configJson) {
-        try {
-            final RuntimeConfigResolver.ResolvedConfig resolved = configResolver.resolve(configJson);
-            promoteServiceForRuntime();
-            final int result = ReticulumBridge.restart(resolved.resolvedJson);
-            if (result != 0) {
-                return result;
-            }
-
-            lastResolvedConfigJson = resolved.resolvedJson;
-            lastCanonicalConfigJson = resolved.canonicalConfig;
-            persistDesiredRunning(true, resolved);
-            eventCoordinator.clearRuntimeReadinessFailure();
-            notificationController.primeOperationalState();
-            eventCoordinator.refreshLatestRuntimeState();
-            eventCoordinator.start();
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-            eventCoordinator.emitCachedStateToAll();
-            eventCoordinator.emitProjectionRefreshSweepToAll();
-            pluginCoordinator.setNodeRunning(true);
-            return 0;
-        } catch (Exception ex) {
-            Logger.error(TAG, "Failed to restart node", ex);
-            eventCoordinator.reportRuntimeReadinessFailure(
-                "InternalError",
-                "node runtime failed during restart: " + ex.getMessage()
-            );
-            return -1;
-        }
+        return runtimeController.restartNode(configJson);
     }
 
     public String refreshPluginsJson() {
@@ -421,161 +330,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         return ReticulumBridge.triggerSosJson(payloadJson);
     }
 
-    private void scheduleRuntimeRestore(String reason) {
-        if (!shouldBeRunning()) {
-            return;
-        }
-
-        final String persistedConfig = preferences.getString(PREF_LAST_CONFIG, "");
-        if (persistedConfig == null || persistedConfig.trim().isEmpty()) {
-            return;
-        }
-
-        if (!restoreRunning.compareAndSet(false, true)) {
-            return;
-        }
-
-        promoteServiceForRuntime();
-        final AtomicBoolean restoreCompleted = new AtomicBoolean(false);
-        mainHandler.postDelayed(() -> {
-            if (restoreCompleted.get() || !restoreRunning.get()) {
-                return;
-            }
-            eventCoordinator.reportRuntimeReadinessFailure(
-                "InternalError",
-                "node runtime restore timed out after " + RUNTIME_RESTORE_TIMEOUT_MS + "ms"
-            );
-        }, RUNTIME_RESTORE_TIMEOUT_MS);
-        restoreExecutor.execute(() -> {
-            try {
-                if (isNodeRunning()) {
-                    eventCoordinator.start();
-                    eventCoordinator.clearRuntimeReadinessFailure();
-                    eventCoordinator.refreshLatestRuntimeState();
-                    startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
-                    eventCoordinator.emitCachedStateToAll();
-                    eventCoordinator.emitProjectionRefreshSweepToAll();
-                    return;
-                }
-
-                final int result = startNode(persistedConfig);
-                if (result != 0) {
-                    eventCoordinator.reportRuntimeReadinessFailure(
-                        "InternalError",
-                        "node runtime failed to restore after " + reason
-                    );
-                }
-            } catch (Exception ex) {
-                Logger.error(TAG, "Failed to restore node after " + reason, ex);
-                eventCoordinator.reportRuntimeReadinessFailure(
-                    "InternalError",
-                    "node runtime failed to restore after " + reason + ": " + ex.getMessage()
-                );
-            } finally {
-                restoreCompleted.set(true);
-                restoreRunning.set(false);
-            }
-        });
-    }
-
-    private boolean shouldBeRunning() {
-        if (!preferences.getBoolean(PREF_DESIRED_RUNNING, false)) {
-            return false;
-        }
-        return preferences.getInt(PREF_LAST_BOOT_COUNT, -1) == configResolver.currentBootCount();
-    }
-
-    private boolean isNodeRunning() {
-        try {
-            final JSONObject payload = new JSONObject(
-                JsonPayloads.orFallback(ReticulumBridge.getStatusJson(), "{}")
-            );
-            return payload.optBoolean("running", false);
-        } catch (JSONException ex) {
-            return false;
-        }
-    }
-
-    private void persistDesiredRunning(
-        boolean desiredRunning,
-        RuntimeConfigResolver.ResolvedConfig resolved
-    ) {
-        preferences.edit()
-            .putBoolean(PREF_DESIRED_RUNNING, desiredRunning)
-            .putString(PREF_LAST_CONFIG, resolved.resolvedJson)
-            .putInt(PREF_LAST_BOOT_COUNT, configResolver.currentBootCount())
-            .apply();
-    }
-
-    private void clearDesiredRunning() {
-        preferences.edit()
-            .putBoolean(PREF_DESIRED_RUNNING, false)
-            .remove(PREF_LAST_CONFIG)
-            .putInt(PREF_LAST_BOOT_COUNT, configResolver.currentBootCount())
-            .apply();
-        lastResolvedConfigJson = "";
-        lastCanonicalConfigJson = "";
-    }
-
-    private void cleanupFailedRuntimeStart() {
-        eventCoordinator.stop();
-        pluginCoordinator.setNodeRunning(false);
-        try {
-            ReticulumBridge.stop();
-        } catch (Exception ex) {
-            Log.w(TAG, "Failed to stop native runtime after start failure", ex);
-        }
-        clearDesiredRunning();
-        eventCoordinator.refreshLatestRuntimeState();
-        eventCoordinator.emitCachedStateToAll();
-        stopForegroundAndSelf(0);
-    }
-
-    private synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
-        eventCoordinator.reportRuntimeReadinessFailure(
-            "InternalError",
-            "node runtime foreground service timed out; stopping Reticulum node service. type="
-                + foregroundServiceType
-        );
-        eventCoordinator.stop();
-        pluginCoordinator.setNodeRunning(false);
-        try {
-            ReticulumBridge.stop();
-        } catch (Exception ex) {
-            Log.w(TAG, "Failed to stop native runtime after foreground service timeout", ex);
-        }
-        clearDesiredRunning();
-        eventCoordinator.refreshLatestRuntimeState();
-        eventCoordinator.emitCachedStateToAll();
-        stopForegroundAndSelf(startId);
-    }
-
-    private void stopForegroundAndSelf(int startId) {
-        try {
-            stopForeground(STOP_FOREGROUND_REMOVE);
-        } catch (Exception ex) {
-            Log.w(TAG, "Failed to remove foreground notification", ex);
-        }
-        if (startId > 0) {
-            stopSelf(startId);
-        } else {
-            stopSelf();
-        }
-    }
-
-    private void initializeBridgeStorage(String resolvedStorageDir) {
-        storageDir = resolvedStorageDir;
-        final int result = ReticulumBridge.initializeStorage(resolvedStorageDir);
-        if (result != 0) {
-            Logger.error(
-                TAG,
-                "Failed to initialize bridge storage: "
-                    + JsonPayloads.orFallback(ReticulumBridge.takeLastErrorJson(), "unknown"),
-                null
-            );
-        }
-    }
-
     private String safeStatusJson() {
         return JsonPayloads.orFallback(ReticulumBridge.getStatusJson(), "{}");
     }
@@ -675,100 +429,7 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         }
     }
 
-    private void promoteServiceForRuntime() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(false));
-        }
-    }
-
-    private Notification buildRuntimeNotification(boolean running) {
-        return buildRuntimeNotification(running, buildRuntimeNotificationBody(running));
-    }
-
-    private Notification buildRuntimeNotification(boolean running, String body) {
-        final Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-        final PendingIntent contentIntent = PendingIntent.getActivity(
-            this,
-            0,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
-        final Intent stopIntent = new Intent(this, ReticulumNodeService.class);
-        stopIntent.setAction(ACTION_STOP_SERVICE);
-        final PendingIntent stopPendingIntent = PendingIntent.getService(
-            this,
-            1,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
-        final String title = running ? "Mesh node running" : "Starting mesh node";
-        final String safeBody = body == null || body.trim().isEmpty()
-            ? getString(R.string.app_name)
-            : body;
-
-        return new NotificationCompat.Builder(this, ServiceNotificationController.RUNTIME_CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(safeBody)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(safeBody))
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setOngoing(running)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(contentIntent)
-            .addAction(0, "Stop", stopPendingIntent)
-            .build();
-    }
-
-    private String buildRuntimeNotificationBody(boolean running) {
-        if (!running) {
-            return "Bringing the Reticulum node online";
-        }
-        try {
-            final JSONObject status = new JSONObject(
-                JsonPayloads.orFallback(latestStatusJson(), "{}")
-            );
-            final JSONObject sync = new JSONObject(
-                JsonPayloads.orFallback(latestSyncStatusJson(), "{}")
-            );
-            final String name = status.optString("name", getString(R.string.app_name));
-            final String phase = sync.optString("phase", "Idle");
-            return name + " | Sync " + phase;
-        } catch (JSONException ex) {
-            return getString(R.string.app_name);
-        }
-    }
-
-    private void updateForegroundNotification() {
-        if (!isNodeRunning()) {
-            return;
-        }
-        final String body = buildRuntimeNotificationBody(true);
-        final String fingerprint = "running|" + body;
-        final long now = SystemClock.elapsedRealtime();
-        synchronized (this) {
-            if (fingerprint.equals(lastForegroundNotificationFingerprint)) {
-                return;
-            }
-            final long elapsed = now - lastForegroundNotificationUpdateMs;
-            if (lastForegroundNotificationUpdateMs > 0L && elapsed < FOREGROUND_NOTIFICATION_MIN_UPDATE_MS) {
-                return;
-            }
-            lastForegroundNotificationUpdateMs = now;
-            lastForegroundNotificationFingerprint = fingerprint;
-        }
-        NotificationManagerCompat.from(this).notify(
-            FOREGROUND_NOTIFICATION_ID,
-            buildRuntimeNotification(true, body)
-        );
-    }
-
     private String latestStatusJson() {
         return eventCoordinator == null ? "{}" : eventCoordinator.latestStatusJson();
-    }
-
-    private String latestSyncStatusJson() {
-        return eventCoordinator == null ? "{}" : eventCoordinator.latestSyncStatusJson();
     }
 }
