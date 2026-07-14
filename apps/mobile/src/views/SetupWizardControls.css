@@ -1,0 +1,359 @@
+.toggle-card,
+.permission-card,
+.config-grid div,
+.review-grid div {
+  background: rgb(5 20 44 / 72%);
+  border: 1px solid rgb(74 133 207 / 38%);
+  border-radius: 14px;
+}
+
+.toggle-card {
+  align-items: center;
+  display: grid;
+  gap: 0.64rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 0.78rem;
+  position: relative;
+}
+
+.toggle-card > span:last-child {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.toggle-card input {
+  cursor: pointer;
+  height: 1.8rem;
+  left: 0.78rem;
+  opacity: 0;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3.2rem;
+  z-index: 2;
+}
+
+.toggle-visual {
+  background: rgb(2 7 16 / 76%);
+  border: 1px solid rgb(74 133 207 / 52%);
+  border-radius: 999px;
+  height: 1.8rem;
+  position: relative;
+  width: 3.2rem;
+}
+
+.toggle-visual::after {
+  background: #9cb3d6;
+  border-radius: 999px;
+  content: "";
+  height: 1.14rem;
+  left: 0.3rem;
+  position: absolute;
+  top: 0.28rem;
+  width: 1.14rem;
+}
+
+.toggle-card input:checked + .toggle-visual {
+  background: rgb(31 118 225 / 74%);
+  border-color: #64beff;
+}
+
+.toggle-card input:checked + .toggle-visual::after {
+  background: #64beff;
+  box-shadow: 0 0 12px rgb(100 190 255 / 60%);
+  transform: translateX(1.38rem);
+}
+
+.toggle-card input:focus-visible + .toggle-visual {
+  box-shadow: 0 0 0 3px rgb(100 190 255 / 24%);
+}
+
+.danger-card {
+  border-color: rgb(255 102 102 / 54%);
+}
+
+.danger-card input:checked + .toggle-visual {
+  background: rgb(99 21 25 / 78%);
+  border-color: #ff7777;
+}
+
+.danger-card input:checked + .toggle-visual::after {
+  background: #ff7777;
+  box-shadow: 0 0 12px rgb(255 102 102 / 62%);
+}
+
+.config-grid,
+.review-grid {
+  display: grid;
+  gap: 0.56rem;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin: 0;
+}
+
+.permission-grid {
+  display: grid;
+  gap: 0.56rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.config-grid div,
+.review-grid div {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.64rem;
+}
+
+.config-grid dt,
+.review-grid dt {
+  color: #64beff;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.config-grid dd,
+.review-grid dd {
+  margin: 0;
+}
+
+.permission-card {
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+  padding: 0.76rem;
+}
+
+.permission-card div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.permission-card.granted {
+  border-color: rgb(112 240 164 / 58%);
+}
+
+.permission-card.granted small {
+  color: #70f0a4;
+}
+
+.permission-card.denied {
+  border-color: rgb(255 180 171 / 64%);
+}
+
+.permission-card.denied small {
+  color: #ffb4ab;
+}
+
+.sos-preview {
+  min-height: 4.8rem;
+}
+
+.sos-preview div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.sos-fab-preview {
+  align-items: center;
+  background: radial-gradient(circle at 30% 25%, #ffb4ab, #9f202b 62%, #4b0d16);
+  border: 1px solid rgb(255 180 171 / 80%);
+  border-radius: 999px;
+  box-shadow: 0 0 24px rgb(255 89 89 / 42%);
+  color: #fff7f5;
+  display: inline-flex;
+  flex: 0 0 3.8rem;
+  font-family: var(--font-ui);
+  font-weight: 900;
+  height: 3.8rem;
+  justify-content: center;
+}
+
+.ready-strip {
+  border-color: rgb(112 240 164 / 46%);
+}
+
+.ready-strip strong {
+  color: #70f0a4;
+}
+
+.feedback {
+  margin: 0;
+}
+
+.wizard-actions {
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+button {
+  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
+  --btn-border: rgb(74 133 207 / 45%);
+  --btn-border-pressed: rgb(224 248 255 / 86%);
+  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #8fdbff;
+  --btn-color-pressed: #042541;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 999px;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  min-height: 2.6rem;
+  padding: 0 0.92rem;
+  text-transform: uppercase;
+}
+
+.primary-action {
+  --btn-bg: linear-gradient(180deg, #64beff, #179ce8);
+  --btn-border: rgb(214 248 255 / 76%);
+  --btn-color: #03192f;
+  flex: 1;
+  font-size: clamp(0.88rem, 2.8vw, 1.24rem);
+  min-height: 3.2rem;
+}
+
+.secondary-action {
+  min-width: 7rem;
+}
+
+.icon-action {
+  border-radius: 14px;
+  flex: 0 0 3rem;
+  font-size: 1.2rem;
+  padding: 0;
+}
+
+.inline-remove {
+  font-size: 0.64rem;
+  min-height: 1.8rem;
+  padding-inline: 0.55rem;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+@media (max-width: 760px) {
+  .setup-console {
+    border-radius: 14px;
+    gap: 0.54rem;
+    padding: 0.72rem;
+  }
+
+  .brand-symbol {
+    height: 3rem;
+    width: 3rem;
+  }
+
+  .brand-copy p {
+    font-size: 1.5rem;
+  }
+
+  .brand-copy span {
+    font-size: 0.78rem;
+  }
+
+  .node-state {
+    display: none;
+  }
+
+  .step-band {
+    min-height: 2.48rem;
+    padding-block: 0.42rem;
+  }
+
+  .wizard-section {
+    gap: 0.58rem;
+    padding: 0.72rem;
+  }
+
+  .wizard-section h1 {
+    font-size: clamp(1.48rem, 7.4vw, 2.14rem);
+  }
+
+  .section-heading h1 {
+    font-size: clamp(1.7rem, 8.2vw, 2.5rem);
+  }
+
+  .section-heading p,
+  .toggle-card small,
+  .permission-card span,
+  .permission-card small,
+  .config-grid dd,
+  .review-grid dd,
+  .preview-panel,
+  .feedback,
+  .sos-preview span {
+    font-size: 0.86rem;
+  }
+
+  .wizard-panel {
+    min-height: 0;
+  }
+
+  .field-block input,
+  .custom-row input {
+    min-height: 2.72rem;
+  }
+
+  .config-grid,
+  .review-grid {
+    gap: 0.46rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .permission-grid {
+    gap: 0.46rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .config-grid div,
+  .review-grid div {
+    padding: 0.5rem;
+  }
+
+  .server-option {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 0.48rem 0.54rem;
+  }
+
+  .bootstrap-badge {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .toggle-card {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 0.58rem;
+  }
+
+  .toggle-card input {
+    left: 0.58rem;
+  }
+
+  .permission-card {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.58rem;
+  }
+
+  .wizard-actions {
+    gap: 0.56rem;
+  }
+
+  .primary-action {
+    min-height: 2.85rem;
+  }
+
+  .secondary-action {
+    min-width: 6.4rem;
+  }
+}
