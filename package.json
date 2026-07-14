@@ -12,9 +12,11 @@
     "mobile:dev": "npm --workspace apps/mobile run dev:mobile",
     "mobile:build": "npm --workspace apps/mobile run build:mobile",
     "node-client:build": "npm --workspace packages/node-client run build",
+    "check:source-size": "node tools/check-source-size.mjs",
+    "test:source-size": "node --test tools/source-size-classes.test.mjs",
     "test:app-unit": "node --test apps/mobile/src/utils/*.test.mjs",
     "test:node-client": "npm --workspace packages/node-client run test",
-    "test:unit": "npm run test:app-unit && npm run test:node-client",
+    "test:unit": "npm run test:source-size && npm run test:app-unit && npm run test:node-client",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug"
