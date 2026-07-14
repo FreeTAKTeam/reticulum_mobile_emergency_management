@@ -1,6 +1,6 @@
 {
   "apps/mobile/android/app/src/main/java/network/reticulum/emergency/ReticulumNodePlugin.java": {
-    "ReticulumNodePlugin": 1523
+    "ReticulumNodePlugin": 1161
   },
   "packages/node-client/src/index.ts": {
     "CapacitorReticulumNodeClient": 691,
