@@ -9,14 +9,43 @@ const CLASS_SOURCE_EXTENSIONS = new Set([
   ".tsx",
   ".vue",
 ]);
+const REGEX_PREFIX_WORDS = new Set([
+  "await",
+  "case",
+  "delete",
+  "in",
+  "instanceof",
+  "new",
+  "of",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "yield",
+]);
 
 export function supportsClassDeclarations(filePath) {
   return CLASS_SOURCE_EXTENSIONS.has(path.posix.extname(filePath));
 }
 
+function isRegexLiteralStart(characters, slashIndex) {
+  let cursor = slashIndex - 1;
+  while (cursor >= 0 && /\s/u.test(characters[cursor])) cursor -= 1;
+  if (cursor < 0) return true;
+
+  const previous = characters[cursor];
+  if ("([{:;,=!?&|+-*%^~<>".includes(previous)) return true;
+  if (!/[A-Za-z_$]/u.test(previous)) return false;
+
+  const wordEnd = cursor + 1;
+  while (cursor >= 0 && /[\w$]/u.test(characters[cursor])) cursor -= 1;
+  return REGEX_PREFIX_WORDS.has(characters.slice(cursor + 1, wordEnd).join(""));
+}
+
 function sanitizeForStructure(source) {
   const characters = [...source];
   let state = "code";
+  let regexCharacterClass = false;
 
   for (let index = 0; index < characters.length; index += 1) {
     const current = characters[index];
@@ -51,6 +80,24 @@ function sanitizeForStructure(source) {
       }
       continue;
     }
+    if (state === "regex") {
+      if (current === "\n") {
+        state = "code";
+        regexCharacterClass = false;
+      } else if (current === "\\") {
+        characters[index] = " ";
+        if (next !== undefined && next !== "\n") {
+          characters[index + 1] = " ";
+          index += 1;
+        }
+      } else {
+        if (current === "[") regexCharacterClass = true;
+        if (current === "]") regexCharacterClass = false;
+        characters[index] = " ";
+        if (current === "/" && !regexCharacterClass) state = "code";
+      }
+      continue;
+    }
     if (state === "single-string" || state === "double-string" || state === "template-string") {
       const terminator =
         state === "single-string" ? "'" : state === "double-string" ? '"' : "`";
@@ -79,6 +126,10 @@ function sanitizeForStructure(source) {
       characters[index + 1] = " ";
       index += 1;
       state = "block-comment";
+    } else if (current === "/" && isRegexLiteralStart(characters, index)) {
+      characters[index] = " ";
+      regexCharacterClass = false;
+      state = "regex";
     } else if (current === '"' && next === '"' && third === '"') {
       characters[index] = " ";
       characters[index + 1] = " ";

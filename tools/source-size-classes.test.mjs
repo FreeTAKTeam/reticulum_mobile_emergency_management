@@ -53,6 +53,20 @@ test("ignores Vue attributes, CSS selectors, and Kotlin class references", () =>
   ]);
 });
 
+test("ignores class text and unmatched braces inside regex literals", () => {
+  const source = [
+    "class RegexOwner {",
+    "  closing = /}/;",
+    "  opening = /{/;",
+    "  named = /class Fake \\{}/;",
+    "}",
+  ].join("\n");
+
+  assert.deepEqual(findClassSpans(source), [
+    { name: "RegexOwner", startLine: 1, endLine: 5, lineCount: 5 },
+  ]);
+});
+
 test("keeps duplicate class names stable without line-number keys", () => {
   const source = "class Reused {}\nclass Reused {}";
 
