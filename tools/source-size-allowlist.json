@@ -1,8 +1,6 @@
 {
-  "apps/mobile/src/stores/eventsStore.ts": 659,
   "apps/mobile/src/stores/messagingStore.ts": 1362,
   "apps/mobile/src/stores/nodeStore.ts": 3505,
-  "apps/mobile/src/utils/missionSync.ts": 712,
   "apps/mobile/src/views/SettingsView.vue": 2200,
   "apps/mobile/src/views/SetupWizardView.vue": 1369,
   "apps/mobile/src/views/TelemetryMapView.vue": 1389,
