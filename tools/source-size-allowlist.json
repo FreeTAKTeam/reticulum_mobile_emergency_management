@@ -1,7 +1,6 @@
 {
   "apps/mobile/src/stores/checklistsStore.ts": 575,
   "apps/mobile/src/stores/eventsStore.ts": 659,
-  "apps/mobile/src/stores/messagesStore.ts": 590,
   "apps/mobile/src/stores/messagingStore.ts": 1362,
   "apps/mobile/src/stores/nodeStore.ts": 3505,
   "apps/mobile/src/utils/legacyState.ts": 553,
