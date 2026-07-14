@@ -15,6 +15,7 @@ import {
 } from "../services/operationalNotifications";
 import type { ActionMessage, EamStatus, EamTeamSummary, EamWireStatus } from "../types/domain";
 import { applyActionMessageStatusCycle } from "../utils/actionMessageStatus";
+import { buildWebEamReadinessSummary, computeWebEamTeamSummary } from "../utils/eamReadiness";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { DEFAULT_R3AKT_TEAM_COLOR, normalizeR3aktTeamColor } from "../utils/r3akt";
@@ -24,7 +25,6 @@ import { useNodeStore } from "./nodeStore";
 const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 
 type StoredMessages = Record<string, ActionMessage>;
-type TeamStatusBuckets = Partial<Record<EamWireStatus, number>>;
 
 const getProjectionClient = createProjectionClientAccessor("messages");
 
@@ -224,7 +224,7 @@ function toTeamSummary(record: EamTeamSummaryRecord | null): EamTeamSummary | nu
   if (!record) {
     return null;
   }
-  const byStatus: TeamStatusBuckets = {};
+  const byStatus: Partial<Record<EamWireStatus, number>> = {};
   if (record.greenTotal > 0) {
     byStatus.Green = record.greenTotal;
   }
@@ -242,36 +242,6 @@ function toTeamSummary(record: EamTeamSummaryRecord | null): EamTeamSummary | nu
     overall_status: normalizeWireStatus(record.overallStatus),
     by_status: byStatus,
     updated_at: new Date(record.updatedAt).toISOString(),
-  };
-}
-
-function computeWebTeamSummary(messages: ActionMessage[], teamUid: string): EamTeamSummary {
-  const teamMessages = messages.filter(
-    (message) => message.teamUid === teamUid && !message.deletedAt,
-  );
-  const byStatus: TeamStatusBuckets = {};
-  for (const message of teamMessages) {
-    const status = message.overallStatus;
-    if (!status) {
-      continue;
-    }
-    byStatus[status] = (byStatus[status] ?? 0) + 1;
-  }
-  const overallStatus = byStatus.Red
-    ? "Red"
-    : byStatus.Yellow
-      ? "Yellow"
-      : byStatus.Green
-        ? "Green"
-        : undefined;
-  return {
-    team_uid: teamUid,
-    total: teamMessages.length,
-    active_total: teamMessages.length,
-    deleted_total: messages.filter((message) => message.teamUid === teamUid && Boolean(message.deletedAt)).length,
-    overall_status: overallStatus,
-    by_status: byStatus,
-    updated_at: new Date().toISOString(),
   };
 }
 
@@ -301,6 +271,10 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!supportsNativeNodeRuntime) {
       saveWebMessages(byCallsign.value);
     }
+  }
+
+  function refreshWebReadiness(): void {
+    eamReadinessSummary.value = buildWebEamReadinessSummary(Object.values(byCallsign.value));
   }
 
   function canManageMessage(message: ActionMessage): boolean {
@@ -387,7 +361,7 @@ export const useMessagesStore = defineStore("messages", () => {
     }
 
     if (!supportsNativeNodeRuntime) {
-      teamSummary.value = computeWebTeamSummary(Object.values(byCallsign.value), teamUid);
+      teamSummary.value = computeWebEamTeamSummary(Object.values(byCallsign.value), teamUid);
       return;
     }
 
@@ -413,6 +387,7 @@ export const useMessagesStore = defineStore("messages", () => {
 
     if (!supportsNativeNodeRuntime) {
       byCallsign.value = loadWebMessages();
+      refreshWebReadiness();
       void refreshTeamSummary();
       return;
     }
@@ -472,6 +447,7 @@ export const useMessagesStore = defineStore("messages", () => {
         [keyFor(normalized.callsign)]: cloneMessage(normalized),
       };
       webPersist();
+      refreshWebReadiness();
       await refreshTeamSummary();
       return;
     }
@@ -508,6 +484,7 @@ export const useMessagesStore = defineStore("messages", () => {
         return;
       }
       webPersist();
+      refreshWebReadiness();
       await refreshTeamSummary();
       return;
     }
