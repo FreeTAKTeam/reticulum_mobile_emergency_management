@@ -1,0 +1,284 @@
+.checklist-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.checklist-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 1rem 0;
+}
+
+.card-primary {
+  color: inherit;
+  display: grid;
+  gap: 1rem;
+  width: 100%;
+}
+
+.card-open {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+
+.card-open:focus-visible {
+  border-radius: 14px;
+  outline: 2px solid rgb(111 219 255 / 70%);
+  outline-offset: 3px;
+}
+
+.card-topline {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.card-heading-action {
+  display: block;
+  min-width: 0;
+}
+
+.card-progress-action {
+  display: grid;
+  gap: 1rem;
+}
+
+.card-heading h2 {
+  color: #f1f8ff;
+  font-family: var(--font-headline);
+  font-size: clamp(1.2rem, 2.3vw, 1.75rem);
+  line-height: 1.08;
+  margin: 0;
+  min-width: 0;
+}
+
+.card-heading p {
+  color: #9cb3d6;
+  font-family: var(--font-body);
+  font-size: clamp(1rem, 2vw, 1.16rem);
+  margin: 0.55rem 0 0;
+}
+
+.card-top-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.action {
+  align-items: center;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  padding: 0;
+  width: 2.2rem;
+}
+
+.action-icon {
+  fill: none;
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 1rem;
+}
+
+.delete {
+  background: rgb(53 15 25 / 70%);
+  border: 1px solid rgb(255 70 91 / 84%);
+  box-shadow: 0 0 16px rgb(255 72 104 / 24%);
+  color: #ff7b89;
+}
+
+.action:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.edit {
+  background: rgb(11 39 84 / 80%);
+  border: 1px solid rgb(66 169 255 / 80%);
+  box-shadow: 0 0 16px rgb(66 169 255 / 24%);
+  color: #61bbff;
+}
+
+.checklist-card.status-active .progress-fill {
+  color: #64beff;
+}
+
+.checklist-card.status-late .progress-fill {
+  color: #ff6475;
+}
+
+.checklist-card.status-completed .progress-fill {
+  color: #8df3c1;
+}
+
+.progress-copy {
+  color: #8da8d3;
+  display: flex;
+  font-family: var(--font-ui);
+  font-size: 0.74rem;
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.progress-copy span:last-child {
+  color: #64beff;
+}
+
+.checklist-card.status-late .progress-copy span:last-child {
+  color: #ff6475;
+}
+
+.checklist-card.status-completed .progress-copy span:last-child {
+  color: #8df3c1;
+}
+
+.progress-track {
+  background: rgb(47 68 103 / 82%);
+  border-radius: 999px;
+  height: 16px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: linear-gradient(90deg, #57b8ff, #3f8fe4);
+  border-radius: inherit;
+  height: 100%;
+}
+
+.checklist-card.status-late .progress-fill {
+  background: linear-gradient(90deg, #ff6475, #ef4e60);
+}
+
+.checklist-card.status-completed .progress-fill {
+  background: linear-gradient(90deg, #52dc9c, #2ebf7c);
+}
+
+.task-sync-copy span:first-child {
+  align-items: center;
+  color: #9ddcff;
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
+.task-sync-pulse {
+  background: #14f0ff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 0 rgb(20 240 255 / 44%);
+  height: 0.62rem;
+  width: 0.62rem;
+}
+
+.task-sync-pulse {
+  animation: task-sync-pulse 1.35s ease-out infinite;
+}
+
+.task-sync-fill {
+  background: linear-gradient(90deg, #16d5ff, #5de9ff);
+}
+
+.task-sync-detail {
+  color: #7f9fc8;
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.metadata-toggle {
+  align-items: center;
+  background: rgb(7 28 59 / 86%);
+  border: 1px solid rgb(72 120 190 / 46%);
+  border-radius: 12px;
+  color: #9bc2eb;
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  gap: 0.45rem;
+  letter-spacing: 0.08em;
+  min-height: 38px;
+  padding: 0 0.9rem;
+  text-transform: uppercase;
+}
+
+.metadata-toggle:focus-visible {
+  outline: 2px solid rgb(111 219 255 / 70%);
+  outline-offset: 2px;
+}
+
+.toggle-icon {
+  height: 1rem;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  transform: rotate(0deg);
+  transition: transform 0.18s ease;
+  width: 1rem;
+}
+
+.toggle-icon.open {
+  transform: rotate(180deg);
+}
+
+.card-metadata {
+  align-items: center;
+  border-top: 1px solid rgb(92 126 176 / 28%);
+  color: #8da8d3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  padding: 1rem 0;
+}
+
+.metadata-item {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.74rem;
+  gap: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.metadata-item svg {
+  height: 0.92rem;
+  width: 0.92rem;
+}
+
+.empty-state {
+  padding: 1.4rem;
+}
+
+.empty-state h2 {
+  font-family: var(--font-headline);
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+.empty-state p {
+  color: #9cb3d6;
+  font-family: var(--font-body);
+  margin: 0.5rem 0 0;
+}
