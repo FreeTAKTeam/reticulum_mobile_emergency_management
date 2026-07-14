@@ -28,6 +28,9 @@ include!("runtime/background_maintenance.rs");
 include!("runtime/background_announces.rs");
 include!("runtime/background_receivers.rs");
 include!("runtime/background_links.rs");
+include!("runtime/command_executor.rs");
+include!("runtime/command_tasks.rs");
+include!("runtime/command_queries.rs");
 
 #[expect(
     clippy::too_many_arguments,
@@ -306,12 +309,13 @@ pub async fn run_node(
     spawn_delivery_tracking_tasks(&state, &bus, &receipt_message_ids);
     spawn_link_event_listener(&state, &bus);
     spawn_periodic_hub_refresh(&config, &state, &bus);
+    let command_executor = RuntimeCommandExecutor::new();
 
     loop {
-        let cmd = tokio::select! {
+        let (cmd, command_lane) = tokio::select! {
             biased;
-            Some(cmd) = priority_cmd_rx.recv() => cmd,
-            Some(cmd) = cmd_rx.recv() => cmd,
+            Some(cmd) = priority_cmd_rx.recv() => (cmd, RuntimeCommandLane::Priority),
+            Some(cmd) = cmd_rx.recv() => (cmd, RuntimeCommandLane::Normal),
             else => break,
         };
         match cmd {
@@ -327,14 +331,14 @@ pub async fn run_node(
                 break;
             }
             Command::AnnounceNow {} => {
-                announce_destinations(
+                spawn_manual_announce(
+                    &command_executor,
+                    command_lane,
                     &transport,
                     &app_destination,
                     &lxmf_destination,
                     &announce_capabilities,
-                    "manual",
-                )
-                .await;
+                );
             }
             Command::SetLogLevel { level } => {
                 crate::logger::NodeLogger::global().set_level(level);
@@ -345,7 +349,7 @@ pub async fn run_node(
             } => {
                 let state = state.clone();
                 let bus = bus.clone();
-                tokio::spawn(async move {
+                command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
                     let result = resolve_peer_route(&state, &bus, destination_hex.as_str()).await;
                     if let Err(err) = &result {
                         state.messaging.lock().await.record_resolution_error(
@@ -354,135 +358,58 @@ pub async fn run_node(
                         );
                         emit_peer_changed(&state, &bus, destination_hex.as_str()).await;
                     }
-                    let _ = resp.send(result);
+                    result
                 });
             }
             Command::SetAnnounceCapabilities {
                 capability_string,
                 resp,
             } => {
-                *announce_capabilities.lock().await = capability_string;
-                announce_destinations(
+                spawn_announce_capability_update(
+                    &command_executor,
+                    command_lane,
                     &transport,
-                    &app_destination,
-                    &lxmf_destination,
+                    (&app_destination, &lxmf_destination),
                     &announce_capabilities,
-                    "capabilities-updated",
-                )
-                .await;
-                let _ = resp.send(Ok(()));
+                    capability_string,
+                    resp,
+                );
             }
             Command::ConnectPeer {
                 destination_hex,
                 resp,
             } => {
-                let destination_hex_copy = destination_hex.clone();
-                let result = async {
-                    let dest = parse_address_hash(&destination_hex)?;
-                    let saved_peer =
-                        persist_selected_peer_destination(&state, &bus, destination_hex.as_str())
-                            .await?;
-                    clear_ignored_peer_destinations(&state, std::slice::from_ref(&destination_hex))
-                        .await;
-                    emit_peer_changed(&state, &bus, saved_peer.destination_hex.as_str()).await;
-                    state.sdk.record_peer_changed(
-                        saved_peer.destination_hex.as_str(),
-                        PeerState::Connecting {},
-                        None,
-                    );
-                    resolve_peer_route(&state, &bus, &destination_hex).await?;
-                    let target =
-                        match register_desired_managed_peer_link(&state, &destination_hex).await {
-                            Some(target) => target,
-                            None => {
-                                let target = ManagedPeerLinkTarget {
-                                    destination_hex: address_hash_to_hex(&dest),
-                                    kind: ManagedPeerLinkKind::App,
-                                };
-                                state.managed_peer_links.add_desired(target.clone()).await;
-                                target
-                            }
-                        };
-                    let target_destination = parse_address_hash(target.destination_hex.as_str())?;
-                    let desc = ensure_destination_desc(
-                        &state,
-                        target_destination,
-                        Some(target.kind.destination_name()),
-                    )
-                    .await?;
-                    let _link = ensure_output_link(&state, desc).await?;
-                    record_peer_link_state(&state, &bus, target.destination_hex.as_str(), true)
-                        .await;
-                    Ok::<(), NodeError>(())
-                }
-                .await;
-                if let Err(err) = &result {
-                    state.messaging.lock().await.record_resolution_error(
-                        destination_hex_copy.as_str(),
-                        Some(err.to_string()),
-                    );
-                    emit_peer_changed(&state, &bus, &destination_hex_copy).await;
-                    state.sdk.record_peer_changed(
-                        &destination_hex_copy,
-                        PeerState::Disconnected {},
-                        Some(err.to_string().as_str()),
-                    );
-                }
-                let _ = resp.send(result);
+                spawn_connect_peer_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
+                    destination_hex,
+                    resp,
+                );
             }
             Command::DisconnectPeer {
                 destination_hex,
                 resp,
             } => {
-                let result = async {
-                    let dest = parse_address_hash(&destination_hex)?;
-                    let mut destinations = vec![destination_hex.clone()];
-                    if let Some(peer) = peer_for_any_destination_hex(&state, &destination_hex).await
-                    {
-                        destinations
-                            .extend(equivalent_peer_destinations(&peer).map(ToOwned::to_owned));
-                    }
-                    destinations.sort();
-                    destinations.dedup();
-                    {
-                        let now = now_ms();
-                        let mut messaging = state.messaging.lock().await;
-                        for destination in &destinations {
-                            messaging.set_peer_active_link(destination.as_str(), false, now);
-                        }
-                    }
-                    state
-                        .direct_delivery_health
-                        .clear(destinations.iter().map(String::as_str));
-                    state
-                        .managed_peer_links
-                        .remove_desired(destinations.iter().map(String::as_str))
-                        .await;
-                    mark_peer_destinations_ignored(&state, destinations.as_slice()).await;
-                    connected_peers.lock().await.remove(&dest);
-                    for destination in &destinations {
-                        if let Ok(destination) = parse_address_hash(destination.as_str()) {
-                            connected_peers.lock().await.remove(&destination);
-                            if let Some(link) = out_links.lock().await.remove(&destination) {
-                                link.lock().await.close();
-                            }
-                        }
-                    }
-                    emit_peer_changed(&state, &bus, &destination_hex).await;
-                    state.sdk.record_peer_changed(
-                        &address_hash_to_hex(&dest),
-                        PeerState::Disconnected {},
-                        None,
-                    );
-                    sync_auto_propagation_node(&state, &bus).await;
-                    Ok::<(), NodeError>(())
-                }
-                .await;
-                let _ = resp.send(result);
+                spawn_disconnect_peer_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
+                    destination_hex,
+                    resp,
+                );
             }
             Command::SetSavedPeers { peers, resp } => {
-                let result = apply_saved_peer_management_projection(&state, &bus, &peers).await;
-                let _ = resp.send(result);
+                spawn_saved_peer_projection_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
+                    peers,
+                    resp,
+                );
             }
             Command::SendBytes {
                 destination_hex,
@@ -512,7 +439,11 @@ pub async fn run_node(
                         fields_bytes.is_some(),
                     ),
                 );
-                tokio::spawn(async move {
+                command_executor.spawn(
+                    command_lane,
+                    RuntimeCommandClass::Work,
+                    resp,
+                    async move {
                     let result = async {
                         let lxmf_report = if fields_bytes.is_some() {
                             Some(
@@ -681,19 +612,19 @@ pub async fn run_node(
                                 "[lxmf][mission] propagation send exhausted destination={} reason={}",
                                 destination_hex, err
                             );
-                            let _ = resp.send(result);
-                            return;
+                        } else {
+                            bus.emit(NodeEvent::Error {
+                                code: node_error_code(err).to_string(),
+                                message: format!(
+                                    "send_bytes failed destination={} reason={}",
+                                    destination_hex, err
+                                ),
+                            });
                         }
-                        bus.emit(NodeEvent::Error {
-                            code: node_error_code(err).to_string(),
-                            message: format!(
-                                "send_bytes failed destination={} reason={}",
-                                destination_hex, err
-                            ),
-                        });
                     }
-                    let _ = resp.send(result);
-                });
+                    result
+                    },
+                );
             }
             Command::SendLxmf { request, resp } => {
                 let state = state.clone();
@@ -707,7 +638,7 @@ pub async fn run_node(
                         request.send_mode,
                     ),
                 );
-                tokio::spawn(async move {
+                command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
                     let result = async {
                         let body_bytes = request.body_utf8.as_bytes().to_vec();
                         let report = send_lxmf_with_delivery_policy(
@@ -811,7 +742,7 @@ pub async fn run_node(
                             ),
                         });
                     }
-                    let _ = resp.send(result);
+                    result
                 });
             }
             Command::RetryLxmf {
@@ -827,7 +758,7 @@ pub async fn run_node(
                         message_id_hex,
                     ),
                 );
-                tokio::spawn(async move {
+                command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
                     let result = async {
                         let outbound = state
                             .messaging
@@ -917,217 +848,94 @@ pub async fn run_node(
                             ),
                         });
                     }
-                    let _ = resp.send(result);
+                    result
                 });
             }
             Command::CancelLxmf {
                 message_id_hex,
                 resp,
             } => {
-                let result = async {
-                    let updated = state
-                        .messaging
-                        .lock()
-                        .await
-                        .update_message_delivery_state(
-                            message_id_hex.as_str(),
-                            Some(sdkmsg::MessageState::Cancelled),
-                            Some(sdkmsg::TransportDeliveryState::Cancelled),
-                            Some(sdkmsg::ApplicationAckState::Failed),
-                            Some("cancelled locally".to_string()),
-                            None,
-                            now_ms(),
-                        )
-                        .map(from_sdk_message_record)
-                        .ok_or(NodeError::InvalidConfig {})?;
-                    upsert_message_record(&state, &bus, updated, false).await;
-                    Ok::<(), NodeError>(())
-                }
-                .await;
-                let _ = resp.send(result);
+                spawn_cancel_lxmf_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
+                    message_id_hex,
+                    resp,
+                );
             }
             Command::SetActivePropagationNode {
                 destination_hex,
                 resp,
             } => {
-                *state.active_propagation_node_hex.lock().await = destination_hex.clone();
-                let status_update = from_sdk_sync_status(
-                    state
-                        .messaging
-                        .lock()
-                        .await
-                        .set_active_propagation_node(destination_hex),
-                );
-                if refresh_sync_status_snapshot(&state, &status_update) {
-                    bus.emit(NodeEvent::SyncUpdated {
-                        status: status_update,
-                    });
-                }
-                let _ = resp.send(Ok(()));
-            }
-            Command::RequestLxmfSync { limit, resp } => {
-                let requested_at_ms = now_ms();
-                if state.propagation_sync_inflight.load(Ordering::Acquire) {
-                    info!("[sync] propagation sync request ignored reason=inflight");
-                    let _ = resp.send(Ok(()));
-                    continue;
-                }
-                emit_sync_status_update(
+                spawn_active_propagation_node_command(
+                    &command_executor,
+                    command_lane,
                     &state,
                     &bus,
-                    sdkmsg::SyncPhase::PathRequested,
-                    requested_at_ms,
-                    0,
-                    Some("waiting for propagation relay selection".to_string()),
-                    false,
-                )
-                .await;
-                let Some(relay_hex) = wait_for_active_propagation_relay(&state, &bus).await else {
-                    let detail = format!(
-                        "no active propagation relay selected after {}s",
-                        PROPAGATION_SYNC_RELAY_SELECTION_WAIT.as_secs()
-                    );
-                    emit_sync_status_update(
-                        &state,
-                        &bus,
-                        sdkmsg::SyncPhase::Failed,
-                        requested_at_ms,
-                        0,
-                        Some(detail.clone()),
-                        true,
-                    )
-                    .await;
-                    info!("[sync] propagation sync failed reason={detail}");
-                    let _ = resp.send(Err(NodeError::InvalidConfig {}));
-                    continue;
-                };
-                if state
-                    .propagation_sync_inflight
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_err()
-                {
-                    info!("[sync] propagation sync request ignored reason=inflight");
-                    let _ = resp.send(Ok(()));
-                    continue;
-                }
-                info!(
-                    "[sync] propagation sync scheduled relay={} limit={}",
-                    relay_hex,
-                    limit
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "none".to_string())
+                    destination_hex,
+                    resp,
                 );
-                tokio::spawn(run_propagation_sync_job(
-                    state.clone(),
-                    bus.clone(),
+            }
+            Command::RequestLxmfSync { limit, resp } => {
+                spawn_sync_request_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
                     limit,
-                    requested_at_ms,
-                    relay_hex,
-                ));
-                let _ = resp.send(Ok(()));
+                    resp,
+                );
             }
             Command::ListAnnounces { resp } => {
-                let records = state
-                    .messaging
-                    .lock()
-                    .await
-                    .list_announces()
-                    .into_iter()
-                    .map(from_sdk_announce_record)
-                    .collect::<Vec<_>>();
-                let _ = resp.send(Ok(records));
+                spawn_list_announces_command(&command_executor, command_lane, &state, resp);
             }
             Command::ListPeers { resp } => {
-                let _ = resp.send(Ok(snapshot_peer_records(&state).await));
+                spawn_list_peers_command(&command_executor, command_lane, &state, resp);
             }
             Command::ListConversations { resp } => {
-                let _ = resp.send(Ok(conversation_records_snapshot(&state).await));
+                spawn_list_conversations_command(&command_executor, command_lane, &state, resp);
             }
             Command::ListMessages {
                 conversation_id,
                 resp,
             } => {
-                let _ = resp.send(Ok(message_records_snapshot(
+                spawn_list_messages_command(
+                    &command_executor,
+                    command_lane,
                     &state,
-                    conversation_id.as_deref(),
-                )
-                .await));
+                    conversation_id,
+                    resp,
+                );
             }
             Command::DeleteConversation {
                 conversation_id,
                 resp,
             } => {
-                let _ = resp.send(
-                    delete_conversation_records(&state, &bus, conversation_id.as_str()).await,
+                spawn_delete_conversation_command(
+                    &command_executor,
+                    command_lane,
+                    &state,
+                    &bus,
+                    conversation_id,
+                    resp,
                 );
             }
             Command::GetLxmfSyncStatus { resp } => {
-                let _ = resp.send(Ok(from_sdk_sync_status(
-                    state.messaging.lock().await.sync_status(),
-                )));
+                spawn_sync_status_command(&command_executor, command_lane, &state, resp);
             }
             Command::BroadcastBytes { bytes, resp } => {
-                let result = async {
-                    let peers = connected_peers
-                        .lock()
-                        .await
-                        .iter()
-                        .copied()
-                        .collect::<Vec<_>>();
-                    let mut sent_any = false;
-                    for dest in peers {
-                        let outcome =
-                            send_transport_packet_with_path_retry(&transport, dest, &bytes).await;
-                        bus.emit(NodeEvent::PacketSent {
-                            destination_hex: address_hash_to_hex(&dest),
-                            bytes: bytes.clone(),
-                            outcome: send_outcome_to_udl(outcome),
-                        });
-                        if matches!(
-                            outcome,
-                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
-                        ) {
-                            sent_any = true;
-                        }
-                    }
-
-                    if sent_any {
-                        Ok::<(), NodeError>(())
-                    } else {
-                        Err(NodeError::NetworkError {})
-                    }
-                }
-                .await;
-                if let Err(err) = &result {
-                    bus.emit(NodeEvent::Error {
-                        code: node_error_code(err).to_string(),
-                        message: format!("broadcast_bytes failed reason={}", err),
-                    });
-                }
-                let _ = resp.send(result);
+                spawn_broadcast_command(&command_executor, command_lane, &state, &bus, bytes, resp);
             }
             Command::RefreshHubDirectory { resp } => {
-                let state = state.clone();
-                let bus = bus.clone();
-                let config = config.clone();
-                tokio::spawn(async move {
-                    let result = match config.hub_mode {
-                        HubMode::Autonomous {} => Err(NodeError::InvalidConfig {}),
-                        HubMode::SemiAutonomous {} | HubMode::Connected {} => {
-                            refresh_hub_directory_lxmf(&config, &state).await
-                        }
-                    }
-                    .map(|snapshot| async {
-                        publish_hub_directory_snapshot(&state, &bus, snapshot).await;
-                    });
-                    let _ = resp.send(match result {
-                        Ok(publish) => {
-                            publish.await;
-                            Ok(())
-                        }
-                        Err(error) => Err(error),
-                    });
-                });
+                spawn_hub_refresh_command(
+                    &command_executor,
+                    command_lane,
+                    &config,
+                    &state,
+                    &bus,
+                    resp,
+                );
             }
         }
     }
@@ -1150,6 +958,7 @@ mod tests {
     include!("runtime/tests/support.rs");
     include!("runtime/tests/checklists_inbound_delete_marks_existing_checklist_de.rs");
     include!("runtime/tests/checklists_upload_snapshot_hydrates_hidden_placeholde.rs");
+    include!("runtime/tests/command_tasks.rs");
     include!("runtime/tests/core.rs");
     include!("runtime/tests/delivery_compact_eam_fields_derive_sender_identity_.rs");
     include!("runtime/tests/delivery_mission_recovery_sends_do_not_wait_on_satu.rs");

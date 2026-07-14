@@ -54,7 +54,7 @@ const DEFAULT_R3AKT_MISSION_UID: &str = "r3akt-default-mission";
 const SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const LXMF_SYNC_COMMAND_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const COMMAND_QUEUE_CAPACITY: usize = 256;
-const PRIORITY_COMMAND_QUEUE_CAPACITY: usize = 32;
+const PRIORITY_COMMAND_QUEUE_CAPACITY: usize = 1_024;
 fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), NodeError> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return tx.try_send(command).map_err(|error| match error {

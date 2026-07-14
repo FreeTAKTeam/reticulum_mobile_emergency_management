@@ -278,7 +278,11 @@ impl Node {
     pub fn connect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            inner
+                .priority_cmd_tx
+                .clone()
+                .or_else(|| inner.cmd_tx.clone())
+                .ok_or(NodeError::NotRunning {})?
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
@@ -297,7 +301,11 @@ impl Node {
     pub fn disconnect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            inner
+                .priority_cmd_tx
+                .clone()
+                .or_else(|| inner.cmd_tx.clone())
+                .ok_or(NodeError::NotRunning {})?
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);

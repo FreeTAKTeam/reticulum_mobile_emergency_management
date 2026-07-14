@@ -2,7 +2,11 @@ impl Node {
     pub fn announce_now(&self) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            inner
+                .priority_cmd_tx
+                .clone()
+                .or_else(|| inner.cmd_tx.clone())
+                .ok_or(NodeError::NotRunning {})?
         };
 
         dispatch_command(&tx, Command::AnnounceNow {})
@@ -73,7 +77,11 @@ impl Node {
     pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            inner
+                .priority_cmd_tx
+                .clone()
+                .or_else(|| inner.cmd_tx.clone())
+                .ok_or(NodeError::NotRunning {})?
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
