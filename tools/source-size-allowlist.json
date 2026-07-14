@@ -1,5 +1,4 @@
 {
-  "apps/mobile/src/App.vue": 992,
   "apps/mobile/src/stores/checklistsStore.ts": 575,
   "apps/mobile/src/stores/eventsStore.ts": 659,
   "apps/mobile/src/stores/messagesStore.ts": 590,
@@ -9,7 +8,6 @@
   "apps/mobile/src/utils/missionSync.ts": 712,
   "apps/mobile/src/views/ChecklistDetailView.vue": 1174,
   "apps/mobile/src/views/ChecklistView.vue": 1456,
-  "apps/mobile/src/views/PeersDiscoveryView.vue": 945,
   "apps/mobile/src/views/SettingsView.vue": 2200,
   "apps/mobile/src/views/SetupWizardView.vue": 1369,
   "apps/mobile/src/views/TelemetryMapView.vue": 1389,
