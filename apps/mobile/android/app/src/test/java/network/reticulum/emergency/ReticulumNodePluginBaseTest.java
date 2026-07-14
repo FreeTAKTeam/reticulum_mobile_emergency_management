@@ -2,6 +2,7 @@ package network.reticulum.emergency;
 
 import static org.junit.Assert.assertEquals;
 
+import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 
 import org.junit.Test;
@@ -12,8 +13,16 @@ public class ReticulumNodePluginBaseTest {
     @Test
     public void concretePluginInheritsSharedLifecycle() throws Exception {
         assertEquals(
-            ReticulumNodeTransportPluginApi.class,
+            ReticulumNodeChecklistPluginApi.class,
             ReticulumNodePlugin.class.getSuperclass()
+        );
+        assertEquals(
+            ReticulumNodeAppDataPluginApi.class,
+            ReticulumNodeChecklistPluginApi.class.getSuperclass()
+        );
+        assertEquals(
+            ReticulumNodeTransportPluginApi.class,
+            ReticulumNodeAppDataPluginApi.class.getSuperclass()
         );
         assertEquals(
             ReticulumNodePluginBase.class,
@@ -30,6 +39,18 @@ public class ReticulumNodePluginBaseTest {
         assertEquals(
             ReticulumNodePluginBase.class,
             ReticulumNodePluginBase.class.getDeclaredMethod("handleOnDestroy").getDeclaringClass()
+        );
+        assertEquals(
+            ReticulumNodeAppDataPluginApi.class,
+            ReticulumNodePlugin.class.getMethod("refreshPlugins", PluginCall.class).getDeclaringClass()
+        );
+        assertEquals(
+            ReticulumNodeChecklistPluginApi.class,
+            ReticulumNodePlugin.class.getMethod("getChecklists", PluginCall.class).getDeclaringClass()
+        );
+        assertEquals(
+            ReticulumNodePlugin.class,
+            ReticulumNodePlugin.class.getMethod("getEams", PluginCall.class).getDeclaringClass()
         );
     }
 
