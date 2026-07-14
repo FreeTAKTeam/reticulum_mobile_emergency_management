@@ -44,4 +44,7 @@ For NDK, precedence is:
 3. `apps/mobile/android/local.properties` (`ndk.dir`, if present)
 4. Latest side-by-side NDK in `<sdk>/ndk`
 
-Then they set linker and `CC_*` env vars for Android targets, build, and copy `.so` files into `jniLibs`.
+Then they set linker, `CC_*`, and 16 KB page-alignment flags for Android
+targets, build, and copy `.so` files into `jniLibs`. The scripts stop before
+copying when any ELF load segment is not aligned to 16 KB, so incompatible
+native libraries cannot silently enter an Android package.
