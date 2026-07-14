@@ -2,8 +2,6 @@ package network.reticulum.emergency;
 
 import android.Manifest;
 import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.app.Activity;
@@ -22,7 +20,6 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
-import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
@@ -38,14 +35,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -71,12 +65,7 @@ public final class ReticulumNodeService extends Service {
     private static final String PREF_WATCH_STATUS_SERVER_PORT = "watchStatusServerPort";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     private static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
-    private static final String RUNTIME_CHANNEL_ID = "mesh-runtime";
-    private static final String RUNTIME_UPDATES_CHANNEL_ID = "operational-updates";
-    private static final String SOS_CHANNEL_ID = "sos-emergency";
     private static final int FOREGROUND_NOTIFICATION_ID = 41001;
-    private static final int SOS_NOTIFICATION_ID = 41002;
-    private static final int BACKGROUND_NOTIFICATION_BASE_ID = 47000;
     private static final long RUNTIME_RESTORE_TIMEOUT_MS = 15_000L;
     private static final long FOREGROUND_NOTIFICATION_MIN_UPDATE_MS = 5_000L;
 
@@ -144,12 +133,7 @@ public final class ReticulumNodeService extends Service {
     private SosPlatformCoordinator sosPlatformCoordinator;
     private RemWatchStatusServer watchStatusServer;
     private PluginCoordinator pluginCoordinator;
-    private final Set<String> seenEamKeys = new HashSet<>();
-    private final Set<String> seenEventKeys = new HashSet<>();
-    private final Set<String> seenChecklistKeys = new HashSet<>();
-    private final Set<String> seenMessageIds = new HashSet<>();
-    private final Set<String> seenMissionPacketNotificationKeys = new HashSet<>();
-    private int nextBackgroundNotificationId = BACKGROUND_NOTIFICATION_BASE_ID;
+    private ServiceNotificationController notificationController;
 
     @Override
     public void onCreate() {
@@ -157,7 +141,14 @@ public final class ReticulumNodeService extends Service {
         preferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         storageDir = resolveStorageDir("").getAbsolutePath();
         initializeBridgeStorage(storageDir);
-        createNotificationChannels();
+        notificationController = new ServiceNotificationController(
+            this,
+            mainHandler,
+            restoreExecutor,
+            this::isAppUiForeground,
+            () -> latestStatusJson
+        );
+        notificationController.createChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
         watchStatusServer = new RemWatchStatusServer();
         pluginCoordinator = new PluginCoordinator(this);
@@ -290,7 +281,7 @@ public final class ReticulumNodeService extends Service {
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
             clearRuntimeReadinessFailure();
-            primeOperationalNotificationState();
+            notificationController.primeOperationalState();
             refreshLatestRuntimeState();
             ensurePoller();
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
@@ -335,7 +326,7 @@ public final class ReticulumNodeService extends Service {
             lastCanonicalConfigJson = resolved.canonicalConfig;
             persistDesiredRunning(true, resolved);
             clearRuntimeReadinessFailure();
-            primeOperationalNotificationState();
+            notificationController.primeOperationalState();
             refreshLatestRuntimeState();
             ensurePoller();
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(true));
@@ -969,9 +960,9 @@ public final class ReticulumNodeService extends Service {
         dispatchEventToListeners(eventName, payload);
         final boolean uiForeground = isAppUiForeground();
         if ("sosAlertChanged".equals(eventName)) {
-            maybeNotifySosAlert(payload, !uiForeground);
+            notificationController.handleSosAlert(payload, !uiForeground);
         } else if (!uiForeground) {
-            maybeNotifyInboundUpdate(eventName, payload);
+            notificationController.handleInboundUpdate(eventName, payload);
         }
         if ("sosTelemetryRequested".equals(eventName) && sosPlatformCoordinator != null) {
             sosPlatformCoordinator.submitTelemetrySnapshot();
@@ -1237,42 +1228,6 @@ public final class ReticulumNodeService extends Service {
         return raw;
     }
 
-    private void createNotificationChannels() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return;
-        }
-
-        final NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager == null) {
-            return;
-        }
-
-        final NotificationChannel runtimeChannel = new NotificationChannel(
-            RUNTIME_CHANNEL_ID,
-            "Mesh Runtime",
-            NotificationManager.IMPORTANCE_LOW
-        );
-        runtimeChannel.setDescription("Foreground Reticulum mesh runtime");
-
-        final NotificationChannel updatesChannel = new NotificationChannel(
-            RUNTIME_UPDATES_CHANNEL_ID,
-            "Operational Updates",
-            NotificationManager.IMPORTANCE_DEFAULT
-        );
-        updatesChannel.setDescription("Incoming mesh events, action messages, and chat");
-
-        final NotificationChannel sosChannel = new NotificationChannel(
-            SOS_CHANNEL_ID,
-            "SOS Emergency",
-            NotificationManager.IMPORTANCE_HIGH
-        );
-        sosChannel.setDescription("Urgent SOS alerts received over the mesh");
-
-        manager.createNotificationChannel(runtimeChannel);
-        manager.createNotificationChannel(updatesChannel);
-        manager.createNotificationChannel(sosChannel);
-    }
-
     private void promoteServiceForRuntime() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForeground(FOREGROUND_NOTIFICATION_ID, buildRuntimeNotification(false));
@@ -1307,7 +1262,7 @@ public final class ReticulumNodeService extends Service {
             ? getString(R.string.app_name)
             : body;
 
-        return new NotificationCompat.Builder(this, RUNTIME_CHANNEL_ID)
+        return new NotificationCompat.Builder(this, ServiceNotificationController.RUNTIME_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(safeBody)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(safeBody))
@@ -1356,462 +1311,6 @@ public final class ReticulumNodeService extends Service {
             FOREGROUND_NOTIFICATION_ID,
             buildRuntimeNotification(true, body)
         );
-    }
-
-    private void maybeNotifyInboundUpdate(String eventName, JSObject payload) {
-        if ("log".equals(eventName)) {
-            maybeNotifyInboundMissionLog(payload);
-            return;
-        }
-        if ("packetReceived".equals(eventName)) {
-            maybeNotifyInboundMissionPacket(payload);
-            return;
-        }
-        if ("messageReceived".equals(eventName) || "messageUpdated".equals(eventName)) {
-            maybeNotifyInboundMessage(payload);
-            return;
-        }
-        if ("projectionInvalidated".equals(eventName)) {
-            final String scope = payload.getString("scope", "");
-            if ("Eams".equals(scope)) {
-                maybeNotifyInboundEams();
-            } else if ("Events".equals(scope)) {
-                maybeNotifyInboundEvents();
-            } else if ("Checklists".equals(scope)) {
-                maybeNotifyInboundChecklists();
-            }
-        }
-    }
-
-    private void maybeNotifyInboundMissionPacket(JSObject payload) {
-        final String fieldsBase64 = payload.getString("fieldsBase64", "");
-        if (fieldsBase64.isEmpty()) {
-            return;
-        }
-        final String fieldsText = decodeBase64Text(fieldsBase64);
-        final String sourceHex = payload.getString("sourceHex", "").trim().toLowerCase(Locale.US);
-        final String destinationHex = payload.getString("destinationHex", "").trim().toLowerCase(Locale.US);
-        final String key = sourceHex + ":" + destinationHex + ":" + Integer.toHexString(fieldsBase64.hashCode());
-        if (!seenMissionPacketNotificationKeys.add(key)) {
-            return;
-        }
-
-        final String body = truncate(decodeBase64Text(payload.getString("bytesBase64", "")).trim());
-        if (fieldsText.contains("mission.registry.eam.upsert")) {
-            postBackgroundNotification("EAM from mesh", body.isEmpty() ? "Action Emergency Message updated" : body);
-        } else if (fieldsText.contains("mission.registry.log_entry.upsert")) {
-            postBackgroundNotification("Event from mesh", body.isEmpty() ? "Event updated" : body);
-        } else if (fieldsText.contains("checklist.task.status.set")) {
-            postBackgroundNotification("Checklist updated", body.isEmpty() ? "Checklist task status changed" : body);
-        }
-    }
-
-    private void maybeNotifyInboundMissionLog(JSObject payload) {
-        final String message = payload.getString("message", "");
-        if (!message.contains("[lxmf][mission] received kind=command")) {
-            return;
-        }
-        if (message.contains("name=mission.registry.eam.upsert")) {
-            scheduleBackgroundNotificationRefresh("Eams");
-        } else if (message.contains("name=mission.registry.log_entry.upsert")) {
-            scheduleBackgroundNotificationRefresh("Events");
-        } else if (message.contains("name=checklist.task.status.set")) {
-            scheduleBackgroundNotificationRefresh("Checklists");
-        }
-    }
-
-    private void scheduleBackgroundNotificationRefresh(String scope) {
-        mainHandler.postDelayed(() -> restoreExecutor.execute(() -> {
-            if (isAppUiForeground()) {
-                return;
-            }
-            if ("Eams".equals(scope)) {
-                maybeNotifyInboundEams();
-            } else if ("Events".equals(scope)) {
-                maybeNotifyInboundEvents();
-            } else if ("Checklists".equals(scope)) {
-                maybeNotifyInboundChecklists();
-            }
-        }), 1_500L);
-    }
-
-    private void maybeNotifySosAlert(JSObject payload, boolean postUserVisibleNotification) {
-        final JSONObject nestedAlert = payload.optJSONObject("alert");
-        final JSONObject alert = nestedAlert == null ? payload : nestedAlert;
-        final boolean active = alert.optBoolean("active", true);
-        if (!active) {
-            NotificationManagerCompat.from(this).cancel(SOS_NOTIFICATION_ID);
-            if (postUserVisibleNotification) {
-                postBackgroundNotification("SOS cancelled", "The sender marked themselves safe.");
-            }
-            return;
-        }
-        if (!postUserVisibleNotification) {
-            return;
-        }
-        final String source = alert.optString("sourceHex", "Unknown");
-        final String body = truncate(alert.optString("bodyUtf8", "Emergency SOS alert"));
-        postSosNotification("SOS EMERGENCY from " + source, body);
-    }
-
-    private void maybeNotifyInboundMessage(JSObject payload) {
-        final String direction = payload.getString("direction", "");
-        final String messageId = payload.getString("messageIdHex", "").trim().toLowerCase();
-        if (!"Inbound".equals(direction) || messageId.isEmpty() || !seenMessageIds.add(messageId)) {
-            return;
-        }
-        final String peer = payload.getString("sourceHex", payload.getString("destinationHex", "Unknown"));
-        final String body = truncate(payload.getString("bodyUtf8", "(empty message)"));
-        if (isSosMessageBody(body)) {
-            return;
-        }
-        postBackgroundNotification("Message from " + peer, body);
-    }
-
-    private boolean isSosMessageBody(String body) {
-        final String normalized = body == null ? "" : body.trim().toLowerCase(Locale.US);
-        return normalized.startsWith("sos!") || normalized.startsWith("sos cancelled");
-    }
-
-    private void maybeNotifyInboundEams() {
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}"));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
-            final String localIdentity = status.optString("identityHex", "").trim().toLowerCase();
-            final String localAppDestination = status.optString("appDestinationHex", "").trim().toLowerCase();
-            final String localName = status.optString("name", "").trim().toLowerCase();
-
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                if (item == null || item.has("deletedAt")) {
-                    continue;
-                }
-                final String callsign = item.optString("callsign", "").trim();
-                final long updatedAt = item.optLong("updatedAt", 0L);
-                if (callsign.isEmpty() || updatedAt <= 0L) {
-                    continue;
-                }
-                final String key = callsign.toLowerCase() + ":" + updatedAt;
-                if (!seenEamKeys.add(key)) {
-                    continue;
-                }
-
-                final String teamMemberUid = item.optString("teamMemberUid", "").trim().toLowerCase();
-                final JSONObject source = item.optJSONObject("source");
-                final String sourceIdentity = source == null
-                    ? ""
-                    : source.optString("rnsIdentity", source.optString("rns_identity", "")).trim().toLowerCase(Locale.US);
-                final String reportedBy = item.optString("reportedBy", "").trim().toLowerCase();
-                if (
-                    (!localAppDestination.isEmpty() && localAppDestination.equals(teamMemberUid))
-                        || (!localIdentity.isEmpty() && localIdentity.equals(sourceIdentity))
-                        || (!localName.isEmpty() && (localName.equals(reportedBy) || localName.equals(callsign.toLowerCase())))
-                ) {
-                    continue;
-                }
-
-                final String title = "EAM from " + item.optString("reportedBy", callsign);
-                final String notes = item.optString("notes", "").trim();
-                final String body = !notes.isEmpty()
-                    ? truncate(notes)
-                    : truncate(item.optString("groupName", "Team") + " status " + item.optString("overallStatus", "updated"));
-                postBackgroundNotification(title, body);
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private void maybeNotifyInboundEvents() {
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}"));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
-            final String localIdentity = status.optString("identityHex", "").trim().toLowerCase();
-            final String localName = status.optString("name", "").trim().toLowerCase();
-
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                final JSONObject args = item == null ? null : item.optJSONObject("args");
-                final JSONObject source = item == null ? null : item.optJSONObject("source");
-                if (args == null || source == null || item.has("deleted_at")) {
-                    continue;
-                }
-                final String uid = args.optString("entry_uid", "").trim();
-                final long updatedAt = item.optLong("updatedAt", 0L);
-                if (uid.isEmpty() || updatedAt <= 0L) {
-                    continue;
-                }
-                final String key = uid.toLowerCase() + ":" + updatedAt;
-                if (!seenEventKeys.add(key)) {
-                    continue;
-                }
-
-                final String sourceIdentity = args.optString(
-                    "sourceIdentity",
-                    args.optString(
-                        "source_identity",
-                        source.optString("rnsIdentity", source.optString("rns_identity", ""))
-                    )
-                ).trim().toLowerCase(Locale.US);
-                final String sourceDisplayName = args.optString(
-                    "sourceDisplayName",
-                    args.optString(
-                        "source_display_name",
-                        source.optString("displayName", source.optString("display_name", ""))
-                    )
-                ).trim().toLowerCase(Locale.US);
-                final String callsign = args.optString("callsign", "").trim();
-                if (
-                    (!localIdentity.isEmpty() && localIdentity.equals(sourceIdentity))
-                        || (!localName.isEmpty() && (localName.equals(sourceDisplayName) || localName.equals(callsign.toLowerCase())))
-                ) {
-                    continue;
-                }
-
-                postBackgroundNotification(
-                    "Event from " + (callsign.isEmpty() ? "Unknown" : callsign),
-                    truncate(args.optString("content", "Event updated"))
-                );
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private void maybeNotifyInboundChecklists() {
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(
-                ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
-                "{\"items\":[]}"
-            ));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            final JSONObject status = new JSONObject(nonEmptyJson(latestStatusJson, "{}"));
-            final String localIdentity = status.optString("identityHex", "").trim().toLowerCase(Locale.US);
-
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                if (item == null || item.has("deletedAt") || item.has("deleted_at")) {
-                    continue;
-                }
-                final String key = checklistNotificationKey(item);
-                if (key.isEmpty() || !seenChecklistKeys.add(key)) {
-                    continue;
-                }
-                final String changedBy = optStringAny(
-                    item,
-                    "lastChangedByTeamMemberRnsIdentity",
-                    "last_changed_by_team_member_rns_identity"
-                ).trim().toLowerCase(Locale.US);
-                final String createdBy = optStringAny(
-                    item,
-                    "createdByTeamMemberRnsIdentity",
-                    "created_by_team_member_rns_identity"
-                ).trim().toLowerCase(Locale.US);
-                if (
-                    !localIdentity.isEmpty()
-                        && (localIdentity.equals(changedBy)
-                            || (changedBy.isEmpty() && localIdentity.equals(createdBy)))
-                ) {
-                    continue;
-                }
-
-                final JSONObject counts = item.optJSONObject("counts");
-                final int pendingCount = optIntAny(counts, "pendingCount", "pending_count", 0);
-                final int completeCount = optIntAny(counts, "completeCount", "complete_count", 0);
-                final int lateCount = optIntAny(counts, "lateCount", "late_count", 0);
-                final JSONArray tasks = item.optJSONArray("tasks");
-                final int taskCount = tasks == null ? 0 : tasks.length();
-                final String lateSummary = lateCount > 0 ? ", " + lateCount + " late" : "";
-                final String taskSummary = taskCount == 1 ? "1 task" : taskCount + " tasks";
-                postBackgroundNotification(
-                    "Checklist updated: " + item.optString("name", "Checklist"),
-                    truncate(pendingCount + " pending, " + completeCount + " complete" + lateSummary + " across " + taskSummary)
-                );
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private void postBackgroundNotification(String title, String body) {
-        final int notificationId = nextNotificationId();
-        final Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-        final PendingIntent contentIntent = PendingIntent.getActivity(
-            this,
-            notificationId,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-        final Notification notification = new NotificationCompat.Builder(this, RUNTIME_UPDATES_CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(contentIntent)
-            .build();
-        NotificationManagerCompat.from(this).notify(notificationId, notification);
-    }
-
-    private void postSosNotification(String title, String body) {
-        final Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-        final PendingIntent contentIntent = PendingIntent.getActivity(
-            this,
-            SOS_NOTIFICATION_ID,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-        final Notification notification = new NotificationCompat.Builder(this, SOS_CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setContentIntent(contentIntent)
-            .addAction(0, "Open Chat", contentIntent)
-            .addAction(0, "View on Map", contentIntent)
-            .build();
-        NotificationManagerCompat.from(this).notify(SOS_NOTIFICATION_ID, notification);
-    }
-
-    private void primeOperationalNotificationState() {
-        seenMessageIds.clear();
-        seenMissionPacketNotificationKeys.clear();
-        maybePrimeEamKeys();
-        maybePrimeEventKeys();
-        maybePrimeChecklistKeys();
-    }
-
-    private void maybePrimeEamKeys() {
-        seenEamKeys.clear();
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEamsJson(), "{\"items\":[]}"));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                if (item == null || item.has("deletedAt")) {
-                    continue;
-                }
-                final String callsign = item.optString("callsign", "").trim();
-                final long updatedAt = item.optLong("updatedAt", 0L);
-                if (!callsign.isEmpty() && updatedAt > 0L) {
-                    seenEamKeys.add(callsign.toLowerCase(Locale.US) + ":" + updatedAt);
-                }
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private void maybePrimeEventKeys() {
-        seenEventKeys.clear();
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(ReticulumBridge.getEventsJson(), "{\"items\":[]}"));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                if (item == null || item.has("deletedAt") || item.has("deleted_at")) {
-                    continue;
-                }
-                final JSONObject args = item.optJSONObject("args");
-                final String uid = item.optString(
-                    "uid",
-                    args == null ? "" : args.optString("entry_uid", "")
-                ).trim();
-                final long updatedAt = item.optLong("updatedAt", 0L);
-                if (!uid.isEmpty() && updatedAt > 0L) {
-                    seenEventKeys.add(uid.toLowerCase(Locale.US) + ":" + updatedAt);
-                }
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private void maybePrimeChecklistKeys() {
-        seenChecklistKeys.clear();
-        try {
-            final JSONObject root = new JSONObject(nonEmptyJson(
-                ReticulumBridge.getChecklistsJson("{\"sortBy\":\"updated_at_desc\"}"),
-                "{\"items\":[]}"
-            ));
-            final JSONArray items = root.optJSONArray("items");
-            if (items == null) {
-                return;
-            }
-            for (int index = 0; index < items.length(); index += 1) {
-                final JSONObject item = items.optJSONObject(index);
-                if (item == null || item.has("deletedAt") || item.has("deleted_at")) {
-                    continue;
-                }
-                final String key = checklistNotificationKey(item);
-                if (!key.isEmpty()) {
-                    seenChecklistKeys.add(key);
-                }
-            }
-        } catch (JSONException ignored) {
-        }
-    }
-
-    private String checklistNotificationKey(JSONObject item) {
-        final String uid = item.optString("uid", "").trim();
-        final String stamp = latestChecklistStamp(item);
-        return uid.isEmpty() || stamp.isEmpty()
-            ? ""
-            : uid.toLowerCase(Locale.US) + ":" + stamp;
-    }
-
-    private String latestChecklistStamp(JSONObject item) {
-        String latest = "";
-        for (String key : new String[] {"updatedAt", "updated_at", "uploadedAt", "uploaded_at"}) {
-            final String value = item.optString(key, "").trim();
-            if (!value.isEmpty() && value.compareTo(latest) > 0) {
-                latest = value;
-            }
-        }
-        return latest;
-    }
-
-    private String optStringAny(JSONObject item, String camelKey, String snakeKey) {
-        if (item == null) {
-            return "";
-        }
-        return item.optString(camelKey, item.optString(snakeKey, ""));
-    }
-
-    private String decodeBase64Text(String raw) {
-        if (raw == null || raw.trim().isEmpty()) {
-            return "";
-        }
-        try {
-            return new String(Base64.decode(raw, Base64.DEFAULT), StandardCharsets.UTF_8);
-        } catch (IllegalArgumentException ex) {
-            return "";
-        }
-    }
-
-    private int optIntAny(JSONObject item, String camelKey, String snakeKey, int fallback) {
-        if (item == null) {
-            return fallback;
-        }
-        return item.optInt(camelKey, item.optInt(snakeKey, fallback));
     }
 
     private ResolvedConfig resolveConfig(String rawConfigJson) throws JSONException {
@@ -1948,26 +1447,6 @@ public final class ReticulumNodeService extends Service {
         } catch (Settings.SettingNotFoundException ex) {
             return 0;
         }
-    }
-
-    private int nextNotificationId() {
-        final int current = nextBackgroundNotificationId;
-        nextBackgroundNotificationId += 1;
-        if (nextBackgroundNotificationId > BACKGROUND_NOTIFICATION_BASE_ID + 10_000) {
-            nextBackgroundNotificationId = BACKGROUND_NOTIFICATION_BASE_ID;
-        }
-        return current;
-    }
-
-    private String truncate(String value) {
-        if (value == null) {
-            return "";
-        }
-        final String normalized = value.trim();
-        if (normalized.length() <= 160) {
-            return normalized;
-        }
-        return normalized.substring(0, 157) + "...";
     }
 
     private String abbreviate(String value) {
