@@ -25,7 +25,6 @@
   "apps/mobile/src/views/SettingsView.vue": 2200,
   "apps/mobile/src/views/SetupWizardView.vue": 1369,
   "apps/mobile/src/views/TelemetryMapView.vue": 1389,
-  "crates/reticulum_mobile/src/runtime.rs": 972,
   "packages/node-client/src/contracts.ts": 1024,
   "packages/node-client/src/index.ts": 4555
 }
