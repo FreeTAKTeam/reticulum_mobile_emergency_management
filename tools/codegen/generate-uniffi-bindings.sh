@@ -73,6 +73,10 @@ if [[ "$LANGUAGE" == "kotlin" ]]; then
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK_BIN/aarch64-linux-android21-clang"
   export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$NDK_BIN/armv7a-linux-androideabi21-clang"
   export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$NDK_BIN/x86_64-linux-android21-clang"
+  ANDROID_PAGE_SIZE_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+  export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:+$CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS }$ANDROID_PAGE_SIZE_RUSTFLAGS"
+  export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS="${CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS:+$CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS }$ANDROID_PAGE_SIZE_RUSTFLAGS"
+  export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS:+$CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS }$ANDROID_PAGE_SIZE_RUSTFLAGS"
   export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android21-clang"
   export CC_armv7_linux_androideabi="$NDK_BIN/armv7a-linux-androideabi21-clang"
   export CC_x86_64_linux_android="$NDK_BIN/x86_64-linux-android21-clang"
@@ -100,6 +104,17 @@ echo "Building reticulum_mobile for $LANGUAGE targets..."
 for target in "${TARGETS[@]}"; do
   rustup target add "$target" >/dev/null
   cargo build -p reticulum_mobile --release --target "$target"
+  if [[ "$LANGUAGE" == "kotlin" ]]; then
+    BUILT_LIBRARY="$REPO_ROOT/target/$target/release/libreticulum_mobile.so"
+    if ! "$NDK_BIN/llvm-readelf" -lW "$BUILT_LIBRARY" \
+      | awk '
+          $1 == "LOAD" { seen = 1; if ($NF != "0x4000") invalid = 1 }
+          END { exit (!seen || invalid) }
+        '; then
+      echo "Android native library is not 16 KB ELF-aligned: $BUILT_LIBRARY" >&2
+      exit 1
+    fi
+  fi
 done
 
 if command -v uniffi-bindgen >/dev/null 2>&1; then

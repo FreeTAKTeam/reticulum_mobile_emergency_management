@@ -106,6 +106,21 @@ if ($Language -eq "kotlin") {
   $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = Join-Path $ndkBin "aarch64-linux-android21-clang.cmd"
   $env:CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER = Join-Path $ndkBin "armv7a-linux-androideabi21-clang.cmd"
   $env:CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER = Join-Path $ndkBin "x86_64-linux-android21-clang.cmd"
+  $androidPageSizeRustFlags = "-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+  foreach ($rustFlagsVariable in @(
+      "CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS",
+      "CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS",
+      "CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS"
+    )) {
+    $existingRustFlags = [Environment]::GetEnvironmentVariable($rustFlagsVariable)
+    if (
+      $existingRustFlags -notmatch "max-page-size=16384" -or
+      $existingRustFlags -notmatch "common-page-size=16384"
+    ) {
+      $combinedRustFlags = "$existingRustFlags $androidPageSizeRustFlags".Trim()
+      Set-Item -Path "Env:$rustFlagsVariable" -Value $combinedRustFlags
+    }
+  }
   $env:CC_aarch64_linux_android = Join-Path $ndkBin "aarch64-linux-android21-clang.cmd"
   $env:CC_armv7_linux_androideabi = Join-Path $ndkBin "armv7a-linux-androideabi21-clang.cmd"
   $env:CC_x86_64_linux_android = Join-Path $ndkBin "x86_64-linux-android21-clang.cmd"
@@ -137,6 +152,15 @@ foreach ($target in $targets) {
   cargo build --manifest-path $crateManifest --target-dir $cargoTargetDir --release --target $target
   if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed for $target"
+  }
+  if ($Language -eq "kotlin") {
+    $builtLibrary = Join-Path $cargoTargetDir "$target\release\libreticulum_mobile.so"
+    $readElf = Join-Path $ndkBin "llvm-readelf.exe"
+    $loadSegments = @(& $readElf -lW $builtLibrary | Where-Object { $_ -match "^\s*LOAD\s" })
+    $misalignedSegments = @($loadSegments | Where-Object { $_ -notmatch "\s0x4000\s*$" })
+    if ($loadSegments.Count -eq 0 -or $misalignedSegments.Count -gt 0) {
+      throw "Android native library is not 16 KB ELF-aligned: $builtLibrary"
+    }
   }
 }
 
