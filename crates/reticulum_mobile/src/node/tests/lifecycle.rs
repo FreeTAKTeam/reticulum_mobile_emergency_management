@@ -88,6 +88,62 @@ async fn runtime_only_commands_still_fail_before_start() {
 }
 
 #[test]
+fn lifecycle_and_cancel_commands_use_reserved_priority_capacity() {
+    assert!(PRIORITY_COMMAND_QUEUE_CAPACITY >= 1_000);
+    let storage_dir = prepare_storage_dir("priority-lifecycle-commands");
+    let storage_dir_text = storage_dir.to_string_lossy().to_string();
+    let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");
+    let (normal_tx, mut normal_rx) = mpsc::channel(4);
+    let (priority_tx, mut priority_rx) = mpsc::channel(4);
+    {
+        let mut inner = node.inner.lock().expect("node lock");
+        inner.cmd_tx = Some(normal_tx);
+        inner.priority_cmd_tx = Some(priority_tx);
+    }
+
+    node.announce_now().expect("announce dispatch");
+    assert!(matches!(
+        priority_rx.blocking_recv(),
+        Some(Command::AnnounceNow {})
+    ));
+
+    std::thread::scope(|scope| {
+        let call = scope.spawn(|| {
+            node.connect_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+        });
+        match priority_rx.blocking_recv() {
+            Some(Command::ConnectPeer { resp, .. }) => {
+                resp.send(Ok(())).expect("connect response");
+            }
+            _ => panic!("expected priority connect command"),
+        }
+        assert!(call.join().expect("connect call should join").is_ok());
+
+        let call = scope.spawn(|| {
+            node.disconnect_peer("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+        });
+        match priority_rx.blocking_recv() {
+            Some(Command::DisconnectPeer { resp, .. }) => {
+                resp.send(Ok(())).expect("disconnect response");
+            }
+            _ => panic!("expected priority disconnect command"),
+        }
+        assert!(call.join().expect("disconnect call should join").is_ok());
+
+        let call = scope.spawn(|| node.cancel_lxmf("message-id".to_string()));
+        match priority_rx.blocking_recv() {
+            Some(Command::CancelLxmf { resp, .. }) => {
+                resp.send(Ok(())).expect("cancel response");
+            }
+            _ => panic!("expected priority cancel command"),
+        }
+        assert!(call.join().expect("cancel call should join").is_ok());
+    });
+
+    assert!(normal_rx.try_recv().is_err());
+}
+
+#[test]
 fn start_is_idempotent_for_equivalent_config() {
     let rt = tokio::runtime::Runtime::new().expect("test runtime");
     let _guard = rt.block_on(test_lock().lock());
