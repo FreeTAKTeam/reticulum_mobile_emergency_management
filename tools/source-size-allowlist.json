@@ -1,9 +1,6 @@
 {
   "apps/mobile/src/App.vue": 992,
-  "apps/mobile/src/components/ActionMessageItem.vue": 521,
   "apps/mobile/src/components/messaging/ConversationThread.vue": 769,
-  "apps/mobile/src/composables/useSetupWizard.ts": 525,
-  "apps/mobile/src/services/hubRegistryBootstrap.ts": 501,
   "apps/mobile/src/stores/checklistsStore.ts": 575,
   "apps/mobile/src/stores/eventsStore.ts": 659,
   "apps/mobile/src/stores/messagesStore.ts": 613,
