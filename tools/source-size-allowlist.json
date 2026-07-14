@@ -25,16 +25,7 @@
   "apps/mobile/src/views/SettingsView.vue": 2200,
   "apps/mobile/src/views/SetupWizardView.vue": 1369,
   "apps/mobile/src/views/TelemetryMapView.vue": 1389,
-  "crates/reticulum_mobile/src/app_state.rs": 5472,
-  "crates/reticulum_mobile/src/jni_bridge.rs": 5004,
-  "crates/reticulum_mobile/src/messaging_compat.rs": 2348,
-  "crates/reticulum_mobile/src/mission_sync.rs": 769,
-  "crates/reticulum_mobile/src/node.rs": 13008,
   "crates/reticulum_mobile/src/runtime.rs": 14934,
-  "crates/reticulum_mobile/src/runtime_projection.rs": 979,
-  "crates/reticulum_mobile/src/sdk_bridge.rs": 2061,
-  "crates/reticulum_mobile/src/sos_fields.rs": 538,
-  "crates/reticulum_mobile/src/types.rs": 1802,
   "packages/node-client/src/contracts.ts": 1024,
   "packages/node-client/src/index.ts": 4555
 }
