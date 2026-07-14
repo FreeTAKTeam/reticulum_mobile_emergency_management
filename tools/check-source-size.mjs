@@ -3,9 +3,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import {
+  evaluateClassSizes,
+  findClassSpans,
+  supportsClassDeclarations,
+} from "./source-size-classes.mjs";
+
 const MAX_LINES = 500;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWLIST_PATH = path.join(ROOT, "tools", "source-size-allowlist.json");
+const CLASS_ALLOWLIST_PATH = path.join(ROOT, "tools", "source-class-size-allowlist.json");
 const SOURCE_EXTENSIONS = new Set([
   ".java",
   ".js",
@@ -63,13 +70,16 @@ function repositoryFiles() {
 }
 
 const allowlist = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8"));
+const classAllowlist = JSON.parse(readFileSync(CLASS_ALLOWLIST_PATH, "utf8"));
 const files = repositoryFiles();
 const fileSet = new Set(files);
 const failures = [];
 let oversizedCount = 0;
+const classesByFile = new Map();
 
 for (const filePath of files) {
-  const lineCount = physicalLineCount(readFileSync(path.join(ROOT, filePath), "utf8"));
+  const contents = readFileSync(path.join(ROOT, filePath), "utf8");
+  const lineCount = physicalLineCount(contents);
   if (lineCount <= MAX_LINES) continue;
 
   oversizedCount += 1;
@@ -79,6 +89,12 @@ for (const filePath of files) {
   } else if (lineCount > allowedMaximum) {
     failures.push(`${filePath}: grew from allowed ${allowedMaximum} to ${lineCount} lines`);
   }
+}
+
+for (const filePath of files.filter(supportsClassDeclarations)) {
+  const contents = readFileSync(path.join(ROOT, filePath), "utf8");
+  const classes = findClassSpans(contents);
+  classesByFile.set(filePath, new Map(classes.map((entry) => [entry.name, entry])));
 }
 
 for (const [filePath, allowedMaximum] of Object.entries(allowlist)) {
@@ -95,12 +111,15 @@ for (const [filePath, allowedMaximum] of Object.entries(allowlist)) {
   }
 }
 
+const classEvaluation = evaluateClassSizes(classesByFile, classAllowlist, MAX_LINES);
+failures.push(...classEvaluation.failures);
+
 if (failures.length > 0) {
   console.error(`Source-size gate failed (${failures.length} issue${failures.length === 1 ? "" : "s"}):`);
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
   console.log(
-    `Source-size gate passed: ${files.length} first-party files checked, ${oversizedCount} ratcheted exception${oversizedCount === 1 ? "" : "s"}.`,
+    `Source-size gate passed: ${files.length} first-party files checked, ${oversizedCount} ratcheted file exception${oversizedCount === 1 ? "" : "s"}, ${classEvaluation.oversizedCount} ratcheted class exception${classEvaluation.oversizedCount === 1 ? "" : "s"}.`,
   );
 }
