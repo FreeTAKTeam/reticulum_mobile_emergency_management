@@ -1,0 +1,122 @@
+.help-screen,
+.delete-confirm-screen {
+  align-items: center;
+  background: rgb(2 9 24 / 72%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 1rem;
+  position: fixed;
+  z-index: 20;
+}
+
+.help-panel,
+.delete-confirm-panel {
+  background:
+    linear-gradient(150deg, rgb(9 25 55 / 96%), rgb(7 16 37 / 98%)),
+    radial-gradient(circle at 10% 10%, rgb(13 152 255 / 18%), transparent 38%);
+  border: 1px solid rgb(74 120 193 / 44%);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgb(0 0 0 / 36%);
+  color: #cfe2ff;
+  display: grid;
+  gap: 0.85rem;
+  max-width: 34rem;
+  padding: 1.05rem;
+  width: min(100%, 34rem);
+}
+
+.help-header,
+.delete-confirm-header {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.help-panel h2,
+.delete-confirm-panel h2 {
+  color: #f1f8ff;
+  font-family: var(--font-headline);
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+.help-panel p,
+.delete-confirm-panel p {
+  color: #b8cdec;
+  font-family: var(--font-body);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.delete-confirm-actions {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.delete-confirm-actions button {
+  min-height: 2.5rem;
+  padding: 0.72rem 0.8rem;
+  width: 100%;
+}
+
+.delete-cancel {
+  background: rgb(9 21 45 / 88%);
+  border: 1px solid rgb(93 127 181 / 48%);
+  color: #cfe2ff;
+}
+
+.delete-local {
+  background: rgb(23 42 72 / 88%);
+  border: 1px solid rgb(112 154 215 / 58%);
+  color: #e8f2ff;
+}
+
+.delete-remote {
+  background: rgb(72 20 35 / 88%);
+  border: 1px solid rgb(255 83 105 / 78%);
+  color: #ffd7dd;
+}
+
+.filter-row {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.filter-field {
+  align-items: center;
+  display: flex;
+  gap: 0.65rem;
+  max-width: 24rem;
+}
+
+.filter-label {
+  color: #9cb3d6;
+  flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.filter-select {
+  background: rgb(6 17 38 / 82%);
+  border: 1px solid rgb(70 110 174 / 42%);
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgb(186 236 255 / 5%);
+  color: #daecff;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 0.58rem 0.7rem;
+  width: auto;
+}
+
+.filter-select:active {
+  border-color: rgb(120 227 255 / 42%);
+  transform: translateY(1px) scale(0.99);
+}
