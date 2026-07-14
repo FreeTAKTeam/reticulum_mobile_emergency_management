@@ -1,8 +1,6 @@
 import {
-  createReticulumNodeClient,
   type EventProjectionRecord,
   type ProjectionInvalidationEvent,
-  type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
@@ -24,6 +22,7 @@ import {
   parseMecpMessage,
 } from "../utils/mecp";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
+import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -51,9 +50,7 @@ type EventTimelineRecord = {
   };
 };
 
-type ProjectionClientCache = typeof globalThis & {
-  __reticulumEventsProjectionClient?: ReticulumNodeClient;
-};
+const getProjectionClient = createProjectionClientAccessor("events");
 
 function nowMs(): number {
   return Date.now();
@@ -384,14 +381,6 @@ function loadWebEvents(): Record<string, EventProjectionRecord> {
 
 function saveWebEvents(records: Record<string, EventProjectionRecord>): void {
   localStorage.setItem(EVENT_STORAGE_KEY, JSON.stringify(Object.values(records)));
-}
-
-function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
-  const cache = globalThis as ProjectionClientCache;
-  if (!cache.__reticulumEventsProjectionClient) {
-    cache.__reticulumEventsProjectionClient = createReticulumNodeClient({ mode });
-  }
-  return cache.__reticulumEventsProjectionClient;
 }
 
 export const useEventsStore = defineStore("events", () => {

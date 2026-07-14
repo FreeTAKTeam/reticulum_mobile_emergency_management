@@ -1,5 +1,7 @@
 use rmpv::Value as MsgPackValue;
 
+use crate::msgpack_values::msgpack_string;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AnnounceMetadata {
     pub(crate) display_name: Option<String>,
@@ -130,14 +132,6 @@ fn extract_msgpack_announce_display_name(value: &MsgPackValue) -> Option<String>
     entries
         .first()
         .and_then(announce_display_name_from_msgpack_value)
-}
-
-fn msgpack_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::String(value) => value.as_str().map(str::to_string),
-        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
-        _ => None,
-    }
 }
 
 fn extract_msgpack_capability_tokens(value: &MsgPackValue) -> Vec<String> {

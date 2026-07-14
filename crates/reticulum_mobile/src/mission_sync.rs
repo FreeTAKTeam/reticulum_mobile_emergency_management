@@ -1,8 +1,11 @@
 use rmpv::Value as MsgPackValue;
-use std::borrow::ToOwned;
 
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_EVENT, FIELD_RESULTS};
 use crate::mission_commands::{canonical_command_type, checklist_arg_code};
+use crate::msgpack_values::{
+    msgpack_get_indexed, msgpack_get_named, msgpack_hex_or_string, msgpack_map_entries,
+    msgpack_string,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct MissionSyncMetadata {
@@ -81,48 +84,6 @@ impl MissionSyncMetadata {
     }
 }
 
-fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackValue)]> {
-    match value {
-        MsgPackValue::Map(entries) => Some(entries.as_slice()),
-        _ => None,
-    }
-}
-
-fn msgpack_get_indexed(
-    entries: &[(MsgPackValue, MsgPackValue)],
-    key: i64,
-) -> Option<&MsgPackValue> {
-    let key_string = key.to_string();
-
-    for (entry_key, entry_value) in entries {
-        match entry_key {
-            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => {
-                return Some(entry_value)
-            }
-            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
-                return Some(entry_value)
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn msgpack_get_named<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
-    keys: &[&str],
-) -> Option<&'a MsgPackValue> {
-    for wanted in keys {
-        for (entry_key, entry_value) in entries {
-            if matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
-            {
-                return Some(entry_value);
-            }
-        }
-    }
-    None
-}
-
 fn msgpack_get_checklist_arg<'a>(
     entries: &'a [(MsgPackValue, MsgPackValue)],
     key: &str,
@@ -131,21 +92,6 @@ fn msgpack_get_checklist_arg<'a>(
         msgpack_get_named(entries, &[key, code])
     } else {
         msgpack_get_named(entries, &[key])
-    }
-}
-
-fn msgpack_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::String(value) => value.as_str().map(ToOwned::to_owned),
-        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
-        _ => None,
-    }
-}
-
-fn msgpack_hex_or_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::Binary(value) if value.len() == 16 => Some(hex::encode(value)),
-        _ => msgpack_string(value),
     }
 }
 

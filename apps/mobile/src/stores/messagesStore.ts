@@ -1,11 +1,9 @@
 import {
-  createReticulumNodeClient,
   type EamProjectionRecord,
   type EamReadinessMessageRecord,
   type EamReadinessSummaryRecord,
   type EamTeamSummaryRecord,
   type ProjectionInvalidationEvent,
-  type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
@@ -18,6 +16,7 @@ import {
 import type { ActionMessage, EamStatus, EamTeamSummary, EamWireStatus } from "../types/domain";
 import { applyActionMessageStatusCycle } from "../utils/actionMessageStatus";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
+import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { DEFAULT_R3AKT_TEAM_COLOR, normalizeR3aktTeamColor } from "../utils/r3akt";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
@@ -27,9 +26,7 @@ const MESSAGE_STORAGE_KEY = "reticulum.mobile.messages.v1";
 type StoredMessages = Record<string, ActionMessage>;
 type TeamStatusBuckets = Partial<Record<EamWireStatus, number>>;
 
-type ProjectionClientCache = typeof globalThis & {
-  __reticulumMessagesProjectionClient?: ReticulumNodeClient;
-};
+const getProjectionClient = createProjectionClientAccessor("messages");
 
 function emptyEamReadinessSummary(): EamReadinessSummaryRecord {
   return {
@@ -276,14 +273,6 @@ function computeWebTeamSummary(messages: ActionMessage[], teamUid: string): EamT
     by_status: byStatus,
     updated_at: new Date().toISOString(),
   };
-}
-
-function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
-  const cache = globalThis as ProjectionClientCache;
-  if (!cache.__reticulumMessagesProjectionClient) {
-    cache.__reticulumMessagesProjectionClient = createReticulumNodeClient({ mode });
-  }
-  return cache.__reticulumMessagesProjectionClient;
 }
 
 function countRedStatuses(message: ActionMessage): number {

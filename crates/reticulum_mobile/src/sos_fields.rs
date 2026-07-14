@@ -2,6 +2,10 @@ use rmpv::Value as MsgPackValue;
 
 use crate::lxmf_fields::FIELD_COMMANDS;
 use crate::mission_commands::command_wire_value;
+use crate::msgpack_values::{
+    msgpack_bool, msgpack_f64, msgpack_get_indexed, msgpack_get_named, msgpack_map_entries,
+    msgpack_string,
+};
 use crate::types::{NodeError, SosDeviceTelemetryRecord, SosMessageKind, SosTriggerSource};
 
 pub(crate) const LXMF_FIELD_TELEMETRY: i64 = 0x02;
@@ -279,65 +283,6 @@ fn parse_telemetry_field(value: Option<&MsgPackValue>) -> Option<SosDeviceTeleme
     }
     (telemetry.lat.is_some() || telemetry.lon.is_some() || telemetry.battery_percent.is_some())
         .then_some(telemetry)
-}
-
-fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackValue)]> {
-    match value {
-        MsgPackValue::Map(entries) => Some(entries.as_slice()),
-        _ => None,
-    }
-}
-
-fn msgpack_get_indexed(
-    entries: &[(MsgPackValue, MsgPackValue)],
-    key: i64,
-) -> Option<&MsgPackValue> {
-    let key_string = key.to_string();
-    entries
-        .iter()
-        .find_map(|(entry_key, entry_value)| match entry_key {
-            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => Some(entry_value),
-            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
-                Some(entry_value)
-            }
-            _ => None,
-        })
-}
-
-fn msgpack_get_named<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
-    keys: &[&str],
-) -> Option<&'a MsgPackValue> {
-    keys.iter().find_map(|wanted| {
-        entries.iter().find_map(|(entry_key, entry_value)| {
-            matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
-                .then_some(entry_value)
-        })
-    })
-}
-
-fn msgpack_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::String(value) => value.as_str().map(str::to_string),
-        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
-        _ => None,
-    }
-}
-
-fn msgpack_bool(value: &MsgPackValue) -> Option<bool> {
-    match value {
-        MsgPackValue::Boolean(value) => Some(*value),
-        _ => None,
-    }
-}
-
-fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
-    match value {
-        MsgPackValue::F32(value) => Some(f64::from(*value)),
-        MsgPackValue::F64(value) => Some(*value),
-        MsgPackValue::Integer(value) => value.as_i64().map(|entry| entry as f64),
-        _ => None,
-    }
 }
 
 fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {

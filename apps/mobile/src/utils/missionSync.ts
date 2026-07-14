@@ -1,3 +1,7 @@
+import {
+  base64ToBytes as decodeBase64ToBytes,
+  bytesToBase64 as encodeBytesToBase64,
+} from "@reticulum/node-client";
 import { pack, unpack } from "msgpackr";
 
 import { asRecord } from "./records";
@@ -217,41 +221,6 @@ const CHECKLIST_ARG_KEY_BY_CODE: Record<string, string> = {
 
 function commandWireValue(commandType: string): string {
   return COMMAND_CODE_BY_TYPE[commandType] ?? commandType;
-}
-
-function encodeBytesToBase64(value: Uint8Array): string {
-  const bufferCtor = (
-    globalThis as unknown as {
-      Buffer?: { from(data: Uint8Array): { toString(encoding: string): string } };
-    }
-  ).Buffer;
-  if (bufferCtor) {
-    return bufferCtor.from(value).toString("base64");
-  }
-
-  let binary = "";
-  for (const byte of value) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-function decodeBase64ToBytes(value: string): Uint8Array {
-  const bufferCtor = (
-    globalThis as unknown as {
-      Buffer?: { from(data: string, encoding: string): Uint8Array };
-    }
-  ).Buffer;
-  if (bufferCtor) {
-    return Uint8Array.from(bufferCtor.from(value, "base64"));
-  }
-
-  const binary = atob(value);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
 }
 
 function getMapValue(source: unknown, key: number): unknown {
