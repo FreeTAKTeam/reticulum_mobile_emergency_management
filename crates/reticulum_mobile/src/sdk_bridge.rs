@@ -31,6 +31,7 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex as TokioMutex;
 use x25519_dalek::PublicKey;
 
+use crate::delivery_policy::normalize_hex_32;
 use crate::mission_sync::MissionSyncMetadata;
 use crate::runtime::LxmfSendReport;
 use crate::types::{
@@ -1503,17 +1504,6 @@ fn decrypt_propagation_ciphertext(
     }
 
     Err(PropagationPayloadDecryptError::DecryptFailed)
-}
-
-fn normalize_hex_32(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.len() != 32 {
-        return None;
-    }
-    if !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
 }
 
 fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {

@@ -7,10 +7,6 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-default = []
-legacy-lxmf-runtime = []
-
 [dependencies]
 reticulum = { package = "reticulum-rs", path = "../../../LXMF-rs/crates/libs/reticulum-rs" }
 base64 = "0.22"
@@ -27,14 +23,12 @@ lxmf-runtime = { path = "../../../LXMF-rs/crates/libs/lxmf-runtime" }
 rmp-serde = "1"
 rmpv = "1"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-regex = "1.10.6"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "1"
-tokio = { version = "1.44.2", features = ["full"] }
+tokio = { version = "1.44.2", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 uniffi = "0.28"
 x25519-dalek = "2.0.1"
 

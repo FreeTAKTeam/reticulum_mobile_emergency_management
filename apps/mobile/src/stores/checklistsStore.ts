@@ -1,5 +1,4 @@
 import {
-  createReticulumNodeClient,
   type ChecklistRecord as RuntimeChecklistRecord,
   type ChecklistTemplateRecord as RuntimeChecklistTemplateRecord,
   type ProjectionInvalidationEvent,
@@ -19,11 +18,10 @@ import {
   type ChecklistRecord as UiChecklistRecord,
 } from "../utils/checklists";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
+import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { useNodeStore } from "./nodeStore";
 
-type ProjectionClientCache = typeof globalThis & {
-  __reticulumChecklistsProjectionClient?: ReticulumNodeClient;
-};
+const getProjectionClient = createProjectionClientAccessor("checklists");
 
 type RuntimeChecklistDetailRecord = RuntimeChecklistRecord | RuntimeChecklistTemplateRecord;
 type ChecklistNotificationWork = {
@@ -36,14 +34,6 @@ type ChecklistNotificationWork = {
 
 const CHECKLIST_NOTIFICATION_DEBOUNCE_MS = 2_000;
 const TASK_SUBMISSION_KEY_SEPARATOR = "::";
-
-function getProjectionClient(clientMode: "auto" | "capacitor"): ReticulumNodeClient {
-  const cache = globalThis as ProjectionClientCache;
-  if (!cache.__reticulumChecklistsProjectionClient) {
-    cache.__reticulumChecklistsProjectionClient = createReticulumNodeClient({ mode: clientMode });
-  }
-  return cache.__reticulumChecklistsProjectionClient;
-}
 
 function normalizeMissionUid(value: string): string {
   const normalized = value

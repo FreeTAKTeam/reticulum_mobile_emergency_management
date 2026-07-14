@@ -1,9 +1,7 @@
 import {
-  createReticulumNodeClient,
   type ConversationRecord,
   type MessageRecord,
   type ProjectionInvalidationEvent,
-  type ReticulumNodeClient,
   type SendMode,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
@@ -15,6 +13,7 @@ import {
   truncateNotificationBody,
 } from "../services/operationalNotifications";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
+import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
@@ -23,9 +22,7 @@ const DIRECT_CHAT_CONNECT_TIMEOUT_MS = 7_000;
 const DIRECT_CHAT_CONNECT_POLL_MS = 250;
 
 type StoredMessages = Record<string, MessageRecord>;
-type ProjectionClientCache = typeof globalThis & {
-  __reticulumMessagingProjectionClient?: ReticulumNodeClient;
-};
+const getProjectionClient = createProjectionClientAccessor("messaging");
 type ConversationListItem = {
   conversationId: string;
   destinationHex: string;
@@ -74,14 +71,6 @@ function loadWebMessages(): StoredMessages {
 
 function saveWebMessages(messages: StoredMessages): void {
   localStorage.setItem(MESSAGE_STORAGE_KEY, JSON.stringify(Object.values(messages)));
-}
-
-function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
-  const cache = globalThis as ProjectionClientCache;
-  if (!cache.__reticulumMessagingProjectionClient) {
-    cache.__reticulumMessagingProjectionClient = createReticulumNodeClient({ mode });
-  }
-  return cache.__reticulumMessagingProjectionClient;
 }
 
 function normalizeDestinationHex(value: string): string {

@@ -8,6 +8,7 @@ mod lxmf_fields;
 mod messaging_compat;
 mod mission_commands;
 mod mission_sync;
+mod msgpack_values;
 mod node;
 mod plugin_runtime;
 mod runtime;

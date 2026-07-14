@@ -1,7 +1,5 @@
 import {
-  createReticulumNodeClient,
   type ProjectionInvalidationEvent,
-  type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, reactive, ref, watch } from "vue";
@@ -14,14 +12,13 @@ import {
 } from "../services/telemetry";
 import { LEGACY_TELEMETRY_STORAGE_KEY } from "../utils/legacyState";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
+import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { asNumber, asTrimmedString } from "../utils/replicationParser";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { useNodeStore } from "./nodeStore";
 
 type TelemetryLoopStatus = "idle" | "running" | "permission_denied" | "gps_unavailable" | "error";
-type ProjectionClientCache = typeof globalThis & {
-  __reticulumTelemetryProjectionClient?: ReticulumNodeClient;
-};
+const getProjectionClient = createProjectionClientAccessor("telemetry");
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") {
@@ -69,14 +66,6 @@ function saveLegacyPositions(positions: TelemetryPosition[]): void {
 
 function keyFor(callsign: string): string {
   return callsign.trim().toLowerCase();
-}
-
-function getProjectionClient(mode: "auto" | "capacitor"): ReticulumNodeClient {
-  const cache = globalThis as ProjectionClientCache;
-  if (!cache.__reticulumTelemetryProjectionClient) {
-    cache.__reticulumTelemetryProjectionClient = createReticulumNodeClient({ mode });
-  }
-  return cache.__reticulumTelemetryProjectionClient;
 }
 
 export const useTelemetryStore = defineStore("telemetry", () => {

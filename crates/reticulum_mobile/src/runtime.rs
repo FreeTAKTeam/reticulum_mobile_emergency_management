@@ -11,10 +11,15 @@ use crate::announce_metadata::{
     normalize_rem_display_name, parse_announce_metadata, supports_mission_traffic,
 };
 use crate::delivery_policy;
+use crate::delivery_policy::normalize_hex_32;
 use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_RESULTS};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_commands::{canonical_command_type, checklist_arg_code};
 use crate::mission_sync::{parse_mission_sync_metadata, MissionSyncMetadata};
+use crate::msgpack_values::{
+    msgpack_bool, msgpack_f64, msgpack_get_indexed, msgpack_get_named, msgpack_hex_or_string,
+    msgpack_map_entries, msgpack_string,
+};
 use crate::sos::{location_from_alert, received_alert_from_sos};
 use crate::sos_fields::{extract_text_coordinates, parse_sos_fields, sos_kind_from_text};
 use crossbeam_channel as cb;
@@ -3026,62 +3031,6 @@ struct EamWireBody {
     projection: Option<EamProjectionRecord>,
 }
 
-fn msgpack_map_entries(value: &MsgPackValue) -> Option<&[(MsgPackValue, MsgPackValue)]> {
-    match value {
-        MsgPackValue::Map(entries) => Some(entries.as_slice()),
-        _ => None,
-    }
-}
-
-fn msgpack_get_indexed(
-    entries: &[(MsgPackValue, MsgPackValue)],
-    key: i64,
-) -> Option<&MsgPackValue> {
-    let key_string = key.to_string();
-    for (entry_key, entry_value) in entries {
-        match entry_key {
-            MsgPackValue::Integer(value) if value.as_i64() == Some(key) => {
-                return Some(entry_value)
-            }
-            MsgPackValue::String(value) if value.as_str() == Some(key_string.as_str()) => {
-                return Some(entry_value)
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn msgpack_get_named<'a>(
-    entries: &'a [(MsgPackValue, MsgPackValue)],
-    keys: &[&str],
-) -> Option<&'a MsgPackValue> {
-    for wanted in keys {
-        for (entry_key, entry_value) in entries {
-            if matches!(entry_key, MsgPackValue::String(actual) if actual.as_str() == Some(*wanted))
-            {
-                return Some(entry_value);
-            }
-        }
-    }
-    None
-}
-
-fn msgpack_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::String(value) => value.as_str().map(str::to_string),
-        MsgPackValue::Binary(value) => String::from_utf8(value.clone()).ok(),
-        _ => None,
-    }
-}
-
-fn msgpack_hex_or_string(value: &MsgPackValue) -> Option<String> {
-    match value {
-        MsgPackValue::Binary(value) if value.len() == 16 => Some(hex::encode(value)),
-        _ => msgpack_string(value),
-    }
-}
-
 fn msgpack_event_uid(value: &MsgPackValue) -> Option<String> {
     match value {
         MsgPackValue::Binary(value) if value.len() == 16 => {
@@ -3232,22 +3181,6 @@ fn msgpack_event_topics(value: &MsgPackValue, mission_uid: &str) -> Option<Vec<S
     )
 }
 
-fn msgpack_bool(value: &MsgPackValue) -> Option<bool> {
-    match value {
-        MsgPackValue::Boolean(value) => Some(*value),
-        _ => None,
-    }
-}
-
-fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
-    match value {
-        MsgPackValue::F32(value) => Some(f64::from(*value)),
-        MsgPackValue::F64(value) => Some(*value),
-        MsgPackValue::Integer(value) => value.as_i64().map(|entry| entry as f64),
-        _ => None,
-    }
-}
-
 fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {
     match value {
         MsgPackValue::Integer(value) => value.as_u64().or_else(|| {
@@ -3264,17 +3197,6 @@ pub(crate) fn lxmf_private_identity(
 ) -> Result<lxmf::identity::PrivateIdentity, NodeError> {
     lxmf::identity::PrivateIdentity::from_private_key_bytes(&identity.to_private_key_bytes())
         .map_err(|_| NodeError::InternalError {})
-}
-
-fn normalize_hex_32(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.len() != 32 {
-        return None;
-    }
-    if !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
 }
 
 fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {
