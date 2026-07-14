@@ -11,7 +11,14 @@ import java.util.Arrays;
 public class ReticulumNodePluginBaseTest {
     @Test
     public void concretePluginInheritsSharedLifecycle() throws Exception {
-        assertEquals(ReticulumNodePluginBase.class, ReticulumNodePlugin.class.getSuperclass());
+        assertEquals(
+            ReticulumNodeTransportPluginApi.class,
+            ReticulumNodePlugin.class.getSuperclass()
+        );
+        assertEquals(
+            ReticulumNodePluginBase.class,
+            ReticulumNodeTransportPluginApi.class.getSuperclass()
+        );
         assertEquals(
             ReticulumNodePluginBase.class,
             ReticulumNodePlugin.class.getMethod("load").getDeclaringClass()
