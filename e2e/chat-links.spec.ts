@@ -1,6 +1,15 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { defaultSettings, gotoApp, seedAppStorage } from "./support/app";
+
+async function openAlphaConversationIfNeeded(page: Page): Promise<void> {
+  const composer = page.getByPlaceholder("Write an LXMF message");
+  if (await composer.isVisible()) {
+    return;
+  }
+  await page.getByRole("button", { name: /^ALPHA-1 / }).click();
+  await expect(composer).toBeVisible();
+}
 
 test("chat message links render as styled external anchors", async ({ page }) => {
   await seedAppStorage(page, {
@@ -9,6 +18,7 @@ test("chat message links render as styled external anchors", async ({ page }) =>
 
   await gotoApp(page, "/inbox?mockChat=1");
   await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
+  await openAlphaConversationIfNeeded(page);
 
   const message = "Use https://example.org/ops?id=42, then report.";
   await page.getByPlaceholder("Write an LXMF message").fill(message);
@@ -61,15 +71,17 @@ test("chat peer status and coordinates link to EAM details and telemetry map", a
   });
 
   await gotoApp(page, "/inbox?mockChat=1");
+  await openAlphaConversationIfNeeded(page);
   await expect(page.getByRole("heading", { name: "ALPHA-1" })).toBeVisible();
 
   const statusLink = page.getByRole("link", { name: "Open EAM details for ALPHA-1" });
   await expect(statusLink).toHaveClass(/sos-map-link/);
   await statusLink.click();
   await expect(page).toHaveURL(/\/messages\?callsign=ALPHA-1$/);
-  await expect(page.locator(".item.selected", { hasText: "ALPHA-1" }).first()).toBeVisible();
+  await expect(page.locator(".item.selected:visible", { hasText: "ALPHA-1" })).toBeVisible();
 
   await gotoApp(page, "/inbox?mockChat=1");
+  await openAlphaConversationIfNeeded(page);
   const coordinateLink = page.getByRole("link", { name: /Open 44\.65.+63\.58.+on telemetry map/ });
   await expect(coordinateLink).toHaveClass(/sos-map-link/);
   await coordinateLink.click();
