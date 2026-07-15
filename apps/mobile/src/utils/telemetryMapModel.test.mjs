@@ -66,7 +66,7 @@ test("1,000 telemetry positions cluster and label within the local latency budge
   assert.equal(groups.clusters.length, 1);
   assert.equal(groups.clusters[0].count, 1_000);
   assert.equal(placements.size, 0);
-  assert.ok(elapsedMs < 500, `clustering took ${elapsedMs.toFixed(1)}ms`);
+  assert.ok(elapsedMs < 50, `clustering created a ${elapsedMs.toFixed(1)}ms long task`);
 });
 
 test("1,000 sparse positions avoid quadratic cluster scans", () => {
@@ -87,5 +87,5 @@ test("1,000 sparse positions avoid quadratic cluster scans", () => {
 
   assert.equal(groups.clusters.length, 0);
   assert.equal(groups.individuals.length, 1_000);
-  assert.ok(elapsedMs < 500, `sparse clustering took ${elapsedMs.toFixed(1)}ms`);
+  assert.ok(elapsedMs < 50, `sparse clustering created a ${elapsedMs.toFixed(1)}ms long task`);
 });

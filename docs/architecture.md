@@ -1,5 +1,10 @@
 # Event And Telemetry Flow Architecture
 
+For the current Rust, Android, NodeStore, node-client, and Vue module ownership
+boundaries, see [`runtime-modules.md`](runtime-modules.md). The executable
+responsiveness and source-size invariants described there apply to every flow
+in this document.
+
 This diagram shows the end-to-end mobile event replication flow over LXMF, including local creation, peer LXMF destination resolution, Community Hub-compatible mission payload transport, receiver-side application, and acknowledgement handling.
 
 Current mobile behavior differs from the older store-centric sketch below in two important ways:
