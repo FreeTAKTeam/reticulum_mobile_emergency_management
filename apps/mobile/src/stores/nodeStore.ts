@@ -94,529 +94,64 @@ import {
 } from "../utils/readinessErrors";
 import { statusHasRuntimeReceiveReadiness } from "../utils/startupInterfaces";
 import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
+import {
+  DEFAULT_SETTINGS,
+  LEGACY_DEFAULT_DISPLAY_NAME,
+  RCH_HUB_DIRECTORY_ENABLED,
+  cloneDefaultSettings,
+  fromSavedPeerRecords,
+  hasSelectedHubIdentity,
+  hubModeUsesRch,
+  hubModeWasCoerced,
+  loadNodeConfigRestartRequired,
+  loadRemovedPeerDestinations,
+  nodeConfigsEqual,
+  normalizeAppSettingsRecord,
+  normalizeChecklistSettings,
+  normalizeClientMode,
+  normalizeHubMode,
+  normalizeStoredDisplayName,
+  normalizeTelemetrySettings,
+  settingsRecordWasNormalized,
+  settingsRecordsEqual,
+  storeNodeConfigRestartRequired,
+  storeRemovedPeerDestinations,
+  toAppSettingsRecord,
+  toNodeConfig,
+  toSavedPeerRecords,
+  toUiSettingsProjection,
+} from "./nodeSettingsModel";
+import {
+  EMPTY_BYTES,
+  EMPTY_OPERATIONAL_SUMMARY,
+  EMPTY_STATUS,
+  EMPTY_SYNC_STATUS,
+  DEFAULT_WATCH_STATUS_SERVER,
+  NODE_START_TIMEOUT_MS,
+  OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS,
+  PEER_ONLINE_FRESHNESS_MS,
+  PEER_PRESENCE_TICK_MS,
+  PEER_VISIBLE_UNSAVED_MAX_AGE_MS,
+  PROJECTION_REFRESH_DEBOUNCE_MS,
+  STARTUP_ANNOUNCE_SETTLE_MS,
+  type EventPeerRoute,
+  type HubAnnounceCandidate,
+  type HubRegistrationSnapshot,
+  type PacketSendOptions,
+  type UiLogLine,
+  activePropagationNodeHex,
+  advancePresenceNow,
+  asTrimmedString,
+  hasActualRemAnnounce,
+  normalizeNodeStatus,
+  nowMs,
+  peerSortRank,
+  shouldDisplayDiscoveredPeer,
+  sleep,
+  toUiPeerState,
+  withTimeout,
+} from "./nodeStoreCore";
 
-const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
-const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
-const PEER_PRESENCE_TICK_MS = 15_000;
-const EMPTY_BYTES = new Uint8Array(0);
-const STARTUP_ANNOUNCE_SETTLE_MS = 2_500;
-const NODE_START_TIMEOUT_MS = 15_000;
-const PROJECTION_REFRESH_DEBOUNCE_MS = 200;
-const OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS = 2_000;
-const REMOVED_PEERS_STORAGE_KEY = "reticulum.mobile.removedPeers.v1";
-const NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY = "reticulum.mobile.nodeConfigRestartRequired.v1";
-
-const EMPTY_STATUS: NodeStatus = {
-  running: false,
-  name: "",
-  identityHex: "",
-  appDestinationHex: "",
-  lxmfDestinationHex: "",
-  lastError: undefined,
-  readiness: {
-    state: "Pending",
-    interfaces: [],
-  },
-  interfaces: [],
-};
-
-const EMPTY_SYNC_STATUS: SyncStatus = {
-  phase: "Idle",
-  messagesReceived: 0,
-};
-
-const EMPTY_OPERATIONAL_SUMMARY = {
-  running: false,
-  peerCountTotal: 0,
-  savedPeerCount: 0,
-  connectedPeerCount: 0,
-  conversationCount: 0,
-  messageCount: 0,
-  eamCount: 0,
-  eventCount: 0,
-  telemetryCount: 0,
-  updatedAtMs: 0,
-};
-
-const DEFAULT_WATCH_STATUS_SERVER: WatchStatusServerState = {
-  enabled: true,
-  port: 29_863,
-  url: "http://localhost:29863/info.json",
-  currentUrl: "http://localhost:29863/info.json",
-  running: false,
-  bindError: "",
-};
-
-interface HubRegistrationSnapshot {
-  status: HubRegistrationStatus;
-  linkage?: HubRegistryLinkage;
-  lastAttemptAt?: number;
-  lastReadyAt?: number;
-  lastError?: string;
-}
-
-interface HubAnnounceCandidate {
-  destination: string;
-  label: string;
-}
-
-const LEGACY_DEFAULT_DISPLAY_NAME = "emergency-ops-mobile";
-
-const DEFAULT_SETTINGS: NodeUiSettings = {
-  displayName: DEFAULT_NODE_CONFIG.name,
-  clientMode: "auto",
-  autoConnectSaved: false,
-  announceCapabilities: ensureRequiredAnnounceCapabilities("R3AKT,EMergencyMessages"),
-  tcpClients: [...DEFAULT_TCP_COMMUNITY_ENDPOINTS],
-  broadcast: DEFAULT_NODE_CONFIG.broadcast,
-  transportNodeEnabled: DEFAULT_NODE_CONFIG.transportNodeEnabled,
-  announceIntervalSeconds: DEFAULT_NODE_CONFIG.announceIntervalSeconds,
-  telemetry: {
-    enabled: false,
-    publishIntervalSeconds: 360,
-    accuracyThresholdMeters: undefined,
-    staleAfterMinutes: 30,
-    expireAfterMinutes: 180,
-  },
-  checklists: {
-    defaultTaskDueStepMinutes: 30,
-  },
-  rnode: { ...DEFAULT_RNODE_SETTINGS },
-  hub: {
-    mode: "Autonomous",
-    identityHash: "",
-    apiBaseUrl: "",
-    apiKey: "",
-    refreshIntervalSeconds: 3600,
-  },
-};
-const RCH_HUB_DIRECTORY_ENABLED = false;
-interface UiLogLine {
-  at: number;
-  level: string;
-  message: string;
-}
-
-type EventPeerRoute = {
-  appDestinationHex: string;
-  lxmfDestinationHex: string;
-  identityHex?: string;
-  label?: string;
-  announcedName?: string;
-  sendMode: SendMode;
-};
-type PacketSendOptions = {
-  fieldsBase64?: string;
-  sendMode?: SendMode;
-};
-
-function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
-  if (peer.saved) {
-    return true;
-  }
-
-  if (!hasActualRemAnnounce(peer) && !peer.sources.includes("hub")) {
-    return false;
-  }
-
-  const seenAt = Math.max(peer.announceLastSeenAt ?? 0, peer.lxmfLastSeenAt ?? 0, peer.lastSeenAt ?? 0);
-  return seenAt > 0 && (nowMs() - seenAt) <= PEER_VISIBLE_UNSAVED_MAX_AGE_MS;
-}
-
-function hasActualRemAnnounce(peer: DiscoveredPeer): boolean {
-  return peer.sources.includes("announce")
-    && typeof peer.announceLastSeenAt === "number"
-    && Number.isFinite(peer.announceLastSeenAt)
-    && peer.announceLastSeenAt > 0
-    && peerHasRemAnnounceEvidence(peer);
-}
-
-function nowMs(): number {
-  return Date.now();
-}
-
-function advancePresenceNow(currentValue: number, candidateValue?: number): number {
-  const candidate = typeof candidateValue === "number" && Number.isFinite(candidateValue)
-    ? candidateValue
-    : nowMs();
-  return Math.max(currentValue, candidate);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timerId: number | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timerId = window.setTimeout(() => {
-      reject(new Error(message));
-    }, timeoutMs);
-  });
-
-  return Promise.race([operation, timeout]).finally(() => {
-    if (timerId !== undefined) {
-      window.clearTimeout(timerId);
-    }
-  });
-}
-
-function asTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeNodeStatus(value?: Partial<NodeStatus> | null): NodeStatus {
-  const lastError = asTrimmedString(value?.lastError);
-  return {
-    running: Boolean(value?.running),
-    name: typeof value?.name === "string" ? value.name : "",
-    identityHex: typeof value?.identityHex === "string" ? value.identityHex : "",
-    appDestinationHex: typeof value?.appDestinationHex === "string" ? value.appDestinationHex : "",
-    lxmfDestinationHex: typeof value?.lxmfDestinationHex === "string" ? value.lxmfDestinationHex : "",
-    lastError: lastError || undefined,
-    readiness: value?.readiness ?? {
-      state: "Pending",
-      interfaces: [],
-    },
-    interfaces: Array.isArray(value?.interfaces) ? value.interfaces : [],
-  };
-}
-
-function activePropagationNodeHex(status: SyncStatus): string | undefined {
-  const candidate = asTrimmedString(status.activePropagationNodeHex);
-  return candidate ? candidate : undefined;
-}
-
-function toUiPeerState(
-  state: PeerRecord["state"] | PeerChangedEvent["change"]["state"] | undefined,
-): PeerConnectionState {
-  if (state === "Connected") {
-    return "connected";
-  }
-  if (state === "Connecting") {
-    return "connecting";
-  }
-  return "disconnected";
-}
-
-function peerSortRank(peer: Pick<DiscoveredPeer, "saved" | "activeLink" | "lastSeenAt">): number {
-  let rank = 0;
-  if (peer.saved) {
-    rank += 2;
-  }
-  if (peer.activeLink) {
-    rank += 4;
-  }
-  if (peer.lastSeenAt > 0) {
-    rank += 1;
-  }
-  return rank;
-}
-
-function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
-  const requested = value === "capacitor" ? "capacitor" : "auto";
-  if (requested === "capacitor" && Capacitor.getPlatform() === "web") {
-    return "auto";
-  }
-  return requested;
-}
-
-function normalizeStoredDisplayName(value: unknown): string {
-  const normalized = normalizeDisplayName(typeof value === "string" ? value : "");
-  if (!normalized || normalized.toLowerCase() === LEGACY_DEFAULT_DISPLAY_NAME) {
-    return generateDefaultCallSign();
-  }
-  return normalized;
-}
-
-function normalizeTelemetrySettings(
-  telemetry: Partial<NodeUiSettings["telemetry"]> | undefined,
-  base: NodeUiSettings["telemetry"] = DEFAULT_SETTINGS.telemetry,
-): NodeUiSettings["telemetry"] {
-  const staleAfterMinutes = Math.max(
-    1,
-    Number(telemetry?.staleAfterMinutes ?? base.staleAfterMinutes),
-  );
-  const expireAfterMinutes = Math.max(
-    staleAfterMinutes,
-    Number(telemetry?.expireAfterMinutes ?? base.expireAfterMinutes),
-  );
-
-  return {
-    ...base,
-    ...telemetry,
-    publishIntervalSeconds: Math.max(
-      1,
-      Number(telemetry?.publishIntervalSeconds ?? base.publishIntervalSeconds),
-    ),
-    accuracyThresholdMeters:
-      telemetry?.accuracyThresholdMeters === undefined || telemetry?.accuracyThresholdMeters === null
-        ? undefined
-        : Math.max(0, Number(telemetry.accuracyThresholdMeters)),
-    staleAfterMinutes,
-    expireAfterMinutes,
-  };
-}
-
-function normalizeChecklistSettings(
-  checklists: Partial<NodeUiSettings["checklists"]> | undefined,
-  base: NodeUiSettings["checklists"] = DEFAULT_SETTINGS.checklists,
-): NodeUiSettings["checklists"] {
-  const parsed = Math.trunc(Number(checklists?.defaultTaskDueStepMinutes ?? base.defaultTaskDueStepMinutes));
-  return {
-    ...base,
-    ...checklists,
-    defaultTaskDueStepMinutes: Number.isFinite(parsed) ? Math.max(1, parsed) : base.defaultTaskDueStepMinutes,
-  };
-}
-
-function normalizeHubMode(value: unknown): NodeUiSettings["hub"]["mode"] {
-  if (!RCH_HUB_DIRECTORY_ENABLED) {
-    return "Autonomous";
-  }
-
-  switch (String(value ?? "").trim()) {
-    case "Connected":
-      return "Connected";
-    case "SemiAutonomous":
-    case "RchLxmf":
-    case "RchHttp":
-      return "SemiAutonomous";
-    case "Autonomous":
-    case "Disabled":
-    default:
-      return "Autonomous";
-  }
-}
-
-function hubModeUsesRch(mode: NodeUiSettings["hub"]["mode"]): boolean {
-  return mode !== "Autonomous";
-}
-
-function hasSelectedHubIdentity(hubIdentityHash = ""): boolean {
-  return isValidDestinationHex(normalizeDestinationHex(hubIdentityHash));
-}
-
-function cloneDefaultSettings(): NodeUiSettings {
-  return {
-    ...DEFAULT_SETTINGS,
-    telemetry: { ...DEFAULT_SETTINGS.telemetry },
-    checklists: { ...DEFAULT_SETTINGS.checklists },
-    hub: { ...DEFAULT_SETTINGS.hub },
-    rnode: { ...DEFAULT_SETTINGS.rnode },
-  };
-}
-
-function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord {
-  return {
-    displayName: settings.displayName,
-    autoConnectSaved: settings.autoConnectSaved,
-    announceCapabilities: settings.announceCapabilities,
-    tcpClients: [...settings.tcpClients],
-    broadcast: settings.broadcast,
-    transportNodeEnabled: settings.transportNodeEnabled,
-    announceIntervalSeconds: settings.announceIntervalSeconds,
-    telemetry: {
-      enabled: settings.telemetry.enabled,
-      publishIntervalSeconds: settings.telemetry.publishIntervalSeconds,
-      accuracyThresholdMeters: settings.telemetry.accuracyThresholdMeters,
-      staleAfterMinutes: settings.telemetry.staleAfterMinutes,
-      expireAfterMinutes: settings.telemetry.expireAfterMinutes,
-    },
-    checklists: {
-      defaultTaskDueStepMinutes: settings.checklists.defaultTaskDueStepMinutes,
-    },
-    hub: {
-      mode: settings.hub.mode,
-      identityHash: settings.hub.identityHash,
-      apiBaseUrl: settings.hub.apiBaseUrl,
-      apiKey: settings.hub.apiKey,
-      refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
-    },
-    rnode: normalizeRnodeSettings(settings.rnode),
-  };
-}
-
-function hubModeWasCoerced(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
-  return left.hub.mode !== right.hub.mode;
-}
-
-function settingsRecordWasNormalized(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
-  return left.displayName !== right.displayName || hubModeWasCoerced(left, right);
-}
-
-function settingsRecordsEqual(left: AppSettingsRecord, right: AppSettingsRecord): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function nodeConfigsEqual(left: NodeConfig, right: NodeConfig): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function loadNodeConfigRestartRequired(): boolean {
-  try {
-    return window.localStorage.getItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function storeNodeConfigRestartRequired(required: boolean): void {
-  try {
-    if (required) {
-      window.localStorage.setItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY, "1");
-    } else {
-      window.localStorage.removeItem(NODE_CONFIG_RESTART_REQUIRED_STORAGE_KEY);
-    }
-  } catch {
-    // Local storage can be unavailable in restricted webviews; the in-memory flag still applies.
-  }
-}
-
-function toUiSettingsProjection(
-  next: Pick<NodeUiSettings, "clientMode">,
-): NodeUiPreferences {
-  return {
-    clientMode: normalizeClientMode(next.clientMode),
-  };
-}
-
-function normalizeAppSettingsRecord(
-  runtimeSettings: AppSettingsRecord,
-  uiSettings: NodeUiPreferences,
-  tcpFallback: string[] = DEFAULT_TCP_COMMUNITY_ENDPOINTS,
-  allowEmptyTcpClients = false,
-): NodeUiSettings {
-  return {
-    ...cloneDefaultSettings(),
-    ...runtimeSettings,
-    displayName: normalizeStoredDisplayName(runtimeSettings.displayName),
-    clientMode: normalizeClientMode(uiSettings.clientMode),
-    autoConnectSaved: false,
-    announceCapabilities: ensureRequiredAnnounceCapabilities(runtimeSettings.announceCapabilities),
-    tcpClients: normalizeTcpCommunityClients(
-      runtimeSettings.tcpClients,
-      tcpFallback,
-      allowEmptyTcpClients,
-    ),
-    transportNodeEnabled: runtimeSettings.transportNodeEnabled ?? DEFAULT_SETTINGS.transportNodeEnabled,
-    telemetry: normalizeTelemetrySettings(runtimeSettings.telemetry),
-    checklists: normalizeChecklistSettings(runtimeSettings.checklists),
-    rnode: normalizeRnodeSettings(runtimeSettings.rnode),
-    hub: {
-      ...DEFAULT_SETTINGS.hub,
-      ...runtimeSettings.hub,
-      mode: normalizeHubMode(runtimeSettings.hub?.mode),
-    },
-  };
-}
-
-function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): SavedPeerRecord[] {
-  return Object.values(savedPeers).map((peer) => ({
-    destination: normalizeDestinationHex(peer.destination),
-    label: peer.label?.trim() || undefined,
-    savedAt: Number(peer.savedAt ?? nowMs()),
-    identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
-      ? normalizeDestinationHex(peer.identityHex ?? "")
-      : undefined,
-    lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
-      ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
-      : undefined,
-    appData: peer.appData?.trim() || undefined,
-    displayName: peer.displayName?.trim() || undefined,
-    lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
-      ? peer.lastRouteSeenAtMs
-      : undefined,
-    lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
-      ? peer.lastHops
-      : undefined,
-  }));
-}
-
-function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string, SavedPeer> {
-  const out: Record<string, SavedPeer> = {};
-  for (const peer of records) {
-    const destination = normalizeDestinationHex(peer.destination ?? "");
-    if (!isValidDestinationHex(destination)) {
-      continue;
-    }
-    out[destination] = {
-      destination,
-      label: peer.label?.trim() || undefined,
-      savedAt: Number(peer.savedAt ?? nowMs()),
-      identityHex: isValidDestinationHex(normalizeDestinationHex(peer.identityHex ?? ""))
-        ? normalizeDestinationHex(peer.identityHex ?? "")
-        : undefined,
-      lxmfDestinationHex: isValidDestinationHex(normalizeDestinationHex(peer.lxmfDestinationHex ?? ""))
-        ? normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
-        : undefined,
-      appData: peer.appData?.trim() || undefined,
-      displayName: peer.displayName?.trim() || undefined,
-      lastRouteSeenAtMs: typeof peer.lastRouteSeenAtMs === "number" && Number.isFinite(peer.lastRouteSeenAtMs)
-        ? peer.lastRouteSeenAtMs
-        : undefined,
-      lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
-        ? peer.lastHops
-        : undefined,
-    };
-  }
-  return out;
-}
-
-function loadRemovedPeerDestinations(): Record<string, number> {
-  try {
-    const raw = window.localStorage.getItem(REMOVED_PEERS_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, number> = {};
-    for (const [destinationRaw, removedAtRaw] of Object.entries(parsed)) {
-      const destination = normalizeDestinationHex(destinationRaw);
-      if (!isValidDestinationHex(destination)) {
-        continue;
-      }
-      const removedAt = Number(removedAtRaw);
-      out[destination] = Number.isFinite(removedAt) ? removedAt : nowMs();
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function storeRemovedPeerDestinations(destinations: Record<string, number>): void {
-  try {
-    window.localStorage.setItem(REMOVED_PEERS_STORAGE_KEY, JSON.stringify(destinations));
-  } catch {
-    // Local storage can be unavailable in restricted webviews; native removal still applies.
-  }
-}
-
-function toNodeConfig(settings: NodeUiSettings): NodeConfig {
-  const displayName = normalizeStoredDisplayName(settings.displayName);
-  return {
-    name: displayName,
-    storageDir: "reticulum-mobile",
-    tcpClients: normalizeTcpCommunityClients(settings.tcpClients, DEFAULT_TCP_COMMUNITY_ENDPOINTS, true),
-    broadcast: settings.broadcast,
-    transportNodeEnabled: settings.transportNodeEnabled,
-    announceIntervalSeconds: settings.announceIntervalSeconds,
-    staleAfterMinutes: settings.telemetry.staleAfterMinutes,
-    announceCapabilities: formatAnnounceAppData(
-      ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
-      displayName,
-    ),
-    hubMode: settings.hub.mode,
-    hubIdentityHash: settings.hub.identityHash || undefined,
-    hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,
-    hubApiKey: settings.hub.apiKey || undefined,
-    hubRefreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
-    rnode: normalizeRnodeSettings(settings.rnode),
-  };
-}
 
 export const useNodeStore = defineStore("node", () => {
   const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
