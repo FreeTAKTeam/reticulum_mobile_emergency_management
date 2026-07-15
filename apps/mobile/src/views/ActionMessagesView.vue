@@ -4,6 +4,8 @@ import { useRoute } from "vue-router";
 
 import ActionMessageList from "../components/ActionMessageList.vue";
 import ActionMessageTable from "../components/ActionMessageTable.vue";
+import ListWindowControls from "../components/ListWindowControls.vue";
+import { useListWindow } from "../composables/useListWindow";
 import type { ActionMessage } from "../types/domain";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useNodeStore } from "../stores/nodeStore";
@@ -79,6 +81,7 @@ const filteredMessages = computed(() => {
     normalizeR3aktTeamColor(message.groupName) === selectedTeamColorFilter.value,
   );
 });
+const messageWindow = useListWindow(filteredMessages, { resetKey: selectedTeamColorFilter });
 const messageCountLabel = computed(() =>
   selectedTeamColorFilter.value === TEAM_COLOR_FILTER_ALL
     ? `${messagesStore.activeCount} MSG`
@@ -332,7 +335,7 @@ function deleteMessage(callsign: string): void {
 
     <div class="desktop-only">
       <ActionMessageTable
-        :messages="filteredMessages"
+        :messages="messageWindow.items.value"
         :editable-callsigns="editableCallsigns"
         :selected-callsign="selectedCallsign"
         @edit="editMessage"
@@ -342,7 +345,7 @@ function deleteMessage(callsign: string): void {
     </div>
     <div class="mobile-only">
       <ActionMessageList
-        :messages="filteredMessages"
+        :messages="messageWindow.items.value"
         :editable-callsigns="editableCallsigns"
         :selected-callsign="selectedCallsign"
         @edit="editMessage"
@@ -350,6 +353,15 @@ function deleteMessage(callsign: string): void {
         @cycle="cycleMessage"
       />
     </div>
+    <ListWindowControls
+      :start="messageWindow.startIndex.value"
+      :end="messageWindow.endIndex.value"
+      :total="messageWindow.total.value"
+      :has-previous="messageWindow.hasPrevious.value"
+      :has-next="messageWindow.hasNext.value"
+      @previous="messageWindow.previous"
+      @next="messageWindow.next"
+    />
   </section>
 </template>
 

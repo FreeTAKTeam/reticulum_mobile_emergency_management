@@ -162,6 +162,10 @@
   grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
 }
 
+.thread-picker-search {
+  width: 100%;
+}
+
 .thread-picker-select {
   appearance: none;
   background:

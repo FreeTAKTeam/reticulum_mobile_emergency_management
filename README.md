@@ -73,11 +73,22 @@ This repository contains:
 - `tools/codegen`: UniFFI binding generation scripts.
 - `e2e`: browser-based end-to-end tests.
 
+The current module ownership and responsiveness invariants are documented in
+[`docs/runtime-modules.md`](docs/runtime-modules.md). Performance and footprint
+acceptance results for version 1.2.6 are in
+[`docs/performance/final-1.2.6.md`](docs/performance/final-1.2.6.md).
+
 Useful checks from the repository root:
 
 ```powershell
+npm run check:source-size
+npm run test:unit
 npm --workspace apps/mobile run typecheck
 npm run web:build
 npm run test:e2e
 cargo test --manifest-path crates/reticulum_mobile/Cargo.toml
 ```
+
+The source-size check is a hard gate: first-party source and test files, and
+class declarations inside them, must remain at or below 500 physical lines.
+Generated bindings, vendored code, and build output are excluded.

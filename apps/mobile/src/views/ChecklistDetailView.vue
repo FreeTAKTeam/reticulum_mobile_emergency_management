@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import ListWindowControls from "../components/ListWindowControls.vue";
 import { useChecklistDetail } from "../composables/useChecklistDetail";
+import { useListWindow } from "../composables/useListWindow";
 
 const {
   checklistDetail,
@@ -26,6 +28,7 @@ const {
   toggleTaskEdit,
   deleteTaskRow,
 } = useChecklistDetail();
+const taskWindow = useListWindow(visibleTasks);
 </script>
 
 <template>
@@ -126,7 +129,7 @@ const {
 
         <div class="task-list">
           <article
-            v-for="task in visibleTasks"
+            v-for="task in taskWindow.items.value"
             :key="task.id"
             class="detail-panel task-card"
             :class="[taskStatusClass(task.status), { 'task-line-break': task.lineBreakEnabled }]"
@@ -256,6 +259,15 @@ const {
               </div>
             </div>
           </article>
+          <ListWindowControls
+            :start="taskWindow.startIndex.value"
+            :end="taskWindow.endIndex.value"
+            :total="taskWindow.total.value"
+            :has-previous="taskWindow.hasPrevious.value"
+            :has-next="taskWindow.hasNext.value"
+            @previous="taskWindow.previous"
+            @next="taskWindow.next"
+          />
         </div>
       </section>
 
