@@ -1,1422 +1,153 @@
-import {
-  type AppSettingsRecord,
-  DEFAULT_NODE_CONFIG,
-  type AnnounceRecord,
-  type PeerRecord,
-  type ProjectionInvalidationEvent,
-  type SendMode,
-  type SavedPeerRecord,
-  type SyncStatus,
-  createReticulumNodeClient,
-  type AnnounceReceivedEvent,
-  type HubDirectoryUpdatedEvent,
-  type LogLevel,
-  type NodeConfig,
-  type NodeClientEvents,
-  type NodeErrorEvent,
-  type InterfaceStatusChangedEvent,
-  type InstalledPluginRecord,
-  type PluginCapabilityRecord,
-  type PluginSensorRecord,
-  type NodeLogEvent,
-  type NodeStatus,
-  type PeerChangedEvent,
-  type ReticulumNodeClient,
-  type SosAudioRecord,
-  type StatusChangedEvent,
-  type WatchStatusServerSettings,
-  type WatchStatusServerState,
-  generateDefaultCallSign,
-} from "@reticulum/node-client";
-import { Capacitor } from "@capacitor/core";
+import { createReticulumNodeClient, type ReticulumNodeClient } from "@reticulum/node-client";
 import { defineStore } from "pinia";
-import { computed, reactive, ref, shallowRef } from "vue";
 
-import {
-  bootstrapHubRegistry,
-  buildHubRegistryBootstrapProfile,
-  clearHubRegistryLinkage,
-  loadHubRegistryLinkage,
-  matchesHubRegistryProfile,
-  saveHubRegistryLinkage,
-  type HubRegistrationStatus,
-  type HubRegistryBootstrapProfile,
-  type HubRegistryCommandTransport,
-  type HubRegistryLinkage,
-} from "../services/hubRegistryBootstrap";
-import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
-import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
-import {
-  buildLegacyProjectionState,
-  clearLegacyProjectionStorage,
-  loadUiSettingsProjection,
-  persistUiSettingsProjection as storeUiSettingsProjection,
-  persistWebLegacySavedPeers,
-  persistWebLegacySettings,
-  type NodeUiPreferences,
-} from "../utils/legacyState";
-import type {
-  DiscoveredPeer,
-  HubDirectorySnapshot,
-  NodeUiSettings,
-  PeerConnectionState,
-  PeerListV1,
-  SavedPeer,
-} from "../types/domain";
-import {
-  createPeerListV1,
-  ensureRequiredAnnounceCapabilities,
-  extractAnnouncedName,
-  formatAnnounceAppData,
-  hasCapability,
-  isValidDestinationHex,
-  normalizeDisplayName,
-  normalizeDestinationHex,
-  parsePeerListV1,
-} from "../utils/peers";
-import { peerHasRemAnnounceEvidence } from "../utils/announceEvidence";
+import { loadUiSettingsProjection } from "../utils/legacyState";
 import { runtimeProfile } from "../utils/runtimeProfile";
-import {
-  DEFAULT_TCP_COMMUNITY_ENDPOINTS,
-  normalizeTcpCommunityClients,
-} from "../utils/tcpCommunityServers";
-import {
-  DEFAULT_RNODE_SETTINGS,
-  normalizeRnodeSettings,
-} from "../utils/rnodeProfiles";
-import {
-  hasConfiguredNonTcpInterface,
-  logIndicatesReadinessError,
-  logIndicatesTcpInterfaceReadinessError,
-  nodeErrorIndicatesTcpInterfaceReadinessError,
-  nodeErrorIndicatesReadinessError,
-  summarizeRnodeInterfaceState,
-} from "../utils/readinessErrors";
-import { statusHasRuntimeReceiveReadiness } from "../utils/startupInterfaces";
-import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
-import {
-  DEFAULT_SETTINGS,
-  LEGACY_DEFAULT_DISPLAY_NAME,
-  RCH_HUB_DIRECTORY_ENABLED,
-  cloneDefaultSettings,
-  fromSavedPeerRecords,
-  hasSelectedHubIdentity,
-  hubModeUsesRch,
-  hubModeWasCoerced,
-  loadNodeConfigRestartRequired,
-  loadRemovedPeerDestinations,
-  nodeConfigsEqual,
-  normalizeAppSettingsRecord,
-  normalizeChecklistSettings,
-  normalizeClientMode,
-  normalizeHubMode,
-  normalizeStoredDisplayName,
-  normalizeTelemetrySettings,
-  settingsRecordWasNormalized,
-  settingsRecordsEqual,
-  storeNodeConfigRestartRequired,
-  storeRemovedPeerDestinations,
-  toAppSettingsRecord,
-  toNodeConfig,
-  toSavedPeerRecords,
-  toUiSettingsProjection,
-} from "./nodeSettingsModel";
-import {
-  EMPTY_BYTES,
-  EMPTY_OPERATIONAL_SUMMARY,
-  EMPTY_STATUS,
-  EMPTY_SYNC_STATUS,
-  DEFAULT_WATCH_STATUS_SERVER,
-  NODE_START_TIMEOUT_MS,
-  OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS,
-  PEER_ONLINE_FRESHNESS_MS,
-  PEER_PRESENCE_TICK_MS,
-  PEER_VISIBLE_UNSAVED_MAX_AGE_MS,
-  PROJECTION_REFRESH_DEBOUNCE_MS,
-  STARTUP_ANNOUNCE_SETTLE_MS,
-  type EventPeerRoute,
-  type HubAnnounceCandidate,
-  type HubRegistrationSnapshot,
-  type PacketSendOptions,
-  type UiLogLine,
-  activePropagationNodeHex,
-  advancePresenceNow,
-  asTrimmedString,
-  hasActualRemAnnounce,
-  normalizeNodeStatus,
-  nowMs,
-  peerSortRank,
-  shouldDisplayDiscoveredPeer,
-  sleep,
-  toUiPeerState,
-  withTimeout,
-} from "./nodeStoreCore";
-
+import { createNodeActionsController } from "./nodeActionsController";
+import { createNodeAnnounceController } from "./nodeAnnounceController";
+import { createNodeClientEventsController } from "./nodeClientEventsController";
+import { createNodeHubController } from "./nodeHubController";
+import { createNodeLifecycleController } from "./nodeLifecycleController";
+import { createNodeLoggingController } from "./nodeLoggingController";
+import { createNodePeerController } from "./nodePeerController";
+import { createNodePeerSelectors } from "./nodePeerSelectors";
+import { createNodeProjectionController } from "./nodeProjectionController";
+import { DEFAULT_SETTINGS } from "./nodeSettingsModel";
+import { createNodeStoreApi } from "./nodeStoreApi";
+import { createNodeStoreState } from "./nodeStoreState";
+import { createNodeTransportController } from "./nodeTransportController";
 
 export const useNodeStore = defineStore("node", () => {
-  const settings = reactive<NodeUiSettings>(cloneDefaultSettings());
-  const status = ref<NodeStatus>({ ...EMPTY_STATUS });
-  const nodeConfigRestartRequired = ref(loadNodeConfigRestartRequired());
-  const announceByDestination = reactive<Record<string, AnnounceRecord>>({});
-  const discoveredByDestination = reactive<Record<string, DiscoveredPeer>>({});
-  const savedByDestination = reactive<Record<string, SavedPeer>>({});
-  const removedByDestination = reactive<Record<string, number>>(loadRemovedPeerDestinations());
-  const appDestinationByIdentity = reactive<Record<string, string>>({});
-  const lxmfDestinationByIdentity = reactive<Record<string, string>>({});
-  const livePresenceByDestination = reactive<Record<string, number>>({});
-  const liveLxmfPresenceByIdentity = reactive<Record<string, number>>({});
-  const logs = ref<UiLogLine[]>([]);
-  const nodeControlEntries = ref<UiLogLine[]>([]);
-  const lastError = ref<string>("");
-  const readinessError = ref<string>("");
-  const lastHubRefreshAt = ref<number>(0);
-  const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
-  const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
-  const watchStatusServer = reactive<WatchStatusServerState>({ ...DEFAULT_WATCH_STATUS_SERVER });
-  const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
-  const telemetryDestinations = ref<string[]>([]);
-  const plugins = ref<InstalledPluginRecord[]>([]);
-  const pluginSensors = ref<PluginSensorRecord[]>([]);
-  const hubRegistration = reactive<HubRegistrationSnapshot>({
-    status: hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled",
-    linkage: loadHubRegistryLinkage() ?? undefined,
-    lastReadyAt: loadHubRegistryLinkage()?.updatedAt,
-  });
-  const initialized = ref(false);
-  const presenceNow = ref(nowMs());
+  const state = createNodeStoreState();
+  const {
+    announceByDestination, appDestinationByIdentity, client, discoveredByDestination,
+    hubDirectorySnapshot, hubRegistration, initialized, lastError, lastHubRefreshAt,
+    liveLxmfPresenceByIdentity, livePresenceByDestination, logs, lxmfDestinationByIdentity,
+    nodeConfigRestartRequired, nodeControlEntries, operationalSummary, pluginSensors, plugins,
+    presenceNow, readinessError, removedByDestination, savedByDestination, settings,
+    startupSettling, status, syncStatus, telemetryDestinations, unsubscribeClientEvents,
+    watchStatusServer,
+  } = state;
 
-  const client = shallowRef<ReticulumNodeClient | null>(null);
-  const unsubscribeClientEvents = ref<Array<() => void>>([]);
-  let hubRegistryBootstrapInFlight: Promise<void> | null = null;
-  let presenceTickerId: number | null = null;
-  let refreshOperationalSummaryTimerId: number | null = null;
-  let refreshOperationalSummaryQueued = false;
-  let refreshOperationalSummaryLastRunAt = 0;
-  let initPromise: Promise<void> | null = null;
-  let lastRnodeInterfaceFingerprint = "";
-  let lastRnodeBlockingMessage = "";
-  const startupSettling = ref(false);
+  const logging = createNodeLoggingController({
+    client,
+    lastError,
+    logs,
+    nodeConfigRestartRequired,
+    nodeControlEntries,
+    readinessError,
+    settings,
+    status,
+  });
+  const {
+    appendLog,
+    appendNodeControlEntry,
+    applyRnodeInterfaceReadiness,
+    captureActionError,
+    captureRuntimeActionError,
+    clearLastError,
+    clearReadinessError,
+    defaultsWithTcpFallback,
+    errorMessage,
+    logUi,
+    nodeErrorCanFallBackToConfiguredInterface,
+    setLastError,
+    setNodeConfigRestartRequired,
+    setReadinessError,
+    tcpInterfaceFailureCanFallBackToConfiguredInterface,
+  } = logging;
+
+  const peers = createNodePeerController({
+    announceByDestination,
+    appDestinationByIdentity,
+    discoveredByDestination,
+    hubDirectorySnapshot,
+    lastHubRefreshAt,
+    lxmfDestinationByIdentity,
+    nativeSavedPeerForCanonicalDestination: (...args) => nativeSavedPeerForCanonicalDestination(...args),
+    refreshSavedPeerProfile: (destination, reason) => refreshSavedPeerProfile(destination, reason),
+    refreshMessagingState: () => refreshMessagingState(),
+    savedByDestination,
+    status,
+  });
+  const {
+    applyPeerChanged,
+    clearAnnounceState,
+    clearHubDirectoryState,
+    describePeerState,
+    isLocalDestinationIdentityPair,
+    isLocalPeer,
+    isLocalPeerDestination,
+    markPeerManagedState,
+    reconcileNativePeerSnapshot,
+    setPeerState,
+    settlePeerConnectionState,
+    upsertDiscovered,
+    upsertNativeAnnounceRecord,
+    upsertResolvedPeer,
+  } = peers;
+
+  const projections = createNodeProjectionController({
+    appendLog,
+    client,
+    defaultsWithTcpFallback,
+    discoveredByDestination,
+    errorMessage,
+    init: () => init(),
+    lastError,
+    operationalSummary,
+    plugins,
+    pluginSensors,
+    savedByDestination,
+    settings,
+    status,
+    upsertDiscovered,
+    watchStatusServer,
+  });
+  const {
+    applyUiSettingsProjection,
+    importLegacyProjectionState,
+    persistSavedPeersProjection,
+    persistSettingsProjection,
+    refreshOperationalSummaryProjection,
+    refreshPluginProjection,
+    refreshPluginSensors,
+    refreshSavedPeersProjection,
+    refreshSettingsProjection,
+    refreshWatchStatusServerSettings,
+    scheduleOperationalSummaryRefresh,
+  } = projections;
 
   applyUiSettingsProjection(loadUiSettingsProjection(DEFAULT_SETTINGS));
 
-  function defaultsWithTcpFallback(): string[] {
-    return DEFAULT_SETTINGS.tcpClients.length > 0
-      ? [...DEFAULT_SETTINGS.tcpClients]
-      : [...DEFAULT_TCP_COMMUNITY_ENDPOINTS];
-  }
-
-  function appendLog(level: string, message: string): void {
-    logs.value = [{ at: nowMs(), level, message }, ...logs.value].slice(0, 120);
-  }
-
-  function appendNodeControlEntry(level: string, message: string, at = nowMs()): void {
-    nodeControlEntries.value = [{ at, level, message }, ...nodeControlEntries.value].slice(0, 120);
-  }
-
-  function setNodeConfigRestartRequired(required: boolean): void {
-    nodeConfigRestartRequired.value = required;
-    storeNodeConfigRestartRequired(required);
-  }
-
-  function toPluginLogLevel(level: string): LogLevel {
-    switch (asTrimmedString(level).toLowerCase()) {
-      case "trace":
-        return "Trace";
-      case "debug":
-        return "Debug";
-      case "warn":
-        return "Warn";
-      case "error":
-        return "Error";
-      case "info":
-      default:
-        return "Info";
-    }
-  }
-
-  function mirrorUiLogToNative(level: string, message: string): void {
-    if (!client.value || runtimeProfile === "web") {
-      return;
-    }
-    const normalizedLevel = asTrimmedString(level).toLowerCase();
-    if (normalizedLevel !== "warn" && normalizedLevel !== "error") {
-      return;
-    }
-    void client.value.logMessage(toPluginLogLevel(level), message).catch(() => undefined);
-  }
-
-  function logUi(level: string, message: string): void {
-    appendLog(level, message);
-    mirrorUiLogToNative(level, message);
-    const normalizedLevel = asTrimmedString(level).toLowerCase();
-    if (normalizedLevel === "error") {
-      lastError.value = message;
-      console.error(`[ui][${level}] ${message}`);
-      return;
-    }
-    if (normalizedLevel === "debug" || normalizedLevel === "trace") {
-      console.debug(`[ui][${level}] ${message}`);
-      return;
-    }
-    if (normalizedLevel === "warn") {
-      console.warn(`[ui][${level}] ${message}`);
-      return;
-    }
-    console.info(`[ui][${level}] ${message}`);
-  }
-
-  function setLastError(message: string): void {
-    lastError.value = asTrimmedString(message);
-  }
-
-  function clearLastError(): void {
-    lastError.value = "";
-  }
-
-  function messageIsCurrentReadinessError(message: string, currentReadinessError: string): boolean {
-    const trimmed = asTrimmedString(message);
-    if (!trimmed) {
-      return false;
-    }
-    return trimmed === currentReadinessError
-      || trimmed === `Node marked not ready: ${currentReadinessError}`;
-  }
-
-  function clearReadinessError(): void {
-    const previous = asTrimmedString(readinessError.value);
-    readinessError.value = "";
-    if (!previous) {
-      return;
-    }
-    if (messageIsCurrentReadinessError(lastError.value, previous)) {
-      clearLastError();
-    }
-    nodeControlEntries.value = nodeControlEntries.value.filter(
-      (entry) => !messageIsCurrentReadinessError(entry.message, previous),
-    );
-  }
-
-  function setReadinessError(message: string, at = nowMs()): void {
-    const trimmed = asTrimmedString(message);
-    if (!trimmed) {
-      return;
-    }
-    const wasReady = !asTrimmedString(readinessError.value);
-    readinessError.value = trimmed;
-    lastError.value = trimmed;
-    if (wasReady) {
-      appendNodeControlEntry("Error", `Node marked not ready: ${trimmed}`, at);
-    }
-  }
-
-  function tcpInterfaceFailureCanFallBackToConfiguredInterface(message: string): boolean {
-    return hasConfiguredNonTcpInterface(settings)
-      && logIndicatesTcpInterfaceReadinessError(message);
-  }
-
-  function nodeErrorCanFallBackToConfiguredInterface(event: NodeErrorEvent): boolean {
-    return hasConfiguredNonTcpInterface(settings)
-      && nodeErrorIndicatesTcpInterfaceReadinessError(event);
-  }
-
-  function applyRnodeInterfaceReadiness(at = nowMs()): void {
-    const summary = summarizeRnodeInterfaceState(status.value, settings);
-    const message = asTrimmedString(summary.message);
-    const fingerprint = [
-      summary.severity,
-      message,
-      summary.rnodeAvailable ? "rnode-rx" : "rnode-no-rx",
-      summary.otherAvailableCount,
-    ].join("|");
-    const previousBlockingMessage = lastRnodeBlockingMessage;
-    const fingerprintChanged = fingerprint !== lastRnodeInterfaceFingerprint;
-
-    if (summary.severity === "blocking") {
-      if (message) {
-        setReadinessError(message, at);
-        if (fingerprintChanged && previousBlockingMessage && previousBlockingMessage !== message) {
-          appendNodeControlEntry("Warn", message, at);
-        }
-        lastRnodeBlockingMessage = message;
-      }
-    } else {
-      if (readinessError.value) {
-        clearReadinessError();
-      }
-      lastRnodeBlockingMessage = "";
-    }
-
-    if (!fingerprintChanged) {
-      return;
-    }
-    lastRnodeInterfaceFingerprint = fingerprint;
-
-    if (summary.severity === "degraded" && message) {
-      appendNodeControlEntry("Warn", message, at);
-    } else if (summary.severity === "ready" && summary.rnodeConfigured) {
-      const otherInterfaceText = summary.otherAvailableCount === 0
-        ? "no other receiving interfaces"
-        : `${summary.otherAvailableCount} other receiving interface${summary.otherAvailableCount === 1 ? "" : "s"}`;
-      appendNodeControlEntry(
-        "Info",
-        `RNode LoRa available with ${otherInterfaceText}.`,
-        at,
-      );
-    }
-  }
-
-  function errorMessage(error: unknown): string {
-    if (error instanceof Error) {
-      return error.message;
-    }
-    return String(error);
-  }
-
-  function captureActionError(action: string, error: unknown): Error {
-    const message = `${action}: ${errorMessage(error)}`;
-    lastError.value = message;
-    mirrorUiLogToNative("Error", message);
-    console.error(`[ui][Error] ${message}`);
-    appendLog("Error", message);
-    return error instanceof Error ? error : new Error(message);
-  }
-
-  function captureRuntimeActionError(action: string, error: unknown): Error {
-    const message = `${action}: ${errorMessage(error)}`;
-    const captured = captureActionError(action, error);
-    setReadinessError(message);
-    return captured;
-  }
-
-  function upsertDiscovered(
-    destinationRaw: string,
-    patch: Partial<DiscoveredPeer>,
-    source?: "announce" | "hub" | "import",
-  ): void {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      return;
-    }
-
-    const existing = discoveredByDestination[destination];
-    const sources = existing ? [...existing.sources] : [];
-    if (source && !sources.includes(source)) {
-      sources.push(source);
-    }
-
-    const base: DiscoveredPeer = existing ?? {
-      destination,
-      lastSeenAt: nowMs(),
-      sources,
-      state: "disconnected",
-      saved: false,
-      stale: false,
-      activeLink: false,
-    };
-
-    discoveredByDestination[destination] = {
-      ...base,
-      ...patch,
-      destination,
-      sources,
-      identityHex: patch.identityHex ?? base.identityHex,
-      lxmfDestinationHex: patch.lxmfDestinationHex ?? base.lxmfDestinationHex,
-      announceLastSeenAt: patch.announceLastSeenAt ?? base.announceLastSeenAt,
-      lxmfLastSeenAt: patch.lxmfLastSeenAt ?? base.lxmfLastSeenAt,
-      announcedName: patch.announcedName ?? base.announcedName,
-      label: patch.label ?? base.label,
-      appData: patch.appData ?? base.appData,
-      latestAnnounceKind: patch.latestAnnounceKind ?? base.latestAnnounceKind,
-      latestAnnounceClass: patch.latestAnnounceClass ?? base.latestAnnounceClass,
-      hops: patch.hops ?? base.hops,
-      interfaceHex: patch.interfaceHex ?? base.interfaceHex,
-      saved: patch.saved ?? base.saved,
-      stale: patch.stale ?? base.stale,
-      activeLink: patch.activeLink ?? base.activeLink,
-      lastError: Object.prototype.hasOwnProperty.call(patch, "lastError")
-        ? patch.lastError
-        : base.lastError,
-      lastResolutionError: Object.prototype.hasOwnProperty.call(patch, "lastResolutionError")
-        ? patch.lastResolutionError
-        : base.lastResolutionError,
-      lastResolutionAttemptAt: patch.lastResolutionAttemptAt ?? base.lastResolutionAttemptAt,
-      lastSeenAt: patch.lastSeenAt ?? base.lastSeenAt,
-    };
-  }
-
-  function upsertNativeAnnounceRecord(
-    record: AnnounceReceivedEvent | AnnounceRecord,
-  ): void {
-    const destination = normalizeDestinationHex(record.destinationHex);
-    if (!isValidDestinationHex(destination)) {
-      return;
-    }
-    const existing = announceByDestination[destination];
-    if (existing && existing.receivedAtMs > record.receivedAtMs) {
-      return;
-    }
-    announceByDestination[destination] = {
-      destinationHex: destination,
-      identityHex: normalizeDestinationHex(record.identityHex),
-      destinationKind: record.destinationKind,
-      announceClass: record.announceClass,
-      appData: record.appData,
-      displayName: record.displayName ?? existing?.displayName,
-      hops: record.hops,
-      interfaceHex: record.interfaceHex,
-      receivedAtMs: record.receivedAtMs,
-    };
-  }
-
-  function isLocalPeerDestination(destinationRaw: string): boolean {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      return false;
-    }
-
-    const localAppDestination = normalizeDestinationHex(status.value.appDestinationHex ?? "");
-    const localLxmfDestination = normalizeDestinationHex(status.value.lxmfDestinationHex ?? "");
-    return destination === localAppDestination || destination === localLxmfDestination;
-  }
-
-  function isLocalPeer(peer: Pick<DiscoveredPeer, "destination" | "identityHex">): boolean {
-    if (isLocalPeerDestination(peer.destination)) {
-      return true;
-    }
-
-    const localIdentity = normalizeDestinationHex(status.value.identityHex ?? "");
-    const peerIdentity = normalizeDestinationHex(peer.identityHex ?? "");
-    return isValidDestinationHex(localIdentity) && peerIdentity === localIdentity;
-  }
-
-  function isLocalDestinationIdentityPair(
-    destinationRaw: string,
-    identityRaw?: string,
-  ): boolean {
-    if (isLocalPeerDestination(destinationRaw)) {
-      return true;
-    }
-    const localIdentity = normalizeDestinationHex(status.value.identityHex ?? "");
-    const peerIdentity = normalizeDestinationHex(identityRaw ?? "");
-    return isValidDestinationHex(localIdentity) && peerIdentity === localIdentity;
-  }
-
-  function resolvePeerLxmfDestinationByIdentity(identityRaw?: string): string | undefined {
-    const identityHex = normalizeDestinationHex(identityRaw ?? "");
-    if (!isValidDestinationHex(identityHex) || identityHex === normalizeDestinationHex(status.value.identityHex ?? "")) {
-      return undefined;
-    }
-
-    const mapped = normalizeDestinationHex(lxmfDestinationByIdentity[identityHex] ?? "");
-    if (isValidDestinationHex(mapped)) {
-      return mapped;
-    }
-
-    return Object.values(discoveredByDestination)
-      .find((peer) => normalizeDestinationHex(peer.identityHex ?? "") === identityHex)
-      ?.lxmfDestinationHex;
-  }
-
-  function setPeerState(
-    destinationRaw: string,
-    stateValue: PeerConnectionState,
-    lastErrorValue?: string,
-  ): void {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      return;
-    }
-
-    upsertDiscovered(destination, {
-      state: stateValue,
-      lastError: lastErrorValue,
-    });
-  }
-
-  function clearHubDirectoryState(): void {
-    hubDirectorySnapshot.value = null;
-    lastHubRefreshAt.value = 0;
-  }
-
-  function clearAnnounceState(): void {
-    for (const destination of Object.keys(announceByDestination)) {
-      delete announceByDestination[destination];
-    }
-  }
-
-  function upsertResolvedPeer(peer: PeerRecord): void {
-    const destination = normalizeDestinationHex(peer.destinationHex);
-    const identityHex = normalizeDestinationHex(peer.identityHex ?? "");
-    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-    const canonicalDestination = isValidDestinationHex(lxmfDestinationHex)
-      ? lxmfDestinationHex
-      : destination;
-    if (
-      !isValidDestinationHex(canonicalDestination)
-      || isLocalDestinationIdentityPair(canonicalDestination, peer.identityHex)
-    ) {
-      return;
-    }
-
-    if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
-      appDestinationByIdentity[identityHex] = destination;
-    }
-    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
-      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
-    }
-
-    const saved = nativeSavedPeerForCanonicalDestination(
-      canonicalDestination,
-      identityHex,
-      peer.saved,
-      peer.displayName,
-    );
-    const hasCanonicalRemAnnounce = peer.lxmfLastSeenAtMs
-      ? peerHasRemAnnounceEvidence({
-        appData: peer.appData,
-        latestAnnounceKind: "lxmf_delivery",
-        latestAnnounceClass: "LxmfDelivery",
-      })
-      : false;
-    upsertDiscovered(
-      canonicalDestination,
-      {
-        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
-        announcedName: peer.displayName?.trim() || undefined,
-        label: saved?.label ?? undefined,
-        appData: peer.appData,
-        latestAnnounceKind: peer.lxmfLastSeenAtMs ? "lxmf_delivery" : undefined,
-        latestAnnounceClass: peer.lxmfLastSeenAtMs ? "LxmfDelivery" : undefined,
-        announceLastSeenAt: peer.announceLastSeenAtMs,
-        lxmfLastSeenAt: peer.lxmfLastSeenAtMs,
-        lastSeenAt: peer.lastSeenAtMs,
-        state: toUiPeerState(peer.state),
-        saved: Boolean(saved) || peer.saved,
-        stale: peer.stale,
-        activeLink: peer.activeLink,
-        lastError: peer.lastResolutionError,
-        lastResolutionError: peer.lastResolutionError,
-        lastResolutionAttemptAt: peer.lastResolutionAttemptAtMs,
-      },
-      peer.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
-    );
-    refreshSavedPeerProfile(canonicalDestination, "native peer route profile");
-  }
-
-  function applyPeerChanged(change: PeerChangedEvent["change"]): void {
-    const destination = normalizeDestinationHex(change.destinationHex);
-    const identityHex = normalizeDestinationHex(change.identityHex ?? "");
-    const lxmfDestinationHex = normalizeDestinationHex(change.lxmfDestinationHex ?? "");
-    const canonicalDestination = isValidDestinationHex(lxmfDestinationHex)
-      ? lxmfDestinationHex
-      : destination;
-    if (
-      !isValidDestinationHex(canonicalDestination)
-      || isLocalDestinationIdentityPair(canonicalDestination, change.identityHex)
-    ) {
-      return;
-    }
-
-    if (isValidDestinationHex(identityHex) && destination !== canonicalDestination) {
-      appDestinationByIdentity[identityHex] = destination;
-    }
-    if (isValidDestinationHex(identityHex) && isValidDestinationHex(lxmfDestinationHex)) {
-      lxmfDestinationByIdentity[identityHex] = lxmfDestinationHex;
-    }
-
-    const saved = nativeSavedPeerForCanonicalDestination(
-      canonicalDestination,
-      identityHex,
-      change.saved,
-      change.displayName,
-    );
-    const hasCanonicalRemAnnounce = change.lxmfLastSeenAtMs
-      ? peerHasRemAnnounceEvidence({
-        appData: change.appData ?? discoveredByDestination[canonicalDestination]?.appData,
-        latestAnnounceKind: "lxmf_delivery",
-        latestAnnounceClass: "LxmfDelivery",
-      })
-      : false;
-    upsertDiscovered(
-      canonicalDestination,
-      {
-        identityHex: isValidDestinationHex(identityHex)
-          ? identityHex
-          : undefined,
-        lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
-        announcedName: change.displayName?.trim() || undefined,
-        label: saved?.label ?? discoveredByDestination[canonicalDestination]?.label,
-        appData: change.appData ?? discoveredByDestination[canonicalDestination]?.appData,
-        latestAnnounceKind: change.lxmfLastSeenAtMs
-          ? "lxmf_delivery"
-          : discoveredByDestination[canonicalDestination]?.latestAnnounceKind,
-        latestAnnounceClass: change.lxmfLastSeenAtMs
-          ? "LxmfDelivery"
-          : discoveredByDestination[canonicalDestination]?.latestAnnounceClass,
-        state: change.state ? toUiPeerState(change.state) : undefined,
-        saved: Boolean(saved) || change.saved,
-        stale: change.stale,
-        activeLink: change.activeLink,
-        lastError: change.lastError,
-        lastResolutionError: change.lastResolutionError,
-        lastResolutionAttemptAt: change.lastResolutionAttemptAtMs,
-        lastSeenAt: change.lastSeenAtMs,
-        announceLastSeenAt: change.announceLastSeenAtMs,
-        lxmfLastSeenAt: change.lxmfLastSeenAtMs,
-      },
-      change.hubDerived ? "hub" : hasCanonicalRemAnnounce ? "announce" : undefined,
-    );
-    refreshSavedPeerProfile(canonicalDestination, "peer change route profile");
-  }
-
-  function reconcileNativePeerSnapshot(peers: PeerRecord[]): void {
-    const nativeDestinations = new Set(
-      peers
-        .map((peer) => {
-          const destination = normalizeDestinationHex(peer.destinationHex);
-          const lxmfDestination = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-          return isValidDestinationHex(lxmfDestination) ? lxmfDestination : destination;
-        })
-        .filter((destination) => isValidDestinationHex(destination)),
-    );
-
-    for (const [destination, peer] of Object.entries(discoveredByDestination)) {
-      if (nativeDestinations.has(destination)) {
-        continue;
-      }
-
-      const retainedSources = peer.sources.filter((source) => source === "import");
-      if (retainedSources.length === 0) {
-        delete discoveredByDestination[destination];
-        continue;
-      }
-
-      discoveredByDestination[destination] = {
-        ...peer,
-        sources: retainedSources,
-        identityHex: undefined,
-        lxmfDestinationHex: undefined,
-        announceLastSeenAt: undefined,
-        lxmfLastSeenAt: undefined,
-        latestAnnounceKind: undefined,
-        latestAnnounceClass: undefined,
-        state: peer.saved ? "connecting" : "disconnected",
-        stale: false,
-        activeLink: false,
-        lastError: undefined,
-        lastResolutionError: undefined,
-      };
-    }
-  }
-
-  function markPeerManagedState(destinationRaw: string, managed: boolean): void {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination) || isLocalPeerDestination(destination)) {
-      return;
-    }
-    const currentlySaved = Boolean(savedByDestination[destination] || discoveredByDestination[destination]?.saved);
-    upsertDiscovered(destination, {
-      saved: managed ? true : currentlySaved,
-      state: managed ? "connecting" : "disconnected",
-      activeLink: managed ? discoveredByDestination[destination]?.activeLink : false,
-      lastError: undefined,
-      lastResolutionError: undefined,
-    });
-  }
-
-  async function settlePeerConnectionState(
-    destinationRaw: string,
-    target: "connected" | "disconnected",
-  ): Promise<void> {
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination) || !status.value.running) {
-      return;
-    }
-
-    const deadline = nowMs() + 6_000;
-    do {
-      await refreshMessagingState();
-      const peer = discoveredByDestination[destination];
-      if (!peer) {
-        return;
-      }
-      if (target === "connected" && peer.activeLink) {
-        return;
-      }
-      if (target === "disconnected" && !peer.activeLink) {
-        return;
-      }
-      await sleep(400);
-    } while (nowMs() < deadline);
-  }
-
-  function describePeerState(destinationRaw: string): string {
-    const destination = normalizeDestinationHex(destinationRaw);
-    const peer = discoveredByDestination[destination];
-    if (!peer) {
-      return `destination=${destination} state=missing`;
-    }
-
-    return [
-      `destination=${destination}`,
-      `state=${peer.state}`,
-      `saved=${peer.saved}`,
-      `stale=${peer.stale}`,
-      `activeLink=${peer.activeLink}`,
-      `label=${peer.label ?? "-"}`,
-      `announced=${peer.announcedName ?? "-"}`,
-      `identity=${peer.identityHex ?? "-"}`,
-      `lxmf=${peer.lxmfDestinationHex ?? "-"}`,
-      `sources=${peer.sources.join("+") || "-"}`,
-    ].join(" ");
-  }
-
-  function applyUiSettingsProjection(next: NodeUiPreferences): void {
-    settings.clientMode = normalizeClientMode(next.clientMode);
-  }
-
-  function applySettingsProjection(next: NodeUiSettings): void {
-    settings.displayName = next.displayName;
-    settings.autoConnectSaved = next.autoConnectSaved;
-    settings.announceCapabilities = next.announceCapabilities;
-    settings.tcpClients = [...next.tcpClients];
-    settings.broadcast = next.broadcast;
-    settings.transportNodeEnabled = next.transportNodeEnabled;
-    settings.announceIntervalSeconds = next.announceIntervalSeconds;
-    settings.telemetry = { ...next.telemetry };
-    settings.checklists = { ...next.checklists };
-    settings.hub = { ...next.hub };
-    settings.rnode = normalizeRnodeSettings(next.rnode);
-    applyUiSettingsProjection(toUiSettingsProjection(next));
-  }
-
-  function applySavedPeersProjection(records: SavedPeerRecord[]): void {
-    const nextSavedPeers = fromSavedPeerRecords(records);
-    const previousDestinations = new Set(Object.keys(savedByDestination));
-
-    for (const [destination, peer] of Object.entries(nextSavedPeers)) {
-      savedByDestination[destination] = peer;
-      upsertDiscovered(
-        destination,
-        {
-          label: peer.label,
-          saved: true,
-          lastSeenAt: discoveredByDestination[destination]?.lastSeenAt ?? 0,
-          stale: discoveredByDestination[destination]?.stale ?? false,
-          activeLink: discoveredByDestination[destination]?.activeLink ?? false,
-        },
-        "import",
-      );
-      previousDestinations.delete(destination);
-    }
-
-    for (const destination of previousDestinations) {
-      delete savedByDestination[destination];
-      const peer = discoveredByDestination[destination];
-      if (!peer) {
-        continue;
-      }
-      peer.sources = peer.sources.filter((source) => source !== "import");
-      peer.saved = false;
-      peer.activeLink = false;
-      peer.state = "disconnected";
-      peer.lastError = undefined;
-      peer.lastResolutionError = undefined;
-    }
-  }
-
-  function savedPeerProjectionDelta(records: SavedPeerRecord[]): {
-    added: string[];
-    removed: string[];
-  } {
-    const nextDestinations = new Set(records.map((peer) => normalizeDestinationHex(peer.destination)));
-    const previousDestinations = new Set(Object.keys(savedByDestination));
-    const added = [...nextDestinations].filter((destination) => !previousDestinations.has(destination));
-    const removed = [...previousDestinations].filter((destination) => !nextDestinations.has(destination));
-    return { added, removed };
-  }
-
-  function logSavedPeerProjectionDelta(
-    reason: string,
-    records: SavedPeerRecord[],
-  ): void {
-    const { added, removed } = savedPeerProjectionDelta(records);
-    if (added.length === 0 && removed.length === 0) {
-      return;
-    }
-    appendLog(
-      "Debug",
-      `[saved-peers] ${reason} added=[${added.join(",") || "-"}] removed=[${removed.join(",") || "-"}] total=${records.length}.`,
-    );
-  }
-
-  async function refreshSettingsProjection(): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:settings", async () => {
-      const record = await client.value!.getAppSettings();
-      if (record) {
-        const normalizedSettings = normalizeAppSettingsRecord(
-          record,
-          loadUiSettingsProjection(DEFAULT_SETTINGS),
-          defaultsWithTcpFallback(),
-          true,
-        );
-        applySettingsProjection(normalizedSettings);
-        const normalizedRecord = toAppSettingsRecord(normalizedSettings);
-        if (settingsRecordWasNormalized(record, normalizedRecord)) {
-          await client.value!.setAppSettings(normalizedRecord);
-        }
-      }
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Settings projection refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function refreshSavedPeersProjection(): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:saved-peers", async () => {
-      const peers = await client.value!.getSavedPeers();
-      logSavedPeerProjectionDelta("native projection", peers);
-      applySavedPeersProjection(peers);
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Saved-peer projection refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function refreshOperationalSummaryProjection(): Promise<void> {
-    if (!client.value) {
-      operationalSummary.value = { ...EMPTY_OPERATIONAL_SUMMARY };
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:operational-summary", async () => {
-      operationalSummary.value = await client.value!.getOperationalSummary();
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Operational summary refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function refreshPluginProjection(discover = false): Promise<void> {
-    if (!client.value) {
-      plugins.value = [];
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:plugins", async () => {
-      plugins.value = discover
-        ? await client.value!.refreshPlugins()
-        : await client.value!.listPlugins();
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Plugin projection refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function refreshPluginSensors(): Promise<void> {
-    if (!client.value) {
-      pluginSensors.value = [];
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:plugin-sensors", async () => {
-      pluginSensors.value = await client.value!.listPluginSensors();
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Plugin sensor refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function approvePluginPublisher(pluginId: string): Promise<void> {
-    if (!client.value) return;
-    await client.value.approvePluginPublisher(pluginId);
-    await refreshPluginProjection();
-  }
-
-  async function revokePluginPublisher(fingerprint: string): Promise<void> {
-    if (!client.value) return;
-    await client.value.revokePluginPublisher(fingerprint);
-    await refreshPluginProjection();
-  }
-
-  async function setPluginEnabled(pluginId: string, enabled: boolean): Promise<void> {
-    if (!client.value) return;
-    await client.value.setPluginEnabled(pluginId, enabled);
-    await refreshPluginProjection();
-  }
-
-  async function grantPluginCapabilities(
-    pluginId: string,
-    capabilities: PluginCapabilityRecord,
-  ): Promise<void> {
-    if (!client.value) return;
-    await client.value.grantPluginCapabilities(pluginId, capabilities);
-    await refreshPluginProjection();
-  }
-
-  async function openPluginConfiguration(pluginId: string): Promise<void> {
-    if (!client.value) return;
-    await client.value.openPluginConfiguration(pluginId);
-  }
-
-  async function refreshWatchStatusServerSettings(): Promise<void> {
-    if (!client.value) {
-      Object.assign(watchStatusServer, DEFAULT_WATCH_STATUS_SERVER);
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:watch-status-server", async () => {
-      Object.assign(watchStatusServer, await client.value!.getWatchStatusServerSettings());
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function updateWatchStatusServerSettings(settingsRecord: WatchStatusServerSettings): Promise<void> {
-    await init();
-    if (!client.value) {
-      return;
-    }
-    await client.value.setWatchStatusServerSettings(settingsRecord);
-    Object.assign(watchStatusServer, await client.value.getWatchStatusServerState());
-  }
-
-  function scheduleOperationalSummaryRefresh(delayMs = PROJECTION_REFRESH_DEBOUNCE_MS): void {
-    refreshOperationalSummaryQueued = true;
-    if (refreshOperationalSummaryTimerId !== null) {
-      return;
-    }
-
-    const elapsed = nowMs() - refreshOperationalSummaryLastRunAt;
-    const nextDelay = Math.max(
-      delayMs,
-      Math.max(0, OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS - elapsed),
-    );
-
-    refreshOperationalSummaryTimerId = window.setTimeout(() => {
-      refreshOperationalSummaryTimerId = null;
-      if (!refreshOperationalSummaryQueued) {
-        return;
-      }
-      refreshOperationalSummaryQueued = false;
-      refreshOperationalSummaryLastRunAt = nowMs();
-      void refreshOperationalSummaryProjection()
-        .catch(() => undefined)
-        .finally(() => {
-          if (refreshOperationalSummaryQueued) {
-            scheduleOperationalSummaryRefresh(delayMs);
-          }
-        });
-    }, nextDelay);
-  }
-
-  async function persistSettingsProjection(nextSettings: NodeUiSettings = settings): Promise<void> {
-    const normalizedUiSettings = toUiSettingsProjection(nextSettings);
-    storeUiSettingsProjection(normalizedUiSettings);
-    applyUiSettingsProjection(normalizedUiSettings);
-
-    if (runtimeProfile === "web") {
-      persistWebLegacySettings(nextSettings);
-      applySettingsProjection(nextSettings);
-      return;
-    }
-    if (!client.value) {
-      return;
-    }
-    applySettingsProjection(nextSettings);
-    const requestedRecord = toAppSettingsRecord(nextSettings);
-    await client.value.setAppSettings(requestedRecord);
-    const persistedRecord = await client.value.getAppSettings();
-    if (!persistedRecord) {
-      throw new Error("Native app settings save did not return persisted settings.");
-    }
-    const persistedSettings = normalizeAppSettingsRecord(
-      persistedRecord,
-      normalizedUiSettings,
-      defaultsWithTcpFallback(),
-      true,
-    );
-    const normalizedPersistedRecord = toAppSettingsRecord(persistedSettings);
-    if (!settingsRecordsEqual(requestedRecord, normalizedPersistedRecord)) {
-      throw new Error("Native app settings save verification failed.");
-    }
-    applySettingsProjection(persistedSettings);
-    await refreshOperationalSummaryProjection();
-  }
-
-  async function persistSavedPeersProjection(
-    nextSavedPeers: Record<string, SavedPeer>,
-    reason = "projection update",
-  ): Promise<void> {
-    const records = toSavedPeerRecords(nextSavedPeers);
-    logSavedPeerProjectionDelta(reason, records);
-    if (runtimeProfile === "web") {
-      if (client.value) {
-        await client.value.setSavedPeers(records);
-      }
-      persistWebLegacySavedPeers(records);
-      applySavedPeersProjection(records);
-      return;
-    }
-    if (!client.value) {
-      return;
-    }
-    await client.value.setSavedPeers(records);
-    applySavedPeersProjection(records);
-    await refreshOperationalSummaryProjection();
-  }
-
-  async function importLegacyProjectionState(): Promise<void> {
-    const legacyState = buildLegacyProjectionState(DEFAULT_SETTINGS);
-    if (!legacyState) {
-      return;
-    }
-
-    storeUiSettingsProjection(legacyState.uiSettings);
-    applyUiSettingsProjection(legacyState.uiSettings);
-
-    if (runtimeProfile === "web") {
-      if (legacyState.payload.settings) {
-        applySettingsProjection(
-          normalizeAppSettingsRecord(
-            legacyState.payload.settings,
-            legacyState.uiSettings,
-            defaultsWithTcpFallback(),
-          ),
-        );
-      }
-      if (legacyState.payload.savedPeers.length > 0) {
-        if (client.value) {
-          await client.value.setSavedPeers(legacyState.payload.savedPeers);
-        }
-        applySavedPeersProjection(legacyState.payload.savedPeers);
-      }
-      return;
-    }
-
-    if (!client.value) {
-      return;
-    }
-
-    const legacyCounts = {
-      savedPeers: legacyState.payload.savedPeers.length,
-      eams: legacyState.payload.eams.length,
-      events: legacyState.payload.events.length,
-      messages: legacyState.payload.messages.length,
-      telemetryPositions: legacyState.payload.telemetryPositions.length,
-    };
-    const nativeHasImportedLegacyState = async (): Promise<boolean> => {
-      const [summary, savedPeers] = await Promise.all([
-        client.value!.getOperationalSummary(),
-        client.value!.getSavedPeers(),
-      ]);
-      return savedPeers.length >= legacyCounts.savedPeers
-        && summary.eamCount >= legacyCounts.eams
-        && summary.eventCount >= legacyCounts.events
-        && summary.messageCount >= legacyCounts.messages
-        && summary.telemetryCount >= legacyCounts.telemetryPositions;
-    };
-
-    const completed = await client.value.legacyImportCompleted();
-    if (!completed || !(await nativeHasImportedLegacyState())) {
-      await client.value.importLegacyState(legacyState.payload);
-    }
-    if (await nativeHasImportedLegacyState()) {
-      clearLegacyProjectionStorage();
-    } else {
-      appendLog(
-        "Warn",
-        "[startup] legacy projection import left WebView storage intact because native verification did not match.",
-      );
-    }
-  }
-
-  function recordLivePresence(
-    destinationKind: "app" | "lxmf_delivery" | "lxmf_propagation" | "other",
-    destinationHex: string,
-    identityHex: string | undefined,
-    receivedAtMs: number,
-  ): void {
-    if (destinationKind === "lxmf_propagation") {
-      return;
-    }
-
-    if (destinationKind === "lxmf_delivery") {
-      if (isValidDestinationHex(destinationHex)) {
-        livePresenceByDestination[destinationHex] = Math.max(
-          livePresenceByDestination[destinationHex] ?? 0,
-          receivedAtMs,
-        );
-      }
-      if (isValidDestinationHex(identityHex ?? "")) {
-        const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
-        liveLxmfPresenceByIdentity[normalizedIdentity] = Math.max(
-          liveLxmfPresenceByIdentity[normalizedIdentity] ?? 0,
-          receivedAtMs,
-        );
-        const appDestinationHex = appDestinationByIdentity[normalizedIdentity];
-        if (isValidDestinationHex(appDestinationHex)) {
-          livePresenceByDestination[appDestinationHex] = Math.max(
-            livePresenceByDestination[appDestinationHex] ?? 0,
-            receivedAtMs,
-          );
-        }
-      }
-      return;
-    }
-
-    if (!isValidDestinationHex(destinationHex)) {
-      return;
-    }
-    livePresenceByDestination[destinationHex] = Math.max(
-      livePresenceByDestination[destinationHex] ?? 0,
-      receivedAtMs,
-    );
-    if (isValidDestinationHex(identityHex ?? "")) {
-      const normalizedIdentity = normalizeDestinationHex(identityHex ?? "");
-      const lxmfSeenAt = liveLxmfPresenceByIdentity[normalizedIdentity];
-      if (typeof lxmfSeenAt === "number") {
-        livePresenceByDestination[destinationHex] = Math.max(
-          livePresenceByDestination[destinationHex],
-          lxmfSeenAt,
-        );
-      }
-    }
-  }
-
-  function migrateSavedPeerAlias(
-    aliasDestinationRaw: string | undefined,
-    canonicalDestinationRaw: string,
-  ): SavedPeer | undefined {
-    const aliasDestination = normalizeDestinationHex(aliasDestinationRaw ?? "");
-    const canonicalDestination = normalizeDestinationHex(canonicalDestinationRaw);
-    if (
-      !isValidDestinationHex(aliasDestination)
-      || !isValidDestinationHex(canonicalDestination)
-      || aliasDestination === canonicalDestination
-    ) {
-      return savedByDestination[canonicalDestination];
-    }
-
-    const aliasPeer = savedByDestination[aliasDestination];
-    if (!aliasPeer) {
-      return savedByDestination[canonicalDestination];
-    }
-
-    const existingPeer = savedByDestination[canonicalDestination];
-    const migratedPeer: SavedPeer = {
-      ...aliasPeer,
-      ...existingPeer,
-      destination: canonicalDestination,
-      label: existingPeer?.label ?? aliasPeer.label,
-      savedAt: existingPeer?.savedAt ?? aliasPeer.savedAt,
-      identityHex: existingPeer?.identityHex ?? aliasPeer.identityHex,
-      lxmfDestinationHex: existingPeer?.lxmfDestinationHex ?? aliasPeer.lxmfDestinationHex,
-      appData: existingPeer?.appData ?? aliasPeer.appData,
-      displayName: existingPeer?.displayName ?? aliasPeer.displayName,
-      lastRouteSeenAtMs: existingPeer?.lastRouteSeenAtMs ?? aliasPeer.lastRouteSeenAtMs,
-      lastHops: existingPeer?.lastHops ?? aliasPeer.lastHops,
-    };
-    delete savedByDestination[aliasDestination];
-    savedByDestination[canonicalDestination] = migratedPeer;
-    if (discoveredByDestination[aliasDestination]) {
-      delete discoveredByDestination[aliasDestination];
-    }
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `canonical saved peer ${canonicalDestination}`,
-    );
-    return migratedPeer;
-  }
-
-  function savedPeerProfileFromDiscovered(
-    destinationRaw: string,
-    discovered?: DiscoveredPeer,
-    fallback?: Partial<SavedPeer>,
-  ): SavedPeer {
-    const destination = normalizeDestinationHex(destinationRaw);
-    const identityHex = normalizeDestinationHex(discovered?.identityHex ?? fallback?.identityHex ?? "");
-    const lxmfDestinationHex = normalizeDestinationHex(
-      discovered?.lxmfDestinationHex ?? fallback?.lxmfDestinationHex ?? "",
-    );
-    const routeSeenAt = Math.max(
-      discovered?.lxmfLastSeenAt ?? 0,
-      discovered?.announceLastSeenAt ?? 0,
-      discovered?.lastSeenAt ?? 0,
-      fallback?.lastRouteSeenAtMs ?? 0,
-    );
-    const hops = typeof discovered?.hops === "number" && Number.isFinite(discovered.hops)
-      ? discovered.hops
-      : fallback?.lastHops;
-
-    return {
-      destination,
-      label: discovered?.label ?? fallback?.label,
-      savedAt: Number(fallback?.savedAt ?? nowMs()),
-      identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-      lxmfDestinationHex: isValidDestinationHex(lxmfDestinationHex) ? lxmfDestinationHex : undefined,
-      appData: discovered?.appData?.trim() || fallback?.appData?.trim() || undefined,
-      displayName: discovered?.announcedName?.trim() || fallback?.displayName?.trim() || undefined,
-      lastRouteSeenAtMs: routeSeenAt > 0 ? routeSeenAt : undefined,
-      lastHops: typeof hops === "number" && Number.isFinite(hops) ? hops : undefined,
-    };
-  }
-
-  function sameSavedPeerProfile(left: SavedPeer, right: SavedPeer): boolean {
-    return left.destination === right.destination
-      && left.label === right.label
-      && left.savedAt === right.savedAt
-      && left.identityHex === right.identityHex
-      && left.lxmfDestinationHex === right.lxmfDestinationHex
-      && left.appData === right.appData
-      && left.displayName === right.displayName
-      && left.lastRouteSeenAtMs === right.lastRouteSeenAtMs
-      && left.lastHops === right.lastHops;
-  }
-
-  function refreshSavedPeerProfile(destinationRaw: string, reason: string): void {
-    const destination = normalizeDestinationHex(destinationRaw);
-    const saved = savedByDestination[destination];
-    const discovered = discoveredByDestination[destination];
-    if (!saved || !discovered) {
-      return;
-    }
-
-    const next = savedPeerProfileFromDiscovered(destination, discovered, saved);
-    if (sameSavedPeerProfile(saved, next)) {
-      return;
-    }
-    savedByDestination[destination] = next;
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `${reason} ${destination}`,
-    );
-  }
-
-  function nativeSavedPeerForCanonicalDestination(
-    canonicalDestinationRaw: string,
-    identityHexRaw: string | undefined,
-    nativeSaved: boolean,
-    displayName?: string,
-  ): SavedPeer | undefined {
-    const canonicalDestination = normalizeDestinationHex(canonicalDestinationRaw);
-    if (!isValidDestinationHex(canonicalDestination)) {
-      return undefined;
-    }
-
-    const identityHex = normalizeDestinationHex(identityHexRaw ?? "");
-    const aliasDestination = isValidDestinationHex(identityHex)
-      ? appDestinationByIdentity[identityHex]
-      : undefined;
-    const saved = migrateSavedPeerAlias(aliasDestination, canonicalDestination)
-      ?? savedByDestination[canonicalDestination];
-    if (saved || !nativeSaved) {
-      return saved;
-    }
-
-    const existing = peerByAnyKnownDestination(discoveredByDestination, canonicalDestination);
-    const adoptedPeer = savedPeerProfileFromDiscovered(canonicalDestination, existing, {
-      label: displayName?.trim() || undefined,
-      displayName: displayName?.trim() || undefined,
-      savedAt: nowMs(),
-    });
-    savedByDestination[canonicalDestination] = adoptedPeer;
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `native saved peer ${canonicalDestination}`,
-    );
-    return adoptedPeer;
-  }
-
-  function applyAnnounceUpdate(
-    event: AnnounceReceivedEvent | AnnounceRecord,
-    source: "live" | "snapshot" = "live",
-  ): void {
-    const identityHex = normalizeDestinationHex(event.identityHex ?? "");
-    if (isLocalDestinationIdentityPair(event.destinationHex, identityHex)) {
-      return;
-    }
-    if (source === "live") {
-      recordLivePresence(
-        event.destinationKind,
-        normalizeDestinationHex(event.destinationHex),
-        identityHex,
-        event.receivedAtMs,
-      );
-    }
-    if (event.destinationKind === "lxmf_propagation") {
-      return;
-    }
-    if (event.destinationKind === "lxmf_delivery") {
-      const destination = normalizeDestinationHex(event.destinationHex);
-      const announcedName = ("displayName" in event && typeof event.displayName === "string"
-        ? event.displayName.trim()
-        : undefined) ?? extractAnnouncedName(event.appData);
-      if (isValidDestinationHex(identityHex)) {
-        lxmfDestinationByIdentity[identityHex] = destination;
-      }
-      if (!peerHasRemAnnounceEvidence({
-        appData: event.appData,
-        latestAnnounceKind: event.destinationKind,
-        latestAnnounceClass: event.announceClass,
-      })) {
-        return;
-      }
-      presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
-      const aliasDestination = isValidDestinationHex(identityHex)
-        ? appDestinationByIdentity[identityHex]
-        : undefined;
-      const saved = migrateSavedPeerAlias(aliasDestination, destination)
-        ?? savedByDestination[destination];
-      upsertDiscovered(destination, {
-        identityHex: isValidDestinationHex(identityHex) ? identityHex : undefined,
-        lxmfDestinationHex: destination,
-        lxmfLastSeenAt: event.receivedAtMs,
-        announceLastSeenAt: event.receivedAtMs,
-        lastSeenAt: event.receivedAtMs,
-        announcedName,
-        appData: event.appData,
-        hops: event.hops,
-        interfaceHex: event.interfaceHex,
-        latestAnnounceKind: event.destinationKind,
-        latestAnnounceClass: event.announceClass,
-        label: saved?.label,
-        saved: Boolean(saved),
-      }, "announce");
-      return;
-    }
-
-    if (isValidDestinationHex(identityHex)) {
-      appDestinationByIdentity[identityHex] = event.destinationHex;
-    }
-  }
-
-  async function refreshAnnounceState(): Promise<void> {
-    if (!client.value || !status.value.running) {
-      return;
-    }
-    try {
-      const announces = await client.value.listAnnounces();
-      for (const announce of announces) {
-        upsertNativeAnnounceRecord(announce);
-        applyAnnounceUpdate(announce, "snapshot");
-      }
-    } catch (error: unknown) {
-      appendLog("Debug", `Announce snapshot refresh skipped: ${errorMessage(error)}`);
-    }
-  }
-
-  async function settleStartupDiscovery(): Promise<void> {
-    if (!status.value.running) {
-      return;
-    }
-    startupSettling.value = true;
-    try {
-      await sleep(STARTUP_ANNOUNCE_SETTLE_MS);
-      await refreshMessagingState();
-      await refreshMessagingState();
-    } finally {
-      startupSettling.value = false;
-    }
-  }
+  const announce = createNodeAnnounceController({
+    appendLog,
+    appDestinationByIdentity,
+    client,
+    discoveredByDestination,
+    liveLxmfPresenceByIdentity,
+    livePresenceByDestination,
+    lxmfDestinationByIdentity,
+    errorMessage,
+    isLocalDestinationIdentityPair,
+    peerByAnyKnownDestination: (peers, destination) => peerByAnyKnownDestination(peers, destination),
+    persistSavedPeersProjection,
+    presenceNow,
+    savedByDestination,
+    startupSettling,
+    status,
+    refreshMessagingState: () => refreshMessagingState(),
+    upsertDiscovered,
+    upsertNativeAnnounceRecord,
+  });
+  const {
+    applyAnnounceUpdate,
+    nativeSavedPeerForCanonicalDestination,
+    refreshAnnounceState,
+    refreshSavedPeerProfile,
+    savedPeerProfileFromDiscovered,
+    settleStartupDiscovery,
+  } = announce;
 
   function buildClient(): ReticulumNodeClient {
     if (runtimeProfile === "web") {
@@ -1429,1612 +160,184 @@ export const useNodeStore = defineStore("node", () => {
     });
   }
 
-  function currentHubBootstrapProfile(): HubRegistryBootstrapProfile | null {
-    if (!hubModeUsesRch(settings.hub.mode)) {
-      return null;
-    }
-    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-      return null;
-    }
-    return buildHubRegistryBootstrapProfile({
-      callsign: settings.displayName,
-      localIdentityHex: status.value.identityHex,
-      hubIdentityHash: settings.hub.identityHash,
-    });
-  }
-
-  function setHubRegistrationPending(lastErrorValue?: string): void {
-    hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled";
-    if (lastErrorValue !== undefined) {
-      hubRegistration.lastError = asTrimmedString(lastErrorValue);
-    } else {
-      hubRegistration.lastError = "";
-    }
-  }
-
-  function setHubRegistrationReady(linkage: HubRegistryLinkage): void {
-    hubRegistration.status = "ready";
-    hubRegistration.linkage = { ...linkage };
-    hubRegistration.lastReadyAt = nowMs();
-    hubRegistration.lastError = "";
-    saveHubRegistryLinkage(linkage);
-  }
-
-  function setHubRegistrationError(error: unknown): void {
-    hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "error" : "disabled";
-    hubRegistration.lastError = errorMessage(error);
-    hubRegistration.lastAttemptAt = nowMs();
-  }
-
-  function clearHubRegistrationError(): void {
-    if (hubRegistration.status === "error") {
-      hubRegistration.status = "pending";
-    }
-    hubRegistration.lastError = "";
-  }
-
-  function reconcileHubRegistrationState(): void {
-    if (!hubModeUsesRch(settings.hub.mode)) {
-      hubRegistration.status = "disabled";
-      hubRegistration.lastError = "";
-      return;
-    }
-
-    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-      setHubRegistrationPending(
-        settings.hub.mode === "Connected"
-          ? "Connected mode requires selecting an RCH hub before outbound traffic can be routed."
-          : "Select an RCH hub to seed peer routing from the hub directory.",
-      );
-      return;
-    }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    hubRegistration.linkage = storedLinkage ?? undefined;
-
-    if (!storedLinkage) {
-      setHubRegistrationPending("Hub registry linkage has not been established yet.");
-      return;
-    }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile) {
-      setHubRegistrationPending("Hub registry bootstrap is waiting on a node identity and hub destination.");
-      return;
-    }
-
-    if (matchesHubRegistryProfile(storedLinkage, profile)) {
-      hubRegistration.status = "ready";
-      hubRegistration.lastError = "";
-      hubRegistration.lastReadyAt = storedLinkage.updatedAt ?? nowMs();
-      return;
-    }
-
-    setHubRegistrationPending("Stored hub linkage does not match the current callsign, team color, or identity.");
-  }
-
-  function buildHubRegistryTransport(): HubRegistryCommandTransport {
-    return {
-      sendCommand: async (destinationHex: string, command) => {
-        await sendBytes(destinationHex, EMPTY_BYTES, {
-          fieldsBase64: buildMissionCommandFieldsBase64([command]),
-        });
-      },
-      onPacket: (listener) => client.value?.on("packetReceived", listener) ?? (() => undefined),
-    };
-  }
-
-  async function bootstrapHubRegistration(force = false): Promise<void> {
-    if (!hubModeUsesRch(settings.hub.mode)) {
-      reconcileHubRegistrationState();
-      return;
-    }
-
-    if (hubRegistryBootstrapInFlight && !force) {
-      return hubRegistryBootstrapInFlight;
-    }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile) {
-      setHubRegistrationPending(
-        "Hub registry bootstrap is waiting on a callsign, node identity, or hub destination.",
-      );
-      return;
-    }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    if (!force && storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
-      setHubRegistrationReady(storedLinkage);
-      return;
-    }
-
-    if (!status.value.running) {
-      setHubRegistrationPending("Hub registry bootstrap will run after the node is started.");
-      return;
-    }
-
-    clearHubRegistrationError();
-    hubRegistration.lastAttemptAt = nowMs();
-    hubRegistration.lastError = "";
-    hubRegistration.status = "pending";
-
-    const transport = buildHubRegistryTransport();
-    const bootstrapPromise = bootstrapHubRegistry(profile, transport)
-      .then((linkage) => {
-        setHubRegistrationReady(linkage);
-        appendLog(
-          "Info",
-          `Hub registry linkage ready: team=${linkage.teamUid} member=${linkage.teamMemberUid}.`,
-        );
-      })
-      .catch((error: unknown) => {
-        setHubRegistrationError(error);
-        throw error;
-      })
-      .finally(() => {
-        hubRegistryBootstrapInFlight = null;
-      });
-
-    hubRegistryBootstrapInFlight = bootstrapPromise;
-    return bootstrapPromise;
-  }
-
-  async function refreshHubRegistrationState(attemptBootstrap = false): Promise<void> {
-    reconcileHubRegistrationState();
-    if (!attemptBootstrap || !hubModeUsesRch(settings.hub.mode)) {
-      return;
-    }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile || !status.value.running) {
-      return;
-    }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    if (storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
-      setHubRegistrationReady(storedLinkage);
-      return;
-    }
-
-    await bootstrapHubRegistration();
-  }
-
-  async function configureClientLogging(): Promise<void> {
-    if (!client.value || !status.value.running) {
-      return;
-    }
-    try {
-      await client.value.setLogLevel("Info");
-      appendLog("Debug", "Node client log level set to Info.");
-    } catch (error: unknown) {
-      logUi("Warn", `Failed to set node log level: ${errorMessage(error)}`);
-    }
-  }
-
-  function resetClientEventBindings(): void {
-    for (const unsubscribe of unsubscribeClientEvents.value) {
-      unsubscribe();
-    }
-    unsubscribeClientEvents.value = [];
-  }
-
-  function bindClientEvents(nodeClient: ReticulumNodeClient): void {
-    resetClientEventBindings();
-    unsubscribeClientEvents.value = [
-      nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
-        status.value = normalizeNodeStatus(event.status);
-        const statusError = asTrimmedString(status.value.lastError);
-        if (statusError && logIndicatesReadinessError(statusError)) {
-          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(statusError)) {
-            clearReadinessError();
-          } else {
-            setReadinessError(statusError);
-          }
-        } else if (event.status.running && !statusError) {
-          clearReadinessError();
-        }
-        applyRnodeInterfaceReadiness();
-        void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
-      }),
-      nodeClient.on("interfaceStatusChanged", (event: InterfaceStatusChangedEvent) => {
-        const current = status.value.interfaces.filter(
-          (entry) => entry.interfaceHex !== event.status.interfaceHex,
-        );
-        status.value = normalizeNodeStatus({
-          ...status.value,
-          interfaces: event.status.state === "disconnected" ? current : [...current, event.status],
-        });
-        applyRnodeInterfaceReadiness();
-      }),
-      nodeClient.on("announceReceived", (event: AnnounceReceivedEvent) => {
-        upsertNativeAnnounceRecord(event);
-        applyAnnounceUpdate(event, "live");
-      }),
-      nodeClient.on("peerChanged", (event: PeerChangedEvent) => {
-        const destination = normalizeDestinationHex(event.change.destinationHex);
-        if (isLocalDestinationIdentityPair(destination, event.change.identityHex)) {
-          return;
-        }
-        presenceNow.value = advancePresenceNow(presenceNow.value);
-        applyPeerChanged(event.change);
-      }),
-      nodeClient.on("peerResolved", (peer: PeerRecord) => {
-        const destination = normalizeDestinationHex(peer.destinationHex);
-        if (isLocalDestinationIdentityPair(destination, peer.identityHex)) {
-          return;
-        }
-        presenceNow.value = advancePresenceNow(presenceNow.value, peer.lastSeenAtMs);
-        upsertResolvedPeer(peer);
-      }),
-      nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
-        presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
-        hubDirectorySnapshot.value = {
-          effectiveConnectedMode: event.effectiveConnectedMode,
-          receivedAtMs: event.receivedAtMs,
-          items: event.items.map((item) => ({
-            ...item,
-            announceCapabilities: [...item.announceCapabilities],
-          })),
-        };
-        lastHubRefreshAt.value = event.receivedAtMs;
-        void refreshMessagingState();
-      }),
-      nodeClient.on("operationalNotice", (event) => {
-        appendNodeControlEntry(event.level, event.message, event.atMs);
-      }),
-      nodeClient.on("projectionInvalidated", (event: ProjectionInvalidationEvent) => {
-        switch (event.scope) {
-          case "AppSettings":
-            void refreshSettingsProjection();
-            break;
-          case "SavedPeers":
-            void refreshSavedPeersProjection();
-            break;
-          case "OperationalSummary":
-            scheduleOperationalSummaryRefresh();
-            break;
-          case "Plugins":
-            void refreshPluginProjection();
-            break;
-          case "PluginSensors":
-            void refreshPluginSensors();
-            break;
-          default:
-            break;
-        }
-      }),
-      nodeClient.on("syncUpdated", (statusUpdate: SyncStatus) => {
-        const previousRelay = activePropagationNodeHex(syncStatus.value);
-        syncStatus.value = { ...statusUpdate };
-        const nextRelay = activePropagationNodeHex(syncStatus.value);
-        if (previousRelay !== nextRelay) {
-          appendLog(
-            "Debug",
-            `[sync] propagation relay ${nextRelay ? `selected ${nextRelay}` : "cleared"}.`,
-          );
-        }
-      }),
-      nodeClient.on("log", (event: NodeLogEvent) => {
-        if (logIndicatesReadinessError(event.message)) {
-          if (tcpInterfaceFailureCanFallBackToConfiguredInterface(event.message)) {
-            clearReadinessError();
-          } else {
-            setReadinessError(event.message);
-          }
-        }
-        if (nativeLogShouldAppendToUi(event.level, event.message)) {
-          appendLog(event.level, event.message);
-        }
-      }),
-      nodeClient.on("error", (event: NodeErrorEvent) => {
-        lastError.value = `${event.code}: ${event.message}`;
-        if (nodeErrorIndicatesReadinessError(event)) {
-          if (nodeErrorCanFallBackToConfiguredInterface(event)) {
-            clearReadinessError();
-          } else {
-            setReadinessError(lastError.value);
-          }
-        }
-        appendNodeControlEntry("Error", lastError.value);
-      }),
-    ];
-  }
-
-  async function refreshStatusSnapshot(
-    retries = 1,
-    delayMs = 250,
-  ): Promise<NodeStatus> {
-    if (!client.value) {
-      return { ...EMPTY_STATUS };
-    }
-
-    let latest: NodeStatus = { ...EMPTY_STATUS };
-    for (let attempt = 0; attempt < retries; attempt += 1) {
-      try {
-        latest = normalizeNodeStatus(await client.value.getStatus());
-        status.value = { ...latest };
-        if (latest.running || attempt === retries - 1) {
-          return latest;
-        }
-      } catch {
-        if (attempt === retries - 1) {
-          status.value = { ...EMPTY_STATUS };
-          return { ...EMPTY_STATUS };
-        }
-      }
-
-      await sleep(delayMs);
-    }
-
-    return latest;
-  }
-
-  async function syncRuntimeSnapshot(reason: string): Promise<void> {
-    const nextStatus = await refreshStatusSnapshot(2, 250);
-    if (!nextStatus.running) {
-      appendLog("Debug", `[startup] native runtime snapshot idle after ${reason}.`);
-      return;
-    }
-
-    await refreshMessagingState();
-    await refreshAnnounceState();
-    await refreshOperationalSummaryProjection();
-    await configureClientLogging();
-    await refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
-    appendLog("Debug", `[startup] native runtime snapshot restored after ${reason}.`);
-  }
-
-  async function refreshMessagingState(): Promise<void> {
-    if (!client.value || !status.value.running) {
-      syncStatus.value = { ...EMPTY_SYNC_STATUS };
-      telemetryDestinations.value = [];
-      return;
-    }
-
-    await projectionRefreshCoordinator.run("node:messaging", async () => {
-      const [peers, nextSyncStatus, nextTelemetryDestinations] = await Promise.all([
-        client.value!.listPeers(),
-        client.value!.getLxmfSyncStatus(),
-        client.value!.listTelemetryDestinations(),
-      ]);
-      reconcileNativePeerSnapshot(peers);
-      for (const peer of peers) {
-        upsertResolvedPeer(peer);
-      }
-      syncStatus.value = { ...nextSyncStatus };
-      telemetryDestinations.value = [...nextTelemetryDestinations];
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Messaging projection refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function init(): Promise<void> {
-    if (initPromise) {
-      return initPromise;
-    }
-    if (initialized.value) {
-      return;
-    }
-
-    initPromise = (async () => {
-      client.value = buildClient();
-      bindClientEvents(client.value);
-      await importLegacyProjectionState();
-      await Promise.all([
-        refreshSettingsProjection(),
-        refreshSavedPeersProjection(),
-        refreshOperationalSummaryProjection(),
-        refreshWatchStatusServerSettings(),
-        refreshPluginProjection(true),
-        refreshPluginSensors(),
-      ]);
-      await syncRuntimeSnapshot("client init");
-      if (presenceTickerId === null) {
-        presenceTickerId = window.setInterval(() => {
-          presenceNow.value = nowMs();
-          void refreshPluginSensors();
-        }, PEER_PRESENCE_TICK_MS);
-      }
-      await refreshHubRegistrationState(false);
-      initialized.value = true;
-    })()
-      .finally(() => {
-        initPromise = null;
-      });
-
-    return initPromise;
-  }
-
-  async function startNode(): Promise<void> {
-    try {
-      await init();
-      if (!client.value) {
-        return;
-      }
-
-      clearLastError();
-      clearReadinessError();
-      await withTimeout(
-        client.value.start(toNodeConfig(settings)),
-        NODE_START_TIMEOUT_MS,
-        `node runtime start timed out after ${NODE_START_TIMEOUT_MS}ms`,
-      );
-      setNodeConfigRestartRequired(false);
-      await refreshStatusSnapshot(8, 250);
-      applyRnodeInterfaceReadiness();
-      await refreshMessagingState();
-      await refreshAnnounceState();
-      await refreshOperationalSummaryProjection();
-      await configureClientLogging();
-      await settleStartupDiscovery();
-      await refreshHubRegistrationState(true);
-      appendNodeControlEntry("Info", "Node started.");
-
-      if (hubModeUsesRch(settings.hub.mode)) {
-        await refreshHubDirectory().catch((error: unknown) => {
-          appendNodeControlEntry("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
-        });
-      }
-    } catch (error: unknown) {
-      throw captureRuntimeActionError("Start node failed", error);
-    }
-  }
-
-  async function stopNode(): Promise<void> {
-    try {
-      if (!client.value) {
-        return;
-      }
-      clearLastError();
-      clearReadinessError();
-      await client.value.stop();
-      appendNodeControlEntry("Info", "Node stopped.");
-      syncStatus.value = { ...EMPTY_SYNC_STATUS };
-      clearAnnounceState();
-      await refreshOperationalSummaryProjection();
-      await refreshHubRegistrationState(false);
-
-      for (const destination of Object.keys(discoveredByDestination)) {
-        setPeerState(destination, "disconnected");
-      }
-    } catch (error: unknown) {
-      throw captureActionError("Stop node failed", error);
-    }
-  }
-
-  async function restartNode(): Promise<void> {
-    try {
-      await init();
-      if (!client.value) {
-        return;
-      }
-      clearLastError();
-      clearReadinessError();
-      await withTimeout(
-        client.value.restart(toNodeConfig(settings)),
-        NODE_START_TIMEOUT_MS,
-        `node runtime restart timed out after ${NODE_START_TIMEOUT_MS}ms`,
-      );
-      setNodeConfigRestartRequired(false);
-      await refreshStatusSnapshot(8, 250);
-      applyRnodeInterfaceReadiness();
-      await refreshMessagingState();
-      await refreshAnnounceState();
-      await refreshOperationalSummaryProjection();
-      await configureClientLogging();
-      await settleStartupDiscovery();
-      await refreshHubRegistrationState(true);
-      appendNodeControlEntry("Info", "Node restarted with updated settings.");
-
-      if (hubModeUsesRch(settings.hub.mode)) {
-        await refreshHubDirectory().catch((error: unknown) => {
-          appendNodeControlEntry("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
-        });
-      }
-    } catch (error: unknown) {
-      throw captureRuntimeActionError("Restart node failed", error);
-    }
-  }
-
-  async function connectPeer(destinationRaw: string): Promise<void> {
-    await init();
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      const message = `Invalid peer destination: ${destinationRaw}.`;
-      appendLog("Debug", `[peers] connect blocked invalid-destination raw=${destinationRaw}.`);
-      throw new Error(message);
-    }
-    if (!client.value) {
-      const message = "Node client unavailable. Reinitialize the app and try again.";
-      appendLog("Debug", `[peers] connect blocked destination=${destination}: client unavailable.`);
-      throw new Error(message);
-    }
-    if (!status.value.running) {
-      const message = "Start node before connecting to a peer.";
-      setLastError(message);
-      appendLog("Debug", `[peers] connect blocked destination=${destination}: node not running.`);
-      throw new Error(message);
-    }
-    if (isLocalPeerDestination(destination)) {
-      const message = `Cannot connect to local destination ${destination}.`;
-      appendLog("Debug", `[peers] connect blocked self destination=${destination}.`);
-      throw new Error(message);
-    }
-    const savedPeer = savedByDestination[destination];
-    if (!savedPeer) {
-      throw new Error(`Save peer ${destination} before connecting.`);
-    }
-    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
-    clearPeerRemoved(destination, discovered);
-
-    try {
-      clearLastError();
-      logUi("Debug", `[peers] connect requested ${describePeerState(destination)}.`);
-      const connectPromise = client.value.connectPeer(destination);
-      markPeerManagedState(destination, true);
-      await connectPromise;
-      void settlePeerConnectionState(destination, "connected");
-    } catch (error: unknown) {
-      const message = errorMessage(error);
-      setPeerState(destination, "disconnected", message);
-      throw captureActionError(`Connect peer failed (${destination})`, error);
-    }
-  }
-
-  async function disconnectPeer(destinationRaw: string): Promise<void> {
-    await init();
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      const message = `Invalid peer destination: ${destinationRaw}.`;
-      appendLog("Debug", `[peers] disconnect blocked invalid-destination raw=${destinationRaw}.`);
-      throw new Error(message);
-    }
-    if (!client.value) {
-      const message = "Node client unavailable. Reinitialize the app and try again.";
-      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: client unavailable.`);
-      throw new Error(message);
-    }
-    if (!status.value.running) {
-      const message = "Start node before disconnecting a peer.";
-      appendLog("Debug", `[peers] disconnect blocked destination=${destination}: node not running.`);
-      throw new Error(message);
-    }
-    try {
-      clearLastError();
-      logUi("Debug", `[peers] disconnect requested ${describePeerState(destination)}.`);
-      const disconnectPromise = client.value.disconnectPeer(destination);
-      markPeerManagedState(destination, false);
-      await disconnectPromise;
-      await settlePeerConnectionState(destination, "disconnected");
-      logUi("Debug", `[peers] disconnect applied ${describePeerState(destination)}.`);
-    } catch (error: unknown) {
-      throw captureActionError(`Disconnect peer failed (${destination})`, error);
-    }
-  }
-
-  async function connectAllSaved(): Promise<void> {
-    const results = await Promise.allSettled(
-      Object.values(savedByDestination).map((peer) => connectPeer(peer.destination)),
-    );
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map((result) => errorMessage(result.reason));
-    if (failures.length > 0) {
-      throw new Error(failures.join("; "));
-    }
-  }
-
-  async function disconnectAllSaved(): Promise<void> {
-    const results = await Promise.allSettled(
-      Object.values(savedByDestination).map((peer) => disconnectPeer(peer.destination)),
-    );
-    const failures = results
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map((result) => errorMessage(result.reason));
-    if (failures.length > 0) {
-      throw new Error(failures.join("; "));
-    }
-  }
-
-  async function refreshHubDirectory(): Promise<void> {
-    try {
-      if (!hubModeUsesRch(settings.hub.mode)) {
-        clearHubDirectoryState();
-        return;
-      }
-      if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-        clearHubDirectoryState();
-        if (settings.hub.mode === "Connected") {
-          throw new Error("Connected mode requires selecting an RCH hub before refreshing.");
-        }
-        return;
-      }
-      if (!client.value || !status.value.running) {
-        return;
-      }
-      clearLastError();
-      await client.value.refreshHubDirectory();
-    } catch (error: unknown) {
-      throw captureActionError("Hub directory refresh failed", error);
-    }
-  }
-
-  async function forgetHubRegistryLinkage(): Promise<void> {
-    clearHubRegistryLinkage();
-    hubRegistration.linkage = undefined;
-    hubRegistration.lastReadyAt = undefined;
-    setHubRegistrationPending("Hub registry linkage cleared.");
-  }
-
-  async function setAnnounceCapabilities(capabilityString: string): Promise<void> {
-    settings.announceCapabilities = ensureRequiredAnnounceCapabilities(capabilityString);
-    const nextSettings = normalizeAppSettingsRecord(
-      toAppSettingsRecord(settings),
-      toUiSettingsProjection(settings),
-      defaultsWithTcpFallback(),
-      true,
-    );
-    await init();
-    await persistSettingsProjection(nextSettings);
-
-    if (!client.value || !status.value.running) {
-      return;
-    }
-    try {
-      clearLastError();
-      await client.value.setAnnounceCapabilities(formatAnnounceAppData(
-        ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
-        settings.displayName,
-      ));
-    } catch (error: unknown) {
-      throw captureActionError("Set announce capabilities failed", error);
-    }
-  }
-
-  async function savePeer(destinationRaw: string): Promise<void> {
-    await init();
-    const requestedDestination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(requestedDestination)) {
-      return;
-    }
-    const discovered = peerByAnyKnownDestination(discoveredByDestination, requestedDestination);
-    const destination = normalizeDestinationHex(discovered?.lxmfDestinationHex ?? discovered?.destination ?? requestedDestination);
-    if (!isValidDestinationHex(destination)) {
-      return;
-    }
-    clearPeerRemoved(requestedDestination, discovered);
-    clearPeerRemoved(destination, discovered);
-    const nextSavedPeers = {
-      ...savedByDestination,
-      [destination]: savedPeerProfileFromDiscovered(destination, discovered, {
-        label: discovered?.label,
-        savedAt: nowMs(),
-      }),
-    };
-    if (requestedDestination !== destination) {
-      delete nextSavedPeers[requestedDestination];
-    }
-    await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
-  }
-
-  async function removePeer(destinationRaw: string): Promise<void> {
-    await init();
-    const destination = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destination)) {
-      return;
-    }
-    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
-    const removedDestinations = markPeerRemoved(destination, discovered);
-    const nextSavedPeers = { ...savedByDestination };
-    for (const removedDestination of removedDestinations) {
-      delete nextSavedPeers[removedDestination];
-      delete discoveredByDestination[removedDestination];
-    }
-    await persistSavedPeersProjection(nextSavedPeers, `explicit remove ${destination}`);
-    if (client.value && status.value.running) {
-      try {
-        await client.value.disconnectPeer(destination);
-      } catch (error: unknown) {
-        appendLog("Debug", `[peers] remove disconnect skipped destination=${destination}: ${errorMessage(error)}`);
-      }
-    }
-  }
-
-  async function unsavePeer(destinationRaw: string): Promise<void> {
-    await init();
-    const destination = normalizeDestinationHex(destinationRaw);
-    const nextSavedPeers = { ...savedByDestination };
-    delete nextSavedPeers[destination];
-    const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);
-    const canonicalDestination = normalizeDestinationHex(discovered?.lxmfDestinationHex ?? discovered?.destination ?? "");
-    if (isValidDestinationHex(canonicalDestination)) {
-      delete nextSavedPeers[canonicalDestination];
-    }
-    await persistSavedPeersProjection(nextSavedPeers, `explicit unsave ${destination}`);
-  }
-
-  async function setPeerLabel(destinationRaw: string, label: string): Promise<void> {
-    await init();
-    const destination = normalizeDestinationHex(destinationRaw);
-    const normalizedLabel = label.trim();
-    if (savedByDestination[destination]) {
-      const nextSavedPeers = {
-        ...savedByDestination,
-        [destination]: {
-          ...savedByDestination[destination],
-          label: normalizedLabel || undefined,
-        },
-      };
-      await persistSavedPeersProjection(nextSavedPeers, `label update ${destination}`);
-    }
-    if (discoveredByDestination[destination]) {
-      discoveredByDestination[destination].label = normalizedLabel || undefined;
-    }
-  }
-
-  async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
-    let uiSettingsChanged = false;
-    let hubRoutingChanged = false;
-    const previousNodeConfig = toNodeConfig(settings);
-    if (next.displayName !== undefined) {
-      settings.displayName = normalizeStoredDisplayName(next.displayName);
-    }
-    if (next.clientMode) {
-      settings.clientMode = next.clientMode;
-      uiSettingsChanged = true;
-    }
-    settings.autoConnectSaved = false;
-    if (next.announceCapabilities !== undefined) {
-      settings.announceCapabilities = ensureRequiredAnnounceCapabilities(next.announceCapabilities);
-    }
-    if (next.tcpClients !== undefined) {
-      settings.tcpClients = normalizeTcpCommunityClients(next.tcpClients, defaultsWithTcpFallback(), true);
-    }
-    if (typeof next.broadcast === "boolean") {
-      settings.broadcast = next.broadcast;
-    }
-    if (typeof next.transportNodeEnabled === "boolean") {
-      settings.transportNodeEnabled = next.transportNodeEnabled;
-    }
-    if (next.announceIntervalSeconds !== undefined) {
-      settings.announceIntervalSeconds = next.announceIntervalSeconds;
-    }
-    if (next.telemetry) {
-      settings.telemetry = normalizeTelemetrySettings(next.telemetry, settings.telemetry);
-    }
-    if (next.hub) {
-      const previousHubMode = settings.hub.mode;
-      const previousHubIdentityHash = settings.hub.identityHash;
-      settings.hub = {
-        ...settings.hub,
-        ...next.hub,
-        mode: normalizeHubMode(next.hub.mode ?? settings.hub.mode),
-      };
-      hubRoutingChanged =
-        settings.hub.mode !== previousHubMode
-        || settings.hub.identityHash !== previousHubIdentityHash;
-      if (
-        !hubModeUsesRch(settings.hub.mode)
-        || settings.hub.mode !== previousHubMode
-        || settings.hub.identityHash !== previousHubIdentityHash
-      ) {
-        clearHubDirectoryState();
-      }
-    }
-    if (next.rnode) {
-      settings.rnode = normalizeRnodeSettings({
-        ...settings.rnode,
-        ...next.rnode,
-      });
-    }
-    const nextSettings = normalizeAppSettingsRecord(
-      toAppSettingsRecord(settings),
-      toUiSettingsProjection(settings),
-      defaultsWithTcpFallback(),
-      true,
-    );
-    if (uiSettingsChanged) {
-      storeUiSettingsProjection(toUiSettingsProjection(settings));
-    }
-    await init();
-    try {
-      await persistSettingsProjection(nextSettings);
-    } catch (error: unknown) {
-      appendLog("Warn", `Settings projection persist failed: ${errorMessage(error)}`);
-      throw error;
-    }
-    const nodeConfigChanged = !nodeConfigsEqual(previousNodeConfig, toNodeConfig(settings));
-    if (status.value.running && nodeConfigChanged) {
-      setNodeConfigRestartRequired(true);
-      appendLog("Info", "Node interface settings changed. Restart the app or node to apply them.");
-    }
-    if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
-      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
-      return;
-    }
-    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-      if (settings.hub.mode === "Connected") {
-        const message =
-          "Connected mode requires selecting an RCH hub before outbound traffic can be routed.";
-        lastError.value = message;
-        appendLog("Warn", message);
-      }
-      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
-      return;
-    }
-    appendLog(
-      "Info",
-      "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
-    );
-    void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
-  }
-
-  function getSavedPeerList(): PeerListV1 {
-    return createPeerListV1(Object.values(savedByDestination));
-  }
-
-  function importPeerList(
-    peerList: PeerListV1,
-    mode: "merge" | "replace" = "merge",
-  ): void {
-    if (mode === "replace") {
-      for (const key of Object.keys(savedByDestination)) {
-        delete savedByDestination[key];
-      }
-    }
-
-    for (const peer of peerList.peers) {
-      const destination = normalizeDestinationHex(peer.destination);
-      if (!isValidDestinationHex(destination)) {
-        continue;
-      }
-      savedByDestination[destination] = {
-        destination,
-        label: peer.label?.trim() || undefined,
-        savedAt: nowMs(),
-        lxmfDestinationHex: destination,
-      };
-      upsertDiscovered(
-        destination,
-        {
-          label: peer.label?.trim() || undefined,
-          saved: true,
-          lastSeenAt: discoveredByDestination[destination]?.lastSeenAt ?? 0,
-        },
-        "import",
-      );
-    }
-    void init()
-      .then(() => persistSavedPeersProjection({ ...savedByDestination }, `peer list import (${mode})`))
-      .catch((error: unknown) => {
-        appendLog("Warn", `Saved-peer projection persist failed: ${errorMessage(error)}`);
-      });
-  }
-
-  function parsePeerListText(text: string): ReturnType<typeof parsePeerListV1> {
-    return parsePeerListV1(text);
-  }
-
-  function hasFreshPresence(lastSeenAt?: number): boolean {
-    return typeof lastSeenAt === "number"
-      && Number.isFinite(lastSeenAt)
-      && (presenceNow.value - lastSeenAt) <= PEER_ONLINE_FRESHNESS_MS;
-  }
-
-  function peerPresenceTimestamp(
-    peer: Pick<DiscoveredPeer, "lastSeenAt">,
-  ): number | undefined {
-    const seenAt = peer.lastSeenAt ?? 0;
-    return seenAt > 0 ? seenAt : undefined;
-  }
-
-  function peerCachedPresenceTimestamp(
-    peer: Pick<DiscoveredPeer, "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
-  ): number | undefined {
-    const announceSeenAt = typeof peer.announceLastSeenAt === "number" ? peer.announceLastSeenAt : 0;
-    const lxmfSeenAt = typeof peer.lxmfLastSeenAt === "number" ? peer.lxmfLastSeenAt : 0;
-    const seenAt = Math.max(announceSeenAt, lxmfSeenAt, peer.lastSeenAt ?? 0);
-    return seenAt > 0 ? seenAt : undefined;
-  }
-
-  function peerDisplayState(peer: Pick<DiscoveredPeer, "state">): PeerConnectionState {
-    return peer.state;
-  }
-
-  function peerIsSaved(
-    peer: Pick<DiscoveredPeer, "destination" | "saved">,
-    savedDestinations: Set<string>,
-  ): boolean {
-    return savedDestinations.has(peer.destination) || peer.saved;
-  }
-
-  function peerPresenceState(
-    peer: Pick<DiscoveredPeer, "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
-  ): "online" | "offline" {
-    return hasFreshPresence(peerCachedPresenceTimestamp(peer)) ? "online" : "offline";
-  }
-
-  function peerHasKnownLxmfRoute(
-    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex">,
-  ): boolean {
-    const appDestinationHex = normalizeDestinationHex(peer.destination);
-    const lxmfDestinationHex = normalizeDestinationHex(peer.lxmfDestinationHex ?? "");
-    return isValidDestinationHex(appDestinationHex)
-      && isValidDestinationHex(lxmfDestinationHex);
-  }
-
-  function peerByAnyKnownDestination(
-    peers: Record<string, DiscoveredPeer>,
-    destinationRaw: string,
-  ): DiscoveredPeer | undefined {
-    const destinationHex = normalizeDestinationHex(destinationRaw);
-    if (!isValidDestinationHex(destinationHex)) {
-      return undefined;
-    }
-    return Object.values(peers).find((peer) =>
-      destinationHex === normalizeDestinationHex(peer.destination)
-        || destinationHex === normalizeDestinationHex(peer.lxmfDestinationHex ?? "")
-        || destinationHex === normalizeDestinationHex(peer.identityHex ?? ""),
-    );
-  }
-
-  function knownDestinationsForPeer(
-    destinationRaw: string,
-    peer?: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
-  ): string[] {
-    const destinations = [
-      destinationRaw,
-      peer?.destination,
-      peer?.lxmfDestinationHex,
-      peer?.identityHex,
-    ]
-      .map((value) => normalizeDestinationHex(value ?? ""))
-      .filter(isValidDestinationHex);
-    return [...new Set(destinations)];
-  }
-
-  function peerIsRemoved(
-    peer: Pick<DiscoveredPeer, "destination" | "lxmfDestinationHex" | "identityHex">,
-  ): boolean {
-    return knownDestinationsForPeer(peer.destination, peer).some((destination) =>
-      removedByDestination[destination] !== undefined,
-    );
-  }
-
-  function markPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): string[] {
-    const destinations = knownDestinationsForPeer(destinationRaw, peer);
-    const removedAt = nowMs();
-    for (const destination of destinations) {
-      removedByDestination[destination] = removedAt;
-    }
-    storeRemovedPeerDestinations({ ...removedByDestination });
-    return destinations;
-  }
-
-  function clearPeerRemoved(destinationRaw: string, peer?: DiscoveredPeer): void {
-    for (const destination of knownDestinationsForPeer(destinationRaw, peer)) {
-      delete removedByDestination[destination];
-    }
-    storeRemovedPeerDestinations({ ...removedByDestination });
-  }
-
-  const discoveredPeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => shouldDisplayDiscoveredPeer(peer))
-      .filter((peer) => !peerIsRemoved(peer))
-      .filter((peer) => !isLocalPeer(peer))
-      .sort((a, b) => {
-        const byRank = peerSortRank(b) - peerSortRank(a);
-        if (byRank !== 0) {
-          return byRank;
-        }
-        return b.lastSeenAt - a.lastSeenAt;
-      }),
-  );
-  const allPeers = discoveredPeers;
-
-  const remAnnouncedPeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => !peerIsRemoved(peer))
-      .filter((peer) => hasActualRemAnnounce(peer))
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-  );
-
-  const autoFanoutPeers = computed(() =>
-    Object.values(discoveredByDestination)
-      .filter((peer) => !isLocalPeer(peer))
-      .filter((peer) => peerIsSaved(peer, savedDestinations.value))
-      .filter((peer) => peerHasKnownLxmfRoute(peer))
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-  );
-
-  const propagationEligibleEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    (!bestPropagationNodeHex.value ? [] : autoFanoutPeers.value)
-      .filter((peer) => !peer.activeLink)
-      .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .map((peer) => ({
-        appDestinationHex: peer.destination,
-        lxmfDestinationHex: peer.lxmfDestinationHex!,
-        identityHex: peer.identityHex,
-        label: peer.label,
-        announcedName: peer.announcedName,
-        sendMode: "PropagationOnly",
-      })),
-  );
-
-  function savedPeerLastSeenAt(peer: SavedPeer): number {
-    const discovered = peerByAnyKnownDestination(discoveredByDestination, peer.destination);
-    return discovered ? peerCachedPresenceTimestamp(discovered) ?? 0 : 0;
-  }
-
-  const savedPeers = computed(() =>
-    Object.values(savedByDestination).sort((a, b) => {
-      const byLastSeen = savedPeerLastSeenAt(b) - savedPeerLastSeenAt(a);
-      if (byLastSeen !== 0) {
-        return byLastSeen;
-      }
-      const bySavedAt = b.savedAt - a.savedAt;
-      if (bySavedAt !== 0) {
-        return bySavedAt;
-      }
-      return a.destination.localeCompare(b.destination);
-    }),
-  );
-
-  const savedVisiblePeers = computed(() =>
-    discoveredPeers.value.filter((peer) => peerIsSaved(peer, savedDestinations.value)),
-  );
-
-  const connectedPeers = computed(() =>
-    savedVisiblePeers.value.filter((peer) => peer.activeLink),
-  );
-
-  const reachablePeers = computed(() =>
-    savedVisiblePeers.value.filter((peer) =>
-      hasFreshPresence(peerCachedPresenceTimestamp(peer)),
-    ),
-  );
-
-  const connectedDestinations = computed(() =>
-    connectedPeers.value.map((peer) => peer.destination),
-  );
-
-  const intentionalPeerDestinations = computed(() =>
-    savedVisiblePeers.value.map((peer) => peer.destination),
-  );
-
-  const connectedLinkDestinations = computed(() =>
-    connectedPeers.value.map((peer) => peer.destination),
-  );
-
-  const connectedEventPeerRoutes = computed<EventPeerRoute[]>(() =>
-    connectedPeers.value
-      .filter((peer) => peerHasKnownLxmfRoute(peer))
-      .map((peer) => ({
-        appDestinationHex: peer.destination,
-        lxmfDestinationHex: peer.lxmfDestinationHex!,
-        identityHex: peer.identityHex,
-        label: peer.label,
-        announcedName: peer.announcedName,
-        sendMode: "Auto",
-      })),
-  );
-
-  const visiblePeerCount = computed(() => discoveredPeers.value.length);
-  const savedPeerCount = computed(() => savedPeers.value.length);
-  const connectedPeerCount = computed(() => connectedPeers.value.length);
-  const reachablePeerCount = computed(() => reachablePeers.value.length);
-  const bestPropagationNodeHex = computed(() => activePropagationNodeHex(syncStatus.value));
-  const hubDirectoryPeers = computed(() => hubDirectorySnapshot.value?.items ?? []);
-  const effectiveConnectedMode = computed(() => Boolean(hubDirectorySnapshot.value?.effectiveConnectedMode));
-  const hubAnnounceCandidates = computed<HubAnnounceCandidate[]>(() => {
-    const byIdentity = new Map<string, HubAnnounceCandidate & { receivedAtMs: number }>();
-    for (const announce of Object.values(announceByDestination)) {
-      if (announce.announceClass !== "RchHubServer") {
-        continue;
-      }
-      const identity = isValidDestinationHex(announce.identityHex)
-        ? announce.identityHex
-        : announce.destinationHex;
-      const candidate = {
-        destination: identity,
-        label: announce.displayName || identity,
-        receivedAtMs: announce.receivedAtMs,
-      };
-      const existing = byIdentity.get(identity);
-      if (!existing || existing.receivedAtMs < announce.receivedAtMs) {
-        byIdentity.set(identity, candidate);
-      }
-    }
-    return [...byIdentity.values()]
-      .map(({ destination, label }) => ({ destination, label }))
-      .sort((left, right) => {
-        const byLabel = left.label.localeCompare(right.label);
-        if (byLabel !== 0) {
-          return byLabel;
-        }
-        return left.destination.localeCompare(right.destination);
-      });
-  });
-
-  const savedDestinations = computed(() => new Set(savedPeers.value.map((peer) => peer.destination)));
-  const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
-  const ready = computed(() =>
-    status.value.running
-    && statusHasRuntimeReceiveReadiness(status.value),
-  );
-  const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
-  const hubRegistrationReady = computed(
-    () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),
-  );
-  const hubRegistrationPending = computed(() => hubRegistration.status === "pending");
-  const hubRegistrationSummary = computed(() => {
-    const lastHubError = asTrimmedString(hubRegistration.lastError);
-    switch (hubRegistration.status) {
-      case "disabled":
-        return "Hub sync disabled";
-      case "ready":
-        if (!hubRegistration.linkage) {
-          return "Hub registration ready";
-        }
-        return `Ready | team=${hubRegistration.linkage.teamUid.slice(0, 10)}... member=${hubRegistration.linkage.teamMemberUid.slice(0, 10)}...`;
-      case "error":
-        return lastHubError
-          ? `Error | ${lastHubError}`
-          : "Hub registration error";
-      case "pending":
-      default:
-        return lastHubError
-          ? `Pending | ${lastHubError}`
-          : "Pending hub registration";
-    }
-  });
-
-  function notReadyMessage(action: string): string {
-    if (readinessErrorMessage.value) {
-      return `Cannot ${action} while the node is not ready: ${readinessErrorMessage.value}`;
-    }
-    return `Cannot ${action} until the node is ready. Wait for the top-right status to show Ready.`;
-  }
-
-  function assertReadyForOutbound(action: string): void {
-    if (ready.value) {
-      return;
-    }
-
-    const message = notReadyMessage(action);
-    logUi(
-      "Debug",
-      `[ready] blocked outbound action=${action} running=${status.value.running} initialized=${initialized.value} readiness_error=${readinessErrorMessage.value || "none"}.`,
-    );
-    lastError.value = message;
-    logUi("Warn", message);
-    throw new Error(message);
-  }
-
-  function assertHubRoutingReadyForOutbound(action: string): void {
-    if (settings.hub.mode !== "Connected") {
-      return;
-    }
-    if (hasSelectedHubIdentity(settings.hub.identityHash)) {
-      return;
-    }
-
-    const message = `Cannot ${action} until a connected-mode RCH hub is selected.`;
-    lastError.value = message;
-    logUi("Warn", message);
-    throw new Error(message);
-  }
-
-  function destinationHasCapability(destinationRaw: string, capability: string): boolean {
-    const peer = peerByAnyKnownDestination(discoveredByDestination, destinationRaw);
-    if (!peer || !hasActualRemAnnounce(peer)) {
-      return false;
-    }
-    return hasCapability(peer.appData ?? "", capability);
-  }
-
-  async function broadcastBytes(bytes: Uint8Array, options?: PacketSendOptions): Promise<void> {
-    if (!client.value) {
-      throw captureActionError("Broadcast failed", new Error("Node client is not initialized."));
-    }
-    try {
-      assertReadyForOutbound("broadcast traffic");
-      logUi(
-        "Debug",
-        `Broadcast requested bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
-      );
-      await client.value.broadcastBytes(bytes, options);
-    } catch (error: unknown) {
-      throw captureActionError("Broadcast failed", error);
-    }
-  }
-
-  async function sendBytes(
-    destinationHex: string,
-    bytes: Uint8Array,
-    options?: PacketSendOptions,
-  ): Promise<void> {
-    const nodeClient = client.value;
-    if (!nodeClient) {
-      throw captureActionError(
-        `Send failed (${destinationHex})`,
-        new Error("Node client is not initialized."),
-      );
-    }
-    try {
-      assertReadyForOutbound("send traffic");
-      assertHubRoutingReadyForOutbound("send traffic");
-      const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
-      const sendMode = options?.sendMode ?? "Auto";
-      logUi(
-        "Debug",
-        `Send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"} mode=${sendMode}${matchedPeer ? ` peer=${matchedPeer.label ?? matchedPeer.destination}` : ""}.`,
-      );
-      await nodeClient.sendBytes(destinationHex, bytes, {
-        ...options,
-        sendMode,
-      });
-      logUi(
-        "Debug",
-        `Send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength} mode=${sendMode}.`,
-      );
-    } catch (error: unknown) {
-      throw captureActionError(`Send failed (${destinationHex})`, error);
-    }
-  }
-
-  async function sendBytesDirect(
-    destinationHex: string,
-    bytes: Uint8Array,
-    options?: PacketSendOptions,
-  ): Promise<void> {
-    const nodeClient = client.value;
-    if (!nodeClient) {
-      throw captureActionError(
-        `Direct send failed (${destinationHex})`,
-        new Error("Node client is not initialized."),
-      );
-    }
-    try {
-      assertReadyForOutbound("send traffic");
-      assertHubRoutingReadyForOutbound("send traffic");
-      logUi(
-        "Debug",
-        `Direct send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
-      );
-      await nodeClient.sendBytes(destinationHex, bytes, {
-        ...options,
-        sendMode: "DirectOnly",
-      });
-      logUi(
-        "Debug",
-        `Direct send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
-      );
-    } catch (error: unknown) {
-      throw captureActionError(`Direct send failed (${destinationHex})`, error);
-    }
-  }
-
-  async function sendBytesViaPropagation(
-    destinationHex: string,
-    bytes: Uint8Array,
-    options?: PacketSendOptions,
-  ): Promise<void> {
-    const nodeClient = client.value;
-    if (!nodeClient) {
-      throw captureActionError(
-        `Propagation send failed (${destinationHex})`,
-        new Error("Node client is not initialized."),
-      );
-    }
-    try {
-      assertReadyForOutbound("send traffic");
-      assertHubRoutingReadyForOutbound("send traffic");
-      logUi(
-        "Debug",
-        `Propagation send requested destination=${destinationHex} bytes=${bytes.byteLength} fields=${options?.fieldsBase64 ? "lxmf" : "none"}.`,
-      );
-      await nodeClient.sendBytes(destinationHex, bytes, {
-        ...options,
-        sendMode: "PropagationOnly",
-      });
-      logUi(
-        "Debug",
-        `Propagation send handed to native transport destination=${destinationHex} bytes=${bytes.byteLength}.`,
-      );
-    } catch (error: unknown) {
-      throw captureActionError(`Propagation send failed (${destinationHex})`, error);
-    }
-  }
-
-  async function sendLxmf(
-    destinationHex: string,
-    bodyUtf8: string,
-    title?: string,
-    options?: {
-      sendMode?: SendMode;
-    },
-  ): Promise<string> {
-    const nodeClient = client.value;
-    if (!nodeClient) {
-      throw captureActionError(
-        `LXMF send failed (${destinationHex})`,
-        new Error("Node client is not initialized."),
-      );
-    }
-    try {
-      assertReadyForOutbound("send LXMF");
-      assertHubRoutingReadyForOutbound("send LXMF");
-      const matchedPeer = peerByAnyKnownDestination(discoveredByDestination, destinationHex);
-      const sendMode = options?.sendMode ?? "Auto";
-      logUi(
-        "Debug",
-        `LXMF send requested destination=${destinationHex} bytes=${new TextEncoder().encode(bodyUtf8).byteLength} mode=${sendMode}${matchedPeer ? ` peer=${matchedPeer.label ?? matchedPeer.destination}` : ""}.`,
-      );
-      return await nodeClient.sendLxmf({
-        destinationHex,
-        bodyUtf8,
-        title,
-        sendMode,
-      });
-    } catch (error: unknown) {
-      const captured = captureActionError(`LXMF send failed (${destinationHex})`, error);
-      throw captured;
-    }
-  }
-
-  function requireClient(action: string): ReticulumNodeClient {
-    if (!client.value) {
-      throw captureActionError(action, new Error("Node client is not initialized."));
-    }
-    return client.value;
-  }
-
-  function onClientEvent<K extends keyof NodeClientEvents>(
-    event: K,
-    handler: (payload: NodeClientEvents[K]) => void,
-  ): () => void {
-    return client.value?.on(event, handler) ?? (() => undefined);
-  }
-
-  async function getSosSettings() {
-    return requireClient("Get SOS settings failed").getSosSettings();
-  }
-
-  async function setSosSettings(settingsRecord: Parameters<ReticulumNodeClient["setSosSettings"]>[0]): Promise<void> {
-    await requireClient("Set SOS settings failed").setSosSettings(settingsRecord);
-  }
-
-  async function setSosPin(pin?: string): Promise<void> {
-    await requireClient("Set SOS PIN failed").setSosPin(pin);
-  }
-
-  async function getSosStatus() {
-    return requireClient("Get SOS status failed").getSosStatus();
-  }
-
-  async function triggerSos(source?: Parameters<ReticulumNodeClient["triggerSos"]>[0]) {
-    return requireClient("Trigger SOS failed").triggerSos(source);
-  }
-
-  async function deactivateSos(pin?: string) {
-    return requireClient("Deactivate SOS failed").deactivateSos(pin);
-  }
-
-  async function submitSosTelemetry(telemetry: Parameters<ReticulumNodeClient["submitSosTelemetry"]>[0]): Promise<void> {
-    await requireClient("Submit SOS telemetry failed").submitSosTelemetry(telemetry);
-  }
-
-  async function listSosAlerts() {
-    return requireClient("List SOS alerts failed").listSosAlerts();
-  }
-
-  async function listSosLocations() {
-    return requireClient("List SOS locations failed").listSosLocations();
-  }
-
-  async function listSosAudio() {
-    return requireClient("List SOS audio failed").listSosAudio();
-  }
-
-  async function recordSosAudio(audio: SosAudioRecord) {
-    return requireClient("Record SOS audio failed").recordSosAudio(audio);
-  }
-
-  async function announceNow(): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    try {
-      await client.value.announceNow();
-    } catch (error: unknown) {
-      throw captureActionError("Announce now failed", error);
-    }
-  }
-
-  async function requestPeerIdentity(destinationHex: string): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    try {
-      await client.value.requestPeerIdentity(destinationHex);
-    } catch (error: unknown) {
-      throw captureActionError(`Peer identity request failed (${destinationHex})`, error);
-    }
-  }
-
-  async function setActivePropagationNode(destinationHex?: string): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    try {
-      await client.value.setActivePropagationNode(destinationHex);
-    } catch (error: unknown) {
-      throw captureActionError("Set active propagation node failed", error);
-    }
-  }
-
-  async function requestLxmfSync(limit?: number): Promise<void> {
-    if (!client.value) {
-      return;
-    }
-    try {
-      await client.value.requestLxmfSync(limit);
-    } catch (error: unknown) {
-      throw captureActionError("LXMF sync request failed", error);
-    }
-  }
-
-  async function broadcastJson(payload: unknown): Promise<void> {
-    const body = new TextEncoder().encode(JSON.stringify(payload));
-    await broadcastBytes(body);
-  }
-
-  async function sendJson(
-    destinationHex: string,
-    payload: unknown,
-  ): Promise<void> {
-    const body = new TextEncoder().encode(JSON.stringify(payload));
-    await sendBytes(destinationHex, body);
-  }
-
-  async function reinitializeClient(): Promise<void> {
-    try {
-      clearLastError();
-      clearReadinessError();
-      if (client.value) {
-        await client.value.dispose().catch(() => undefined);
-      }
-      client.value = buildClient();
-      bindClientEvents(client.value);
-      await configureClientLogging();
-      status.value = { ...EMPTY_STATUS };
-      clearAnnounceState();
-      await Promise.all([
-        refreshSettingsProjection(),
-        refreshSavedPeersProjection(),
-        refreshOperationalSummaryProjection(),
-      ]);
-      await refreshHubRegistrationState(false);
-      appendLog("Info", "Node client recreated.");
-    } catch (error: unknown) {
-      throw captureActionError("Recreate client failed", error);
-    }
-  }
-
-  return {
-    settings,
-    nodeConfigRestartRequired,
-    watchStatusServer,
-    status,
-    syncStatus,
-    operationalSummary,
-    announceByDestination,
-    hubDirectorySnapshot,
-    hubDirectoryPeers,
-    hubAnnounceCandidates,
-    effectiveConnectedMode,
+  const hub = createNodeHubController({
+    appendLog,
+    client,
+    errorMessage,
     hubRegistration,
-    hubBootstrapProfile,
-    hubRegistrationReady,
-    hubRegistrationPending,
-    hubRegistrationSummary,
-    logs,
-    nodeControlEntries,
+    sendBytes: (destination, bytes, options) => transport.sendBytes(destination, bytes, options),
+    settings,
+    status,
+  });
+  const {
+    currentHubBootstrapProfile,
+    refreshHubRegistrationState,
+    setHubRegistrationPending,
+  } = hub;
+
+  const {
+    bindClientEvents,
+    configureClientLogging,
+    refreshMessagingState,
+    refreshStatusSnapshot,
+    syncRuntimeSnapshot,
+  } = createNodeClientEventsController({
+    appendLog,
+    appendNodeControlEntry,
+    applyAnnounceUpdate,
+    applyPeerChanged,
+    applyRnodeInterfaceReadiness,
+    client,
+    clearReadinessError,
+    errorMessage,
+    hubDirectorySnapshot,
+    isLocalDestinationIdentityPair,
     lastError,
-    readinessError: readinessErrorMessage,
     lastHubRefreshAt,
-    discoveredByDestination,
-    savedByDestination,
-    allPeers,
-    discoveredPeers,
-    remAnnouncedPeers,
-    savedPeers,
-    savedVisiblePeers,
-    connectedPeers,
-    reachablePeers,
-    propagationEligibleEventPeerRoutes,
-    connectedDestinations,
-    intentionalPeerDestinations,
-    connectedLinkDestinations,
-    connectedEventPeerRoutes,
-    visiblePeerCount,
-    savedPeerCount,
-    connectedPeerCount,
-    reachablePeerCount,
-    startupSettling,
-    bestPropagationNodeHex,
-    telemetryDestinations,
-    plugins,
-    pluginSensors,
-    savedDestinations,
-    initialized,
-    ready,
-    peerDisplayState,
-    peerPresenceTimestamp,
-    peerCachedPresenceTimestamp,
-    peerPresenceState,
-    init,
-    startNode,
-    stopNode,
-    restartNode,
-    connectPeer,
-    disconnectPeer,
-    connectAllSaved,
-    disconnectAllSaved,
-    refreshHubDirectory,
+    logUi,
+    nodeErrorCanFallBackToConfiguredInterface,
+    reconcileNativePeerSnapshot,
+    refreshAnnounceState,
+    refreshHubRegistrationState,
+    refreshOperationalSummaryProjection,
     refreshPluginProjection,
     refreshPluginSensors,
-    approvePluginPublisher,
-    revokePluginPublisher,
-    setPluginEnabled,
-    grantPluginCapabilities,
-    openPluginConfiguration,
-    refreshHubRegistrationState,
-    bootstrapHubRegistration,
-    forgetHubRegistryLinkage,
-    setAnnounceCapabilities,
-    savePeer,
-    removePeer,
-    unsavePeer,
-    setPeerLabel,
-    updateSettings,
-    refreshWatchStatusServerSettings,
-    updateWatchStatusServerSettings,
-    getSavedPeerList,
-    importPeerList,
-    parsePeerListText,
+    refreshSavedPeersProjection,
+    refreshSettingsProjection,
+    scheduleOperationalSummaryRefresh,
+    setReadinessError,
+    settings,
+    status,
+    syncStatus,
+    tcpInterfaceFailureCanFallBackToConfiguredInterface,
+    telemetryDestinations,
+    unsubscribeClientEvents,
+    presenceNow,
+    upsertResolvedPeer,
+    upsertNativeAnnounceRecord,
+  });
+
+  const selectors = createNodePeerSelectors({
+    announceByDestination,
+    currentHubBootstrapProfile,
+    discoveredByDestination,
+    hubDirectorySnapshot,
+    hubRegistration,
+    isLocalPeer,
+    presenceNow,
+    readinessError,
+    removedByDestination,
+    savedByDestination,
+    status,
+    syncStatus,
+  });
+  const {
+    clearPeerRemoved,
+    markPeerRemoved,
+    peerByAnyKnownDestination,
+    readinessErrorMessage,
+    ready,
+  } = selectors;
+
+  const lifecycle = createNodeLifecycleController({
+    appendLog,
+    appendNodeControlEntry,
+    applyRnodeInterfaceReadiness,
+    bindClientEvents,
+    buildClient,
+    captureActionError,
+    captureRuntimeActionError,
+    clearAnnounceState,
+    clearLastError,
+    clearPeerRemoved: (destination, peer) => clearPeerRemoved(destination, peer),
+    clearReadinessError,
+    client,
+    configureClientLogging,
+    describePeerState,
+    discoveredByDestination,
+    errorMessage,
+    importLegacyProjectionState,
+    initialized,
+    isLocalPeerDestination,
     logUi,
-    announceNow,
-    requestPeerIdentity,
-    sendBytes,
-    sendBytesDirect,
-    sendBytesViaPropagation,
-    sendLxmf,
-    onClientEvent,
-    getSosSettings,
-    setSosSettings,
-    setSosPin,
-    getSosStatus,
-    triggerSos,
-    deactivateSos,
-    submitSosTelemetry,
-    listSosAlerts,
-    listSosLocations,
-    listSosAudio,
-    recordSosAudio,
-    setActivePropagationNode,
-    requestLxmfSync,
-    broadcastBytes,
-    broadcastJson,
-    sendJson,
-    resolvePeerLxmfDestinationByIdentity,
-    destinationHasCapability,
-    reinitializeClient,
+    markPeerManagedState,
+    presenceNow,
+    peerByAnyKnownDestination,
+    refreshAnnounceState,
+    refreshHubDirectory: () => actions.refreshHubDirectory(),
+    refreshHubRegistrationState,
+    refreshMessagingState,
+    refreshOperationalSummaryProjection,
+    refreshPluginProjection,
+    refreshPluginSensors,
+    refreshSavedPeersProjection,
+    refreshSettingsProjection,
+    refreshWatchStatusServerSettings,
+    refreshStatusSnapshot,
+    savedByDestination,
     setLastError,
-    assertReadyForOutbound,
-    assertHubRoutingReadyForOutbound,
-  };
+    setNodeConfigRestartRequired,
+    setPeerState,
+    settings,
+    settlePeerConnectionState,
+    settleStartupDiscovery,
+    status,
+    syncRuntimeSnapshot,
+    syncStatus,
+  });
+  const { init } = lifecycle;
+
+  const actions = createNodeActionsController({
+    appendLog,
+    captureActionError,
+    clearHubDirectoryState,
+    clearLastError,
+    clearPeerRemoved: (destination, peer) => clearPeerRemoved(destination, peer),
+    client,
+    defaultsWithTcpFallback,
+    discoveredByDestination,
+    errorMessage,
+    hubRegistration,
+    init,
+    lastError,
+    markPeerRemoved: (destination, peer) => markPeerRemoved(destination, peer),
+    peerByAnyKnownDestination,
+    persistSavedPeersProjection,
+    persistSettingsProjection,
+    refreshHubRegistrationState,
+    savedByDestination,
+    savedPeerProfileFromDiscovered,
+    setHubRegistrationPending,
+    setNodeConfigRestartRequired,
+    settings,
+    status,
+    upsertDiscovered,
+  });
+  const transport = createNodeTransportController({
+    appendLog,
+    bindClientEvents,
+    buildClient,
+    captureActionError,
+    clearAnnounceState,
+    clearLastError,
+    clearReadinessError,
+    client,
+    configureClientLogging,
+    discoveredByDestination,
+    initialized,
+    lastError,
+    logUi,
+    peerByAnyKnownDestination: (peers, destination) => peerByAnyKnownDestination(peers, destination),
+    readinessErrorMessage,
+    ready,
+    refreshHubRegistrationState,
+    refreshOperationalSummaryProjection,
+    refreshSavedPeersProjection,
+    refreshSettingsProjection,
+    settings,
+    status,
+  });
+  return createNodeStoreApi(
+    state, logging, peers, projections, hub, selectors, lifecycle, actions, transport,
+  );
 });
