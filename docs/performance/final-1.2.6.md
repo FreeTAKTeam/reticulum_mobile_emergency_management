@@ -39,11 +39,11 @@ native libraries.
 
 | Artifact | Baseline bytes | 1.2.6 bytes | Change |
 | --- | ---: | ---: | ---: |
-| arm64-v8a `libreticulum_mobile.so` | 13,379,216 | 10,283,264 | -23.1% |
-| armeabi-v7a `libreticulum_mobile.so` | 9,955,548 | 7,509,440 | -24.6% |
-| x86_64 `libreticulum_mobile.so` | 13,646,704 | 11,441,432 | -16.2% |
-| Signed universal APK | 33,127,536 | 33,674,057 | +1.6% |
-| Release AAB | 32,016,205 | 32,628,089 | +1.9% |
+| arm64-v8a `libreticulum_mobile.so` | 13,379,216 | 10,283,472 | -23.1% |
+| armeabi-v7a `libreticulum_mobile.so` | 9,955,548 | 7,509,632 | -24.6% |
+| x86_64 `libreticulum_mobile.so` | 13,646,704 | 11,441,624 | -16.2% |
+| Signed universal APK | 33,127,536 | 33,677,303 | +1.7% |
+| Release AAB | 32,016,205 | 32,632,288 | +1.9% |
 
 The native-library target of at least 10% is exceeded for every ABI. The
 universal APK/AAB target is intentionally not claimed: preserving Android 16 KB
