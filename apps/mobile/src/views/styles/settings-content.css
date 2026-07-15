@@ -1,0 +1,210 @@
+.settings-view .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.settings-view button {
+  --btn-bg: linear-gradient(180deg, rgb(10 35 72 / 88%), rgb(6 24 54 / 92%));
+  --btn-bg-pressed: linear-gradient(180deg, rgb(196 240 255 / 96%), rgb(118 212 255 / 94%));
+  --btn-border: rgb(74 133 207 / 45%);
+  --btn-border-pressed: rgb(224 248 255 / 86%);
+  --btn-shadow: inset 0 1px 0 rgb(209 244 255 / 10%), 0 8px 18px rgb(2 14 32 / 18%);
+  --btn-shadow-pressed: inset 0 1px 0 rgb(255 255 255 / 75%), 0 4px 10px rgb(3 21 47 / 24%);
+  --btn-color: #8fdbff;
+  --btn-color-pressed: #042541;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 999px;
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  min-height: 32px;
+  padding: 0 0.82rem;
+  text-transform: uppercase;
+}
+
+.settings-view button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.settings-view .feedback {
+  color: #96afd5;
+  font-family: var(--font-body);
+  margin: 0.58rem 0 0;
+}
+
+.settings-view .button-row,
+.settings-view .plugin-capability-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.settings-view .plugin-card-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.settings-view .plugin-card {
+  background: rgb(7 20 44 / 78%);
+  border: 1px solid rgb(67 106 165 / 35%);
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.settings-view .plugin-card-header {
+  align-items: start;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+.settings-view .plugin-card h3,
+.settings-view .plugin-card p {
+  margin: 0;
+}
+
+.settings-view .plugin-card h3 {
+  color: #d5eaff;
+  font-family: var(--font-headline);
+}
+
+.settings-view .status-pill {
+  background: rgb(13 120 195 / 34%);
+  border: 1px solid rgb(95 193 255 / 42%);
+  border-radius: 999px;
+  color: #8fe3ff;
+  font-family: var(--font-ui);
+  font-size: 0.68rem;
+  padding: 0.24rem 0.5rem;
+  text-transform: uppercase;
+}
+
+.settings-view .fingerprint {
+  color: #89a8d4;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .danger-button {
+  --btn-border: rgb(255 92 106 / 55%);
+  --btn-color: #ff9ca6;
+}
+
+.settings-view .hidden-input {
+  display: none;
+}
+
+.settings-view .log-list {
+  background: rgb(5 16 35 / 76%);
+  border: 1px solid rgb(68 105 164 / 28%);
+  border-radius: 12px;
+  margin-top: 0.55rem;
+  max-height: 13rem;
+  overflow-y: auto;
+  padding: 0.35rem 0.65rem 0.55rem;
+  scrollbar-gutter: stable;
+}
+
+.settings-view .log {
+  align-items: baseline;
+  color: #88a4d0;
+  display: grid;
+  font-family: var(--font-body);
+  gap: 0.4rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  margin: 0.28rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .log time,
+.settings-view .log span:first-of-type {
+  color: #5de7ff;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.settings-view .about-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.settings-view .about-row {
+  background: rgb(7 20 44 / 72%);
+  border: 1px solid rgb(67 106 165 / 30%);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.62rem 0.72rem;
+}
+
+.settings-view .about-row dt,
+.settings-view .about-row dd {
+  margin: 0;
+}
+
+.settings-view .about-row dt {
+  color: #60d8ff;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.settings-view .about-row dd,
+.settings-view .about-row a {
+  color: #d5eaff;
+  font-family: var(--font-body);
+  overflow-wrap: anywhere;
+}
+
+.settings-view .about-row a {
+  text-decoration-color: rgb(96 216 255 / 55%);
+  text-underline-offset: 0.16rem;
+}
+
+@media (max-width: 760px) {
+  .settings-view .view-header {
+    align-items: stretch;
+  }
+
+  .settings-view .header-actions {
+    gap: 0.48rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-view .settings-chip,
+.settings-view .settings-save {
+    font-size: 0.72rem;
+    gap: 0.34rem;
+    min-height: 2.62rem;
+    padding-inline: 0.42rem;
+  }
+
+  .settings-view .settings-chip svg,
+.settings-view .settings-save svg {
+    height: 0.98rem;
+    width: 0.98rem;
+  }
+
+  .settings-view .server-option {
+    grid-template-columns: auto 1fr;
+  }
+
+  .settings-view .bootstrap-badge {
+    justify-self: start;
+    margin-left: 1.55rem;
+  }
+}

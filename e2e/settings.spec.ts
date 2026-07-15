@@ -171,6 +171,7 @@ test("operators can save manual RNode LoRa configuration", async ({ page }) => {
 
   expect(storedSettings.rnode).toEqual({
     enabled: true,
+    connectionMode: "ble",
     peripheralId: "AA:BB:CC:DD:EE:FF",
     displayName: "Field RNode",
     region: "EU868",
