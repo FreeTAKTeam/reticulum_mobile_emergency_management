@@ -2,6 +2,10 @@
 import { computed, nextTick, ref, watch } from "vue";
 import type { MessageRecord } from "@reticulum/node-client";
 
+import ListWindowControls from "../ListWindowControls.vue";
+import { useListWindow } from "../../composables/useListWindow";
+import { safeTrim } from "../../utils/stringValues";
+
 interface SosMessageMapTarget {
   incidentId: string;
   sourceHex: string;
@@ -39,10 +43,6 @@ const draft = ref("");
 const threadBody = ref<HTMLElement | null>(null);
 let lastTargetScrolled = "";
 
-function safeTrim(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 const canSend = computed(() => draft.value.trim().length > 0 && Boolean(props.destinationHex));
 const hasTargetPosition = computed(() =>
   Boolean(safeTrim(props.targetLatitude) || safeTrim(props.targetLongitude)),
@@ -51,6 +51,7 @@ const visibleTargetStatus = computed(() => safeTrim(props.targetStatus) || "Unkn
 const visibleTargetTeam = computed(() => safeTrim(props.targetTeam) || "Unknown Team");
 const targetEamHref = computed(() => safeTrim(props.targetEamHref));
 const targetMapHref = computed(() => safeTrim(props.targetMapHref));
+const messageWindow = useListWindow(() => props.messages, { fromEnd: true });
 
 function submit(): void {
   const bodyUtf8 = draft.value.trim();
@@ -178,13 +179,18 @@ watch(
     props.targetMessageId ?? "",
   ],
   async () => {
+    const targetMessageId = safeTrim(props.targetMessageId);
+    if (targetMessageId) {
+      messageWindow.showIndex(props.messages.findIndex(
+        (message) => message.messageIdHex === targetMessageId,
+      ));
+    }
     await nextTick();
     const body = threadBody.value;
     if (!body) {
       return;
     }
 
-    const targetMessageId = safeTrim(props.targetMessageId);
     if (targetMessageId && targetMessageId !== lastTargetScrolled) {
       const target = body.querySelector<HTMLElement>(
         `[data-message-id="${cssEscape(targetMessageId)}"]`,
@@ -270,8 +276,19 @@ watch(
 
     <section class="thread-panel">
       <div ref="threadBody" class="thread-body">
+        <ListWindowControls
+          :start="messageWindow.startIndex.value"
+          :end="messageWindow.endIndex.value"
+          :total="messageWindow.total.value"
+          :has-previous="messageWindow.hasPrevious.value"
+          :has-next="messageWindow.hasNext.value"
+          previous-label="Older"
+          next-label="Newer"
+          @previous="messageWindow.previous"
+          @next="messageWindow.next"
+        />
         <article
-          v-for="message in messages"
+          v-for="message in messageWindow.items.value"
           :key="message.messageIdHex"
           :data-message-id="message.messageIdHex"
           class="bubble"

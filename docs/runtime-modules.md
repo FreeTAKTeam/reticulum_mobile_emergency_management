@@ -53,6 +53,9 @@ Route views orchestrate focused components and composables. Domain state stays
 in Pinia stores and utilities; views do not reproduce wire formats or native
 transport rules. Projection invalidations are keyed and coalesced, and obsolete
 refreshes do not create unbounded reactive loops.
+Large operational collections render through a shared 200-row window. Filter
+changes reset the window, selected conversations remain visible, and paging
+controls preserve access to the complete collection.
 
 ## Enforced invariants
 
@@ -60,6 +63,7 @@ refreshes do not create unbounded reactive loops.
   above 500 physical lines. Both allowlists are empty.
 - Local projection work has a p95 budget of 500 ms at the defined scale matrix.
 - Critical telemetry clustering has a 50 ms long-task ceiling in unit tests.
+- Large operational lists render at most 200 rows per window.
 - UI actions provide immediate local feedback while network completion remains
   asynchronous.
 - Queues are bounded; saturation returns a typed timeout instead of growing

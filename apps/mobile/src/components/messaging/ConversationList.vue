@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { shallowRef } from "vue";
+import { shallowRef, watch } from "vue";
+
+import ListWindowControls from "../ListWindowControls.vue";
+import { useListWindow } from "../../composables/useListWindow";
 
 interface ConversationListItem {
   conversationId: string;
@@ -10,11 +13,20 @@ interface ConversationListItem {
   state: string;
 }
 
-defineProps<{
+const props = defineProps<{
   items: ConversationListItem[];
   selectedConversationId: string;
   activeSosConversationIds?: Set<string>;
 }>();
+const itemWindow = useListWindow(() => props.items);
+
+watch(
+  () => props.selectedConversationId,
+  (conversationId) => {
+    itemWindow.showIndex(props.items.findIndex((item) => item.conversationId === conversationId));
+  },
+  { immediate: true },
+);
 
 const emit = defineEmits<{
   select: [conversationId: string];
@@ -92,7 +104,7 @@ function conversationStateLabel(state: string): string {
       No conversations yet. Discover a peer or receive an LXMF message to start a thread.
     </p>
     <article
-      v-for="item in items"
+      v-for="item in itemWindow.items.value"
       :key="item.conversationId"
       class="conversation-item"
       :class="{
@@ -143,6 +155,15 @@ function conversationStateLabel(state: string): string {
         </svg>
       </button>
     </article>
+    <ListWindowControls
+      :start="itemWindow.startIndex.value"
+      :end="itemWindow.endIndex.value"
+      :total="itemWindow.total.value"
+      :has-previous="itemWindow.hasPrevious.value"
+      :has-next="itemWindow.hasNext.value"
+      @previous="itemWindow.previous"
+      @next="itemWindow.next"
+    />
   </aside>
 </template>
 

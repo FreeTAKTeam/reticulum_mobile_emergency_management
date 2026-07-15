@@ -9,13 +9,13 @@ supported ABIs, and two physical Android acceptance devices described in
 
 | Metric | Baseline | 1.2.6 |
 | --- | ---: | ---: |
-| First-party files checked | 180 | 444 |
+| First-party files checked | 180 | 451 |
 | Files above 500 lines | 38 | 0 |
 | Classes above 500 lines | 5 | 0 |
 | File allowlist entries | 38 | 0 |
 | Class allowlist entries | 5 | 0 |
 
-The final count includes the new scale test. Run `npm run check:source-size` to
+The final count includes the new scale and list-window tests. Run `npm run check:source-size` to
 enforce the empty allowlists.
 
 ## Web build
@@ -24,10 +24,10 @@ Command: `npm run web:build`
 
 | Artifact | Baseline bytes | 1.2.6 bytes | Change |
 | --- | ---: | ---: | ---: |
-| Initial application JavaScript | 252,434 | 206,489 | -18.2% |
-| Vue/vendor JavaScript | 140,548 | 140,557 | +0.0% |
+| Initial application JavaScript | 252,434 | 206,594 | -18.2% |
+| Vue/vendor JavaScript | 140,548 | 140,604 | +0.0% |
 | Lazy MapLibre JavaScript | 803,071 | 803,071 | 0.0% |
-| All files under `dist/assets` | 1,744,131 | 1,703,640 | -2.3% |
+| All files under `dist/assets` | 1,744,131 | 1,710,181 | -1.9% |
 
 The initial-bundle target of at least 15% is met. Platform-specific entrypoints
 keep native and mock client implementations out of production web builds.
@@ -64,9 +64,14 @@ Executable tests cover:
   capacity remains available;
 - dense and sparse 1,000-position map clustering below the 50 ms long-task
   ceiling.
+- shared 200-row render windows for peers, conversations, messages, events,
+  action messages, checklists, and checklist tasks, with controls that retain
+  access to every record.
 
 The projection scale test enforces p95 below 500 ms. Bounded queues reject
 excess normal work with a typed timeout, and network work remains asynchronous.
+The list-window unit tests verify that 1,000-row collections never render more
+than 200 rows at once and that final partial pages remain reachable.
 
 ## Physical-device sample
 

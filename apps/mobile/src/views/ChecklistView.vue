@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import ListWindowControls from "../components/ListWindowControls.vue";
 import { useChecklistList } from "../composables/useChecklistList";
+import { useListWindow } from "../composables/useListWindow";
 
 const {
   displayedTaskTotal,
@@ -33,6 +35,9 @@ const {
   emptyStateTitle,
   emptyStateCopy,
 } = useChecklistList();
+const checklistWindow = useListWindow(filteredRecords, {
+  resetKey: () => `${activeSegment.value}:${activeFilter.value}`,
+});
 </script>
 
 <template>
@@ -220,7 +225,7 @@ const {
 
     <section class="checklist-list">
       <article
-        v-for="record in filteredRecords"
+        v-for="record in checklistWindow.items.value"
         :key="record.id"
         class="checklist-card"
         :class="statusCardClass(record.status)"
@@ -368,6 +373,15 @@ const {
           }}
         </p>
       </article>
+      <ListWindowControls
+        :start="checklistWindow.startIndex.value"
+        :end="checklistWindow.endIndex.value"
+        :total="checklistWindow.total.value"
+        :has-previous="checklistWindow.hasPrevious.value"
+        :has-next="checklistWindow.hasNext.value"
+        @previous="checklistWindow.previous"
+        @next="checklistWindow.next"
+      />
     </section>
   </section>
 </template>

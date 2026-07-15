@@ -3,6 +3,8 @@ import { computed, reactive, shallowRef, watch } from "vue";
 import { RouterLink } from "vue-router";
 
 import MecpCategorySelector from "../components/events/MecpCategorySelector.vue";
+import ListWindowControls from "../components/ListWindowControls.vue";
+import { useListWindow } from "../composables/useListWindow";
 import { useEventsStore } from "../stores/eventsStore";
 import { useNodeStore } from "../stores/nodeStore";
 import {
@@ -100,6 +102,9 @@ const events = computed(() =>
     return true;
   }),
 );
+const eventWindow = useListWindow(events, {
+  resetKey: () => `${filters.severity}:${filters.category}`,
+});
 
 watch(
   () => createForm.category,
@@ -368,7 +373,7 @@ async function deleteEvent(uid: string): Promise<void> {
             [`mecp-event-${event.mecp?.severityStatus}`]: event.mecp,
           },
         ]"
-        v-for="event in events"
+        v-for="event in eventWindow.items.value"
         :key="event.uid"
       >
         <div class="event-head">
@@ -418,6 +423,15 @@ async function deleteEvent(uid: string): Promise<void> {
       <p v-if="events.length === 0" class="empty">
         No events yet. Add one locally or wait for a peer snapshot.
       </p>
+      <ListWindowControls
+        :start="eventWindow.startIndex.value"
+        :end="eventWindow.endIndex.value"
+        :total="eventWindow.total.value"
+        :has-previous="eventWindow.hasPrevious.value"
+        :has-next="eventWindow.hasNext.value"
+        @previous="eventWindow.previous"
+        @next="eventWindow.next"
+      />
     </section>
   </section>
 </template>

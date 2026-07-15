@@ -4,14 +4,29 @@ import { useRoute, useRouter } from "vue-router";
 
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
+import ListWindowControls from "../components/ListWindowControls.vue";
+import { useListWindow } from "../composables/useListWindow";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { useTelemetryStore } from "../stores/telemetryStore";
+import { isDraftConversationId } from "../stores/messagingModel";
 import type { DiscoveredPeer } from "../types/domain";
 import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
+import {
+  connectedPeerOptionsFor,
+  filterPeerOptions,
+  withSelectedPeerOption,
+  type ConnectedPeerOption,
+} from "../utils/inboxPeerOptions";
 import { formatR3aktTeamColor } from "../utils/r3akt";
+import {
+  normalizedValuesMatch as destinationsMatch,
+  routeQueryString,
+  safeLower,
+  safeTrim,
+} from "../utils/stringValues";
 
 const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
@@ -23,39 +38,14 @@ const router = useRouter();
 const mobilePane = shallowRef<"list" | "detail">("list");
 const selectedThreadDestinationHex = shallowRef("");
 const isPeerPickerVisible = shallowRef(false);
+const peerPickerQuery = shallowRef("");
 let visualMockRefreshInterval: number | undefined;
 let unregisterBackNavigationHandler: (() => void) | undefined;
 
-interface ConnectedPeerOption {
-  value: string;
-  displayName: string;
-}
 interface SosMessageMapTarget {
   incidentId: string;
   sourceHex: string;
   messageIdHex?: string;
-}
-
-function safeTrim(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function safeLower(value: unknown): string {
-  return safeTrim(value).toLowerCase();
-}
-
-function routeQueryString(value: unknown): string {
-  return Array.isArray(value) ? safeTrim(value[0]) : safeTrim(value);
-}
-
-function destinationsMatch(left: unknown, right: unknown): boolean {
-  const normalizedLeft = safeLower(left);
-  const normalizedRight = safeLower(right);
-  return normalizedLeft.length > 0 && normalizedLeft === normalizedRight;
-}
-
-function isDraftConversationId(value: string): boolean {
-  return safeLower(value).startsWith("draft:");
 }
 
 function isVisualMockMode(): boolean {
@@ -66,26 +56,9 @@ const selectedConversation = computed(() => messagingStore.selectedConversation)
 const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
-const connectedPeerOptions = computed<ConnectedPeerOption[]>(() => {
-  const seen = new Set<string>();
-  return nodeStore.reachablePeers
-    .filter((peer) => nodeStore.savedDestinations.has(peer.destination))
-    .map((peer) => {
-      const value = safeTrim(peer.lxmfDestinationHex) || safeTrim(peer.destination);
-      const baseName = safeTrim(peer.announcedName) || safeTrim(peer.label) || value;
-      const displayName = peer.activeLink ? `${baseName} (Connected)` : `${baseName} (Reachable)`;
-      return { value, displayName };
-    })
-    .filter((option) => {
-      const normalizedValue = safeLower(option.value);
-      if (!normalizedValue || seen.has(normalizedValue)) {
-        return false;
-      }
-      seen.add(normalizedValue);
-      return true;
-    })
-    .sort((left, right) => left.displayName.localeCompare(right.displayName));
-});
+const connectedPeerOptions = computed(() =>
+  connectedPeerOptionsFor(nodeStore.reachablePeers, nodeStore.savedDestinations),
+);
 const selectedConversationOption = computed<ConnectedPeerOption | null>(() => {
   const value = safeTrim(selectedConversation.value?.destinationHex);
   if (!safeTrim(value)) {
@@ -97,15 +70,13 @@ const selectedConversationOption = computed<ConnectedPeerOption | null>(() => {
   };
 });
 const threadDestinationOptions = computed<ConnectedPeerOption[]>(() => {
-  const next = [...connectedPeerOptions.value];
-  const current = selectedConversationOption.value;
-  if (!current) {
-    return next;
-  }
-  if (!next.some((option) => destinationsMatch(option.value, current.value))) {
-    next.unshift(current);
-  }
-  return next;
+  return withSelectedPeerOption(connectedPeerOptions.value, selectedConversationOption.value);
+});
+const filteredThreadDestinationOptions = computed(() =>
+  filterPeerOptions(threadDestinationOptions.value, peerPickerQuery.value),
+);
+const peerOptionWindow = useListWindow(filteredThreadDestinationOptions, {
+  resetKey: peerPickerQuery,
 });
 const explicitDestinationHex = computed(() =>
   safeTrim(selectedConversation.value?.destinationHex) || safeTrim(selectedThreadDestinationHex.value),
@@ -308,6 +279,9 @@ function handleAndroidBackNavigation(): boolean {
 
 function togglePeerPicker(): void {
   isPeerPickerVisible.value = !isPeerPickerVisible.value;
+  if (isPeerPickerVisible.value) {
+    peerOptionWindow.reset();
+  }
 }
 
 function handleThreadDestinationSelected(event: Event): void {
@@ -442,6 +416,13 @@ onUnmounted(() => {
       class="peer-picker-form"
       @submit.prevent
     >
+      <input
+        v-model="peerPickerQuery"
+        class="thread-picker-search"
+        type="search"
+        placeholder="Search reachable peers"
+        aria-label="Search reachable peers"
+      />
       <select
         :value="selectedDestinationHex"
         aria-label="Select reachable peer"
@@ -451,7 +432,7 @@ onUnmounted(() => {
       >
         <option value="">Select reachable peer</option>
         <option
-          v-for="option in threadDestinationOptions"
+          v-for="option in peerOptionWindow.items.value"
           :key="option.value"
           :value="option.value"
         >
@@ -461,6 +442,18 @@ onUnmounted(() => {
       <p v-if="threadDestinationOptions.length === 0" class="peer-picker-empty">
         No reachable saved peers available.
       </p>
+      <p v-else-if="filteredThreadDestinationOptions.length === 0" class="peer-picker-empty">
+        No reachable peer matches this search.
+      </p>
+      <ListWindowControls
+        :start="peerOptionWindow.startIndex.value"
+        :end="peerOptionWindow.endIndex.value"
+        :total="peerOptionWindow.total.value"
+        :has-previous="peerOptionWindow.hasPrevious.value"
+        :has-next="peerOptionWindow.hasNext.value"
+        @previous="peerOptionWindow.previous"
+        @next="peerOptionWindow.next"
+      />
     </form>
 
     <section class="inbox-layout" :class="`pane-${mobilePane}`">

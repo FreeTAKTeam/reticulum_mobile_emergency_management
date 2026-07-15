@@ -2,9 +2,12 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import ListWindowControls from "../components/ListWindowControls.vue";
+import { useListWindow } from "../composables/useListWindow";
 import { notifyOperationalUpdate } from "../services/notifications";
 import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer, HubDirectoryPeerRecord, SavedPeer } from "../types/domain";
+import { discoveredPeerMatchesQuery, savedPeerMatchesQuery } from "../utils/peerSearch";
 import type { PeersVisualMockData } from "../utils/peersVisualMock";
 
 type PeerTab = "discovered" | "peers" | "hub";
@@ -81,38 +84,22 @@ function isSaved(destination: string): boolean {
   return nodeStore.savedDestinations.has(destination);
 }
 
-function peerMatchesQuery(peer: DiscoveredPeer, query: string): boolean {
-  return (
-    peer.destination.includes(query) ||
-    (peer.label ?? "").toLowerCase().includes(query) ||
-    (peer.announcedName ?? "").toLowerCase().includes(query) ||
-    (peer.appData ?? "").toLowerCase().includes(query)
-  );
-}
-
 function announcedNameFor(destination: string): string | undefined {
   return nodeStore.discoveredByDestination[destination]?.announcedName;
-}
-
-function savedPeerMatchesQuery(peer: SavedPeer, query: string): boolean {
-  const announcedName = announcedNameFor(peer.destination)?.toLowerCase() ?? "";
-  return (
-    peer.destination.includes(query) ||
-    (peer.label ?? "").toLowerCase().includes(query) ||
-    announcedName.includes(query)
-  );
 }
 
 const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
   return nodeStore.remAnnouncedPeers
-    .filter((peer: DiscoveredPeer) => !query || peerMatchesQuery(peer, query))
+    .filter((peer: DiscoveredPeer) => !query || discoveredPeerMatchesQuery(peer, query))
     .sort((left, right) => right.lastSeenAt - left.lastSeenAt);
 });
 
 const filteredPeers = computed(() => {
   const query = searchText.value.trim().toLowerCase();
-  return nodeStore.savedPeers.filter((peer: SavedPeer) => !query || savedPeerMatchesQuery(peer, query));
+  return nodeStore.savedPeers.filter((peer: SavedPeer) =>
+    !query || savedPeerMatchesQuery(peer, query, announcedNameFor(peer.destination))
+  );
 });
 
 const filteredHubPeers = computed(() => {
@@ -129,6 +116,9 @@ const filteredHubPeers = computed(() => {
     );
   });
 });
+const discoveredWindow = useListWindow(filteredDiscovered, { resetKey: searchText });
+const savedWindow = useListWindow(filteredPeers, { resetKey: searchText });
+const hubWindow = useListWindow(filteredHubPeers, { resetKey: searchText });
 
 function peerName(peer: Pick<DiscoveredPeer, "announcedName" | "label" | "destination">): string {
   return peer.announcedName || peer.label || peer.destination;
@@ -345,7 +335,7 @@ async function runNodeAction(
       </div>
       <div v-if="filteredDiscovered.length > 0" class="peer-list">
         <article
-          v-for="peer in filteredDiscovered"
+          v-for="peer in discoveredWindow.items.value"
           :key="peer.destination"
           class="peer-item compact"
         >
@@ -367,6 +357,15 @@ async function runNodeAction(
             <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
           </div>
         </article>
+        <ListWindowControls
+          :start="discoveredWindow.startIndex.value"
+          :end="discoveredWindow.endIndex.value"
+          :total="discoveredWindow.total.value"
+          :has-previous="discoveredWindow.hasPrevious.value"
+          :has-next="discoveredWindow.hasNext.value"
+          @previous="discoveredWindow.previous"
+          @next="discoveredWindow.next"
+        />
       </div>
       <p v-else class="empty-copy">No REM-capable announces match this search.</p>
     </section>
@@ -397,7 +396,7 @@ async function runNodeAction(
         </div>
       </div>
       <div v-if="filteredPeers.length > 0" class="peer-list">
-        <article v-for="peer in filteredPeers" :key="peer.destination" class="peer-item">
+        <article v-for="peer in savedWindow.items.value" :key="peer.destination" class="peer-item">
           <div class="peer-copy">
             <p class="dest">{{ peer.destination }}</p>
             <div class="peer-name-line">
@@ -419,6 +418,15 @@ async function runNodeAction(
             <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
           </div>
         </article>
+        <ListWindowControls
+          :start="savedWindow.startIndex.value"
+          :end="savedWindow.endIndex.value"
+          :total="savedWindow.total.value"
+          :has-previous="savedWindow.hasPrevious.value"
+          :has-next="savedWindow.hasNext.value"
+          @previous="savedWindow.previous"
+          @next="savedWindow.next"
+        />
       </div>
       <p v-else class="empty-copy">No peers saved locally.</p>
     </section>
@@ -449,7 +457,7 @@ async function runNodeAction(
       </div>
       <div v-if="filteredHubPeers.length > 0" class="peer-list">
         <article
-          v-for="peer in filteredHubPeers"
+          v-for="peer in hubWindow.items.value"
           :key="peer.destinationHash"
           class="peer-item hub-item"
         >
@@ -463,6 +471,15 @@ async function runNodeAction(
             <p class="peer-resolution">{{ peer.announceCapabilities.join(", ") }}</p>
           </div>
         </article>
+        <ListWindowControls
+          :start="hubWindow.startIndex.value"
+          :end="hubWindow.endIndex.value"
+          :total="hubWindow.total.value"
+          :has-previous="hubWindow.hasPrevious.value"
+          :has-next="hubWindow.hasNext.value"
+          @previous="hubWindow.previous"
+          @next="hubWindow.next"
+        />
       </div>
       <p v-else class="empty-copy">No hub peers cached.</p>
     </section>
