@@ -173,4 +173,3 @@ export abstract class InMemoryProjectionClient {
     return this.emitter.on(event, handler);
   }
 }
-
