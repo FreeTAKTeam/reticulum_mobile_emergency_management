@@ -59,6 +59,28 @@ fn messages_for_same_peer_are_repaired_into_one_canonical_thread() {
 }
 
 #[test]
+fn conversation_message_query_uses_the_additive_sort_index() {
+    let storage_dir = test_storage_dir("message-query-index");
+    let store =
+        AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
+    let connection = store.connect().expect("open store");
+    let plan: String = connection
+        .query_row(
+            "EXPLAIN QUERY PLAN
+             SELECT json FROM messages WHERE conversation_id = ?1
+             ORDER BY updated_at_ms ASC, message_id_hex ASC",
+            ["peer-a"],
+            |row| row.get(3),
+        )
+        .expect("query plan");
+
+    assert!(
+        plan.contains("idx_messages_conversation_updated"),
+        "unexpected query plan: {plan}"
+    );
+}
+
+#[test]
 fn startup_history_lists_persisted_messages_without_runtime() {
     let storage_dir = test_storage_dir("startup-history");
     let store =

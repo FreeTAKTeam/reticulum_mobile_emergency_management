@@ -79,6 +79,8 @@ impl AppStateStore {
                     updated_at_ms INTEGER NOT NULL,
                     json TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_updated
+                    ON messages (conversation_id, updated_at_ms, message_id_hex);
                 CREATE TABLE IF NOT EXISTS announces (
                     destination_hex TEXT PRIMARY KEY,
                     identity_hex TEXT NOT NULL,

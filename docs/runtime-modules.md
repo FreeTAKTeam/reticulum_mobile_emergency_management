@@ -64,6 +64,8 @@ controls preserve access to the complete collection.
 - Local projection work has a p95 budget of 500 ms at the defined scale matrix.
 - Critical telemetry clustering has a 50 ms long-task ceiling in unit tests.
 - Large operational lists render at most 200 rows per window.
+- Message-thread storage queries use the additive
+  `idx_messages_conversation_updated` index, verified by a query-plan test.
 - UI actions provide immediate local feedback while network completion remains
   asynchronous.
 - Queues are bounded; saturation returns a typed timeout instead of growing

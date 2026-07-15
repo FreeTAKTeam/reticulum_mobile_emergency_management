@@ -72,6 +72,9 @@ The projection scale test enforces p95 below 500 ms. Bounded queues reject
 excess normal work with a typed timeout, and network work remains asynchronous.
 The list-window unit tests verify that 1,000-row collections never render more
 than 200 rows at once and that final partial pages remain reachable.
+Message-thread reads use one additive composite SQLite index covering their
+conversation filter and stable timestamp/message ordering. An `EXPLAIN QUERY
+PLAN` regression test verifies that SQLite selects the index.
 
 ## Physical-device sample
 
