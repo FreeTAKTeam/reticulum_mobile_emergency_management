@@ -1,6 +1,5 @@
 {
   "apps/mobile/src/stores/messagingStore.ts": 1362,
   "apps/mobile/src/stores/nodeStore.ts": 3505,
-  "apps/mobile/src/views/SettingsView.vue": 2200,
   "packages/node-client/src/index.ts": 4555
 }
