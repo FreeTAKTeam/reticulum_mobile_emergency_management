@@ -1,7 +1,1 @@
-{
-  "packages/node-client/src/index.ts": {
-    "CapacitorReticulumNodeClient": 691,
-    "MockReticulumNodeClient": 595,
-    "WebReticulumNodeClient": 530
-  }
-}
+{}
