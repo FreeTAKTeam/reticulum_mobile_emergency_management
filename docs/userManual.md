@@ -225,6 +225,13 @@ Use the Peers page to:
 
 Discovery does not mean trust. Save only the peers you want to work with.
 
+In **Semi-autonomous** RCH mode, the hub directory is authoritative for team
+sharing. RCH returns only recent REM-capable identities belonging to teams you
+share. If that directory cannot be refreshed or validated, REM shows an empty
+hub directory and pauses team fanout instead of sending to locally discovered
+peers. **Autonomous** mode continues to use locally managed peers, while
+**Connected** mode sends through the selected hub.
+
 ### How Peer Sharing Works Today
 
 When you save or select a peer, you are choosing who REM should try to share information with. This can include chat messages, Action Messages, Events, checklist updates, telemetry, and SOS updates, depending on what is enabled.

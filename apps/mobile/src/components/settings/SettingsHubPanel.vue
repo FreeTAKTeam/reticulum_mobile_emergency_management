@@ -61,9 +61,10 @@ function onCandidateSelected(event: Event): void {
     </summary>
     <div class="panel-body">
       <p class="section-note">
-        Autonomous keeps REM peer discovery local. Semi-autonomous seeds peer routing from the
-        selected RCH via <code>rem.registry.peers.list</code> and still sends directly to those
-        peers. Connected sends only to the selected RCH so the hub redistributes traffic.
+        Autonomous keeps REM peer discovery local. Semi-autonomous uses the shared-TEAM directory
+        from <code>rem.registry.team_peers.list</code> for direct or propagated sends and pauses team
+        fanout if the directory is unavailable. Connected sends only to the selected RCH so the hub
+        redistributes traffic.
       </p>
       <div class="grid">
         <label>

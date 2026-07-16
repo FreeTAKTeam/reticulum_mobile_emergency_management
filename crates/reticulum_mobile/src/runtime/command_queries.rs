@@ -154,13 +154,21 @@ fn spawn_hub_refresh_command(
     let state = state.clone();
     let bus = bus.clone();
     executor.spawn(lane, RuntimeCommandClass::Work, resp, async move {
-        let snapshot = match config.hub_mode {
+        let result = match config.hub_mode {
             HubMode::Autonomous {} => return Err(NodeError::InvalidConfig {}),
             HubMode::SemiAutonomous {} | HubMode::Connected {} => {
-                refresh_hub_directory_lxmf(&config, &state).await?
+                refresh_hub_directory_lxmf(&config, &state).await
             }
         };
-        publish_hub_directory_snapshot(&state, &bus, snapshot).await;
-        Ok(())
+        match result {
+            Ok(snapshot) => {
+                publish_hub_directory_snapshot(&state, &bus, snapshot).await;
+                Ok(())
+            }
+            Err(error) => {
+                publish_failed_hub_directory_refresh(&state, &bus, &error).await;
+                Err(error)
+            }
+        }
     });
 }

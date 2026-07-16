@@ -64,6 +64,44 @@ fn semi_autonomous_replication_targets_use_current_hub_directory_peers() {
 }
 
 #[test]
+fn semi_autonomous_replication_targets_fail_closed_without_hub_directory() {
+    let status = build_status_for_tests();
+    let config = build_config_fingerprint_for_tests(
+        HubMode::SemiAutonomous {},
+        Some("56565656565656565656565656565656"),
+    );
+    let peers = vec![build_peer_record(
+        "abababababababababababababababab",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        true,
+        true,
+        true,
+    )];
+
+    let mission_targets = build_runtime_mission_replication_targets(
+        &status,
+        peers.as_slice(),
+        &[],
+        None,
+        Some(&config),
+        None,
+    )
+    .expect("mission targets");
+    let event_targets = build_runtime_event_replication_targets(
+        &status,
+        peers.as_slice(),
+        &[],
+        None,
+        Some(&config),
+        None,
+    )
+    .expect("event targets");
+
+    assert!(mission_targets.is_empty());
+    assert!(event_targets.is_empty());
+}
+
+#[test]
 fn connected_replication_targets_route_to_selected_hub_without_current_peer() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(

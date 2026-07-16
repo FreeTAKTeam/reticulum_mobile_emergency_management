@@ -159,64 +159,72 @@ fn upload_snapshot_does_not_revive_newer_deleted_checklist() {
 
 #[test]
 fn parse_hub_directory_result_state_extracts_terminal_snapshot() {
-    let result = MsgPackValue::Map(vec![
-        (
-            MsgPackValue::from("command_id"),
-            MsgPackValue::from("cmd-123"),
-        ),
-        (
-            MsgPackValue::from("status"),
-            MsgPackValue::from("completed"),
-        ),
-        (
-            MsgPackValue::from("result"),
-            MsgPackValue::Map(vec![
-                (
-                    MsgPackValue::from("effective_connected_mode"),
-                    MsgPackValue::from(true),
-                ),
-                (
-                    MsgPackValue::from("items"),
-                    MsgPackValue::Array(vec![MsgPackValue::Map(vec![
-                        (
-                            MsgPackValue::from("identity"),
-                            MsgPackValue::from("11111111111111111111111111111111"),
-                        ),
-                        (
-                            MsgPackValue::from("destination_hash"),
-                            MsgPackValue::from("22222222222222222222222222222222"),
-                        ),
-                        (
-                            MsgPackValue::from("display_name"),
-                            MsgPackValue::from("Pixel"),
-                        ),
-                        (
-                            MsgPackValue::from("announce_capabilities"),
-                            MsgPackValue::Array(vec![
-                                MsgPackValue::from("r3akt"),
-                                MsgPackValue::from("telemetry"),
-                            ]),
-                        ),
-                        (MsgPackValue::from("client_type"), MsgPackValue::from("rem")),
-                        (
-                            MsgPackValue::from("registered_mode"),
-                            MsgPackValue::from("connected"),
-                        ),
-                        (
-                            MsgPackValue::from("last_seen"),
-                            MsgPackValue::from("2026-04-02T12:43:28Z"),
-                        ),
-                        (MsgPackValue::from("status"), MsgPackValue::from("active")),
-                    ])]),
-                ),
-            ]),
-        ),
-    ]);
+    let result = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_RESULTS),
+        MsgPackValue::Map(vec![
+            (
+                MsgPackValue::from("command_id"),
+                MsgPackValue::from("cmd-123"),
+            ),
+            (
+                MsgPackValue::from("status"),
+                MsgPackValue::from("result"),
+            ),
+            (
+                MsgPackValue::from("result"),
+                MsgPackValue::Map(vec![
+                    (
+                        MsgPackValue::from("scope"),
+                        MsgPackValue::from("shared_teams"),
+                    ),
+                    (
+                        MsgPackValue::from("effective_connected_mode"),
+                        MsgPackValue::from(true),
+                    ),
+                    (
+                        MsgPackValue::from("items"),
+                        MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                            (
+                                MsgPackValue::from("identity"),
+                                MsgPackValue::from("11111111111111111111111111111111"),
+                            ),
+                            (
+                                MsgPackValue::from("destination_hash"),
+                                MsgPackValue::from("22222222222222222222222222222222"),
+                            ),
+                            (
+                                MsgPackValue::from("display_name"),
+                                MsgPackValue::from("Pixel"),
+                            ),
+                            (
+                                MsgPackValue::from("announce_capabilities"),
+                                MsgPackValue::Array(vec![
+                                    MsgPackValue::from("r3akt"),
+                                    MsgPackValue::from("emergencymessages"),
+                                    MsgPackValue::from("telemetry"),
+                                ]),
+                            ),
+                            (MsgPackValue::from("client_type"), MsgPackValue::from("rem")),
+                            (
+                                MsgPackValue::from("registered_mode"),
+                                MsgPackValue::from("connected"),
+                            ),
+                            (
+                                MsgPackValue::from("last_seen"),
+                                MsgPackValue::from("2026-04-02T12:43:28Z"),
+                            ),
+                            (MsgPackValue::from("status"), MsgPackValue::from("active")),
+                        ])]),
+                    ),
+                ]),
+            ),
+        ]),
+    )]);
 
     let parsed =
         parse_hub_directory_result_state(&result, "cmd-123", 456).expect("terminal result");
 
-    let HubDirectoryResultState::Snapshot(snapshot) = parsed else {
+    let Some(HubDirectoryResultState::Snapshot(snapshot)) = parsed else {
         panic!("expected snapshot");
     };
     assert!(snapshot.effective_connected_mode);
@@ -228,6 +236,10 @@ fn parse_hub_directory_result_state_extracts_terminal_snapshot() {
     );
     assert_eq!(
         snapshot.items[0].announce_capabilities,
-        vec!["r3akt".to_string(), "telemetry".to_string()]
+        vec![
+            "r3akt".to_string(),
+            "emergencymessages".to_string(),
+            "telemetry".to_string()
+        ]
     );
 }
