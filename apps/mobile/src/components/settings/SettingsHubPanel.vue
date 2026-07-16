@@ -15,7 +15,7 @@ const props = defineProps<{
 }>();
 
 const nodeStore = useNodeStore();
-const directoryDisabled = true;
+const directoryDisabled = false;
 const announceCandidates = computed(() => nodeStore.hubAnnounceCandidates);
 const registrationSummary = computed(() => nodeStore.hubRegistrationSummary);
 const summary = computed(() => {

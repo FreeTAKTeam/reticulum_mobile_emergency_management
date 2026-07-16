@@ -236,6 +236,10 @@ async fn refresh_hub_directory_lxmf(
         .to_wire(Some(&signer))
         .map_err(|_| NodeError::InternalError {})?;
 
+    // Subscribe before transmitting so a fast hub response cannot arrive
+    // between the send and creation of the response receiver.
+    let mut data_rx = state.transport.received_data_events();
+    let mut resource_rx = state.transport.resource_events();
     let packet = link
         .lock()
         .await
@@ -249,29 +253,39 @@ async fn refresh_hub_directory_lxmf(
         return Err(NodeError::NetworkError {});
     }
 
-    let mut rx = state.transport.received_data_events();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         if tokio::time::Instant::now() >= deadline {
             return Err(NodeError::Timeout {});
         }
 
-        let received = match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-            Ok(Ok(event)) => event,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                return Err(NodeError::InternalError {})
-            }
-            Err(_) => continue,
+        let received_data = tokio::select! {
+            received = data_rx.recv() => match received {
+                Ok(event) => event.data.as_slice().to_vec(),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(NodeError::InternalError {});
+                }
+            },
+            received = resource_rx.recv() => match received {
+                Ok(event) => match event.kind {
+                    ResourceEventKind::Complete(complete) => complete.data,
+                    _ => continue,
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(NodeError::InternalError {});
+                }
+            },
+            () = tokio::time::sleep(Duration::from_millis(500)) => continue,
         };
 
-        if received.destination != hub {
+        let Ok(reply) = LxmfMessage::from_wire(received_data.as_slice()) else {
+            continue;
+        };
+        if reply.source_hash != Some(destination) || reply.destination_hash != Some(source) {
             continue;
         }
-
-        let Ok(reply) = LxmfMessage::from_wire(received.data.as_slice()) else {
-            continue;
-        };
 
         let mut text = String::new();
         if !reply.title.is_empty() {
