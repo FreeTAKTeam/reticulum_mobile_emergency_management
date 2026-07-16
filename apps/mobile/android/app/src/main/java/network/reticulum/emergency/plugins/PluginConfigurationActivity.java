@@ -46,6 +46,7 @@ public final class PluginConfigurationActivity extends Activity implements Servi
     private String assetDirectory;
     private Context pluginContext;
     private boolean bound;
+    private boolean pageFinished;
 
     public static Intent intentFor(Context context, JSONObject plugin) {
         return new Intent(context, PluginConfigurationActivity.class)
@@ -163,13 +164,14 @@ public final class PluginConfigurationActivity extends Activity implements Servi
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                pageFinished = true;
                 establishMessageChannel();
             }
         });
     }
 
     private void establishMessageChannel() {
-        if (nativePort != null || service == null) {
+        if (nativePort != null || service == null || !pageFinished) {
             return;
         }
         final WebMessagePort[] ports = webView.createWebMessageChannel();
@@ -279,6 +281,7 @@ public final class PluginConfigurationActivity extends Activity implements Servi
         if (webView != null) {
             webView.destroy();
         }
+        pageFinished = false;
         super.onDestroy();
     }
 
@@ -301,6 +304,15 @@ public final class PluginConfigurationActivity extends Activity implements Servi
     }
 
     private static String mimeType(String path) {
+        if (path.endsWith(".html")) {
+            return "text/html";
+        }
+        if (path.endsWith(".css")) {
+            return "text/css";
+        }
+        if (path.endsWith(".js")) {
+            return "application/javascript";
+        }
         final String extension = MimeTypeMap.getFileExtensionFromUrl(path);
         final String value = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
         return value == null ? "application/octet-stream" : value;

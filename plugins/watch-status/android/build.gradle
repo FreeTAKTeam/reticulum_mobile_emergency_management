@@ -1,0 +1,67 @@
+import java.io.FileInputStream
+import java.util.Properties
+
+apply plugin: 'com.android.application'
+
+def hostPackage = project.findProperty('remHostPackage')?.toString()?.trim() ?: 'network.reticulum.emergency'
+def hostFingerprints = project.findProperty('remHostFingerprints')?.toString()?.trim() ?: ''
+def signingPropertiesFile = rootProject.file('watch-status-keystore.properties')
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+    signingProperties.load(new FileInputStream(signingPropertiesFile))
+}
+
+android {
+    namespace 'org.freetakteam.rem.plugin.watchstatus'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId 'org.freetakteam.rem.plugin.watchstatus'
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName '1.0.0'
+        manifestPlaceholders = [remHostPackage: hostPackage]
+        buildConfigField 'String', 'REM_HOST_PACKAGE', '"' + hostPackage + '"'
+        buildConfigField 'String', 'REM_HOST_FINGERPRINTS', '"' + hostFingerprints + '"'
+    }
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                storeFile rootProject.file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (signingPropertiesFile.exists()) signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseRequested = graph.allTasks.any { task ->
+        task.project == project && task.name.toLowerCase().contains('release')
+    }
+    if (releaseRequested && hostFingerprints.isEmpty()) {
+        throw new GradleException('Release plugin builds require -PremHostFingerprints=<sha256[,sha256]>')
+    }
+    if (releaseRequested && !signingPropertiesFile.exists()) {
+        throw new GradleException('Release plugin builds require ignored watch-status-keystore.properties')
+    }
+}
+
+dependencies {
+    implementation project(':rem-plugin-sdk')
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

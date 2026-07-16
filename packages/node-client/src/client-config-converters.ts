@@ -1,4 +1,4 @@
-import type { NodeConfig, OperationalSummary, SosAlertRecord, SosAudioRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, WatchStatusServerState } from "./contracts";
+import type { NodeConfig, OperationalSummary, SosAlertRecord, SosAudioRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource } from "./contracts";
 import { toOptionalNumber } from "./converters";
 import { decodeBase64ToBytes, encodeBytesToBase64, enumVariantName, normalizeHex, pluginRecord, toOptionalHex } from "./runtime-converters";
 
@@ -199,33 +199,6 @@ export function toOperationalSummary(raw: Record<string, unknown>): OperationalS
     telemetryCount: Number(raw.telemetryCount ?? 0),
     activePropagationNodeHex: toOptionalHex(raw.activePropagationNodeHex),
     updatedAtMs: Number(raw.updatedAtMs ?? Date.now()),
-  };
-}
-
-export function normalizeWatchStatusPort(value: unknown): number {
-  const parsed = Number(value ?? 29_863);
-  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535
-    ? parsed
-    : 29_863;
-}
-
-export function toWatchStatusServerState(raw: Record<string, unknown> = {}): WatchStatusServerState {
-  const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled);
-  const port = normalizeWatchStatusPort(raw.port);
-  const url = String(
-    raw.url
-      ?? raw.currentUrl
-      ?? raw.current_url
-      ?? `http://localhost:${port}/info.json`,
-  );
-
-  return {
-    enabled,
-    port,
-    url,
-    currentUrl: String(raw.currentUrl ?? raw.current_url ?? url),
-    running: Boolean(raw.running),
-    bindError: String(raw.bindError ?? raw.bind_error ?? ""),
   };
 }
 

@@ -65,9 +65,6 @@ export interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
-  getWatchStatusServerSettings(): Promise<Record<string, unknown>>;
-  setWatchStatusServerSettings(options: { enabled: boolean; port: number }): Promise<void>;
-  getWatchStatusServerState(): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;

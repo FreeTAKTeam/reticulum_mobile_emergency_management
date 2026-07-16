@@ -26,7 +26,6 @@ export const useNodeStore = defineStore("node", () => {
     nodeConfigRestartRequired, nodeControlEntries, operationalSummary, pluginSensors, plugins,
     presenceNow, readinessError, removedByDestination, savedByDestination, settings,
     startupSettling, status, syncStatus, telemetryDestinations, unsubscribeClientEvents,
-    watchStatusServer,
   } = state;
 
   const logging = createNodeLoggingController({
@@ -102,7 +101,6 @@ export const useNodeStore = defineStore("node", () => {
     settings,
     status,
     upsertDiscovered,
-    watchStatusServer,
   });
   const {
     applyUiSettingsProjection,
@@ -114,7 +112,6 @@ export const useNodeStore = defineStore("node", () => {
     refreshPluginSensors,
     refreshSavedPeersProjection,
     refreshSettingsProjection,
-    refreshWatchStatusServerSettings,
     scheduleOperationalSummaryRefresh,
   } = projections;
 
@@ -272,7 +269,6 @@ export const useNodeStore = defineStore("node", () => {
     refreshPluginSensors,
     refreshSavedPeersProjection,
     refreshSettingsProjection,
-    refreshWatchStatusServerSettings,
     refreshStatusSnapshot,
     savedByDestination,
     setLastError,

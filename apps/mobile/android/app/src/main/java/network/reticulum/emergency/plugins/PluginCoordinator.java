@@ -330,6 +330,7 @@ public final class PluginCoordinator implements AutoCloseable {
                     "REM rejected the plugin request"
                 );
             }
+            PluginProtocol.requireJsonSize(response, "Plugin host response");
         } catch (Exception error) {
             response = PluginProtocol.errorResponse("", "InvalidRequest", error.getMessage());
         }

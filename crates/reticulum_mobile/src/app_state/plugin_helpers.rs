@@ -74,6 +74,7 @@ fn intersect_capabilities(granted: &mut PluginCapabilityRecord, declared: &Plugi
     granted.lxmf_send &= declared.lxmf_send;
     granted.lxmf_receive &= declared.lxmf_receive;
     granted.notifications_raise &= declared.notifications_raise;
+    granted.operational_read &= declared.operational_read;
 }
 
 fn validate_sensor_sample(sample: &PluginSensorSampleRequest) -> Result<(), NodeError> {

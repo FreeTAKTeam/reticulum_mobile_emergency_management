@@ -14,7 +14,7 @@ import type {
   ChecklistCellRecord, ChecklistTaskRecord, ChecklistFeedPublicationRecord, ChecklistRecord, ChecklistTemplateRecord, HubDirectoryPeerRecord, TelemetrySettingsRecord, ChecklistSettingsRecord,
   AppSettingsRecord, SavedPeerRecord, EamSourceRecord, EamProjectionRecord, EamTeamSummaryRecord, EamReadinessStatusMetricRecord, EamReadinessMessageRecord, EamReadinessSummaryRecord,
   EventProjectionRecord, TelemetryPositionRecord, SosSettingsRecord, SosDeviceTelemetryRecord, SosStatusRecord, SosAlertRecord, SosLocationRecord, SosAudioRecord,
-  LegacyImportPayload, ProjectionInvalidationEvent, OperationalSummary, WatchStatusServerSettings, WatchStatusServerState, HubDirectoryUpdatedEvent, NodeLogEvent, NodeOperationalNoticeEvent,
+  LegacyImportPayload, ProjectionInvalidationEvent, OperationalSummary, HubDirectoryUpdatedEvent, NodeLogEvent, NodeOperationalNoticeEvent,
   NodeErrorEvent, NodeClientEvents,
 } from "./contracts-domain";
 
@@ -66,9 +66,6 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
-  getWatchStatusServerSettings(): Promise<WatchStatusServerState>;
-  setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void>;
-  getWatchStatusServerState(): Promise<WatchStatusServerState>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;

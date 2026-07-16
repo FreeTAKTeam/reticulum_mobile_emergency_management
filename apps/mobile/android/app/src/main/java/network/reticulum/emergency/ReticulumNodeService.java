@@ -37,8 +37,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     private static final String TAG = "ReticulumNodeService";
     private static final String PREFS_NAME = "reticulum-node-service";
-    private static final String PREF_WATCH_STATUS_SERVER_ENABLED = "watchStatusServerEnabled";
-    private static final String PREF_WATCH_STATUS_SERVER_PORT = "watchStatusServerPort";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
 
@@ -91,7 +89,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     private SharedPreferences preferences;
     private SosPlatformCoordinator sosPlatformCoordinator;
-    private RemWatchStatusServer watchStatusServer;
     private PluginCoordinator pluginCoordinator;
     private ServiceNotificationController notificationController;
     private ServiceEventCoordinator eventCoordinator;
@@ -114,7 +111,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         );
         notificationController.createChannels();
         sosPlatformCoordinator = new SosPlatformCoordinator(this);
-        watchStatusServer = new RemWatchStatusServer();
         pluginCoordinator = new PluginCoordinator(this);
         pluginCoordinator.refresh();
         runtimeController = new NodeRuntimeLifecycleController(
@@ -137,7 +133,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         runtimeController.attachEventCoordinator(eventCoordinator);
         getApplication().registerActivityLifecycleCallbacks(activityLifecycleCallbacks);
         eventCoordinator.refreshLatestRuntimeState();
-        applyWatchStatusServerSettings();
     }
 
     @Override
@@ -171,9 +166,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
     public void onDestroy() {
         if (eventCoordinator != null) {
             eventCoordinator.close();
-        }
-        if (watchStatusServer != null) {
-            watchStatusServer.stop();
         }
         if (sosPlatformCoordinator != null) {
             sosPlatformCoordinator.close();
@@ -279,42 +271,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         return pluginCoordinator.configurationIntent(pluginId);
     }
 
-    public String getWatchStatusServerSettingsJson() {
-        try {
-            return currentWatchStatusServerStateJson().toString();
-        } catch (JSONException ex) {
-            return "{}";
-        }
-    }
-
-    public int setWatchStatusServerSettingsJson(String payloadJson) {
-        try {
-            final JSONObject payload = new JSONObject(JsonPayloads.orFallback(payloadJson, "{}"));
-            final RemWatchStatusServerSettings current = readWatchStatusServerSettings();
-            final boolean enabled = payload.has("enabled") ? payload.optBoolean("enabled", current.enabled) : current.enabled;
-            final int requestedPort = payload.has("port") ? payload.optInt("port", current.port) : current.port;
-            final RemWatchStatusServerSettings next = RemWatchStatusServerSettings.normalize(enabled, requestedPort);
-            preferences
-                .edit()
-                .putBoolean(PREF_WATCH_STATUS_SERVER_ENABLED, next.enabled)
-                .putInt(PREF_WATCH_STATUS_SERVER_PORT, next.port)
-                .apply();
-            applyWatchStatusServerSettings();
-            return 0;
-        } catch (JSONException ex) {
-            Logger.error(TAG, "Failed to parse watch status server settings", ex);
-            return -1;
-        }
-    }
-
-    public String getWatchStatusServerStateJson() {
-        try {
-            return currentWatchStatusServerStateJson().toString();
-        } catch (JSONException ex) {
-            return "{}";
-        }
-    }
-
     public int setSosSettingsJson(String payloadJson) {
         final int result = ReticulumBridge.setSosSettingsJson(payloadJson);
         if (result == 0) {
@@ -332,101 +288,6 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     private String safeStatusJson() {
         return JsonPayloads.orFallback(ReticulumBridge.getStatusJson(), "{}");
-    }
-
-    private RemWatchStatusServerSettings readWatchStatusServerSettings() {
-        if (preferences == null) {
-            return RemWatchStatusServerSettings.defaults();
-        }
-        return RemWatchStatusServerSettings.normalize(
-            preferences.getBoolean(
-                PREF_WATCH_STATUS_SERVER_ENABLED,
-                RemWatchStatusServerSettings.DEFAULT_ENABLED
-            ),
-            preferences.getInt(
-                PREF_WATCH_STATUS_SERVER_PORT,
-                RemWatchStatusServerSettings.DEFAULT_PORT
-            )
-        );
-    }
-
-    private void applyWatchStatusServerSettings() {
-        if (watchStatusServer == null) {
-            return;
-        }
-        watchStatusServer.apply(readWatchStatusServerSettings(), this::buildWatchStatusJson);
-    }
-
-    private JSONObject currentWatchStatusServerStateJson() throws JSONException {
-        if (watchStatusServer == null) {
-            return readWatchStatusServerSettings().toJson(false, "");
-        }
-        return watchStatusServer.stateJson();
-    }
-
-    private String buildWatchStatusJson() {
-        try {
-            return RemWatchStatusPayload.build(
-                safeStatusJson(),
-                safeOperationalSummaryJson(),
-                safeEamReadinessSummaryJson(),
-                safeEventsJson(),
-                safeTelemetryPositionsJson(),
-                System.currentTimeMillis()
-            );
-        } catch (Exception ex) {
-            Logger.error(TAG, "Failed to build watch status payload", ex);
-            try {
-                final JSONObject fallbackStatus = new JSONObject();
-                fallbackStatus.put("running", false);
-                fallbackStatus.put("lastError", ex.getMessage() == null ? ex.toString() : ex.getMessage());
-                return RemWatchStatusPayload.build(
-                    fallbackStatus.toString(),
-                    "{}",
-                    "{}",
-                    "{\"items\":[]}",
-                    "{\"items\":[]}",
-                    System.currentTimeMillis()
-                );
-            } catch (JSONException jsonException) {
-                return "{\"type\":\"rem.watch.status\",\"version\":1,\"connection_state\":\"ERROR\",\"operator_name\":\"REM\",\"operator_status\":\"ERROR\",\"operator_eam\":\"UNKNOWN\",\"team\":\"REM\",\"team_status\":\"UNKNOWN\",\"last_sync_epoch_ms\":0,\"last_sync_age_seconds\":0,\"active_events\":0,\"highest_priority\":\"ERROR\",\"alert_state\":\"ERROR\"}";
-            }
-        }
-    }
-
-    private String safeOperationalSummaryJson() {
-        try {
-            return JsonPayloads.orFallback(ReticulumBridge.getOperationalSummaryJson(), "{}");
-        } catch (Exception ex) {
-            return "{}";
-        }
-    }
-
-    private String safeEamReadinessSummaryJson() {
-        try {
-            return JsonPayloads.orFallback(ReticulumBridge.getEamReadinessSummaryJson(), "{}");
-        } catch (Exception ex) {
-            return "{}";
-        }
-    }
-
-    private String safeEventsJson() {
-        try {
-            return JsonPayloads.orFallback(ReticulumBridge.getEventsJson(), "{\"items\":[]}");
-        } catch (Exception ex) {
-            return "{\"items\":[]}";
-        }
-    }
-
-    private String safeTelemetryPositionsJson() {
-        try {
-            return JsonPayloads.orFallback(
-                ReticulumBridge.getTelemetryPositionsJson(),
-                "{\"items\":[]}"
-            );
-        } catch (Exception ex) {
-            return "{\"items\":[]}";
-        }
     }
 
     private String latestStatusJson() {

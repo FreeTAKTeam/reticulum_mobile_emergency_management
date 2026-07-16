@@ -291,6 +291,7 @@ test("plugin management is present without storing plugin configuration in the w
   const pluginPanel = page.getByTestId("plugin-settings-panel");
   await pluginPanel.locator("summary").click();
 
+  await expect(pluginPanel.locator("summary .summary-icon-svg")).toBeVisible();
   await expect(pluginPanel.getByRole("button", { name: "Refresh installed plugins" })).toBeVisible();
   await expect(pluginPanel).toContainText("No plugin APKs were discovered");
   const pluginSettingsKeys = await page.evaluate(() =>

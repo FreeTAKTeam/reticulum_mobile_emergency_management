@@ -19,6 +19,7 @@ export function toPluginCapabilities(value: unknown): PluginCapabilityRecord {
     lxmfSend: Boolean(raw.lxmfSend ?? raw.lxmf_send),
     lxmfReceive: Boolean(raw.lxmfReceive ?? raw.lxmf_receive),
     notificationsRaise: Boolean(raw.notificationsRaise ?? raw.notifications_raise),
+    operationalRead: Boolean(raw.operationalRead ?? raw.operational_read),
   };
 }
 

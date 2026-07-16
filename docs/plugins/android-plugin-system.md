@@ -17,7 +17,7 @@ Export one service using the SDK base class and the v1 action:
   <meta-data android:name="rem.plugin.displayName" android:value="Sample Plugin" />
   <meta-data android:name="rem.plugin.version" android:value="1.0.0" />
   <meta-data android:name="rem.plugin.apiMajor" android:value="1" />
-  <meta-data android:name="rem.plugin.apiMinor" android:value="0" />
+  <meta-data android:name="rem.plugin.apiMinor" android:value="1" />
   <meta-data
     android:name="rem.plugin.capabilities"
     android:value="{&quot;sensorsPublish&quot;:true}" />
@@ -43,9 +43,12 @@ Plugins must also validate the REM caller on every Binder call. Override
 with the REM package and release signing fingerprints accepted by that plugin. Signing keys and
 keystore properties stay outside git.
 
-REM host capabilities are `events.publish`, `sensors.publish`, `lxmf.send`, `lxmf.receive`, and
-`notifications.raise`. Android permissions requested by the plugin APK are independent of these
-host grants.
+REM host capabilities are `events.publish`, `sensors.publish`, `lxmf.send`, `lxmf.receive`,
+`notifications.raise`, and `operational.read`. Android permissions requested by the plugin APK are
+independent of these host grants. API 1.1 adds `operational.read`; its `operational.snapshot`
+request returns the current node status, operational summary, EAM readiness, latest active event,
+and latest telemetry position. The operation is rejected unless the plugin declares and is granted
+that capability.
 
 ## Lifecycle and requests
 
@@ -101,5 +104,6 @@ cd apps/mobile/android
 bash ./gradlew :rem-plugin-sdk:assembleDebug :plugin-test-fixture:assembleDebug testDebugUnitTest
 ```
 
-The fixture APK is an integration aid, not a public example. BLE heart rate is the first supported
-example plugin built on this SDK.
+The fixture APK is an integration aid, not a public example. BLE Heart Rate and Watch Status Server
+are supported plugins built and distributed as separate APK artifacts; neither is embedded or
+automatically installed by REM.

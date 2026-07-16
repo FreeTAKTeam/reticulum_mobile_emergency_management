@@ -59,6 +59,72 @@ fn plugin_trust_enablement_and_sensors_persist() {
 }
 
 #[test]
+fn plugin_operational_read_defaults_false_and_is_part_of_capability_subset() {
+    let legacy: PluginCapabilityRecord = serde_json::from_value(json!({
+        "eventsPublish": true
+    }))
+    .expect("legacy capabilities");
+    assert!(!legacy.operational_read);
+
+    let requested = PluginCapabilityRecord {
+        operational_read: true,
+        ..PluginCapabilityRecord::default()
+    };
+    assert!(!requested.is_subset_of(&PluginCapabilityRecord::default()));
+    assert!(requested.is_subset_of(&PluginCapabilityRecord {
+        operational_read: true,
+        ..PluginCapabilityRecord::default()
+    }));
+}
+
+#[test]
+fn plugin_operational_read_grant_persists() {
+    let storage_dir = test_storage_dir("plugin-operational-read-persistence");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let mut discovered = discovered_plugin("ab".repeat(32).as_str());
+    discovered.api_minor = 1;
+    discovered.declared_capabilities.operational_read = true;
+    store
+        .sync_discovered_plugins(&[discovered])
+        .expect("discover plugin");
+    store
+        .approve_plugin_publisher("org.freetakteam.rem.plugin.test", None)
+        .expect("approve publisher");
+    store
+        .grant_plugin_capabilities(
+            "org.freetakteam.rem.plugin.test",
+            PluginCapabilityRecord {
+                operational_read: true,
+                ..PluginCapabilityRecord::default()
+            },
+        )
+        .expect("grant operational read");
+
+    let restored = AppStateStore::new(storage_dir.to_str()).expect("restored store");
+    let plugin = restored
+        .get_plugin("org.freetakteam.rem.plugin.test")
+        .expect("restored plugin lookup")
+        .expect("restored plugin");
+    assert!(plugin.discovered.declared_capabilities.operational_read);
+    assert!(plugin.granted_capabilities.operational_read);
+}
+
+#[test]
+fn plugin_api_minor_newer_than_host_is_incompatible() {
+    let storage_dir = test_storage_dir("plugin-api-minor");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let mut plugin = discovered_plugin("ef".repeat(32).as_str());
+    plugin.api_minor = 2;
+    store.sync_discovered_plugins(&[plugin]).expect("discover plugin");
+    let stored = store
+        .get_plugin("org.freetakteam.rem.plugin.test")
+        .expect("plugin lookup")
+        .expect("plugin");
+    assert_eq!(stored.state, "Incompatible");
+    assert!(!stored.enabled);
+}
+
+#[test]
 fn plugin_sensor_status_transitions_from_active_to_stale_and_offline() {
     assert_eq!(
         sensor_status(Some("SUBSCRIBED"), 1_000, 30_000, 30_000),

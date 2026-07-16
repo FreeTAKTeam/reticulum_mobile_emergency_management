@@ -5,7 +5,7 @@ import org.json.JSONObject;
 
 public final class PluginProtocol {
     public static final int API_MAJOR = 1;
-    public static final int API_MINOR = 0;
+    public static final int API_MINOR = 1;
     public static final int MAX_JSON_BYTES = 65_536;
     public static final String SERVICE_ACTION = "network.reticulum.emergency.PLUGIN_V1";
 

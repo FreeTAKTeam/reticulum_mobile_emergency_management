@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #101722; color: #f4f7fb; }
+main { max-width: 42rem; margin: 0 auto; padding: 1.25rem; }
+h1 { margin-bottom: .35rem; }
+.intro { color: #b8c5d6; line-height: 1.45; }
+section { margin: 1rem 0; padding: 1rem; border: 1px solid #314159; border-radius: .75rem; background: #182231; }
+label { display: grid; gap: .35rem; margin-top: .9rem; font-weight: 600; }
+label.check { display: flex; align-items: center; }
+input { width: 100%; min-height: 2.75rem; padding: .65rem; border: 1px solid #52657f; border-radius: .45rem; background: #0e1621; color: inherit; }
+input[type="checkbox"] { width: 1.2rem; min-height: 1.2rem; }
+button { min-height: 2.75rem; padding: .65rem .85rem; border: 1px solid #6f88a7; border-radius: .45rem; background: #263a54; color: inherit; font-weight: 700; }
+button.primary { width: 100%; background: #17745b; border-color: #32a883; }
+dl { margin: 1rem 0 0; }
+dl div { display: flex; justify-content: space-between; gap: 1rem; padding: .25rem 0; }
+dt { color: #b8c5d6; }
+dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+#status { min-height: 1.5rem; }

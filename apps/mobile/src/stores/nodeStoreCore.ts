@@ -4,7 +4,6 @@ import {
   type PeerRecord,
   type SendMode,
   type SyncStatus,
-  type WatchStatusServerState,
 } from "@reticulum/node-client";
 
 import type {
@@ -58,15 +57,6 @@ export const EMPTY_OPERATIONAL_SUMMARY = {
   eventCount: 0,
   telemetryCount: 0,
   updatedAtMs: 0,
-};
-
-export const DEFAULT_WATCH_STATUS_SERVER: WatchStatusServerState = {
-  enabled: true,
-  port: 29_863,
-  url: "http://localhost:29863/info.json",
-  currentUrl: "http://localhost:29863/info.json",
-  running: false,
-  bindError: "",
 };
 
 export interface HubRegistrationSnapshot {

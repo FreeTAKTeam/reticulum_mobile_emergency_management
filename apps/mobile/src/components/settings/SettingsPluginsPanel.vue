@@ -3,7 +3,6 @@ import type { PluginCapabilityRecord } from "@reticulum/node-client";
 import { ref } from "vue";
 
 import { useNodeStore } from "../../stores/nodeStore";
-
 const nodeStore = useNodeStore();
 const pluginActionPending = ref("");
 
@@ -16,6 +15,7 @@ const capabilityDefinitions: Array<{
   { key: "lxmfSend", label: "Send LXMF" },
   { key: "lxmfReceive", label: "Receive LXMF" },
   { key: "notificationsRaise", label: "Raise notifications" },
+  { key: "operationalRead", label: "Read operational status" },
 ];
 
 async function runPluginAction(key: string, action: () => Promise<void>): Promise<void> {
@@ -45,7 +45,11 @@ function setPluginCapability(
   <details class="panel fold-panel" data-testid="plugin-settings-panel">
     <summary class="panel-summary">
       <div class="summary-copy">
-        <span class="summary-icon" aria-hidden="true">&#129513;</span>
+        <span class="summary-icon" aria-hidden="true">
+          <svg class="summary-icon-svg" viewBox="0 0 24 24" fill="none">
+            <path d="M8.5 4H4v4.5a2.5 2.5 0 1 1 0 5V20h6.5a2.5 2.5 0 1 0 5 0H20v-6.5a2.5 2.5 0 1 0 0-5V4h-6.5a2.5 2.5 0 1 0-5 0Z" />
+          </svg>
+        </span>
         <h2>Plugins</h2>
         <p>{{ nodeStore.plugins.length }} discovered Android plugin{{ nodeStore.plugins.length === 1 ? "" : "s" }}</p>
       </div>

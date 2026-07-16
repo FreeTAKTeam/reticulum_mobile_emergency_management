@@ -85,6 +85,7 @@ export interface PluginCapabilityRecord {
   lxmfSend: boolean;
   lxmfReceive: boolean;
   notificationsRaise: boolean;
+  operationalRead: boolean;
 }
 
 export interface PluginMessageDescriptorRecord {

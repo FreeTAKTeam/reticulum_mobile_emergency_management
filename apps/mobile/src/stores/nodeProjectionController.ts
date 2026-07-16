@@ -5,8 +5,6 @@ import {
   type PluginSensorRecord,
   type ReticulumNodeClient,
   type SavedPeerRecord,
-  type WatchStatusServerSettings,
-  type WatchStatusServerState,
 } from "@reticulum/node-client";
 import type { Ref, ShallowRef } from "vue";
 
@@ -42,7 +40,6 @@ import {
 import {
   OPERATIONAL_SUMMARY_REFRESH_MIN_INTERVAL_MS,
   PROJECTION_REFRESH_DEBOUNCE_MS,
-  DEFAULT_WATCH_STATUS_SERVER,
   EMPTY_OPERATIONAL_SUMMARY,
   nowMs,
 } from "./nodeStoreCore";
@@ -66,7 +63,6 @@ interface NodeProjectionContext {
     patch: Partial<DiscoveredPeer>,
     source?: "announce" | "hub" | "import",
   ) => void;
-  watchStatusServer: WatchStatusServerState;
 }
 
 export function createNodeProjectionController(context: NodeProjectionContext) {
@@ -85,7 +81,6 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
     settings,
     status,
     upsertDiscovered,
-    watchStatusServer,
   } = context;
   let refreshOperationalSummaryTimerId: number | null = null;
   let refreshOperationalSummaryQueued = false;
@@ -277,27 +272,6 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
     await client.value.openPluginConfiguration(pluginId);
   }
 
-  async function refreshWatchStatusServerSettings(): Promise<void> {
-    if (!client.value) {
-      Object.assign(watchStatusServer, DEFAULT_WATCH_STATUS_SERVER);
-      return;
-    }
-    await projectionRefreshCoordinator.run("node:watch-status-server", async () => {
-      Object.assign(watchStatusServer, await client.value!.getWatchStatusServerSettings());
-    }).catch((error: unknown) => {
-      appendLog("Debug", `Watch status server settings refresh skipped: ${errorMessage(error)}`);
-    });
-  }
-
-  async function updateWatchStatusServerSettings(settingsRecord: WatchStatusServerSettings): Promise<void> {
-    await init();
-    if (!client.value) {
-      return;
-    }
-    await client.value.setWatchStatusServerSettings(settingsRecord);
-    Object.assign(watchStatusServer, await client.value.getWatchStatusServerState());
-  }
-
   function scheduleOperationalSummaryRefresh(delayMs = PROJECTION_REFRESH_DEBOUNCE_MS): void {
     refreshOperationalSummaryQueued = true;
     if (refreshOperationalSummaryTimerId !== null) {
@@ -463,10 +437,8 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
     refreshPluginSensors,
     refreshSavedPeersProjection,
     refreshSettingsProjection,
-    refreshWatchStatusServerSettings,
     revokePluginPublisher,
     scheduleOperationalSummaryRefresh,
     setPluginEnabled,
-    updateWatchStatusServerSettings,
   };
 }

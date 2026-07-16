@@ -1,6 +1,6 @@
-import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord, WatchStatusServerSettings, WatchStatusServerState } from "./contracts";
+import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_NODE_CONFIG, browserRuntimeReadiness, countConnectedSavedPeers, randomHex32 } from "./client-defaults";
-import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS, toWatchStatusServerState } from "./client-config-converters";
+import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, normalizeInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";
 import { emptyEamReadinessSummary } from "./projection-converters";
@@ -321,9 +321,6 @@ export class WebReticulumNodeClient extends InMemoryProjectionClient implements 
   async importLegacyState(_payload: LegacyImportPayload): Promise<void> {}
   async getAppSettings(): Promise<AppSettingsRecord | null> { return null; }
   async setAppSettings(_settings: AppSettingsRecord): Promise<void> {}
-  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
-  async setWatchStatusServerSettings(_settings: WatchStatusServerSettings): Promise<void> {}
-  async getWatchStatusServerState(): Promise<WatchStatusServerState> { return toWatchStatusServerState(); }
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
     return [...this.savedPeers.values()];
   }

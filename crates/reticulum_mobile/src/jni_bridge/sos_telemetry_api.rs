@@ -23,6 +23,174 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosL
     }
 }
 
+const PLUGIN_HOST_RESPONSE_MAX_BYTES: usize = 65_536;
+
+fn can_read_operational_snapshot(plugin: &InstalledPluginRecord, plugin_id: &str) -> bool {
+    plugin.discovered.plugin_id == plugin_id
+        && plugin.trusted
+        && plugin.enabled
+        && plugin.discovered.api_major == 1
+        && plugin.discovered.api_minor >= 1
+        && plugin.discovered.declared_capabilities.operational_read
+        && plugin.granted_capabilities.operational_read
+}
+
+fn operational_snapshot_json(
+    captured_at_ms: u64,
+    status: Value,
+    operational_summary: Value,
+    eam_readiness: Value,
+    latest_event: Option<Value>,
+    latest_position: Option<Value>,
+) -> Value {
+    json!({
+        "capturedAtMs": captured_at_ms,
+        "status": status,
+        "operationalSummary": operational_summary,
+        "eamReadiness": eam_readiness,
+        "latestEvent": latest_event,
+        "latestPosition": latest_position
+    })
+}
+
+fn plugin_host_response_json(request_id: &str, result: Result<Value, NodeError>) -> Value {
+    match result {
+        Ok(value) => json!({
+            "protocolVersion": 1,
+            "requestId": request_id,
+            "ok": true,
+            "result": value
+        }),
+        Err(error) => json!({
+            "protocolVersion": 1,
+            "requestId": request_id,
+            "ok": false,
+            "error": {"code": "PermissionDeniedOrInvalid", "message": error.to_string()}
+        }),
+    }
+}
+
+fn plugin_host_response_within_limit(response: &Value) -> bool {
+    serde_json::to_vec(response)
+        .map(|encoded| encoded.len() <= PLUGIN_HOST_RESPONSE_MAX_BYTES)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod operational_snapshot_tests {
+    use super::*;
+
+    fn permitted_plugin() -> InstalledPluginRecord {
+        InstalledPluginRecord {
+            discovered: DiscoveredPluginRecord {
+                plugin_id: "org.freetakteam.rem.plugin.watch_status".to_string(),
+                display_name: "Watch Status".to_string(),
+                version: "1.0.0".to_string(),
+                api_major: 1,
+                api_minor: 1,
+                package_name: "org.freetakteam.rem.plugin.watchstatus".to_string(),
+                service_class_name: ".WatchStatusPluginService".to_string(),
+                publisher_fingerprint: "ab".repeat(32),
+                publisher_history: Vec::new(),
+                android_permissions: Vec::new(),
+                declared_capabilities: PluginCapabilityRecord {
+                    operational_read: true,
+                    ..PluginCapabilityRecord::default()
+                },
+                messages: Vec::new(),
+                configuration_entrypoint: Some("rem-plugin-config/index.html".to_string()),
+            },
+            state: "Enabled".to_string(),
+            trusted: true,
+            enabled: true,
+            granted_capabilities: PluginCapabilityRecord {
+                operational_read: true,
+                ..PluginCapabilityRecord::default()
+            },
+            diagnostic: None,
+            updated_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn operational_snapshot_requires_every_permission_gate() {
+        let plugin = permitted_plugin();
+        assert!(can_read_operational_snapshot(
+            &plugin,
+            "org.freetakteam.rem.plugin.watch_status"
+        ));
+
+        let mut denied = plugin.clone();
+        denied.trusted = false;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        denied = plugin.clone();
+        denied.enabled = false;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        denied = plugin.clone();
+        denied.discovered.api_major = 2;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        denied = plugin.clone();
+        denied.discovered.api_minor = 0;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        denied = plugin.clone();
+        denied.discovered.declared_capabilities.operational_read = false;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        denied = plugin.clone();
+        denied.granted_capabilities.operational_read = false;
+        assert!(!can_read_operational_snapshot(
+            &denied,
+            &plugin.discovered.plugin_id
+        ));
+        assert!(!can_read_operational_snapshot(&plugin, "org.example.another"));
+    }
+
+    #[test]
+    fn operational_snapshot_has_the_stable_public_shape() {
+        let snapshot = operational_snapshot_json(
+            42,
+            json!({"state": "Running"}),
+            json!({"callsign": "REM"}),
+            json!({"readinessColor": "Orange"}),
+            Some(json!({"id": "event-1"})),
+            None,
+        );
+        assert_eq!(snapshot["capturedAtMs"], 42);
+        assert_eq!(snapshot["status"]["state"], "Running");
+        assert_eq!(snapshot["operationalSummary"]["callsign"], "REM");
+        assert_eq!(snapshot["eamReadiness"]["readinessColor"], "Orange");
+        assert_eq!(snapshot["latestEvent"]["id"], "event-1");
+        assert!(snapshot["latestPosition"].is_null());
+        assert_eq!(snapshot.as_object().expect("snapshot object").len(), 6);
+    }
+
+    #[test]
+    fn plugin_host_response_enforces_the_protocol_size_limit() {
+        let small = plugin_host_response_json("request-1", Ok(json!({"value": "ok"})));
+        assert!(plugin_host_response_within_limit(&small));
+
+        let oversized = plugin_host_response_json(
+            "request-2",
+            Ok(json!({"value": "x".repeat(PLUGIN_HOST_RESPONSE_MAX_BYTES)})),
+        );
+        assert!(!plugin_host_response_within_limit(&oversized));
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosAudioJson(
     mut env: JNIEnv,
@@ -401,26 +569,50 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_handlePl
                 .map(|_| json!({"accepted": true}))
                 .ok_or(NodeError::InvalidConfig {})
         }),
+        "operational.snapshot" => node.list_plugins().and_then(|plugins| {
+            let allowed = plugins
+                .iter()
+                .any(|plugin| can_read_operational_snapshot(plugin, input.plugin_id.as_str()));
+            if !allowed {
+                return Err(NodeError::InvalidConfig {});
+            }
+
+            let status = serde_json::from_str::<serde_json::Value>(&status_to_json(node.get_status()))
+                .map_err(|_| NodeError::InternalError {})?;
+            let summary = node.get_operational_summary()?;
+            let readiness = node.get_eam_readiness_summary()?;
+            let latest_event = node
+                .get_events()?
+                .into_iter()
+                .filter(|event| event.deleted_at_ms.is_none())
+                .max_by_key(|event| event.updated_at_ms)
+                .map(|event| event_projection_json(&event));
+            let latest_position = node
+                .get_telemetry_positions()?
+                .into_iter()
+                .max_by_key(|position| position.updated_at_ms)
+                .map(|position| telemetry_position_json(&position));
+            Ok(operational_snapshot_json(
+                now_ms(),
+                status,
+                operational_summary_json(&summary),
+                eam_readiness_summary_json(&readiness),
+                latest_event,
+                latest_position,
+            ))
+        }),
         _ => Err(NodeError::InvalidConfig {}),
     };
-    match result {
-        Ok(value) => ok_json_result(
+    let response = plugin_host_response_json(input.request_id.as_str(), result);
+    if plugin_host_response_within_limit(&response) {
+        ok_json_result(&mut env, &response)
+    } else {
+        ok_json_result(
             &mut env,
-            &json!({
-                "protocolVersion": 1,
-                "requestId": input.request_id,
-                "ok": true,
-                "result": value
-            }),
-        ),
-        Err(error) => ok_json_result(
-            &mut env,
-            &json!({
-                "protocolVersion": 1,
-                "requestId": input.request_id,
-                "ok": false,
-                "error": {"code": "PermissionDeniedOrInvalid", "message": error.to_string()}
-            }),
-        ),
+            &plugin_host_response_json(
+                input.request_id.as_str(),
+                Err(NodeError::InvalidConfig {}),
+            ),
+        )
     }
 }

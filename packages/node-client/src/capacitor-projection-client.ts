@@ -1,6 +1,6 @@
-import type { AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, SavedPeerRecord, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord, WatchStatusServerSettings, WatchStatusServerState } from "./contracts";
+import type { AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, SavedPeerRecord, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { type ReticulumNodePlugin } from "./capacitor-plugin";
-import { normalizeWatchStatusPort, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord, toWatchStatusServerState } from "./client-config-converters";
+import { sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
 import { toChecklistRecord, toChecklistTemplateRecord } from "./checklist-converters";
 import { toAppSettingsRecord } from "./converters";
 import { toConversationRecord, toMessageRecord, toPeerRecord, toSyncStatus } from "./message-converters";
@@ -110,24 +110,6 @@ export abstract class CapacitorProjectionClient {
   async setAppSettings(settings: AppSettingsRecord): Promise<void> {
     await this.ready();
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
-  }
-
-  async getWatchStatusServerSettings(): Promise<WatchStatusServerState> {
-    await this.ready();
-    return toWatchStatusServerState(await this.plugin.getWatchStatusServerSettings());
-  }
-
-  async setWatchStatusServerSettings(settings: WatchStatusServerSettings): Promise<void> {
-    await this.ready();
-    await this.plugin.setWatchStatusServerSettings({
-      enabled: Boolean(settings.enabled),
-      port: normalizeWatchStatusPort(settings.port),
-    });
-  }
-
-  async getWatchStatusServerState(): Promise<WatchStatusServerState> {
-    await this.ready();
-    return toWatchStatusServerState(await this.plugin.getWatchStatusServerState());
   }
 
   async getSavedPeers(): Promise<SavedPeerRecord[]> {

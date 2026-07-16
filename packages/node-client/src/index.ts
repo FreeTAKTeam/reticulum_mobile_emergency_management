@@ -86,8 +86,6 @@ import type {
   LegacyImportPayload,
   ProjectionInvalidationEvent,
   OperationalSummary,
-  WatchStatusServerSettings,
-  WatchStatusServerState,
   HubDirectoryUpdatedEvent,
   NodeLogEvent,
   NodeOperationalNoticeEvent,
@@ -112,7 +110,7 @@ import { ReticulumNodePluginInstance, type PluginListenerHandle } from "./capaci
 import { CapacitorReticulumNodeClient } from "./capacitor-client";
 import { WebReticulumNodeClient } from "./web-client";
 import { MockReticulumNodeClient } from "./mock-client";
-import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS, configToPlugin, normalizeWatchStatusPort, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosMessageKind, toSosSettingsRecord, toSosState, toSosStatusRecord, toSosTriggerSource, toWatchStatusServerState } from "./client-config-converters";
+import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS, configToPlugin, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosMessageKind, toSosSettingsRecord, toSosState, toSosStatusRecord, toSosTriggerSource } from "./client-config-converters";
 import { DEFAULT_NODE_CONFIG, browserRuntimeReadiness, countConnectedSavedPeers, generateDefaultCallSign, randomHex32 } from "./client-defaults";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, defaultChecklistColumns, defaultChecklistTask, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, normalizeInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";

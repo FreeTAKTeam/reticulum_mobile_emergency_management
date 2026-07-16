@@ -4,6 +4,8 @@ project(':rem-plugin-sdk').projectDir = new File('../../../packages/android-plug
 include ':plugin-test-fixture'
 include ':ble-heart-rate-plugin'
 project(':ble-heart-rate-plugin').projectDir = new File('../../../plugins/ble-heart-rate/android')
+include ':watch-status-plugin'
+project(':watch-status-plugin').projectDir = new File('../../../plugins/watch-status/android')
 include ':capacitor-cordova-android-plugins'
 project(':capacitor-cordova-android-plugins').projectDir = new File('./capacitor-cordova-android-plugins/')
 

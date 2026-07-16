@@ -101,4 +101,61 @@ public final class PluginBinderIntegrationTest {
             context.unbindService(connection);
         }
     }
+
+    @Test
+    public void discoversBindsAndReceivesWatchStatusSnapshotRequest() throws Exception {
+        final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        final JSONArray discovered = PluginDiscovery.discover(context);
+        JSONObject watch = null;
+        for (int index = 0; index < discovered.length(); index++) {
+            final JSONObject candidate = discovered.getJSONObject(index);
+            if ("org.freetakteam.rem.plugin.watch_status".equals(candidate.optString("pluginId"))) {
+                watch = candidate;
+                break;
+            }
+        }
+        assertNotNull("watch status plugin must be installed before instrumentation", watch);
+        assertEquals(1, watch.optInt("apiMinor"));
+        assertTrue(watch.getJSONObject("declaredCapabilities").optBoolean("operationalRead"));
+
+        final CountDownLatch connected = new CountDownLatch(1);
+        final CountDownLatch requestReceived = new CountDownLatch(1);
+        final AtomicReference<IRemPluginService> serviceReference = new AtomicReference<>();
+        final AtomicReference<JSONObject> requestReference = new AtomicReference<>();
+        final ServiceConnection connection = new ServiceConnection() {
+            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+                serviceReference.set(IRemPluginService.Stub.asInterface(binder));
+                connected.countDown();
+            }
+            @Override public void onServiceDisconnected(ComponentName name) { serviceReference.set(null); }
+        };
+        final Intent intent = new Intent(PluginProtocol.SERVICE_ACTION).setComponent(
+            new ComponentName(watch.getString("packageName"), watch.getString("serviceClassName"))
+        );
+        assertTrue(context.bindService(intent, connection, Context.BIND_AUTO_CREATE));
+        try {
+            assertTrue(connected.await(10, TimeUnit.SECONDS));
+            final IRemPluginService service = serviceReference.get();
+            assertNotNull(service);
+            service.start(new IRemPluginHost.Stub() {
+                @Override public void submitRequest(String requestJson) {
+                    try {
+                        requestReference.set(PluginProtocol.requireEnvelope(requestJson));
+                        requestReceived.countDown();
+                    } catch (Exception ignored) {}
+                }
+            }, new JSONObject()
+                .put("protocolVersion", 1)
+                .put("apiMajor", 1)
+                .put("apiMinor", 1)
+                .put("sessionId", "watch-instrumentation")
+                .put("hostPackage", context.getPackageName())
+                .toString());
+            assertTrue(requestReceived.await(10, TimeUnit.SECONDS));
+            assertEquals("operational.snapshot", requestReference.get().getString("operation"));
+            service.stop("instrumentation-complete");
+        } finally {
+            context.unbindService(connection);
+        }
+    }
 }

@@ -22,7 +22,6 @@ export function createNodeStoreApi(
   return {
     settings: state.settings,
     nodeConfigRestartRequired: state.nodeConfigRestartRequired,
-    watchStatusServer: state.watchStatusServer,
     status: state.status,
     syncStatus: state.syncStatus,
     operationalSummary: state.operationalSummary,
@@ -96,8 +95,6 @@ export function createNodeStoreApi(
     unsavePeer: actions.unsavePeer,
     setPeerLabel: actions.setPeerLabel,
     updateSettings: actions.updateSettings,
-    refreshWatchStatusServerSettings: projections.refreshWatchStatusServerSettings,
-    updateWatchStatusServerSettings: projections.updateWatchStatusServerSettings,
     getSavedPeerList: actions.getSavedPeerList,
     importPeerList: actions.importPeerList,
     parsePeerListText: actions.parsePeerListText,

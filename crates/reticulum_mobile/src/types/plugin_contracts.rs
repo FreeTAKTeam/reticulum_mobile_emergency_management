@@ -23,6 +23,8 @@ pub struct PluginCapabilityRecord {
     pub lxmf_receive: bool,
     #[serde(default)]
     pub notifications_raise: bool,
+    #[serde(default)]
+    pub operational_read: bool,
 }
 
 impl PluginCapabilityRecord {
@@ -32,6 +34,7 @@ impl PluginCapabilityRecord {
             && (!self.lxmf_send || declared.lxmf_send)
             && (!self.lxmf_receive || declared.lxmf_receive)
             && (!self.notifications_raise || declared.notifications_raise)
+            && (!self.operational_read || declared.operational_read)
     }
 }
 

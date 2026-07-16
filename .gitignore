@@ -24,6 +24,7 @@ apps/mobile/android/app/src/main/jniLibs/
 apps/mobile/android/uniffi/
 apps/mobile/ios/uniffi/
 apps/mobile/android/ble-heart-rate-keystore.properties
+apps/mobile/android/watch-status-keystore.properties
 
 # Local REM infographic artifacts
 docs/rem-capability-infographic.pdf

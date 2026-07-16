@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
+use crate::runtime::now_ms;
 use crate::types::{
     AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
     ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
@@ -20,8 +21,8 @@ use crate::types::{
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
     DiscoveredPluginRecord, EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord,
-    HubDirectorySnapshot, HubMode, HubSettingsRecord, InterfaceStatusRecord, LegacyImportPayload,
-    LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    HubDirectorySnapshot, HubMode, HubSettingsRecord, InstalledPluginRecord, InterfaceStatusRecord,
+    LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
     NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, PluginCapabilityRecord,
     PluginLxmfSendRequest, PluginSensorSampleRequest, ProjectionScope, RnodeConnectionMode,

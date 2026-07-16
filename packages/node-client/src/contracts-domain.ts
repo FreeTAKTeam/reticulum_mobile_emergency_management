@@ -385,18 +385,6 @@ export interface OperationalSummary {
   updatedAtMs: number;
 }
 
-export interface WatchStatusServerSettings {
-  enabled: boolean;
-  port: number;
-}
-
-export interface WatchStatusServerState extends WatchStatusServerSettings {
-  url: string;
-  currentUrl: string;
-  running: boolean;
-  bindError?: string;
-}
-
 export interface HubDirectoryUpdatedEvent {
   effectiveConnectedMode: boolean;
   items: HubDirectoryPeerRecord[];

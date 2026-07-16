@@ -56,7 +56,6 @@ interface NodeLifecycleContext {
   refreshPluginSensors: () => Promise<void>;
   refreshSavedPeersProjection: () => Promise<void>;
   refreshSettingsProjection: () => Promise<void>;
-  refreshWatchStatusServerSettings: () => Promise<void>;
   refreshStatusSnapshot: (retries?: number, delayMs?: number) => Promise<NodeStatus>;
   savedByDestination: Record<string, SavedPeer>;
   setLastError: (message: string) => void;
@@ -108,7 +107,6 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
     refreshPluginSensors,
     refreshSavedPeersProjection,
     refreshSettingsProjection,
-    refreshWatchStatusServerSettings,
     refreshStatusSnapshot,
     savedByDestination,
     setLastError,
@@ -140,7 +138,6 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
         refreshSettingsProjection(),
         refreshSavedPeersProjection(),
         refreshOperationalSummaryProjection(),
-        refreshWatchStatusServerSettings(),
         refreshPluginProjection(true),
         refreshPluginSensors(),
       ]);

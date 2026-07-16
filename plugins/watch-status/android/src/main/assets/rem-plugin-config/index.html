@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Watch Status Server</title>
+    <link rel="stylesheet" href="config.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Watch Status Server</h1>
+      <p class="intro">Expose a read-only REM status endpoint on this device's loopback interface.</p>
+      <section>
+        <label class="check"><input id="enabled" type="checkbox" /> Enable server</label>
+        <label>Port <input id="port" type="number" min="1024" max="65535" step="1" /></label>
+        <dl>
+          <div><dt>URL</dt><dd id="url">Unavailable</dd></div>
+          <div><dt>Server</dt><dd id="server">Stopped</dd></div>
+          <div><dt>Snapshot</dt><dd id="snapshot">Unavailable</dd></div>
+        </dl>
+      </section>
+      <button id="save" class="primary" type="button">Save configuration</button>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="config.js"></script>
+  </body>
+</html>

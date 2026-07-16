@@ -5,7 +5,6 @@ import type {
   PluginSensorRecord,
   ReticulumNodeClient,
   SyncStatus,
-  WatchStatusServerState,
 } from "@reticulum/node-client";
 import { reactive, ref, shallowRef } from "vue";
 
@@ -18,7 +17,6 @@ import {
   loadRemovedPeerDestinations,
 } from "./nodeSettingsModel";
 import {
-  DEFAULT_WATCH_STATUS_SERVER,
   EMPTY_OPERATIONAL_SUMMARY,
   EMPTY_STATUS,
   EMPTY_SYNC_STATUS,
@@ -46,7 +44,6 @@ export function createNodeStoreState() {
   const lastHubRefreshAt = ref(0);
   const syncStatus = ref<SyncStatus>({ ...EMPTY_SYNC_STATUS });
   const operationalSummary = ref({ ...EMPTY_OPERATIONAL_SUMMARY });
-  const watchStatusServer = reactive<WatchStatusServerState>({ ...DEFAULT_WATCH_STATUS_SERVER });
   const hubDirectorySnapshot = ref<HubDirectorySnapshot | null>(null);
   const telemetryDestinations = ref<string[]>([]);
   const plugins = ref<InstalledPluginRecord[]>([]);
@@ -92,7 +89,6 @@ export function createNodeStoreState() {
     syncStatus,
     telemetryDestinations,
     unsubscribeClientEvents,
-    watchStatusServer,
   };
 }
 

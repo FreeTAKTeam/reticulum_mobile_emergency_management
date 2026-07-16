@@ -98,6 +98,16 @@ fn spawn_payload_receivers(state: &NodeRuntimeState, bus: &EventBus) {
                                 progress.total_parts,
                             );
                         }
+                        ResourceEventKind::SegmentComplete(progress) => {
+                            debug!(
+                                "[lxmf][debug] resource segment complete link_id={} original_hash={} segment={} total_segments={} total_data_size={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(progress.original_hash.as_slice()),
+                                progress.segment_index,
+                                progress.total_segments,
+                                progress.total_data_size,
+                            );
+                        }
                         ResourceEventKind::OutboundComplete => {
                             info!(
                                 "[lxmf][events] resource outbound complete link_id={} hash={}",

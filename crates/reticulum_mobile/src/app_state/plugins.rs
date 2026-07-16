@@ -123,7 +123,7 @@ impl AppStateStore {
                 PluginCapabilityRecord::default()
             };
             intersect_capabilities(&mut granted, &item.declared_capabilities);
-            let compatible = item.api_major == 1;
+            let compatible = item.api_major == 1 && item.api_minor <= 1;
             let enabled = previous.is_some_and(|plugin| plugin.enabled)
                 && same_signer
                 && trusted
