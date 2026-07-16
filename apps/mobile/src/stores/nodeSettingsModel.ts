@@ -63,7 +63,7 @@ export const DEFAULT_SETTINGS: NodeUiSettings = {
     refreshIntervalSeconds: 3600,
   },
 };
-export const RCH_HUB_DIRECTORY_ENABLED = false;
+export const RCH_HUB_DIRECTORY_ENABLED = true;
 export function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
   const requested = value === "capacitor" ? "capacitor" : "auto";
   if (requested === "capacitor" && Capacitor.getPlatform() === "web") {
