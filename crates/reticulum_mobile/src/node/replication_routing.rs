@@ -234,20 +234,10 @@ fn build_runtime_mission_replication_targets(
                 .as_deref()
                 .and_then(normalize_hex_32)
             else {
-                return Ok(build_mission_replication_targets(
-                    status,
-                    peers,
-                    saved_peers,
-                    active_propagation_node_hex,
-                ));
+                return Ok(Vec::new());
             };
             let Some(snapshot) = hub_directory_snapshot else {
-                return Ok(build_mission_replication_targets(
-                    status,
-                    peers,
-                    saved_peers,
-                    active_propagation_node_hex,
-                ));
+                return Ok(Vec::new());
             };
             Ok(build_transient_replication_targets(
                 status,
@@ -383,20 +373,10 @@ fn build_runtime_event_replication_targets(
                 .as_deref()
                 .and_then(normalize_hex_32)
             else {
-                return Ok(build_event_replication_targets(
-                    status,
-                    peers,
-                    saved_peers,
-                    active_propagation_node_hex,
-                ));
+                return Ok(Vec::new());
             };
             let Some(snapshot) = hub_directory_snapshot else {
-                return Ok(build_event_replication_targets(
-                    status,
-                    peers,
-                    saved_peers,
-                    active_propagation_node_hex,
-                ));
+                return Ok(Vec::new());
             };
             Ok(build_transient_replication_targets(
                 status,

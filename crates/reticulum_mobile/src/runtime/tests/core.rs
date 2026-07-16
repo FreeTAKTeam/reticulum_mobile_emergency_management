@@ -298,5 +298,155 @@ fn parse_hub_directory_result_state_ignores_accepted_lifecycle() {
     let parsed =
         parse_hub_directory_result_state(&result, "cmd-123", 123).expect("accepted lifecycle");
 
-    assert!(matches!(parsed, HubDirectoryResultState::Accepted));
+    assert!(matches!(
+        parsed,
+        Some(HubDirectoryResultState::Accepted)
+    ));
+}
+
+#[test]
+fn hub_team_directory_command_fields_use_scoped_command_and_source() {
+    let fields = hub_team_directory_command_fields(
+        "hub-directory-123",
+        "11111111111111111111111111111111",
+    );
+    let fields_entries = msgpack_map_entries(&fields).expect("fields");
+    let commands = msgpack_get_indexed(fields_entries, FIELD_COMMANDS)
+        .and_then(|value| match value {
+            MsgPackValue::Array(commands) => commands.first(),
+            _ => None,
+        })
+        .and_then(msgpack_map_entries)
+        .expect("command");
+
+    assert_eq!(
+        msgpack_get_named(commands, &["command_type"]).and_then(msgpack_string),
+        Some("rem.registry.team_peers.list".to_string())
+    );
+    assert_eq!(
+        msgpack_get_named(commands, &["command_id"]).and_then(msgpack_string),
+        Some("hub-directory-123".to_string())
+    );
+    let source = msgpack_get_named(commands, &["source"])
+        .and_then(msgpack_map_entries)
+        .expect("source");
+    assert_eq!(
+        msgpack_get_named(source, &["rns_identity"]).and_then(msgpack_string),
+        Some("11111111111111111111111111111111".to_string())
+    );
+}
+
+#[test]
+fn parse_hub_directory_result_state_rejects_unscoped_snapshots() {
+    let result = MsgPackValue::Map(vec![
+        (
+            MsgPackValue::from("command_id"),
+            MsgPackValue::from("cmd-123"),
+        ),
+        (MsgPackValue::from("status"), MsgPackValue::from("result")),
+        (
+            MsgPackValue::from("result"),
+            MsgPackValue::Map(vec![
+                (MsgPackValue::from("scope"), MsgPackValue::from("all_peers")),
+                (
+                    MsgPackValue::from("effective_connected_mode"),
+                    MsgPackValue::from(false),
+                ),
+                (
+                    MsgPackValue::from("items"),
+                    MsgPackValue::Array(Vec::new()),
+                ),
+            ]),
+        ),
+    ]);
+
+    assert!(matches!(
+        parse_hub_directory_result_state(&result, "cmd-123", 123),
+        Err(NodeError::InternalError {})
+    ));
+}
+
+#[test]
+fn parse_hub_directory_result_state_accepts_empty_shared_team_directory() {
+    let result = MsgPackValue::Map(vec![
+        (
+            MsgPackValue::from("command_id"),
+            MsgPackValue::from("cmd-123"),
+        ),
+        (MsgPackValue::from("status"), MsgPackValue::from("result")),
+        (
+            MsgPackValue::from("result"),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("scope"),
+                    MsgPackValue::from("shared_teams"),
+                ),
+                (
+                    MsgPackValue::from("effective_connected_mode"),
+                    MsgPackValue::from(false),
+                ),
+                (
+                    MsgPackValue::from("items"),
+                    MsgPackValue::Array(Vec::new()),
+                ),
+            ]),
+        ),
+    ]);
+
+    let parsed = parse_hub_directory_result_state(&result, "cmd-123", 123)
+        .expect("valid directory")
+        .expect("directory result");
+    let HubDirectoryResultState::Snapshot(snapshot) = parsed else {
+        panic!("expected snapshot");
+    };
+    assert!(!snapshot.effective_connected_mode);
+    assert!(snapshot.items.is_empty());
+}
+
+#[test]
+fn parse_hub_directory_result_state_rejects_non_rem_items_atomically() {
+    let result = MsgPackValue::Map(vec![
+        (
+            MsgPackValue::from("command_id"),
+            MsgPackValue::from("cmd-123"),
+        ),
+        (MsgPackValue::from("status"), MsgPackValue::from("result")),
+        (
+            MsgPackValue::from("result"),
+            MsgPackValue::Map(vec![
+                (
+                    MsgPackValue::from("scope"),
+                    MsgPackValue::from("shared_teams"),
+                ),
+                (
+                    MsgPackValue::from("effective_connected_mode"),
+                    MsgPackValue::from(false),
+                ),
+                (
+                    MsgPackValue::from("items"),
+                    MsgPackValue::Array(vec![MsgPackValue::Map(vec![
+                        (
+                            MsgPackValue::from("identity"),
+                            MsgPackValue::from("11111111111111111111111111111111"),
+                        ),
+                        (
+                            MsgPackValue::from("destination_hash"),
+                            MsgPackValue::from("22222222222222222222222222222222"),
+                        ),
+                        (
+                            MsgPackValue::from("announce_capabilities"),
+                            MsgPackValue::Array(vec![MsgPackValue::from("r3akt")]),
+                        ),
+                        (MsgPackValue::from("client_type"), MsgPackValue::from("rem")),
+                        (MsgPackValue::from("status"), MsgPackValue::from("active")),
+                    ])]),
+                ),
+            ]),
+        ),
+    ]);
+
+    assert!(matches!(
+        parse_hub_directory_result_state(&result, "cmd-123", 123),
+        Err(NodeError::InternalError {})
+    ));
 }

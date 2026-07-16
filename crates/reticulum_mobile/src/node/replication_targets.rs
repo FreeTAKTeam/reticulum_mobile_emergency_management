@@ -46,39 +46,6 @@ fn effective_hub_mode(
     }
 }
 
-fn telemetry_targets_from_peers(
-    peers: &[PeerRecord],
-    self_destination_hex: Option<&str>,
-) -> Vec<MissionReplicationTarget> {
-    let mut destinations = Vec::new();
-    let mut seen = HashSet::<String>::new();
-    for peer in peers {
-        let Some(destination_hex) = normalize_hex_32(peer.destination_hex.as_str()) else {
-            continue;
-        };
-        if self_destination_hex == Some(destination_hex.as_str()) {
-            continue;
-        }
-        if !peer_is_current_replication_target(peer) {
-            continue;
-        }
-        if !peer.active_link || !has_capability_token(peer.app_data.as_deref(), "telemetry") {
-            continue;
-        }
-        if seen.insert(destination_hex.clone()) {
-            destinations.push(MissionReplicationTarget {
-                app_destination_hex: destination_hex,
-                send_mode: if peer_is_direct_delivery_ready(peer) {
-                    SendMode::Auto {}
-                } else {
-                    SendMode::PropagationOnly {}
-                },
-            });
-        }
-    }
-    destinations
-}
-
 fn telemetry_targets_from_peers_with_relay(
     peers: &[PeerRecord],
     self_destination_hex: Option<&str>,
@@ -192,30 +159,20 @@ fn build_runtime_telemetry_destinations(
                 .hub_identity_hash
                 .as_deref()
                 .and_then(normalize_hex_32)
-                .is_some()
+                .is_none()
             {
-                if let Some(snapshot) = hub_directory_snapshot {
-                    let targets = build_transient_replication_targets(
-                        status,
-                        peers,
-                        &telemetry_destinations_from_hub_snapshot(
-                            snapshot,
-                            self_destination_hex.as_deref(),
-                        ),
-                        active_propagation_node_hex,
-                    );
-                    return Ok(targets);
-                }
+                return Ok(Vec::new());
             }
-            if active_propagation_node_hex.is_none() {
-                return Ok(telemetry_targets_from_peers(
-                    peers,
-                    self_destination_hex.as_deref(),
-                ));
-            }
-            Ok(telemetry_targets_from_peers_with_relay(
+            let Some(snapshot) = hub_directory_snapshot else {
+                return Ok(Vec::new());
+            };
+            Ok(build_transient_replication_targets(
+                status,
                 peers,
-                self_destination_hex.as_deref(),
+                &telemetry_destinations_from_hub_snapshot(
+                    snapshot,
+                    self_destination_hex.as_deref(),
+                ),
                 active_propagation_node_hex,
             ))
         }

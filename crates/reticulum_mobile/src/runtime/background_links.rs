@@ -95,8 +95,11 @@ fn spawn_periodic_hub_refresh(config: &NodeConfig, state: &NodeRuntimeState, bus
             let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
             loop {
                 interval.tick().await;
-                if let Ok(snapshot) = refresh_hub_directory_lxmf(&config, &state).await {
-                    publish_hub_directory_snapshot(&state, &bus, snapshot).await;
+                match refresh_hub_directory_lxmf(&config, &state).await {
+                    Ok(snapshot) => publish_hub_directory_snapshot(&state, &bus, snapshot).await,
+                    Err(error) => {
+                        publish_failed_hub_directory_refresh(&state, &bus, &error).await;
+                    }
                 }
             }
         });

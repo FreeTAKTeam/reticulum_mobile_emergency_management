@@ -172,9 +172,12 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
 }
 
 #[test]
-fn semi_autonomous_telemetry_destinations_fall_back_without_selected_hub() {
+fn semi_autonomous_telemetry_destinations_fail_closed_without_directory() {
     let status = build_status_for_tests();
-    let config = build_config_fingerprint_for_tests(HubMode::SemiAutonomous {}, None);
+    let config = build_config_fingerprint_for_tests(
+        HubMode::SemiAutonomous {},
+        Some("56565656565656565656565656565656"),
+    );
     let peers = vec![
         build_peer_record(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -199,14 +202,9 @@ fn semi_autonomous_telemetry_destinations_fall_back_without_selected_hub() {
         Some(&config),
         None,
     )
-    .expect("semi-autonomous fallback telemetry destinations");
+    .expect("semi-autonomous fail-closed telemetry destinations");
 
-    assert_eq!(destinations.len(), 1);
-    assert_eq!(
-        destinations[0].app_destination_hex,
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    );
-    assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
+    assert!(destinations.is_empty());
 }
 
 #[test]

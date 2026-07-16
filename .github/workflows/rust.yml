@@ -18,7 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  LXMF_RS_REF: d98de3bf3eb71fa386589a6cb2c0bb38f49a69e3
+  LXMF_RS_REF: 06648b278678383e994c644e63da5109df909747
 
 jobs:
   web:
