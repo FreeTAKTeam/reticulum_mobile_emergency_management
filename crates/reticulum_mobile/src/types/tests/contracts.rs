@@ -130,17 +130,10 @@ fn runtime_readiness_transitions_from_pending_to_ready_from_typed_interface_stat
 }
 
 #[test]
-fn runtime_readiness_stays_ready_when_one_of_multiple_interfaces_is_usable() {
+fn runtime_readiness_is_ready_while_configured_interface_is_unavailable() {
     let mut snapshot = RuntimeReadinessSnapshot {
         state: RuntimeReadinessState::Pending,
         interfaces: vec![
-            RuntimeInterfaceReadinessRecord {
-                id: "rnode".to_string(),
-                label: "LoRa".to_string(),
-                state: RuntimeReadinessState::Ready,
-                detail: "Connected".to_string(),
-                last_error: None,
-            },
             RuntimeInterfaceReadinessRecord {
                 id: "tcp".to_string(),
                 label: "TCP community".to_string(),
@@ -166,5 +159,66 @@ fn runtime_readiness_stays_ready_when_one_of_multiple_interfaces_is_usable() {
     );
 
     assert_eq!(snapshot.state, RuntimeReadinessState::Ready);
-    assert_eq!(snapshot.interfaces[1].state, RuntimeReadinessState::Failed);
+    assert_eq!(snapshot.interfaces[0].state, RuntimeReadinessState::Failed);
+    assert_eq!(
+        snapshot.interfaces[0].last_error.as_deref(),
+        Some("connection refused")
+    );
+}
+
+#[test]
+fn network_interface_failure_does_not_impersonate_a_runtime_failure() {
+    let mut snapshot = RuntimeReadinessSnapshot {
+        state: RuntimeReadinessState::Pending,
+        interfaces: vec![
+            RuntimeInterfaceReadinessRecord {
+                id: "tcp".to_string(),
+                label: "TCP community".to_string(),
+                state: RuntimeReadinessState::Pending,
+                detail: "Starting".to_string(),
+                last_error: None,
+            },
+            RuntimeInterfaceReadinessRecord {
+                id: "local".to_string(),
+                label: "Reticulum Net".to_string(),
+                state: RuntimeReadinessState::Pending,
+                detail: "Starting".to_string(),
+                last_error: None,
+            },
+        ],
+    };
+
+    snapshot.set_interface_state(
+        "tcp",
+        RuntimeReadinessState::Failed,
+        "Unavailable".to_string(),
+        Some("connection refused".to_string()),
+        false,
+    );
+
+    assert_eq!(snapshot.state, RuntimeReadinessState::Pending);
+}
+
+#[test]
+fn local_runtime_failure_sets_the_aggregate_failure_state() {
+    let mut snapshot = RuntimeReadinessSnapshot {
+        state: RuntimeReadinessState::Pending,
+        interfaces: vec![RuntimeInterfaceReadinessRecord {
+            id: "local".to_string(),
+            label: "Reticulum Net".to_string(),
+            state: RuntimeReadinessState::Pending,
+            detail: "Starting".to_string(),
+            last_error: None,
+        }],
+    };
+
+    snapshot.set_interface_state(
+        "local",
+        RuntimeReadinessState::Failed,
+        "Runtime failed".to_string(),
+        Some("database corrupt".to_string()),
+        false,
+    );
+
+    assert_eq!(snapshot.state, RuntimeReadinessState::Failed);
 }

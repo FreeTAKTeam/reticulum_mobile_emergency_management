@@ -322,7 +322,9 @@ function normalizeReference(reference: string): string {
   }
   return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
 }
-
+function assertMecp(condition: boolean, field: string): asserts condition {
+  if (!condition) throw new TypeError(`Invalid MECP ${field}.`);
+}
 export function encodeMecpMessage(input: {
   severity: MecpSeverity;
   code?: string;
@@ -332,37 +334,52 @@ export function encodeMecpMessage(input: {
   mode?: "rem" | "portable";
 }): string {
   const normalizedCodes = normalizeCodeList(input);
+  assertMecp(VALID_SEVERITIES.has(input.severity), "severity");
+  assertMecp(
+    normalizedCodes.length === 0
+      ? false
+      : normalizedCodes.every((code) => CODE_PATTERN.test(code) && isMecpCategoryCode(code.charAt(0))),
+    "event code",
+  );
   const details = input.details?.trim();
-  const tokens = normalizedCodes.filter((code) => CODE_PATTERN.test(code));
+  const tokens = [...normalizedCodes];
   const extras = input.extras;
-  if (extras?.pax !== undefined && Number.isFinite(extras.pax) && extras.pax > 0) {
-    tokens.push(`${Math.floor(extras.pax)}pax`);
+  if (extras?.pax !== undefined) {
+    assertMecp(Number.isInteger(extras.pax) && extras.pax >= 1 && extras.pax <= 9999, "pax count");
+    tokens.push(`${extras.pax}pax`);
   }
   if (extras?.coordinates) {
-    tokens.push(`${formatCoordinate(extras.coordinates.latitude)},${formatCoordinate(extras.coordinates.longitude)}`);
+    const { latitude, longitude } = extras.coordinates;
+    assertMecp(
+      Number.isFinite(latitude) && latitude >= -90 && latitude <= 90
+        && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180,
+      "coordinates",
+    );
+    tokens.push(`${formatCoordinate(latitude)},${formatCoordinate(longitude)}`);
   }
   for (const reference of extras?.references ?? []) {
     const normalized = normalizeReference(reference);
-    if (normalized) {
-      tokens.push(normalized);
-    }
+    assertMecp(REFERENCE_PATTERN.test(normalized), "reference");
+    tokens.push(normalized);
   }
-  if (extras?.etaMinutes !== undefined && Number.isFinite(extras.etaMinutes) && extras.etaMinutes >= 0) {
-    tokens.push(`${Math.floor(extras.etaMinutes)}`);
+  if (extras?.etaMinutes !== undefined) {
+    assertMecp(Number.isInteger(extras.etaMinutes) && extras.etaMinutes >= 0 && extras.etaMinutes <= 9999, "ETA");
+    tokens.push(`${extras.etaMinutes}`);
   }
   if (extras?.language) {
     const language = extras.language.trim().replace(/^@/, "");
-    if (language) {
-      tokens.push(`@${language.toLowerCase()}`);
-    }
+    assertMecp(/^[A-Za-z]{2,3}$/.test(language), "language");
+    tokens.push(`@${language.toLowerCase()}`);
   }
   if (input.mode === "portable") {
     const timestamp = extras?.timestamp?.trim().replace(/^@/, "");
     const callsign = extras?.callsign?.trim().replace(/^~/, "");
     if (timestamp) {
+      assertMecp(TIMESTAMP_PATTERN.test(`@${timestamp}`), "timestamp");
       tokens.push(`@${timestamp}`);
     }
     if (callsign) {
+      assertMecp(CALLSIGN_PATTERN.test(`~${callsign}`), "callsign");
       tokens.push(`~${callsign}`);
     }
   }
@@ -374,11 +391,9 @@ export function encodeMecpMessage(input: {
 
 export function decodeMecpMessage(input: string): DecodedMecpMessage {
   const raw = input.trim();
-
   if (!raw.startsWith(MECP_PREFIX)) {
     return createInvalidDecodedMecpMessage(raw);
   }
-
   const severity = Number.parseInt(raw.charAt(5), 10);
   if (!VALID_SEVERITIES.has(severity) || raw.charAt(6) !== "/") {
     return createInvalidDecodedMecpMessage(raw, ["Invalid MECP severity or separator."]);
