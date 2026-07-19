@@ -24,6 +24,7 @@ import {
   nowMs,
   sleep,
 } from "./nodeStoreCore";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 
 interface NodeAnnounceContext {
   appendLog: (level: string, message: string) => void;
@@ -45,6 +46,7 @@ interface NodeAnnounceContext {
   ) => Promise<void>;
   presenceNow: Ref<number>;
   savedByDestination: Record<string, SavedPeer>;
+  setLastError: (message: string) => void;
   startupSettling: Ref<boolean>;
   status: Ref<NodeStatus>;
   refreshMessagingState: () => Promise<void>;
@@ -71,12 +73,22 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
     persistSavedPeersProjection,
     presenceNow,
     savedByDestination,
+    setLastError,
     startupSettling,
     status,
     refreshMessagingState,
     upsertDiscovered,
     upsertNativeAnnounceRecord,
   } = context;
+
+  function persistSavedPeersDetached(reason: string): void {
+    runDetachedStoreTask(
+      { setLastError, logUi: appendLog },
+      "saved-peers",
+      reason,
+      () => persistSavedPeersProjection({ ...savedByDestination }, reason),
+    );
+  }
 
   function recordLivePresence(
     destinationKind: "app" | "lxmf_delivery" | "lxmf_propagation" | "other",
@@ -169,10 +181,7 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
     if (discoveredByDestination[aliasDestination]) {
       delete discoveredByDestination[aliasDestination];
     }
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `canonical saved peer ${canonicalDestination}`,
-    );
+    persistSavedPeersDetached(`canonical saved peer ${canonicalDestination}`);
     return migratedPeer;
   }
 
@@ -234,10 +243,7 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
       return;
     }
     savedByDestination[destination] = next;
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `${reason} ${destination}`,
-    );
+    persistSavedPeersDetached(`${reason} ${destination}`);
   }
 
   function nativeSavedPeerForCanonicalDestination(
@@ -268,10 +274,7 @@ export function createNodeAnnounceController(context: NodeAnnounceContext) {
       savedAt: nowMs(),
     });
     savedByDestination[canonicalDestination] = adoptedPeer;
-    void persistSavedPeersProjection(
-      { ...savedByDestination },
-      `native saved peer ${canonicalDestination}`,
-    );
+    persistSavedPeersDetached(`native saved peer ${canonicalDestination}`);
     return adoptedPeer;
   }
 

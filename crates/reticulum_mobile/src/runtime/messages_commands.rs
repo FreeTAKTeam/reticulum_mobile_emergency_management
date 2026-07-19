@@ -5,9 +5,20 @@ async fn upsert_message_record(
     emit_received: bool,
 ) {
     let message = canonicalize_chat_message(&message);
-    if let Ok(invalidations) = state.app_state.upsert_message(&message) {
-        for invalidation in invalidations {
-            bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+    match state.app_state.upsert_message(&message) {
+        Ok(invalidations) => {
+            for invalidation in invalidations {
+                bus.emit(NodeEvent::ProjectionInvalidated { invalidation });
+            }
+        }
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist message id={} reason={error}",
+                    message.message_id_hex
+                ),
+            });
         }
     }
     let changed = state

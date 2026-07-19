@@ -165,6 +165,8 @@ pub(crate) struct RuntimeProjectionJournal {
     flush_scheduled: Arc<AtomicBool>,
 }
 
+include!("runtime_projection/journal_io.rs");
+
 impl RuntimeProjectionJournal {
     pub(crate) fn new(path: Option<PathBuf>, bus: EventBus) -> Self {
         Self {
@@ -176,18 +178,6 @@ impl RuntimeProjectionJournal {
         }
     }
 
-    pub(crate) fn load_snapshot(&self) -> Option<RuntimeProjectionSnapshot> {
-        let path = self.path.as_ref()?;
-        let raw = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&raw).ok()
-    }
-
-    pub(crate) fn seed_snapshot(&self, snapshot: RuntimeProjectionSnapshot) {
-        if let Ok(mut guard) = self.snapshot.lock() {
-            *guard = snapshot;
-        }
-    }
-
     pub(crate) fn record_peers(&self, peers: Vec<PeerRecord>, reason: Option<&str>) -> bool {
         let Some(persisted) = persisted_saved_peers(peers.as_slice()) else {
             return false;
@@ -195,7 +185,10 @@ impl RuntimeProjectionJournal {
 
         let mut guard = match self.snapshot.lock() {
             Ok(v) => v,
-            Err(_) => return false,
+            Err(error) => {
+                warn!("[projection] failed to record peer snapshot: {error}");
+                return false;
+            }
         };
         if peers_match(&peers, &guard.peers) {
             return false;
@@ -219,7 +212,10 @@ impl RuntimeProjectionJournal {
 
         let mut guard = match self.snapshot.lock() {
             Ok(v) => v,
-            Err(_) => return false,
+            Err(error) => {
+                warn!("[projection] failed to record sync snapshot: {error}");
+                return false;
+            }
         };
         if sync_match(&status, &guard.sync_status) {
             return false;
@@ -243,7 +239,10 @@ impl RuntimeProjectionJournal {
 
         let mut guard = match self.snapshot.lock() {
             Ok(v) => v,
-            Err(_) => return false,
+            Err(error) => {
+                warn!("[projection] failed to record message snapshot: {error}");
+                return false;
+            }
         };
         let mut changed = false;
         if let Some(existing) = guard

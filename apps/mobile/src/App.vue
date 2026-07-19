@@ -25,6 +25,7 @@ import {
   runBackNavigationHandlers,
 } from "./utils/androidBackNavigation";
 import { appVersion } from "./utils/appVersion";
+import { runDetachedStoreTask } from "./utils/detachedStoreTask";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
 import { runRecoverableStartupStep } from "./utils/startupInitialization";
 import {
@@ -338,7 +339,7 @@ async function registerAndroidBackButtonHandler(): Promise<void> {
     return;
   }
   androidBackButtonListener = await App.addListener("backButton", (event) => {
-    void handleAndroidBackButton(event);
+    runDetachedStoreTask(nodeStore, "navigation", "Android back action", () => handleAndroidBackButton(event));
   });
 }
 
@@ -349,13 +350,13 @@ watch(
   },
 );
 
-void registerAndroidBackButtonHandler();
-
+runDetachedStoreTask(nodeStore, "navigation", "back-listener registration", registerAndroidBackButtonHandler);
 onUnmounted(() => {
   if (splashTimer !== undefined) {
     window.clearTimeout(splashTimer);
   }
-  void androidBackButtonListener?.remove();
+  // Listener removal is cleanup-only; the app is already unmounting and cannot surface it safely.
+  void androidBackButtonListener?.remove().catch(() => undefined);
   androidBackButtonListener = undefined;
 });
 </script>

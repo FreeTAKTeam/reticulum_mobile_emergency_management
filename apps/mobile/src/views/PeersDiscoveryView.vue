@@ -9,6 +9,7 @@ import { useNodeStore } from "../stores/nodeStore";
 import type { DiscoveredPeer, HubDirectoryPeerRecord, SavedPeer } from "../types/domain";
 import { discoveredPeerMatchesQuery, savedPeerMatchesQuery } from "../utils/peerSearch";
 import type { PeersVisualMockData } from "../utils/peersVisualMock";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 
 type PeerTab = "discovered" | "peers" | "hub";
 
@@ -52,7 +53,7 @@ async function applyVisualMockData(): Promise<void> {
 }
 
 function scheduleVisualMockRefresh(): void {
-  void applyVisualMockData();
+  runDetachedStoreTask(nodeStore, "peers", "visual mock refresh", applyVisualMockData);
 }
 
 function isVisualMockMode(): boolean {

@@ -112,7 +112,11 @@ function stopCategoryDrag(event: PointerEvent): void {
 
 watch(
   () => [props.modelValue, props.active],
-  () => void nextTick(scrollSelectedCategoryIntoView),
+  () => {
+    void nextTick(scrollSelectedCategoryIntoView).catch((error: unknown) => {
+      console.warn("MECP category positioning failed.", error);
+    });
+  },
   { immediate: true },
 );
 </script>

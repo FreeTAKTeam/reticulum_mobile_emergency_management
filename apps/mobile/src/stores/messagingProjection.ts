@@ -8,6 +8,7 @@ import type { Ref } from "vue";
 import { primeOperationalNotificationScope } from "../services/operationalNotifications";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import { isRecoveredChatHydrationError } from "../utils/startupInitialization";
 import {
@@ -61,12 +62,7 @@ export function createMessagingProjectionController(context: MessagingProjection
   let initPromise: Promise<void> | null = null;
 
   function runDetached(operation: string, task: () => Promise<void>): void {
-    void task().catch((error: unknown) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      const message = `[chat] ${operation} failed: ${detail}`;
-      nodeStore.setLastError(message);
-      nodeStore.logUi("Warn", message);
-    });
+    runDetachedStoreTask(nodeStore, "chat", operation, task);
   }
 
   function markHydrated(): void {

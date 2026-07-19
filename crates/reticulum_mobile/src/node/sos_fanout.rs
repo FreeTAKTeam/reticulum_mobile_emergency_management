@@ -140,11 +140,21 @@ fn run_sos_fanout(
             received_at_ms: None,
             updated_at_ms: now,
         });
-        if let Ok(invalidations) = app_state.upsert_message(&record) {
-            for invalidation in invalidations {
-                emit_projection_invalidation(&bus, invalidation);
+        match app_state.upsert_message(&record) {
+            Ok(invalidations) => {
+                for invalidation in invalidations {
+                    emit_projection_invalidation(&bus, invalidation);
+                }
+                bus.emit(NodeEvent::MessageUpdated { message: record });
             }
-            bus.emit(NodeEvent::MessageUpdated { message: record });
+            Err(error) => {
+                bus.emit(NodeEvent::Error {
+                    code: "IoError".to_string(),
+                    message: format!(
+                        "failed to persist sos message destination={destination_hex} reason={error}"
+                    ),
+                });
+            }
         }
 
         let (resp_tx, _resp_rx) = cb::bounded(1);

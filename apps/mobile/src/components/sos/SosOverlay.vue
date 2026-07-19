@@ -2,9 +2,12 @@
 import { computed, onMounted, reactive } from "vue";
 
 import { useSosStore } from "../../stores/sosStore";
+import { useNodeStore } from "../../stores/nodeStore";
+import { runDetachedStoreTask } from "../../utils/detachedStoreTask";
 
 const TAP_SLOP_PX = 8;
 const sosStore = useSosStore();
+const nodeStore = useNodeStore();
 const drag = reactive({
   target: "" as "button" | "pill" | "",
   pointerId: -1,
@@ -146,14 +149,15 @@ function endPress(event: PointerEvent): void {
   const y = target === "button" ? sosStore.settings.floatingButtonY : sosStore.settings.activePillY;
   resetPress();
   if (wasDragged) {
-    void persistPosition(target, x, y);
+    runDetachedStoreTask(nodeStore, "sos", "overlay position persistence", () =>
+      persistPosition(target, x, y));
     return;
   }
   void (target === "button" ? toggleFromFloatingButton() : deactivateFromOverlay());
 }
 
 onMounted(() => {
-  void sosStore.init();
+  runDetachedStoreTask(nodeStore, "sos", "overlay initialization", sosStore.init);
 });
 </script>
 

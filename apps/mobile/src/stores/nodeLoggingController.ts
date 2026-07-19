@@ -94,6 +94,7 @@ export function createNodeLoggingController(context: NodeLoggingContext) {
     if (normalizedLevel !== "warn" && normalizedLevel !== "error") {
       return;
     }
+    // Native log mirroring is best-effort. Reporting its failure through logUi would recurse.
     void client.value.logMessage(toPluginLogLevel(level), message).catch(() => undefined);
   }
 

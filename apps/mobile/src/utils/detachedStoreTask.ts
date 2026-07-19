@@ -9,7 +9,7 @@ export function runDetachedStoreTask(
   operation: string,
   task: () => Promise<void>,
 ): void {
-  void task().catch((error: unknown) => {
+  void Promise.resolve().then(task).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : String(error);
     const message = `[${scope}] ${operation} failed: ${detail}`;
     sink.setLastError(message);

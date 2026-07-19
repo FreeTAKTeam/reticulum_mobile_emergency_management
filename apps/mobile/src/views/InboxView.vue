@@ -14,6 +14,7 @@ import { useTelemetryStore } from "../stores/telemetryStore";
 import { isDraftConversationId } from "../stores/messagingModel";
 import type { DiscoveredPeer } from "../types/domain";
 import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   connectedPeerOptionsFor,
   filterPeerOptions,
@@ -338,12 +339,11 @@ watch(
       return;
     }
     const messageIdHex = routeQueryString(messageQuery);
-    void messagingStore
-      .openConversationTarget(conversationId, messageIdHex || undefined)
-      .then(() => {
-        selectedThreadDestinationHex.value = "";
-        mobilePane.value = "detail";
-      });
+    runDetachedStoreTask(nodeStore, "chat", "conversation navigation", async () => {
+      await messagingStore.openConversationTarget(conversationId, messageIdHex || undefined);
+      selectedThreadDestinationHex.value = "";
+      mobilePane.value = "detail";
+    });
   },
   { immediate: true },
 );

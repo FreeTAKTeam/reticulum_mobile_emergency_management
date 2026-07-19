@@ -49,3 +49,41 @@ test("successful detached store tasks do not report an error", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(reported, false);
 });
+
+test("synchronous detached task failures are contained", async () => {
+  const errors = [];
+  runDetachedStoreTask(
+    {
+      setLastError: (message) => errors.push(message),
+      logUi: () => undefined,
+    },
+    "navigation",
+    "route update",
+    () => {
+      throw new Error("router unavailable");
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(errors, ["[navigation] route update failed: router unavailable"]);
+});
+
+test("known fallible detached call sites use the shared containment helper", async () => {
+  const sourceUrls = [
+    new URL("../components/sos/SosOverlay.vue", import.meta.url),
+    new URL("../composables/useChecklistDetail.ts", import.meta.url),
+    new URL("../composables/useChecklistList.ts", import.meta.url),
+    new URL("../views/DashboardView.vue", import.meta.url),
+    new URL("../stores/nodeAnnounceController.ts", import.meta.url),
+    new URL("../views/InboxView.vue", import.meta.url),
+  ];
+  const sources = await Promise.all(sourceUrls.map((url) => readFile(url, "utf8")));
+  for (const callSite of sources) {
+    assert.match(callSite, /runDetachedStoreTask/);
+  }
+  assert.doesNotMatch(sources[0], /void persistPosition/);
+  assert.doesNotMatch(sources[1], /void checklistsStore\.refreshDetail/);
+  assert.doesNotMatch(sources[2], /void ensureChecklistData/);
+  assert.doesNotMatch(sources[3], /void checklistsStore\.refreshLive/);
+  assert.doesNotMatch(sources[4], /void persistSavedPeersProjection/);
+  assert.doesNotMatch(sources[5], /void messagingStore/);
+});

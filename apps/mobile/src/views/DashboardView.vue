@@ -12,6 +12,7 @@ import { useEventsStore } from "../stores/eventsStore";
 import { useMessagesStore } from "../stores/messagesStore";
 import { useMessagingStore } from "../stores/messagingStore";
 import { useNodeStore } from "../stores/nodeStore";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 
 const checklistsStore = useChecklistsStore();
 const { dashboardSummary } = storeToRefs(checklistsStore);
@@ -170,8 +171,8 @@ function refreshNotificationActivities(): void {
 }
 
 onMounted(() => {
-  void checklistsStore.refreshLive();
-  void nodeStore.refreshPluginSensors();
+  runDetachedStoreTask(nodeStore, "dashboard", "checklist refresh", checklistsStore.refreshLive);
+  runDetachedStoreTask(nodeStore, "dashboard", "plugin sensor refresh", nodeStore.refreshPluginSensors);
   refreshNotificationActivities();
   unsubscribeNotificationActivity = subscribeNotificationActivity(refreshNotificationActivities);
 });

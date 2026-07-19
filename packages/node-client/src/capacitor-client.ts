@@ -23,6 +23,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
     }
 
     const generation = this.generation;
+    const initialHandleCount = this.listenerHandles.length;
     this.attachPromise = (async () => {
       const register = async (
         eventName: keyof NodeClientEvents,
@@ -74,7 +75,9 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
       }));
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
-    })().catch((error) => {
+    })().catch(async (error: unknown) => {
+      const partialHandles = this.listenerHandles.splice(initialHandleCount);
+      await Promise.all(partialHandles.map((handle) => handle.remove().catch(() => undefined)));
       this.attachPromise = null;
       throw error;
     });
@@ -284,6 +287,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
     event: K,
     handler: (payload: NodeClientEvents[K]) => void,
   ): () => void {
+    // Event subscriptions are synchronous; the next awaited client operation retries and surfaces failures.
     void this.attachListeners().catch(() => undefined);
     return this.emitter.on(event, handler);
   }
