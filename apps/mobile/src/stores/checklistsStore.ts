@@ -13,6 +13,7 @@ import {
   type ChecklistRecord as UiChecklistRecord,
 } from "../utils/checklists";
 import { createChecklistNotificationCoordinator } from "../utils/checklistNotifications";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { useNodeStore } from "./nodeStore";
@@ -259,20 +260,20 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   function init(): void {
     if (initialized.value) {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "checklists", "projection refresh", refreshAll);
       return;
     }
     initialized.value = true;
-    void refreshAll();
+    runDetachedStoreTask(nodeStore, "checklists", "startup projection refresh", refreshAll);
   }
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
     if (event.scope === "Checklists") {
-      void refreshLive();
+      runDetachedStoreTask(nodeStore, "checklists", "list invalidation refresh", refreshLive);
       return;
     }
     if (event.scope === "ChecklistDetail" && typeof event.key === "string" && event.key.trim()) {
-      void refreshDetail(event.key);
+      runDetachedStoreTask(nodeStore, "checklists", "detail invalidation refresh", () => refreshDetail(event.key ?? ""));
     }
   }
 
@@ -284,12 +285,12 @@ export const useChecklistsStore = defineStore("checklists", () => {
     const projectionClient = client();
     cleanups.push(projectionClient.on("projectionInvalidated", handleProjectionInvalidation));
     cleanups.push(projectionClient.on("statusChanged", () => {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "checklists", "status projection refresh", refreshAll);
     }));
     cleanups.push(watch(
       () => nodeStore.status.running,
       (running) => {
-        if (running) void refreshAll();
+        if (running) runDetachedStoreTask(nodeStore, "checklists", "runtime-ready projection refresh", refreshAll);
       },
       { immediate: true },
     ));

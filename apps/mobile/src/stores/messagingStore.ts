@@ -10,6 +10,7 @@ import {
   truncateNotificationBody,
 } from "../services/operationalNotifications";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import {
   type ConversationListItem,
@@ -303,7 +304,12 @@ export const useMessagingStore = defineStore("messaging", () => {
     selectedConversationId.value = conversationId;
     selectedTargetMessageId.value = "";
     if (supportsNativeNodeRuntime && !isDraftConversationId(conversationId)) {
-      void refreshMessages(conversationId);
+      runDetachedStoreTask(
+        nodeStore,
+        "chat",
+        "conversation selection refresh",
+        () => refreshMessages(conversationId),
+      );
     }
   }
 

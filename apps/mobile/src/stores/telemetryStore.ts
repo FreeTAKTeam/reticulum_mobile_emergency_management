@@ -272,7 +272,10 @@ export const useTelemetryStore = defineStore("telemetry", () => {
       return;
     }
 
-    void startPublishLoop();
+    void startPublishLoop().catch((error: unknown) => {
+      loopStatus.value = "error";
+      telemetryError.value = error instanceof Error ? error.message : String(error);
+    });
   }
 
   async function initializeAsync(): Promise<void> {

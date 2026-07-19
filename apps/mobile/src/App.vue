@@ -99,6 +99,11 @@ async function repairStartupRnodeSelection(): Promise<void> {
   }
 }
 
+function reportStartupFailure(message: string): void {
+  nodeStore.setLastError(message);
+  nodeStore.logUi("Warn", `[startup] ${message}`);
+}
+
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {
     await router.push(target.route);
@@ -143,10 +148,7 @@ onMounted(async () => {
             restart: () => nodeStore.restartNode(),
           },
         ),
-        (message) => {
-          nodeStore.setLastError(message);
-          nodeStore.logUi("Warn", `[startup] ${message}`);
-        },
+        reportStartupFailure,
       );
     }
 
@@ -163,28 +165,19 @@ onMounted(async () => {
     const chatHistoryHydrated = await runRecoverableStartupStep(
       "chat history hydration",
       () => messagingStore.init(),
-      (message) => {
-        nodeStore.setLastError(message);
-        nodeStore.logUi("Warn", `[startup] ${message}`);
-      },
+      reportStartupFailure,
     );
     if (!chatHistoryHydrated && nodeStore.status.running) {
       void runRecoverableStartupStep(
         "chat history hydration retry",
         () => messagingStore.init(),
-        (message) => {
-          nodeStore.setLastError(message);
-          nodeStore.logUi("Warn", `[startup] ${message}`);
-        },
+        reportStartupFailure,
       );
     }
     await runRecoverableStartupStep(
       "SOS projection hydration",
       () => sosStore.init(),
-      (message) => {
-        nodeStore.setLastError(message);
-        nodeStore.logUi("Warn", `[startup] ${message}`);
-      },
+      reportStartupFailure,
     );
     if (setupCompleted && nodeStore.settings.telemetry.enabled) {
       await runRecoverableStartupStep(
