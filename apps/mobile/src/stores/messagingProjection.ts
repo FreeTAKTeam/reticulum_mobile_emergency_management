@@ -9,6 +9,7 @@ import { primeOperationalNotificationScope } from "../services/operationalNotifi
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
+import { isRecoveredChatHydrationError } from "../utils/startupInitialization";
 import {
   type ConversationListItem,
   type StoredMessages,
@@ -66,6 +67,13 @@ export function createMessagingProjectionController(context: MessagingProjection
       nodeStore.setLastError(message);
       nodeStore.logUi("Warn", message);
     });
+  }
+
+  function markHydrated(): void {
+    hydrated.value = true;
+    if (isRecoveredChatHydrationError(nodeStore.lastError)) {
+      nodeStore.setLastError("");
+    }
   }
 
   function mergeFetchedMessages(items: MessageRecord[]): void {
@@ -306,7 +314,7 @@ export function createMessagingProjectionController(context: MessagingProjection
   async function hydrateStartupHistory(): Promise<void> {
     if (!supportsNativeNodeRuntime) {
       byMessageId.value = loadWebMessages();
-      hydrated.value = true;
+      markHydrated();
       return;
     }
 
@@ -326,7 +334,7 @@ export function createMessagingProjectionController(context: MessagingProjection
     if (selectedConversationId.value) {
       await refreshMessages(selectedConversationId.value);
     }
-    hydrated.value = true;
+    markHydrated();
   }
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {

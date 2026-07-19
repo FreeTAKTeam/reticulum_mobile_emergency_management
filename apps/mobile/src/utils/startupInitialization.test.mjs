@@ -11,7 +11,7 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const { runRecoverableStartupStep } = await import(moduleUrl);
+const { isRecoveredChatHydrationError, runRecoverableStartupStep } = await import(moduleUrl);
 
 test("recoverable startup failures are reported without rejecting startup", async () => {
   const failures = [];
@@ -41,6 +41,14 @@ test("successful startup steps return true without reporting a failure", async (
 
   assert.equal(result, true);
   assert.equal(reported, false);
+});
+
+test("only recovered chat hydration errors are eligible for clearing", () => {
+  assert.equal(isRecoveredChatHydrationError("chat history hydration failed: timeout"), true);
+  assert.equal(isRecoveredChatHydrationError("chat history hydration retry failed: timeout"), true);
+  assert.equal(isRecoveredChatHydrationError("[chat] history hydration retry failed: timeout"), true);
+  assert.equal(isRecoveredChatHydrationError("Timeout: RCH TEAM peer directory refresh failed"), false);
+  assert.equal(isRecoveredChatHydrationError("transport startup failed"), false);
 });
 
 test("App initializes projections before recoverable chat initialization", async () => {
