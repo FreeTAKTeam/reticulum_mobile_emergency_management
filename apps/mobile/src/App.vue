@@ -33,6 +33,7 @@ import {
   statusHasRuntimeStartupReadiness,
   type StartupInterfaceItem,
 } from "./utils/startupInterfaces";
+import { reconcileStartupRuntime } from "./utils/startupRuntime";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -130,11 +131,16 @@ onMounted(async () => {
     await messagingStore.init();
     if (setupCompleted) {
       await repairStartupRnodeSelection();
-      if (nodeStore.status.running && nodeStore.nodeConfigRestartRequired) {
-        await nodeStore.restartNode();
-      } else if (!nodeStore.status.running) {
-        await nodeStore.startNode();
-      }
+      await reconcileStartupRuntime(
+        {
+          running: nodeStore.status.running,
+          restartRequired: nodeStore.nodeConfigRestartRequired,
+        },
+        {
+          start: () => nodeStore.startNode(),
+          restart: () => nodeStore.restartNode(),
+        },
+      );
     }
     await messagingStore.hydrateStartupHistory();
 
