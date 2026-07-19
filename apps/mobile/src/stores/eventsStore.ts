@@ -97,6 +97,14 @@ export const useEventsStore = defineStore("events", () => {
     });
   }
 
+  function requestNativeRefresh(): void {
+    void refreshFromNative().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      nodeStore.setLastError(message);
+      nodeStore.logUi("Error", `[events] native refresh failed: ${message}`);
+    });
+  }
+
   function init(): void {
     if (initialized.value) return;
     initialized.value = true;
@@ -104,11 +112,11 @@ export const useEventsStore = defineStore("events", () => {
       byUid.value = loadWebEvents();
       return;
     }
-    void refreshFromNative();
+    requestNativeRefresh();
   }
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
-    if (event.scope === "Events") void refreshFromNative();
+    if (event.scope === "Events") requestNativeRefresh();
   }
 
   function initReplication(): void {
@@ -117,7 +125,10 @@ export const useEventsStore = defineStore("events", () => {
     if (!supportsNativeNodeRuntime) return;
     const client = getProjectionClient(nodeStore.settings.clientMode);
     cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
-    cleanups.push(client.on("statusChanged", () => void refreshFromNative()));
+    cleanups.push(client.on("statusChanged", requestNativeRefresh));
+    // Close the startup race where the runtime becomes ready after init() skips
+    // hydration but before the status listener above is registered.
+    requestNativeRefresh();
   }
 
   async function persistNativeEventUpsert(
