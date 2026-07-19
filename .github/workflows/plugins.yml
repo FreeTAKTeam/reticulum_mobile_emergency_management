@@ -8,7 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  LXMF_RS_REF: 06648b278678383e994c644e63da5109df909747
+  # LXMF-rs v0.9.5
+  LXMF_RS_REF: 7cafc5b4be21ff4f777d0f2300cfb79e5d0da23c
 
 jobs:
   plugin-system:
