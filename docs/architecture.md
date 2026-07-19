@@ -159,7 +159,7 @@ Live checklist deadlines are calculated from the checklist start DTG plus each t
 
 Initial autonomous sharing uses packet-first replication:
 
-- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits task and column snapshots so the create command remains packet-sized.
+- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits descriptive metadata plus task and column snapshots so the create command remains packet-sized. The sender follows creation with the existing `checklist.update` command for description and start time, preserving metadata without changing the compact create envelope.
 - Checklist column schema is fanned out as compact per-column `checklist.update` patches before row/cell data. This is required for new/non-template checklists where the receiver cannot hydrate columns from a local template.
 - The initial rows are fanned out as compact `checklist.task.row.add` commands plus compact `checklist.task.cell.set` commands for non-empty cells, so the first sync can stay under the small LXMF packet budget instead of forcing resource transfer.
 - `checklist.upload` remains available for full snapshot hydration. Its content uses `rem.checklist.snapshot.v2` with a `zlib+msgpack` snapshot body; receivers also accept the older uncompressed `rem.checklist.snapshot.v1` format.

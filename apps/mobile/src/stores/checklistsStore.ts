@@ -308,17 +308,31 @@ export const useChecklistsStore = defineStore("checklists", () => {
     description: string;
     startTime: string;
   }): Promise<void> {
-    await client().createChecklistFromTemplate({
-      checklistUid: input.checklistUid,
+    const checklistUid = input.checklistUid?.trim() || `chk-${Date.now()}`;
+    const description = input.description.trim();
+    const startTime = input.startTime.trim() || new Date().toISOString();
+    const projectionClient = client();
+    await projectionClient.createChecklistFromTemplate({
+      checklistUid,
       missionUid: normalizeMissionUid(input.missionUid?.trim() || input.name),
       templateUid: input.templateUid,
       name: input.name.trim(),
-      description: input.description.trim(),
-      startTime: input.startTime.trim() || new Date().toISOString(),
+      description,
+      startTime,
       createdByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
       createdByTeamMemberDisplayName: nodeStore.settings.displayName.trim() || undefined,
     });
-    await refreshAfterMutation(input.checklistUid);
+    // The compact create envelope deliberately omits descriptive metadata so it
+    // fits an RNode packet. Replicate those fields with the existing update
+    // command instead of silently replacing them with receiver-side defaults.
+    await projectionClient.updateChecklist({
+      checklistUid,
+      patch: {
+        description,
+        startTime,
+      },
+    });
+    await refreshAfterMutation(checklistUid);
   }
 
   async function updateChecklist(input: {
