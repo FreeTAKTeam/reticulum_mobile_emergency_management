@@ -107,7 +107,12 @@ public final class PluginDiscovery {
                 .put("declaredCapabilities", capabilities)
                 .put("messages", messages)
                 .put("configurationEntrypoint", configEntrypoint.isEmpty() ? JSONObject.NULL : configEntrypoint);
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            android.util.Log.w(
+                "REM.PluginDiscovery",
+                "Ignoring malformed plugin metadata from " + service.packageName,
+                error
+            );
             return null;
         }
     }

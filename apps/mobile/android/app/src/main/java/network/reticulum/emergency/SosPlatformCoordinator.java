@@ -200,7 +200,8 @@ final class SosPlatformCoordinator implements SensorEventListener, LocationListe
         }
         try {
             service.unregisterReceiver(screenReceiver);
-        } catch (IllegalArgumentException ignored) {
+        } catch (IllegalArgumentException cleanupError) {
+            Log.d(TAG, "SOS screen receiver was already unregistered", cleanupError);
         }
         screenRegistered = false;
     }

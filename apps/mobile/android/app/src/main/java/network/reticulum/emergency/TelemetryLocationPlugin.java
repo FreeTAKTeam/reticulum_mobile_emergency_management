@@ -338,8 +338,9 @@ public class TelemetryLocationPlugin extends Plugin {
             handler.removeCallbacksAndMessages(null);
             try {
                 locationManager.removeUpdates(this);
-            } catch (Exception ignored) {
-                // Best effort cleanup only.
+            } catch (Exception cleanupError) {
+                // Best effort cleanup only; the plugin is already being destroyed.
+                android.util.Log.d("TelemetryLocation", "Location listener was already inactive", cleanupError);
             }
         }
     }

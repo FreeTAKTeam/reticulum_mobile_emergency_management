@@ -86,7 +86,8 @@ final class OperationalNotificationState {
                     eamKeys.add(callsign.toLowerCase(Locale.US) + ":" + updatedAt);
                 }
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotificationState", "Unable to prime EAM notification state", error);
         }
     }
 
@@ -115,7 +116,8 @@ final class OperationalNotificationState {
                     eventKeys.add(uid.toLowerCase(Locale.US) + ":" + updatedAt);
                 }
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotificationState", "Unable to prime event notification state", error);
         }
     }
 
@@ -140,7 +142,8 @@ final class OperationalNotificationState {
                     checklistKeys.add(key);
                 }
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotificationState", "Unable to prime checklist notification state", error);
         }
     }
 

@@ -118,8 +118,9 @@ final class RNodeUsbControlManager {
                     }
                     try {
                         receiverContext.unregisterReceiver(this);
-                    } catch (IllegalArgumentException ignored) {
+                    } catch (IllegalArgumentException cleanupError) {
                         // Receiver may already be unregistered if Android sends a duplicate result.
+                        Log.d("ReticulumNode", "USB permission receiver was already unregistered", cleanupError);
                     }
                     final UsbDevice resultDevice =
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU

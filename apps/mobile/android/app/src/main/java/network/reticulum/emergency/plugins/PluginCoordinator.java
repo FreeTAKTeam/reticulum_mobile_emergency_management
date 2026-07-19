@@ -266,13 +266,15 @@ public final class PluginCoordinator implements AutoCloseable {
             if (service != null) {
                 try {
                     service.stop(reason);
-                } catch (RemoteException ignored) {
+                } catch (RemoteException cleanupError) {
+                    Log.d(TAG, "Plugin stop callback failed during cleanup: " + pluginId, cleanupError);
                 }
             }
             if (bound) {
                 try {
                     context.unbindService(this);
-                } catch (IllegalArgumentException ignored) {
+                } catch (IllegalArgumentException cleanupError) {
+                    Log.d(TAG, "Plugin service was already unbound: " + pluginId, cleanupError);
                 }
             }
             bound = false;
@@ -298,7 +300,8 @@ public final class PluginCoordinator implements AutoCloseable {
                         .put("diagnostic", diagnostic == null ? JSONObject.NULL : diagnostic)
                         .toString()
                 );
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.w(TAG, "Unable to publish plugin state for " + pluginId, error);
             }
         }
     }
@@ -341,7 +344,8 @@ public final class PluginCoordinator implements AutoCloseable {
                 if (new JSONObject(response).optBoolean("ok")) {
                     raiseNotification(connection.pluginId, request.optJSONObject("payload"));
                 }
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.w(TAG, "Unable to inspect plugin host response for " + connection.pluginId, error);
             }
         }
         final IRemPluginService service = connection.service;

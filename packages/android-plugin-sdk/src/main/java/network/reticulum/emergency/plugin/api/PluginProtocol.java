@@ -39,7 +39,8 @@ public final class PluginProtocol {
                 .put("ok", false)
                 .put("error", new JSONObject().put("code", code).put("message", message))
                 .toString();
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("REM.PluginProtocol", "Failed to encode structured error response", error);
             return "{\"protocolVersion\":1,\"requestId\":\"\",\"ok\":false}";
         }
     }

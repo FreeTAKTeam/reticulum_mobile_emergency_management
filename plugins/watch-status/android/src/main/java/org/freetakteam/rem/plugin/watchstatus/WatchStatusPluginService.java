@@ -94,7 +94,8 @@ public final class WatchStatusPluginService extends RemPluginService {
                     latestSnapshotAtMs = System.currentTimeMillis();
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to apply the watch-status host response", error);
         } finally {
             if (matchesPendingRequest) {
                 pendingRequestId = "";

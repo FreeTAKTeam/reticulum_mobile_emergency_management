@@ -82,7 +82,12 @@ public final class CallerCertificateVerifier {
                 signatures = legacySignatures;
             }
             return fingerprints(signatures);
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            android.util.Log.w(
+                "REM.PluginCertificate",
+                "Unable to read current package signing certificates for " + packageName,
+                error
+            );
             return Collections.emptySet();
         }
     }
@@ -104,7 +109,12 @@ public final class CallerCertificateVerifier {
             );
             history.removeAll(currentPackageFingerprints(context, packageName));
             return history;
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            android.util.Log.w(
+                "REM.PluginCertificate",
+                "Unable to read package signing history for " + packageName,
+                error
+            );
             return Collections.emptySet();
         }
     }

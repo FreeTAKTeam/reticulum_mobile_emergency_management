@@ -121,7 +121,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 "REMOTE",
                 "remote"
             );
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to start the heart-rate foreground service", error);
         }
     }
 
@@ -159,7 +160,8 @@ public final class HeartRatePluginService extends RemPluginService {
                         .put("message", error.getMessage())
                         .toString()
                 );
-            } catch (Exception ignored) {
+            } catch (Exception callbackError) {
+                Log.w(TAG, "Unable to report configuration failure to the host", callbackError);
             }
         }
     }
@@ -319,7 +321,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("timestampMs", atMs)
                 .put("staleAfterMs", preferences.staleAfterMs())
                 .put("origin", origin));
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to publish a heart-rate sensor sample", error);
         }
     }
 
@@ -339,7 +342,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("bodyUtf8", "Heart rate " + bpm + " bpm")
                 .put("title", "Heart rate")
                 .put("sendMode", new JSONObject().put("Auto", new JSONObject())));
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to publish a heart-rate LXMF request", error);
         }
     }
 
@@ -353,7 +357,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("operation", operation)
                 .put("payload", payload)
                 .toString());
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to submit a heart-rate host request", error);
         }
     }
 

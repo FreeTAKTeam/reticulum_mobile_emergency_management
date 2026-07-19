@@ -49,7 +49,8 @@ final class WatchStatusPayload {
             return build(new JSONObject()
                 .put("capturedAtMs", nowMs)
                 .put("status", new JSONObject().put("running", false).put("lastError", first(message, "Snapshot unavailable"))), nowMs);
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("REM.WatchStatusPayload", "Unable to encode the fallback watch status", error);
             return "{\"type\":\"rem.watch.status\",\"version\":1,\"connection_state\":\"ERROR\",\"operator_name\":\"REM\",\"operator_status\":\"ERROR\",\"operator_eam\":\"UNKNOWN\",\"team\":\"REM\",\"team_status\":\"UNKNOWN\",\"last_sync_epoch_ms\":0,\"last_sync_age_seconds\":0,\"active_events\":0,\"highest_priority\":\"ERROR\",\"alert_state\":\"ERROR\"}";
         }
     }
