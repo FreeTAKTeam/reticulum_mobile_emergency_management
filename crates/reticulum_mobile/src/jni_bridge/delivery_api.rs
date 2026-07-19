@@ -30,14 +30,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendJson
         None => None,
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.send_bytes(
         payload.destination_hex,
         bytes,
@@ -82,20 +75,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_sendLxmf
         }
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.send_lxmf(SendLxmfRequest {
         destination_hex: payload.destination_hex,
         body_utf8: payload.body_utf8,
@@ -126,14 +106,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_retryLxm
         Err(e) => return err_result("InvalidConfig", format!("invalid retry payload: {e}")),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.retry_lxmf(payload.message_id_hex) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -159,14 +132,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_cancelLx
         Err(e) => return err_result("InvalidConfig", format!("invalid cancel payload: {e}")),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.cancel_lxmf(payload.message_id_hex) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -197,14 +163,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setActiv
         }
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.set_active_propagation_node(payload.destination_hex) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -230,14 +189,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestL
         Err(e) => return err_result("InvalidConfig", format!("invalid sync payload: {e}")),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.request_lxmf_sync(payload.limit) {
         Ok(_) => ok_result(),
         Err(err) => {

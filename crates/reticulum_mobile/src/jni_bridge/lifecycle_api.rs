@@ -43,15 +43,24 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_start(
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
 
-    let subscription = {
-        let node = ensure_node_or_return!(&mut guard);
-        if let Err(err) = node.start(config) {
-            set_last_node_error_for("start", err);
+    let node = match ensure_node(&mut guard) {
+        Ok(node) => node,
+        Err(error) => {
+            set_last_node_error_for("start", error);
             return RESULT_ERR;
         }
-        node.subscribe_events()
     };
+    drop(guard);
+    if let Err(err) = node.start(config) {
+        set_last_node_error_for("start", err);
+        return RESULT_ERR;
+    }
+    let subscription = node.subscribe_events();
 
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
     guard.subscription = Some(subscription);
     ok_result()
 }
@@ -67,11 +76,15 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_stop(
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
 
-    if let Some(subscription) = guard.subscription.take() {
+    let subscription = guard.subscription.take();
+    let node = guard.node.clone();
+    drop(guard);
+
+    if let Some(subscription) = subscription {
         subscription.close();
     }
 
-    if let Some(node) = guard.node.as_ref() {
+    if let Some(node) = node {
         if let Err(err) = node.stop() {
             set_last_node_error(err);
             return RESULT_ERR;
@@ -109,15 +122,24 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_restart(
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
 
-    let subscription = {
-        let node = ensure_node_or_return!(&mut guard);
-        if let Err(err) = node.restart(config) {
-            set_last_node_error(err);
+    let node = match ensure_node(&mut guard) {
+        Ok(node) => node,
+        Err(error) => {
+            set_last_node_error(error);
             return RESULT_ERR;
         }
-        node.subscribe_events()
     };
+    drop(guard);
+    if let Err(err) = node.restart(config) {
+        set_last_node_error(err);
+        return RESULT_ERR;
+    }
+    let subscription = node.subscribe_events();
 
+    let mut guard = match bridge_state().lock() {
+        Ok(v) => v,
+        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
+    };
     guard.subscription = Some(subscription);
     ok_result()
 }
@@ -128,7 +150,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let status = {
+    let node = {
         let guard = match bridge_state().lock() {
             Ok(v) => v,
             Err(_) => {
@@ -136,20 +158,20 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getStatu
                 return ptr::null_mut();
             }
         };
-        if let Some(node) = guard.node.as_ref() {
-            node.get_status()
-        } else {
-            NodeStatus {
-                running: false,
-                name: String::new(),
-                identity_hex: String::new(),
-                app_destination_hex: String::new(),
-                lxmf_destination_hex: String::new(),
-                readiness: RuntimeReadinessSnapshot::default(),
-                interfaces: Vec::new(),
-            }
-        }
+        guard.node.clone()
     };
+    let status = node.map_or_else(
+        || NodeStatus {
+            running: false,
+            name: String::new(),
+            identity_hex: String::new(),
+            app_destination_hex: String::new(),
+            lxmf_destination_hex: String::new(),
+            readiness: RuntimeReadinessSnapshot::default(),
+            interfaces: Vec::new(),
+        },
+        |node| node.get_status(),
+    );
 
     make_jstring_or_null(&mut env, status_to_json(status))
 }
@@ -166,14 +188,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_connectP
         Err(e) => return err_result("InvalidConfig", e),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.connect_peer(destination) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -195,14 +210,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_disconne
         Err(e) => return err_result("InvalidConfig", e),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.disconnect_peer(destination) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -218,14 +226,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_announce
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.announce_now() {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -247,14 +248,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestP
         Err(e) => return err_result("InvalidConfig", e),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.request_peer_identity(destination) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -263,4 +257,3 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_requestP
         }
     }
 }
-

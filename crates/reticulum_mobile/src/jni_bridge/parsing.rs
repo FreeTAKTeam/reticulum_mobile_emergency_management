@@ -3,11 +3,6 @@ fn bridge_state() -> &'static Mutex<BridgeState> {
     STATE.get_or_init(|| Mutex::new(BridgeState::default()))
 }
 
-fn last_error() -> &'static Mutex<Option<LastError>> {
-    static LAST_ERROR: OnceLock<Mutex<Option<LastError>>> = OnceLock::new();
-    LAST_ERROR.get_or_init(|| Mutex::new(None))
-}
-
 fn set_last_error(code: impl Into<String>, message: impl Into<String>) {
     set_last_error_with_context(code, message, None, None);
 }
@@ -19,21 +14,28 @@ fn set_last_error_with_context(
     cause: Option<String>,
 ) {
     let code = code.into();
-    if let Ok(mut guard) = last_error().lock() {
-        *guard = Some(LastError {
+    LAST_JNI_ERROR.with(|slot| {
+        slot.replace(Some(LastError {
             retryable: node_error_code_is_retryable(code.as_str()),
             code,
             message: message.into(),
             operation: operation.map(ToOwned::to_owned),
             cause,
-        });
-    }
+        }));
+    });
 }
 
 fn clear_last_error() {
-    if let Ok(mut guard) = last_error().lock() {
-        *guard = None;
-    }
+    LAST_JNI_ERROR.with(|slot| slot.replace(None));
+}
+
+fn take_last_error() -> Option<LastError> {
+    LAST_JNI_ERROR.with(|slot| slot.borrow_mut().take())
+}
+
+#[cfg(test)]
+fn current_last_error() -> Option<LastError> {
+    LAST_JNI_ERROR.with(|slot| slot.borrow().clone())
 }
 
 fn set_last_node_error(err: NodeError) {
@@ -263,6 +265,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initiali
             return RESULT_ERR;
         }
     };
+    drop(guard);
     match node.initialize_storage(storage_dir.as_deref()) {
         Ok(()) => RESULT_OK,
         Err(err) => {
@@ -423,6 +426,7 @@ fn to_sos_telemetry_record(input: SosTelemetryInput) -> SosDeviceTelemetryRecord
 #[cfg(test)]
 mod panic_boundary_tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn panic_is_contained_and_returns_compatible_failure_values() {
@@ -431,11 +435,7 @@ mod panic_boundary_tests {
         let result: jint = contain_jni_panic("testInt", || panic!("boundary failure"));
 
         assert_eq!(result, RESULT_ERR);
-        let error = last_error()
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .expect("panic boundary should set last error");
+        let error = current_last_error().expect("panic boundary should set last error");
         assert_eq!(error.code, "InternalError");
         assert_eq!(error.operation.as_deref(), Some("testInt"));
         assert!(!error.retryable);
@@ -444,11 +444,27 @@ mod panic_boundary_tests {
         let result: jstring = contain_jni_panic("testObject", || panic!("object failure"));
 
         assert!(result.is_null());
-        let error = last_error()
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-            .expect("panic boundary should set last error");
+        let error = current_last_error().expect("panic boundary should set last error");
         assert_eq!(error.operation.as_deref(), Some("testObject"));
+    }
+
+    #[test]
+    fn last_error_envelopes_are_scoped_to_the_calling_thread() {
+        clear_last_error();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = ["first", "second"].map(|code| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                set_last_error(code, format!("{code} failure"));
+                barrier.wait();
+                take_last_error().expect("thread should retrieve its own error")
+            })
+        });
+
+        let errors = handles.map(|handle| handle.join().expect("error thread should finish"));
+
+        assert_eq!(errors[0].code, "first");
+        assert_eq!(errors[1].code, "second");
+        assert!(take_last_error().is_none());
     }
 }

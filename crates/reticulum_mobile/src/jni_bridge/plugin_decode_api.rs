@@ -76,13 +76,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_takeLast
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let value = {
-        let mut guard = match last_error().lock() {
-            Ok(v) => v,
-            Err(_) => return ptr::null_mut(),
-        };
-        guard.take()
-    };
+    let value = take_last_error();
 
     let Some(value) = value else {
         return ptr::null_mut();

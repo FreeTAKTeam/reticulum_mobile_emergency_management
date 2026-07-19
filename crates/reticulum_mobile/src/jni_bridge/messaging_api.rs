@@ -14,14 +14,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_broadcas
         Err(e) => return err_result("InvalidConfig", format!("invalid base64 payload: {e}")),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.broadcast_bytes(bytes) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -42,14 +35,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAnnou
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.set_announce_capabilities(value) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -70,14 +56,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setLogLe
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     node.set_log_level(parse_log_level(Some(value.as_str())));
     ok_result()
 }
@@ -88,14 +67,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshH
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.refresh_hub_directory() {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -111,20 +83,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnno
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_announces() {
         Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
         Err(err) => {
@@ -140,20 +99,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listPeer
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_peers() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -291,20 +237,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfS
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.get_lxmf_sync_status() {
         Ok(status) => ok_json_result(&mut env, &status),
         Err(err) => {
@@ -320,20 +253,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listTele
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_telemetry_destinations() {
         Ok(items) => ok_json_result(
             &mut env,
