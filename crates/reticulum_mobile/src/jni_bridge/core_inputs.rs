@@ -107,6 +107,11 @@ macro_rules! ensure_node_or_return {
 struct LastError {
     code: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation: Option<String>,
+    retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cause: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

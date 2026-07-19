@@ -28,16 +28,16 @@ impl RuntimeLxmfSdk {
                 .map(|_| ())
         })
         .await
-        .map_err(|_| NodeError::InternalError {})?
-        .map_err(|_| NodeError::InternalError {})
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), NodeError> {
         let client = self.client.clone();
         tokio::task::spawn_blocking(move || client.shutdown(ShutdownMode::Graceful).map(|_| ()))
             .await
-            .map_err(|_| NodeError::InternalError {})?
-            .map_err(|_| NodeError::InternalError {})
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
     }
 
     pub(crate) async fn send_lxmf_via_propagation_relay(
@@ -129,7 +129,8 @@ impl RuntimeLxmfSdk {
             request = request.with_extension(EXT_ACCEPTED_RESULT_ACK, json!(true));
         }
         if let Some(link_connect_timeout) = link_connect_timeout {
-            let timeout_ms = link_connect_timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+            let timeout_ms =
+                crate::numeric::u128_to_u64_saturating(link_connect_timeout.as_millis());
             request = request.with_extension(EXT_LINK_CONNECT_TIMEOUT_MS, json!(timeout_ms));
         }
         if let Some(direct_packet_max_wire_bytes) = direct_packet_max_wire_bytes {
@@ -172,7 +173,7 @@ impl RuntimeLxmfSdk {
         let client = self.client.clone();
         let message_id = tokio::task::spawn_blocking(move || client.send(request))
             .await
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .map_err(|err| {
                 warn!("in-process LXMF send failed destination={requested_destination_hex}: {err}");
                 map_sdk_error_to_node_error(err)

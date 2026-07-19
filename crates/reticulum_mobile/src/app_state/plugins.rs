@@ -6,7 +6,7 @@ impl AppStateStore {
                 row.get(0)
             })
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value)).transpose()
     }
 
@@ -17,7 +17,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_app_settings_tx(&transaction, settings)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -25,7 +25,7 @@ impl AppStateStore {
             None,
             Some("settings-updated".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -33,13 +33,13 @@ impl AppStateStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT json FROM plugins ORDER BY plugin_id ASC")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?);
+            records.push(deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?);
         }
         Ok(records)
     }
@@ -53,7 +53,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(value.as_str()))
             .transpose()
     }
@@ -64,13 +64,13 @@ impl AppStateStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT json FROM plugin_publishers ORDER BY fingerprint ASC")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?);
+            records.push(deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?);
         }
         Ok(records)
     }
@@ -92,7 +92,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut seen = std::collections::HashSet::new();
         let updated_at_ms = now_ms();
 
@@ -166,7 +166,7 @@ impl AppStateStore {
             None,
             Some("plugin-discovery-synchronized".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -195,7 +195,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         transaction
             .execute(
                 "INSERT INTO plugin_publishers (fingerprint, json, updated_at_ms)
@@ -206,10 +206,10 @@ impl AppStateStore {
                 params![
                     fingerprint,
                     serialize_json(&publisher)?,
-                    approved_at_ms as i64
+                    crate::numeric::u64_to_i64_saturating(approved_at_ms)
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         for mut signed_plugin in self.list_plugins()? {
             let signed_by_publisher =
                 normalize_fingerprint(signed_plugin.discovered.publisher_fingerprint.as_str())
@@ -241,7 +241,7 @@ impl AppStateStore {
             Some(plugin_id.to_string()),
             Some("plugin-publisher-approved".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -270,14 +270,14 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         for revoked in &revoked_fingerprints {
             transaction
                 .execute(
                     "DELETE FROM plugin_publishers WHERE fingerprint = ?1",
                     params![revoked],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
         for mut plugin in plugins {
             let matches = std::iter::once(plugin.discovered.publisher_fingerprint.as_str())
@@ -306,7 +306,7 @@ impl AppStateStore {
             None,
             Some("plugin-publisher-revoked".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -374,15 +374,15 @@ impl AppStateStore {
                 "SELECT json FROM plugin_sensors
                  ORDER BY sample_at_ms DESC, plugin_id ASC, device_id ASC, sensor_type ASC",
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let current = now_ms();
         let mut records = Vec::new();
         for row in rows {
             let mut record: PluginSensorRecord =
-                deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+                deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?;
             record.status = sensor_status(
                 record.connection_state.as_deref(),
                 record.sample_at_ms,
@@ -438,7 +438,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         transaction
             .execute(
                 "INSERT INTO plugin_sensors (
@@ -451,11 +451,11 @@ impl AppStateStore {
                     record.plugin_id,
                     record.device_id,
                     record.sensor_type,
-                    record.sample_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(record.sample_at_ms),
                     serialize_json(&record)?
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::PluginSensors {},
@@ -465,7 +465,7 @@ impl AppStateStore {
             )),
             Some("plugin-sensor-updated".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok((record, invalidation))
     }
 
@@ -477,7 +477,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         write_plugin_tx(&transaction, &plugin)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -485,7 +485,7 @@ impl AppStateStore {
             Some(plugin.discovered.plugin_id.clone()),
             Some(reason.to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 

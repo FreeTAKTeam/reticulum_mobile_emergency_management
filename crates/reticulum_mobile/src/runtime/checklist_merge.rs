@@ -426,13 +426,13 @@ fn prepare_uploaded_snapshot(
     );
     incoming.sync_state = ChecklistSyncState::Synced {};
     if incoming.expected_task_count.is_none() {
-        incoming.expected_task_count = Some(
+        incoming.expected_task_count = Some(crate::numeric::usize_to_u32_saturating(
             incoming
                 .tasks
                 .iter()
                 .filter(|task| task.deleted_at.is_none())
-                .count() as u32,
-        );
+                .count(),
+        ));
     }
     normalize_checklist_record(&mut incoming);
     incoming

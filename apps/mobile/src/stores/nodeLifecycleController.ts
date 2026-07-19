@@ -180,7 +180,12 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery();
-      await refreshHubRegistrationState(true);
+      void refreshHubRegistrationState(true).catch((error: unknown) => {
+        appendNodeControlEntry(
+          "Warn",
+          `Hub registration bootstrap failed after start: ${errorMessage(error)}`,
+        );
+      });
       appendNodeControlEntry("Info", "Node started.");
 
       if (hubModeUsesRch(settings.hub.mode)) {
@@ -236,7 +241,12 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       await refreshOperationalSummaryProjection();
       await configureClientLogging();
       await settleStartupDiscovery();
-      await refreshHubRegistrationState(true);
+      void refreshHubRegistrationState(true).catch((error: unknown) => {
+        appendNodeControlEntry(
+          "Warn",
+          `Hub registration bootstrap failed after restart: ${errorMessage(error)}`,
+        );
+      });
       appendNodeControlEntry("Info", "Node restarted with updated settings.");
 
       if (hubModeUsesRch(settings.hub.mode)) {

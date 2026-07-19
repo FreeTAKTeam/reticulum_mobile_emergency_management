@@ -34,7 +34,7 @@ fn spawn_announce_tasks(
         let announce_capabilities = announce_capabilities.clone();
         let interval_secs = effective_announce_interval_seconds(config.announce_interval_seconds);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
+            let mut interval = tokio::time::interval(Duration::from_secs(u64::from(interval_secs)));
             interval.tick().await;
             loop {
                 interval.tick().await;
@@ -102,8 +102,7 @@ fn spawn_announce_receiver(state: &NodeRuntimeState, bus: &EventBus) {
                         bus.emit(NodeEvent::Error {
                             code: "IoError".to_string(),
                             message: format!(
-                                "failed to persist announce destination={} reason={}",
-                                destination_hex, err
+                                "failed to persist announce destination={destination_hex} reason={err}"
                             ),
                         });
                     }
@@ -199,8 +198,7 @@ fn spawn_announce_receiver(state: &NodeRuntimeState, bus: &EventBus) {
                             .await;
                         } else if is_rem_capable_lxmf_delivery {
                             debug!(
-                                "[link][maintain] destination={} status=ignored reason=rem-lxmf-announce",
-                                destination_hex,
+                                "[link][maintain] destination={destination_hex} status=ignored reason=rem-lxmf-announce",
                             );
                         }
                     }

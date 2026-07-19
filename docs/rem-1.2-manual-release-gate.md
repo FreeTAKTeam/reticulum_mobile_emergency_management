@@ -1,6 +1,7 @@
 # REM 1.2 Manual Release Gate
 
-REM 1.2.0 stays a prerelease until this matrix passes on connected phones.
+REM `1.2.7-rc.1` stays a prerelease until this matrix passes on two authorized
+physical phones and the evidence is recorded in issue #168.
 
 This runbook is for manual validation only. Do not clear app data, uninstall the app, delete Bluetooth pairings, or replace saved RNode configuration while executing it.
 
@@ -35,7 +36,7 @@ Diagnostic builds can expose a small adb-only control receiver for repeatable an
 Build example:
 
 ```powershell
-cmd /c "gradlew.bat :app:assembleRelease -PappVersionName=1.2.0-rc.2 -PappVersionCode=261772128 -PenableAdbTestControl=true -PapkClassifierSuffix=adb-test"
+cmd /c "gradlew.bat :app:assembleRelease -PappVersionName=1.2.7-rc.1 -PappVersionCode=<UTC-yyDDDHHmm> -PenableAdbTestControl=true -PapkClassifierSuffix=adb-test"
 ```
 
 Useful commands:
@@ -52,16 +53,20 @@ The receiver only triggers status, read-only app settings, announce, connect, an
 
 ## Workflow Matrix
 
-Each row requires a unique marker string recorded in issue #149.
+Each row requires a unique marker string recorded in issue #168.
 
 | Workflow | LoRa-only | TCP-only | Mixed TCP+LoRa |
 | --- | --- | --- | --- |
-| Announce peer visibility | Pending | Pending | Passed |
-| Peer connection after announce | Pending | Pending | Passed |
-| Chat delivery | Pending | Pending | Passed |
-| Event replication | Pending | Pending | Passed |
-| EAM/preparedness update | Pending | Pending | Passed |
-| Checklist update | Pending | Pending | Passed |
+| Announce peer visibility | Pending | Pending | Pending |
+| Peer connection after announce | Pending | Pending | Pending |
+| Packet and resource delivery | Pending | Pending | Pending |
+| Chat delivery and acknowledgement | Pending | Pending | Pending |
+| Event replication | Pending | Pending | Pending |
+| EAM/preparedness update | Pending | Pending | Pending |
+| Checklist create/join/update | Pending | Pending | Pending |
+| Telemetry and SOS update/cancel | Pending | Pending | Pending |
+| Duplicate suppression | Pending | Pending | Pending |
+| Restart recovery and reconnect | Pending | Pending | Pending |
 
 ## Mixed Mode Routing Contract
 
@@ -87,7 +92,7 @@ Acceptable evidence:
 
 ## Evidence Format
 
-For each completed row, update issue #149 with:
+For each completed row, update issue #168 with:
 
 - Date and local time.
 - Phone serials and roles.
@@ -97,3 +102,8 @@ For each completed row, update issue #149 with:
 - Relevant log snippets or exact log markers when available.
 
 Leave a row unchecked when delivery is inferred only from passive traffic, when the peer was not connected before sending, or when only one target in a mixed test receives the update.
+
+After the three mode passes, run one bounded 60-minute mixed-load soak. Record
+start/end battery, runtime readiness, reconnects, duplicate rows, terminal
+delivery failures, and whether both phones remain usable. A second phone and
+authorized ADB state are mandatory; emulator evidence cannot replace this gate.

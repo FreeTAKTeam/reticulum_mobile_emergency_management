@@ -2,7 +2,7 @@ fn checklist_snapshot_msgpack_entry(
     snapshot_json: &str,
 ) -> Result<(&'static str, MsgPackValue), NodeError> {
     let snapshot_value = serde_json::from_str::<JsonValue>(snapshot_json)
-        .map_err(|_| NodeError::InternalError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
     Ok(("snapshot", json_value_to_msgpack(&snapshot_value)?))
 }
 
@@ -12,19 +12,19 @@ fn checklist_snapshot_content_bytes(
 ) -> Result<Vec<u8>, NodeError> {
     let snapshot_entry = checklist_snapshot_msgpack_entry(snapshot_json)?;
     let snapshot_msgpack =
-        rmp_serde::to_vec(&snapshot_entry.1).map_err(|_| NodeError::InternalError {})?;
+        rmp_serde::to_vec(&snapshot_entry.1).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
     encoder
         .write_all(snapshot_msgpack.as_slice())
-        .map_err(|_| NodeError::InternalError {})?;
-    let compressed_snapshot = encoder.finish().map_err(|_| NodeError::InternalError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+    let compressed_snapshot = encoder.finish().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
     let content = msgpack_map(vec![
         ("type", MsgPackValue::from("rem.checklist.snapshot.v2")),
         ("checklist_uid", MsgPackValue::from(checklist_uid)),
         ("encoding", MsgPackValue::from("zlib+msgpack")),
         ("snapshot", MsgPackValue::Binary(compressed_snapshot)),
     ]);
-    rmp_serde::to_vec(&content).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&content).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn build_checklist_replication_payload(
@@ -83,9 +83,10 @@ fn build_checklist_replication_payload_with_command_id(
 ) -> Result<(Vec<u8>, Vec<u8>), NodeError> {
     let fields =
         build_checklist_command_fields(status, target, command_type, args, command_id_override)?;
-    let body = if matches!(command_type, "checklist.create.online") {
-        command_wire_value(command_type).as_bytes().to_vec()
-    } else if matches!(command_type, "checklist.task.status.set") {
+    let body = if matches!(
+        command_type,
+        "checklist.create.online" | "checklist.task.status.set"
+    ) {
         command_wire_value(command_type).as_bytes().to_vec()
     } else if matches!(command_type, "checklist.task.row.add") {
         format!("C {}", command_wire_value(command_type)).into_bytes()
@@ -192,7 +193,7 @@ fn append_checklist_create_snapshot_args(
     checklist: &ChecklistRecord,
 ) -> Result<(), NodeError> {
     let JsonValue::Object(snapshot) =
-        serde_json::to_value(checklist).map_err(|_| NodeError::InternalError {})?
+        serde_json::to_value(checklist).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
     else {
         return Err(NodeError::InternalError {});
     };
@@ -209,11 +210,13 @@ fn append_checklist_create_snapshot_args(
     args.insert(
         "total_tasks".to_string(),
         JsonValue::from(checklist.expected_task_count.unwrap_or_else(|| {
-            checklist
-                .tasks
-                .iter()
-                .filter(|task| task.deleted_at.is_none())
-                .count() as u32
+            crate::numeric::usize_to_u32_saturating(
+                checklist
+                    .tasks
+                    .iter()
+                    .filter(|task| task.deleted_at.is_none())
+                    .count(),
+            )
         })),
     );
     Ok(())

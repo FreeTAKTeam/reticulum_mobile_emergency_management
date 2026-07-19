@@ -26,7 +26,7 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
     let incoming_task_payload = checklist_task_from_row_add_args(
         args,
         task_uid.as_str(),
-        number as u32,
+        crate::numeric::u64_to_u32_saturating(number),
         timestamp.as_str(),
     );
     let mut checklist = app_state
@@ -65,7 +65,7 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
     }
     let due_relative_minutes = msgpack_get_checklist_arg(args, "due_relative_minutes")
         .and_then(msgpack_u64)
-        .map(|value| value as u32);
+        .map(crate::numeric::u64_to_u32_saturating);
     let legacy_value =
         msgpack_get_checklist_arg(args, "legacy_value").and_then(msgpack_string);
     let due_dtg = msgpack_get_checklist_arg(args, "due_dtg").and_then(msgpack_string);
@@ -87,7 +87,7 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
         .iter_mut()
         .find(|task| task.task_uid == task_uid)
     {
-        task.number = number as u32;
+        task.number = crate::numeric::u64_to_u32_saturating(number);
         task.due_relative_minutes = due_relative_minutes;
         task.due_dtg = due_dtg.clone();
         task.notes = notes.clone();
@@ -100,7 +100,7 @@ fn handle_inbound_checklist_row_add(ctx: &InboundChecklistCommand<'_>) -> bool {
         let cells = blank_task_cells(checklist.columns.as_slice(), task_uid.as_str());
         checklist.tasks.push(ChecklistTaskRecord {
             task_uid,
-            number: number as u32,
+            number: crate::numeric::u64_to_u32_saturating(number),
             user_status: ChecklistUserTaskStatus::Pending {},
             task_status: ChecklistTaskStatus::Pending {},
             is_late: false,

@@ -209,7 +209,7 @@ test("telemetry publish interval above 60 seconds activates save and persists", 
   expect(storedSettings.telemetry.publishIntervalSeconds).toBe(120);
 });
 
-test("RCH hub directory is disabled and coerces persisted mode to autonomous", async ({ page }) => {
+test("persisted RCH mode does not block local runtime startup", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -227,23 +227,21 @@ test("RCH hub directory is disabled and coerces persisted mode to autonomous", a
   });
   await hubPanel.locator("summary").click();
 
-  await expect(hubPanel.getByLabel("Mode")).toBeDisabled();
-  await expect(hubPanel.getByLabel("Mode")).toHaveValue("Autonomous");
-  await expect(hubPanel.getByLabel("Hub from announces (RCH servers)")).toBeDisabled();
-  await expect(hubPanel.getByLabel("Hub identity hash")).toBeDisabled();
-  await expect(hubPanel.getByLabel("Refresh interval seconds")).toBeDisabled();
-  await expect(hubPanel.getByRole("button", { name: "Refresh Now" })).toBeDisabled();
-  await expect(hubPanel.getByRole("button", { name: "Register Team Member" })).toBeDisabled();
-  await expect(hubPanel.getByRole("button", { name: "Clear Registration" })).toBeDisabled();
+  await expect(page.getByText("Interfaces are loading")).toHaveCount(0);
+  await expect(hubPanel.getByLabel("Mode")).toBeEnabled();
+  await expect(hubPanel.getByLabel("Mode")).toHaveValue("SemiAutonomous");
+  await expect(hubPanel.getByLabel("Hub identity hash")).toHaveValue(
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  );
 
   const runtimeHub = await page.evaluate(async () => {
     const mod = await import("/src/stores/nodeStore.ts");
     return mod.useNodeStore().settings.hub;
   });
-  expect(runtimeHub.mode).toBe("Autonomous");
+  expect(runtimeHub.mode).toBe("SemiAutonomous");
 });
 
-test("disabled RCH hub directory does not expose connected routing states", async ({ page }) => {
+test("semi-autonomous RCH exposes effective connected routing state", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
       ...defaultSettings,
@@ -277,10 +275,10 @@ test("disabled RCH hub directory does not expose connected routing states", asyn
     ],
   });
 
-  await expect(hubPanel.getByLabel("Mode")).toBeDisabled();
-  await expect(hubPanel.getByLabel("Mode")).toHaveValue("Autonomous");
-  await expect(hubPanel).toContainText("Autonomous");
-  await expect(hubPanel).not.toContainText("server forcing connected routing");
+  await expect(hubPanel.getByLabel("Mode")).toBeEnabled();
+  await expect(hubPanel.getByLabel("Mode")).toHaveValue("SemiAutonomous");
+  await expect(hubPanel).toContainText("1 cached peers");
+  await expect(hubPanel).toContainText("server forcing connected routing");
   await expect(hubPanel).not.toContainText("outbound blocked");
 });
 

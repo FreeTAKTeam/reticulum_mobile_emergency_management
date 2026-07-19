@@ -2,12 +2,25 @@
 name = "reticulum_mobile"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 publish = false
+
+[lints.rust]
+# UniFFI/JNI require unmangled exports; first-party implementation modules deny unsafe in lib.rs.
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+unchecked_duration_subtraction = "warn"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+reticulum-mobile-jni-boundary = { path = "jni-boundary-macro" }
 reticulum = { package = "reticulum-rs", path = "../../../LXMF-rs/crates/libs/reticulum-rs" }
 base64 = "0.22"
 crossbeam-channel = "0.5"

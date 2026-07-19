@@ -1,3 +1,4 @@
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEventJson(
     mut env: JNIEnv,
@@ -26,6 +27,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_upsertEv
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEventJson(
     mut env: JNIEnv,
@@ -62,6 +64,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteEv
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelemetryPositionsJson(
     mut env: JNIEnv,
@@ -87,6 +90,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getTelem
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordLocalTelemetryFixJson(
     mut env: JNIEnv,
@@ -115,6 +119,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_recordLo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLocalTelemetryJson(
     mut env: JNIEnv,
@@ -148,6 +153,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteLo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSettingsJson(
     mut env: JNIEnv,
@@ -170,6 +176,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSe
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosSettingsJson(
     mut env: JNIEnv,
@@ -203,6 +210,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosSe
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosPinJson(
     mut env: JNIEnv,
@@ -231,6 +239,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSosPi
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosStatusJson(
     mut env: JNIEnv,
@@ -253,6 +262,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSosSt
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_triggerSosJson(
     mut env: JNIEnv,
@@ -290,6 +300,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_triggerS
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deactivateSosJson(
     mut env: JNIEnv,
@@ -330,6 +341,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deactiva
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosTelemetryJson(
     mut env: JNIEnv,
@@ -363,6 +375,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosAccelerometerJson(
     mut env: JNIEnv,
@@ -408,6 +421,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSosScreenEventJson(
     mut env: JNIEnv,
@@ -450,6 +464,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_submitSo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listSosAlertsJson(
     mut env: JNIEnv,

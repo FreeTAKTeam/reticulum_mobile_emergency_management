@@ -26,7 +26,7 @@ fn build_link_request_payload(path: &str, data: rmpv::Value) -> Result<Vec<u8>, 
         rmpv::Value::Binary(path_hash.to_vec()),
         data,
     ]))
-    .map_err(|_| NodeError::InternalError {})
+    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 async fn send_link_context_packet(
@@ -46,7 +46,7 @@ async fn send_link_context_packet(
         let cipher_len = {
             let ciphertext = guard
                 .encrypt(payload, packet_data.accuire_buf_max())
-                .map_err(|_| NodeError::InternalError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             ciphertext.len()
         };
         packet_data.resize(cipher_len);
@@ -317,7 +317,7 @@ fn rmpv_shape(value: &rmpv::Value) -> String {
 
 fn apply_fetch_limit(transient_ids: &mut Vec<Vec<u8>>, limit: Option<u32>) {
     if let Some(limit) = limit {
-        transient_ids.truncate(limit as usize);
+        transient_ids.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
 }
 

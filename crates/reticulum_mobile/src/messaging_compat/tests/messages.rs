@@ -242,15 +242,15 @@ fn transport_receipt_does_not_mark_application_ack_accepted() {
     });
 
     let updated = store
-        .update_message_delivery_state(
-            "msg",
-            None,
-            Some(TransportDeliveryState::TransportDelivered),
-            None,
-            Some("transport receipt".to_string()),
-            None,
-            20,
-        )
+        .update_message_delivery_state(MessageDeliveryUpdate {
+            message_id_hex: "msg",
+            state: None,
+            transport_state: Some(TransportDeliveryState::TransportDelivered),
+            application_ack_state: None,
+            detail: Some("transport receipt".to_string()),
+            last_wire_message_id_hex: None,
+            updated_at_ms: 20,
+        })
         .expect("message updated");
 
     assert_eq!(updated.state, MessageState::SentDirect);
@@ -287,15 +287,15 @@ fn chat_ack_marks_application_ack_accepted() {
     });
 
     let updated = store
-        .update_message_delivery_state(
-            "msg",
-            Some(MessageState::Delivered),
-            Some(TransportDeliveryState::TransportDelivered),
-            Some(ApplicationAckState::Accepted),
-            Some("chat delivery ack".to_string()),
-            None,
-            20,
-        )
+        .update_message_delivery_state(MessageDeliveryUpdate {
+            message_id_hex: "msg",
+            state: Some(MessageState::Delivered),
+            transport_state: Some(TransportDeliveryState::TransportDelivered),
+            application_ack_state: Some(ApplicationAckState::Accepted),
+            detail: Some("chat delivery ack".to_string()),
+            last_wire_message_id_hex: None,
+            updated_at_ms: 20,
+        })
         .expect("message updated");
 
     assert_eq!(updated.state, MessageState::Delivered);
@@ -332,15 +332,15 @@ fn retry_chat_ack_updates_original_record_by_wire_message_id() {
     });
 
     let updated = store
-        .update_message_delivery_state(
-            "retry-wire-msg",
-            Some(MessageState::Delivered),
-            Some(TransportDeliveryState::TransportDelivered),
-            Some(ApplicationAckState::Accepted),
-            Some("chat delivery ack".to_string()),
-            None,
-            20,
-        )
+        .update_message_delivery_state(MessageDeliveryUpdate {
+            message_id_hex: "retry-wire-msg",
+            state: Some(MessageState::Delivered),
+            transport_state: Some(TransportDeliveryState::TransportDelivered),
+            application_ack_state: Some(ApplicationAckState::Accepted),
+            detail: Some("chat delivery ack".to_string()),
+            last_wire_message_id_hex: None,
+            updated_at_ms: 20,
+        })
         .expect("message updated by wire id");
 
     assert_eq!(updated.message_id_hex, "logical-msg");

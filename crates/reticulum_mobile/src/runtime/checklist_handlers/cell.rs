@@ -50,7 +50,7 @@ fn handle_inbound_checklist_cell(ctx: &InboundChecklistCommand<'_>) -> bool {
         .iter()
         .any(|column| column.column_uid == column_uid)
     {
-        let display_order = checklist.columns.len() as u32;
+        let display_order = crate::numeric::usize_to_u32_saturating(checklist.columns.len());
         checklist.columns.push(ChecklistColumnRecord {
             column_uid: column_uid.clone(),
             column_name: column_uid.clone(),

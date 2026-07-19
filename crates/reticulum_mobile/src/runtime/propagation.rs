@@ -47,8 +47,7 @@ async fn run_propagation_sync_job(
         }
 
         info!(
-            "[sync] propagation sync relay attempt relay={} attempt={}/{}",
-            relay_candidate, attempt_number, PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+            "[sync] propagation sync relay attempt relay={relay_candidate} attempt={attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS}"
         );
         emit_sync_status_update(
             &state,
@@ -57,8 +56,7 @@ async fn run_propagation_sync_job(
             requested_at_ms,
             0,
             Some(format!(
-                "requesting path to propagation relay {relay_candidate} ({attempt_number}/{})",
-                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+                "requesting path to propagation relay {relay_candidate} ({attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS})"
             )),
             false,
         )
@@ -70,8 +68,7 @@ async fn run_propagation_sync_job(
             requested_at_ms,
             0,
             Some(format!(
-                "establishing propagation link {relay_candidate} ({attempt_number}/{})",
-                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+                "establishing propagation link {relay_candidate} ({attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS})"
             )),
             false,
         )
@@ -83,8 +80,7 @@ async fn run_propagation_sync_job(
             requested_at_ms,
             0,
             Some(format!(
-                "requesting propagated messages ({attempt_number}/{})",
-                PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS
+                "requesting propagated messages ({attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS})"
             )),
             false,
         )
@@ -98,8 +94,7 @@ async fn run_propagation_sync_job(
             Ok(result) => result,
             Err(err) => {
                 info!(
-                    "[sync] propagation sync relay attempt failed relay={} attempt={}/{} reason={}",
-                    relay_candidate, attempt_number, PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS, err
+                    "[sync] propagation sync relay attempt failed relay={relay_candidate} attempt={attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS} reason={err}"
                 );
                 last_failure = Some((relay_candidate.clone(), err));
                 sync_auto_propagation_node(&state, &bus).await;
@@ -133,7 +128,8 @@ async fn run_propagation_sync_job(
         let failed_count = result.failed_count;
         let malformed_count = result.malformed_count;
         let decrypt_failed_count = result.decrypt_failed_count;
-        let imported_count = result.imported_wires.len() as u32;
+        let imported_count =
+            crate::numeric::usize_to_u32_saturating(result.imported_wires.len());
         emit_sync_status_update(
             &state,
             &bus,
@@ -172,8 +168,7 @@ async fn run_propagation_sync_job(
         )
         .await;
         info!(
-            "[sync] propagation sync complete relay={} {}",
-            relay_candidate, detail
+            "[sync] propagation sync complete relay={relay_candidate} {detail}"
         );
         state
             .propagation_sync_inflight

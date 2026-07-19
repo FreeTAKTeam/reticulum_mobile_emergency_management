@@ -13,11 +13,11 @@ fn parse_checklist_template_csv(
         .from_reader(request.csv_text.as_bytes());
     let headers = reader
         .headers()
-        .map_err(|_| NodeError::InvalidConfig {})?
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))?
         .clone();
     let mut rows = Vec::<Vec<String>>::new();
     for row in reader.records() {
-        let row = row.map_err(|_| NodeError::InvalidConfig {})?;
+        let row = row.map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))?;
         let cells = row
             .iter()
             .map(|cell| cell.replace('\u{feff}', "").trim().to_string())
@@ -77,7 +77,7 @@ fn parse_checklist_template_csv(
         columns.push(ChecklistColumnRecord {
             column_uid,
             column_name: header.clone(),
-            display_order: columns.len() as u32,
+            display_order: crate::numeric::usize_to_u32_saturating(columns.len()),
             column_type: ChecklistColumnType::ShortString {},
             column_editable: true,
             background_color: None,
@@ -113,7 +113,7 @@ fn parse_checklist_template_csv(
     let due_step = default_task_due_step_minutes.max(1);
     let mut tasks = Vec::new();
     for row in rows {
-        let number = (tasks.len() + 1) as u32;
+        let number = crate::numeric::usize_to_u32_saturating(tasks.len().saturating_add(1));
         let task_uid = format!("{template_uid_seed}-task-{number}");
         let due_relative_minutes = match due_header_index {
             Some(index) => {
@@ -283,11 +283,11 @@ fn parse_checklist_due_relative_minutes(value: &str) -> Result<u32, NodeError> {
         let hours = hours
             .trim()
             .parse::<u32>()
-            .map_err(|_| NodeError::InvalidConfig {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))?;
         let minutes = minutes
             .trim()
             .parse::<u32>()
-            .map_err(|_| NodeError::InvalidConfig {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))?;
         if minutes >= 60 {
             return Err(NodeError::InvalidConfig {});
         }
@@ -298,7 +298,7 @@ fn parse_checklist_due_relative_minutes(value: &str) -> Result<u32, NodeError> {
             .trim()
             .parse::<u32>()
             .map(|value| value * 60)
-            .map_err(|_| NodeError::InvalidConfig {});
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error));
     }
     for suffix in ["hours", "hour"] {
         if let Some(hours) = text.strip_suffix(suffix) {
@@ -306,8 +306,8 @@ fn parse_checklist_due_relative_minutes(value: &str) -> Result<u32, NodeError> {
                 .trim()
                 .parse::<u32>()
                 .map(|value| value * 60)
-                .map_err(|_| NodeError::InvalidConfig {});
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error));
         }
     }
-    text.parse::<u32>().map_err(|_| NodeError::InvalidConfig {})
+    text.parse::<u32>().map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))
 }

@@ -4,15 +4,14 @@ fn saved_peer_profile_projects_stale_routable_lxmf_peer_without_announces() {
     let seen_at = current_time_ms().saturating_sub(DEFAULT_PEER_STALE_AFTER_MS + 1_000);
 
     store.mark_peer_saved("appdest", true);
-    store.record_saved_peer_profile(
-        "appdest",
-        Some("identity"),
-        Some("lxmfdest"),
-        Some("R3AKT,EmergencyMessages,Telemetry"),
-        Some("Alice"),
-        Some(seen_at),
-        Some(3),
-    );
+    store.record_saved_peer_profile(SavedPeerProfileInput {
+        destination_hex: "appdest",
+        identity_hex: Some("identity"),
+        lxmf_destination_hex: Some("lxmfdest"),
+        app_data: Some("R3AKT,EmergencyMessages,Telemetry"),
+        display_name: Some("Alice"),
+        last_route_seen_at_ms: Some(seen_at),
+    });
 
     let peers = store.list_peers();
     assert_eq!(peers.len(), 1);

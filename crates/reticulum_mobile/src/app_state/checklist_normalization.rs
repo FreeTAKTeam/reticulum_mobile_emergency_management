@@ -78,25 +78,31 @@ pub(crate) fn normalize_checklist_record(checklist: &mut ChecklistRecord) {
         .iter()
         .filter(|task| task.deleted_at.is_none())
         .collect::<Vec<_>>();
-    let pending_count = active_tasks
-        .iter()
-        .copied()
-        .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Pending {}))
-        .count() as u32;
-    let late_count = active_tasks
-        .iter()
-        .copied()
-        .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Late {}))
-        .count() as u32;
-    let complete_count = active_tasks
-        .iter()
-        .copied()
-        .filter(|task| task.task_status.is_complete())
-        .count() as u32;
+    let pending_count = crate::numeric::usize_to_u32_saturating(
+        active_tasks
+            .iter()
+            .copied()
+            .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Pending {}))
+            .count(),
+    );
+    let late_count = crate::numeric::usize_to_u32_saturating(
+        active_tasks
+            .iter()
+            .copied()
+            .filter(|task| matches!(task.task_status, ChecklistTaskStatus::Late {}))
+            .count(),
+    );
+    let complete_count = crate::numeric::usize_to_u32_saturating(
+        active_tasks
+            .iter()
+            .copied()
+            .filter(|task| task.task_status.is_complete())
+            .count(),
+    );
     checklist.counts.pending_count = pending_count;
     checklist.counts.late_count = late_count;
     checklist.counts.complete_count = complete_count;
-    let total = active_tasks.len() as u32;
+    let total = crate::numeric::usize_to_u32_saturating(active_tasks.len());
     if checklist.expected_task_count.is_none() {
         checklist.expected_task_count = Some(total);
     }
@@ -209,7 +215,7 @@ pub(crate) fn current_timestamp_rfc3339() -> String {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let seconds_since_epoch = duration.as_secs() as i64;
+    let seconds_since_epoch = crate::numeric::u64_to_i64_saturating(duration.as_secs());
     let nanos = duration.subsec_nanos();
     let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
     let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);

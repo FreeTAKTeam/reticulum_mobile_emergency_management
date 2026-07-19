@@ -2,12 +2,12 @@ pub(crate) fn lxmf_private_identity(
     identity: &PrivateIdentity,
 ) -> Result<lxmf::identity::PrivateIdentity, NodeError> {
     lxmf::identity::PrivateIdentity::from_private_key_bytes(&identity.to_private_key_bytes())
-        .map_err(|_| NodeError::InternalError {})
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn parse_address_hash(hex_32: &str) -> Result<AddressHash, NodeError> {
     let normalized = normalize_hex_32(hex_32).ok_or(NodeError::InvalidConfig {})?;
-    AddressHash::new_from_hex_string(&normalized).map_err(|_| NodeError::InvalidConfig {})
+    AddressHash::new_from_hex_string(&normalized).map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))
 }
 
 fn address_hash_to_hex(hash: &AddressHash) -> String {
@@ -29,7 +29,7 @@ impl InterfaceTrafficSample {
         self.packets = self.packets.saturating_add(1);
         self.bytes = self
             .bytes
-            .saturating_add(packet.data.as_slice().len() as u64);
+            .saturating_add(u64::try_from(packet.data.as_slice().len()).unwrap_or(u64::MAX));
         match packet.header.packet_type {
             PacketType::Announce => {
                 self.announces = self.announces.saturating_add(1);
@@ -172,7 +172,7 @@ fn spawn_interface_traffic_monitor(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            warn!("[iface][rx] monitor lagged skipped={}", skipped);
+                            warn!("[iface][rx] monitor lagged skipped={skipped}");
                         }
                     }
                 }
@@ -196,8 +196,7 @@ async fn announce_destinations(
         .address_hash
         .to_hex_string();
     info!(
-        "[announce] sending reason={} kind={} destination={}",
-        reason, DESTINATION_KIND_LXMF_DELIVERY, lxmf_hex,
+        "[announce] sending reason={reason} kind={DESTINATION_KIND_LXMF_DELIVERY} destination={lxmf_hex}",
     );
     transport
         .set_destination_announce_app_data(lxmf_destination, Some(caps.as_bytes().to_vec()))
@@ -223,9 +222,15 @@ async fn send_announce_with_trace(
         let mut destination = destination.lock().await;
         let destination_hex = destination.desc.address_hash.to_hex_string();
         let app_data_len = app_data.map(|value| value.len()).unwrap_or(0);
-        let packet = destination
-            .announce(OsRng, app_data)
-            .expect("valid announce packet");
+        let packet = match destination.announce(OsRng, app_data) {
+            Ok(packet) => packet,
+            Err(error) => {
+                warn!(
+                    "[announce][tx] reason={reason} kind={destination_kind} destination={destination_hex} outcome=build-failed error={error:?}"
+                );
+                return;
+            }
+        };
         (destination_hex, app_data_len, packet)
     };
     let trace = transport.send_packet_with_trace(packet).await;

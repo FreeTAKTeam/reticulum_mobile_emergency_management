@@ -491,7 +491,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 
-1.2 release gate:
+1.2.7-rc.1 release gate:
 - The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
 - For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
 - Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
@@ -503,7 +503,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
 - Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
 - Settings clearly document that REM must be restarted after interface configuration changes for this release.
-- 1.2.0 remains a prerelease until this matrix passes on the connected phones.
+- 1.2.7-rc.1 remains a prerelease until issue #168 passes on two authorized phones.
 
 ## Mobile Runtime Ownership Status
 
@@ -527,7 +527,34 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 - Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
 - Saved peers are rehydrated into the Rust managed-peer set during runtime startup, so the app does not depend on a later UI-driven connect pass before EAM/Event/message sends can target intentional peers.
 
-This cutover is incomplete. Telemetry permission/fix acquisition still originates in TypeScript, and remaining long-session validation must prove that every operational lifecycle is fully native-owned.
+Telemetry permission and fix acquisition intentionally originate in TypeScript
+because they are platform UX concerns; persisted operational state and mesh
+delivery remain Rust-owned.
+
+## Error And Native Boundary Contract
+
+`NodeError` remains the stable UniFFI category enum. First-party Rust records an
+internal failure alongside the category whenever an I/O, database,
+serialization, channel, network, SDK, or lock operation fails. The record has a
+stable `code`, useful `message`, boundary `operation`, retry classification, and
+causal diagnostic text.
+
+The internal record does not change LXMF payloads, persisted records, or the
+UniFFI enum. At JNI, `takeLastErrorJson()` returns camel-case JSON. `operation`
+and `cause` are optional for compatibility; `retryable` is always a boolean.
+JNI integer operations keep `0` for success and `1` for failure. Object
+operations return null on failure.
+
+Every Java JNI export is wrapped in `catch_unwind`. A Rust panic becomes a
+non-retryable `InternalError` and the compatible failure value; it never
+unwinds into the JVM. Java passes the envelope through Capacitor rejection data,
+and `@reticulum/node-client` exposes `ReticulumNodeError` and
+`classifyNodeError()` so callers do not parse message text.
+
+Retry is appropriate only for bounded transient categories (`IoError`,
+`NetworkError`, `ReticulumError`, `Timeout`, and `EventStreamClosed`). Invalid
+configuration, wire construction, oversize packets, and internal errors require
+correction or operator attention. See `docs/developer-examples.md`.
 
 ## UniFFI Code Generation
 

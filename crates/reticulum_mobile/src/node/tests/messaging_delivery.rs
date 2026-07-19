@@ -235,7 +235,9 @@ where
             return None;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let timeout_ms = remaining.as_millis().min(u32::MAX as u128).max(1) as u32;
+        let timeout_ms = crate::numeric::u128_to_u32_saturating(
+            remaining.as_millis().min(u128::from(u32::MAX)).max(1),
+        );
         if let Some(event) = subscription.next(timeout_ms.min(250)) {
             if predicate(&event) {
                 return Some(event);

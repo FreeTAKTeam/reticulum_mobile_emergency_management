@@ -174,31 +174,31 @@ impl SendTaskPermits {
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| NodeError::InternalError {}),
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error)),
             SendTaskClass::MissionAck => self
                 .mission_ack
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| NodeError::InternalError {}),
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error)),
             SendTaskClass::MissionPropagation => self
                 .mission_propagation
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| NodeError::InternalError {}),
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error)),
             SendTaskClass::MissionRecovery => self
                 .mission_recovery
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| NodeError::InternalError {}),
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error)),
             SendTaskClass::General => self
                 .general
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| NodeError::InternalError {}),
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error)),
         }
     }
 }

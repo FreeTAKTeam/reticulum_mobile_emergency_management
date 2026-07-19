@@ -87,7 +87,7 @@ fn handle_inbound_checklist_create(ctx: &InboundChecklistCommand<'_>) -> bool {
     if let Some(total_tasks) =
         msgpack_get_checklist_arg(args, "total_tasks").and_then(msgpack_u64)
     {
-        checklist.expected_task_count = Some(total_tasks as u32);
+        checklist.expected_task_count = Some(crate::numeric::u64_to_u32_saturating(total_tasks));
     }
     if let Some(created_at) =
         msgpack_get_checklist_arg(args, "created_at").and_then(msgpack_string)

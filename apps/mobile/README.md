@@ -57,7 +57,7 @@ Checklist CSV upload creates a template only. The template becomes shared when t
 
 From repo root:
 
-1. Install dependencies (once): `npm install`
+1. Install exact dependencies: `npm ci`
 2. Start app dev server: `npm run mobile:dev`
 
 Or from `apps/mobile` directly:
@@ -69,20 +69,23 @@ Or from `apps/mobile` directly:
 From repo root:
 
 1. Build web assets: `npm run mobile:build`
-2. Sync Capacitor platforms: `npm --workspace apps/mobile run sync`
+2. Sync Android only: from `apps/mobile`, run `npx cap sync android`
 
-Open native projects:
+Open the Android project:
 
 - Android: `npm --workspace apps/mobile run android`
-- iOS: `npm --workspace apps/mobile run ios`
+
+iOS compilation and CocoaPods are not release gates for `1.2.7-rc.1`.
 
 ## Android production build (signed)
 
-1. Build and sync web assets:
-   - From repo root: `npm --workspace apps/mobile run build`
-   - From `apps/mobile`: `npx cap sync android`
-2. Build signed Android release artifacts:
-   - From `apps/mobile/android`: `cmd /c gradlew.bat assembleRelease bundleRelease`
+1. From the repository root, run `npm run mobile:build`.
+2. From `apps/mobile`, run `npx cap sync android`.
+3. Set release-time metadata. `appVersionName` is `1.2.7-rc.1` and
+   `appVersionCode` is the UTC `yyDDDHHmm` value.
+4. Build signed Android release artifacts:
+   - Linux/macOS, from `apps/mobile/android`: `bash ./gradlew assembleRelease bundleRelease`
+   - Windows, from the same directory: `gradlew.bat assembleRelease bundleRelease`
 
 Outputs:
 
@@ -90,10 +93,11 @@ Outputs:
 - AAB (default): `apps/mobile/android/app/build/outputs/bundle/release/app-release.aab`
 - AAB (renamed copy): `apps/mobile/android/app/build/outputs/bundle/release/<app-name>-v<versionName>-release.aab`
 
-Release builds auto-generate:
+When no Gradle property override is present, release builds generate:
 
 - `versionCode` from UTC timestamp (`yyDDDHHmm`)
-- `versionName` as `1.0.<yyyyMMddHHmmss>`
+- `versionName` as `1.0.<yyyyMMddHHmmss>`. Official builds override this with
+  the release name, such as `1.2.7-rc.1`.
 - artifact file names containing the application name and version
 
 ## Local signing config
@@ -106,3 +110,17 @@ Expected keys in `keystore.properties`:
 - `storePassword`
 - `keyAlias`
 - `keyPassword`
+
+Never commit the keystore, passwords, or `keystore.properties`.
+
+Verify a release before publishing:
+
+```bash
+apksigner verify --verbose --print-certs path/to/rem-v1.2.7-rc.1-release.apk
+sha256sum path/to/rem-v1.2.7-rc.1-release.apk path/to/rem-v1.2.7-rc.1-release.aab
+adb install -r path/to/rem-v1.2.7-rc.1-release.apk
+adb shell dumpsys package network.reticulum.emergency | grep -E 'versionCode|versionName'
+```
+
+The APK and AAB must be built from the exact merged `main` commit. Release
+sidecars contain one lowercase SHA-256 digest and asset filename per line.

@@ -82,9 +82,9 @@ fn msgpack_eam_status(value: &MsgPackValue) -> Option<String> {
     })
 }
 
-fn msgpack_eam_status_array<'a>(
-    args: &'a [(MsgPackValue, MsgPackValue)],
-) -> [Option<&'a MsgPackValue>; 6] {
+fn msgpack_eam_status_array(
+    args: &[(MsgPackValue, MsgPackValue)],
+) -> [Option<&MsgPackValue>; 6] {
     let mut statuses = [None, None, None, None, None, None];
     if let Some(values) =
         msgpack_get_named(args, &["statuses", "s"]).and_then(MsgPackValue::as_array)
@@ -193,7 +193,7 @@ fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {
         MsgPackValue::Integer(value) => value.as_u64().or_else(|| {
             value
                 .as_i64()
-                .and_then(|entry| (entry >= 0).then_some(entry as u64))
+                .and_then(|entry| u64::try_from(entry).ok())
         }),
         _ => None,
     }

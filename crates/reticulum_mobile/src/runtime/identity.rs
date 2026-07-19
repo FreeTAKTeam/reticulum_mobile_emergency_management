@@ -12,16 +12,16 @@ pub fn load_or_create_identity(
     };
 
     let dir = PathBuf::from(dir);
-    fs::create_dir_all(&dir).map_err(|_| NodeError::IoError {})?;
+    fs::create_dir_all(&dir).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     let path = identity_path(&dir);
 
     if path.exists() {
-        let raw = fs::read_to_string(&path).map_err(|_| NodeError::IoError {})?;
+        let raw = fs::read_to_string(&path).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let hex = raw.trim();
-        return PrivateIdentity::new_from_hex_string(hex).map_err(|_| NodeError::IoError {});
+        return PrivateIdentity::new_from_hex_string(hex).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error));
     }
 
     let identity = PrivateIdentity::new_from_rand(OsRng);
-    fs::write(&path, identity.to_hex_string()).map_err(|_| NodeError::IoError {})?;
+    fs::write(&path, identity.to_hex_string()).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     Ok(identity)
 }

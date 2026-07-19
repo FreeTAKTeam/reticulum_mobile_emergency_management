@@ -5,7 +5,9 @@ LANGUAGE="${1:-swift}"
 OUT_DIR="${2:-}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UDL_PATH="$REPO_ROOT/crates/reticulum_mobile/src/reticulum_mobile.udl"
+CRATE_MANIFEST="$REPO_ROOT/crates/reticulum_mobile/Cargo.toml"
 TMP_OUT="$REPO_ROOT/target/uniffi/$LANGUAGE"
+export CARGO_TARGET_DIR="$REPO_ROOT/target"
 
 if [[ -z "$OUT_DIR" ]]; then
   if [[ "$LANGUAGE" == "kotlin" ]]; then
@@ -103,7 +105,7 @@ mkdir -p "$TMP_OUT" "$TARGET_OUT"
 echo "Building reticulum_mobile for $LANGUAGE targets..."
 for target in "${TARGETS[@]}"; do
   rustup target add "$target" >/dev/null
-  cargo build -p reticulum_mobile --release --target "$target"
+  cargo build --manifest-path "$CRATE_MANIFEST" --locked --release --target "$target"
   if [[ "$LANGUAGE" == "kotlin" ]]; then
     BUILT_LIBRARY="$REPO_ROOT/target/$target/release/libreticulum_mobile.so"
     if ! "$NDK_BIN/llvm-readelf" -lW "$BUILT_LIBRARY" \

@@ -21,23 +21,23 @@ impl AppStateStore {
                     "SELECT json FROM messages WHERE conversation_id = ?1
                      ORDER BY updated_at_ms ASC, message_id_hex ASC",
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             let rows = statement
                 .query_map(params![conversation_id], |row| row.get::<_, String>(0))
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             for row in rows {
-                let raw: String = row.map_err(|_| NodeError::IoError {})?;
+                let raw: String = row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
                 records.push(deserialize_json(&raw)?);
             }
         } else {
             let mut statement = connection
                 .prepare("SELECT json FROM messages ORDER BY updated_at_ms ASC, message_id_hex ASC")
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             let rows = statement
                 .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             for row in rows {
-                let raw: String = row.map_err(|_| NodeError::IoError {})?;
+                let raw: String = row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
                 records.push(deserialize_json(&raw)?);
             }
         }
@@ -115,7 +115,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_message_tx(&transaction, &canonical_message)?;
         let messages = self.bump_projection_revision_tx(
             &transaction,
@@ -129,7 +129,7 @@ impl AppStateStore {
             None,
             Some("message-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(vec![messages, conversations])
     }
 
@@ -156,7 +156,7 @@ impl AppStateStore {
         self.repair_message_conversations(&connection, resolver)?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let removed_sos =
             self.delete_sos_records_for_conversations_tx(&transaction, normalized_ids.as_slice())?;
         for id in &ids {
@@ -165,7 +165,7 @@ impl AppStateStore {
                     "DELETE FROM messages WHERE conversation_id = ?1",
                     params![id],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
         let messages = self.bump_projection_revision_tx(
             &transaction,
@@ -189,7 +189,7 @@ impl AppStateStore {
         } else {
             None
         };
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut invalidations = vec![messages, conversations];
         if let Some(invalidation) = sos {
             invalidations.push(invalidation);

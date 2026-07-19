@@ -8,10 +8,11 @@ import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImpor
 import { decodeBase64ToBytes, encodeBytesToBase64, normalizeHex, pluginRecord, toAnnounceReceivedEvent, toAnnounceRecord, toInstalledPlugin, toInterfaceStatusChangedEvent, toNodeStatus, toPeerChangedEvent, toPluginSensor, toStatusChangedEvent } from "./runtime-converters";
 import { TypedEmitter } from "./typed-emitter";
 import { CapacitorProjectionClient } from "./capacitor-projection-client";
+import { classifyPluginErrors } from "./errors";
 
 export class CapacitorReticulumNodeClient extends CapacitorProjectionClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  protected readonly plugin = ReticulumNodePluginInstance;
+  protected readonly plugin = classifyPluginErrors(ReticulumNodePluginInstance);
   private listenerHandles: PluginListenerHandle[] = [];
   private attachPromise: Promise<void> | null = null;
   private generation = 0;

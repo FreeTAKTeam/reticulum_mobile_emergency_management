@@ -217,34 +217,38 @@ pub(crate) fn saved_route_prefers_propagation<P: PeerDeliveryState + ?Sized>(
             && !peer_is_directly_reachable(peer)
 }
 
-pub(crate) fn direct_attempt_budget_for_send(
-    send_mode: types::SendMode,
-    has_active_relay: bool,
-    can_try_stored_lxmf_route: bool,
-    has_current_lxmf_route: bool,
-    direct_delivery_ready: bool,
-    direct_priority_hops: Option<u8>,
-    direct_priority_free_hops: u8,
-    lxmf_direct_attempts: usize,
-) -> usize {
-    if matches!(send_mode, types::SendMode::Auto {})
-        && has_active_relay
-        && can_try_stored_lxmf_route
-        && !has_current_lxmf_route
-        && !direct_delivery_ready
-        && direct_priority_hops.is_some_and(|hops| hops > direct_priority_free_hops)
+pub(crate) struct DirectAttemptBudget {
+    pub send_mode: types::SendMode,
+    pub has_active_relay: bool,
+    pub can_try_stored_lxmf_route: bool,
+    pub has_current_lxmf_route: bool,
+    pub direct_delivery_ready: bool,
+    pub direct_priority_hops: Option<u8>,
+    pub direct_priority_free_hops: u8,
+    pub lxmf_direct_attempts: usize,
+}
+
+pub(crate) fn direct_attempt_budget_for_send(input: DirectAttemptBudget) -> usize {
+    if matches!(input.send_mode, types::SendMode::Auto {})
+        && input.has_active_relay
+        && input.can_try_stored_lxmf_route
+        && !input.has_current_lxmf_route
+        && !input.direct_delivery_ready
+        && input
+            .direct_priority_hops
+            .is_some_and(|hops| hops > input.direct_priority_free_hops)
     {
         return 0;
     }
 
-    lxmf_direct_attempts
+    input.lxmf_direct_attempts
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        direct_attempt_budget_for_send, saved_route_prefers_propagation, PeerConnectivityModel,
-        PeerDeliveryState,
+        direct_attempt_budget_for_send, saved_route_prefers_propagation, DirectAttemptBudget,
+        PeerConnectivityModel, PeerDeliveryState,
     };
     use crate::types;
 
@@ -366,16 +370,16 @@ mod tests {
     #[test]
     fn auto_send_keeps_direct_budget_for_current_saved_lxmf_route() {
         assert_eq!(
-            direct_attempt_budget_for_send(
-                types::SendMode::Auto {},
-                true,
-                true,
-                true,
-                false,
-                None,
-                2,
-                3
-            ),
+            direct_attempt_budget_for_send(DirectAttemptBudget {
+                send_mode: types::SendMode::Auto {},
+                has_active_relay: true,
+                can_try_stored_lxmf_route: true,
+                has_current_lxmf_route: true,
+                direct_delivery_ready: false,
+                direct_priority_hops: None,
+                direct_priority_free_hops: 2,
+                lxmf_direct_attempts: 3,
+            }),
             3,
         );
     }
@@ -397,16 +401,16 @@ mod tests {
             &peer, true, false, None, 2
         ));
         assert_eq!(
-            direct_attempt_budget_for_send(
-                types::SendMode::Auto {},
-                true,
-                true,
-                false,
-                false,
-                None,
-                2,
-                3,
-            ),
+            direct_attempt_budget_for_send(DirectAttemptBudget {
+                send_mode: types::SendMode::Auto {},
+                has_active_relay: true,
+                can_try_stored_lxmf_route: true,
+                has_current_lxmf_route: false,
+                direct_delivery_ready: false,
+                direct_priority_hops: None,
+                direct_priority_free_hops: 2,
+                lxmf_direct_attempts: 3,
+            },),
             3,
         );
     }

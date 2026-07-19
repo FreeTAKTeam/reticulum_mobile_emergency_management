@@ -6,7 +6,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -65,7 +65,7 @@ impl AppStateStore {
                     checklist.uid.as_str(),
                     "checklist-task-row-added",
                 )?;
-                transaction.commit().map_err(|_| NodeError::IoError {})?;
+                transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
                 return Ok(invalidations);
             }
             return Err(NodeError::InvalidConfig {});
@@ -113,7 +113,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-task-row-added",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -124,7 +124,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -149,7 +149,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-task-row-deleted",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -160,7 +160,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -189,7 +189,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-task-row-style-set",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -200,7 +200,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -210,7 +210,8 @@ impl AppStateStore {
             .iter()
             .any(|column| column.column_uid == request.column_uid)
         {
-            let display_order = checklist.columns.len() as u32;
+            let display_order =
+                crate::numeric::usize_to_u32_saturating(checklist.columns.len());
             checklist.columns.push(ChecklistColumnRecord {
                 column_uid: request.column_uid.clone(),
                 column_name: request.column_uid.clone(),
@@ -269,7 +270,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-task-cell-set",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 

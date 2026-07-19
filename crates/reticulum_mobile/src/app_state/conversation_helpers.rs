@@ -53,7 +53,7 @@ fn conversation_has_messages(
             params![normalized],
             |row| row.get(0),
         )
-        .map_err(|_| NodeError::IoError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     Ok(count > 0)
 }
 
@@ -72,14 +72,15 @@ fn conversation_has_sos_cancellation(
              WHERE conversation_id = ?1 AND updated_at_ms >= ?2
              ORDER BY updated_at_ms DESC, message_id_hex ASC",
         )
-        .map_err(|_| NodeError::IoError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     let rows = statement
-        .query_map(params![normalized, since_ms as i64], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|_| NodeError::IoError {})?;
+        .query_map(
+            params![normalized, crate::numeric::u64_to_i64_saturating(since_ms)],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     for row in rows {
-        let message: MessageRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+        let message: MessageRecord = deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?;
         let detail = message.detail.as_deref().unwrap_or("").to_ascii_lowercase();
         if detail.contains("sos:cancelled")
             || matches!(
@@ -105,13 +106,13 @@ fn query_json_records<T: serde::de::DeserializeOwned>(
     connection: &Connection,
     sql: &str,
 ) -> Result<Vec<T>, NodeError> {
-    let mut statement = connection.prepare(sql).map_err(|_| NodeError::IoError {})?;
+    let mut statement = connection.prepare(sql).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     let rows = statement
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|_| NodeError::IoError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     let mut records = Vec::new();
     for row in rows {
-        records.push(deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?);
+        records.push(deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?);
     }
     Ok(records)
 }

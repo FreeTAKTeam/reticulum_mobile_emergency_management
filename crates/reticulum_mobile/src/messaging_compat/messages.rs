@@ -13,14 +13,17 @@ impl MessagingStore {
 
     pub fn update_message_delivery_state(
         &mut self,
-        message_id_hex: &str,
-        state: Option<MessageState>,
-        transport_state: Option<TransportDeliveryState>,
-        application_ack_state: Option<ApplicationAckState>,
-        detail: Option<String>,
-        last_wire_message_id_hex: Option<String>,
-        updated_at_ms: u64,
+        update: MessageDeliveryUpdate<'_>,
     ) -> Option<MessageRecord> {
+        let MessageDeliveryUpdate {
+            message_id_hex,
+            state,
+            transport_state,
+            application_ack_state,
+            detail,
+            last_wire_message_id_hex,
+            updated_at_ms,
+        } = update;
         let resolved_message_id_hex = if self.message_records.contains_key(message_id_hex) {
             message_id_hex.to_string()
         } else {

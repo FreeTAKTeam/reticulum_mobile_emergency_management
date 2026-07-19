@@ -282,11 +282,11 @@ fn parse_positional_command_envelope(values: &[MsgPackValue], metadata: &mut Mis
         &mut metadata.checklist_uid,
         values.get(1).and_then(msgpack_checklist_uid),
     );
+    let Some(mission_uid) = values.get(2) else {
+        return;
+    };
     parse_mission_uid_field(
-        &[(
-            MsgPackValue::from("m"),
-            values.get(2).expect("checked length").clone(),
-        )],
+        &[(MsgPackValue::from("m"), mission_uid.clone())],
         &["m"],
         &mut metadata.mission_uid,
     );

@@ -171,17 +171,7 @@ async fn send_lxmf_with_delivery_policy(
         .await?;
         last_resolved_destination_hex = Some(resolved_destination_hex.clone());
         info!(
-            "[lxmf][mission] resolved send requested_destination={} canonical_destination={} resolved_destination={} mode={:?} attempt={attempt}/{direct_attempts} require_current_peer={} saved_peer={} stored_lxmf_route={} active_relay={} relay_transport={} direct_ready={}",
-            requested_destination_hex,
-            canonical_requested_destination,
-            resolved_destination_hex,
-            send_mode,
-            require_current_peer,
-            is_saved_peer,
-            can_try_stored_lxmf_route,
-            has_active_relay,
-            has_active_relay_transport,
-            direct_delivery_ready,
+            "[lxmf][mission] resolved send requested_destination={requested_destination_hex} canonical_destination={canonical_requested_destination} resolved_destination={resolved_destination_hex} mode={send_mode:?} attempt={attempt}/{direct_attempts} require_current_peer={require_current_peer} saved_peer={is_saved_peer} stored_lxmf_route={can_try_stored_lxmf_route} active_relay={has_active_relay} relay_transport={has_active_relay_transport} direct_ready={direct_delivery_ready}",
         );
         let destination = parse_address_hash(resolved_destination_hex.as_str())?;
         let rnode_direct_route =
@@ -276,10 +266,7 @@ async fn send_lxmf_with_delivery_policy(
             Err(err) => {
                 let retriable = is_retriable_lxmf_error(&err);
                 info!(
-                    "[lxmf][mission] send attempt {attempt}/{direct_attempts} errored destination={} mode={:?} err={}",
-                    requested_destination_hex,
-                    send_mode,
-                    err,
+                    "[lxmf][mission] send attempt {attempt}/{direct_attempts} errored destination={requested_destination_hex} mode={send_mode:?} err={err}",
                 );
                 last_error = Some(err);
                 if !retriable {
@@ -310,13 +297,7 @@ async fn send_lxmf_with_delivery_policy(
 
     if direct_attempts == 0 {
         info!(
-            "[lxmf][mission] auto delivery using propagation without direct probe destination={} saved_peer={} stored_lxmf_route={} active_relay={} relay_transport={} direct_ready={}",
-            requested_destination_hex,
-            is_saved_peer,
-            can_try_stored_lxmf_route,
-            has_active_relay,
-            has_active_relay_transport,
-            direct_delivery_ready,
+            "[lxmf][mission] auto delivery using propagation without direct probe destination={requested_destination_hex} saved_peer={is_saved_peer} stored_lxmf_route={can_try_stored_lxmf_route} active_relay={has_active_relay} relay_transport={has_active_relay_transport} direct_ready={direct_delivery_ready}",
         );
     } else {
         if !should_try_propagation_after_direct_failure(
@@ -353,8 +334,7 @@ async fn send_lxmf_with_delivery_policy(
             }
         }
         info!(
-            "[lxmf][mission] auto delivery exhausted destination={}; retrying via propagation relay",
-            requested_destination_hex,
+            "[lxmf][mission] auto delivery exhausted destination={requested_destination_hex}; retrying via propagation relay",
         );
     }
     let resolved_destination_hex =
@@ -418,11 +398,7 @@ async fn send_lxmf_via_propagation_candidates(
     for (index, relay_candidate) in relay_candidates.drain(..).enumerate() {
         let attempt_number = index + 1;
         info!(
-            "[lxmf][mission] propagation send relay attempt relay={} attempt={}/{} destination={}",
-            relay_candidate,
-            attempt_number,
-            PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS,
-            requested_destination_hex,
+            "[lxmf][mission] propagation send relay attempt relay={relay_candidate} attempt={attempt_number}/{PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS} destination={requested_destination_hex}",
         );
 
         match state
@@ -449,8 +425,7 @@ async fn send_lxmf_via_propagation_candidates(
             }
             Err(err) => {
                 info!(
-                    "[lxmf][mission] propagation send relay attempt failed relay={} destination={} reason={}",
-                    relay_candidate, requested_destination_hex, err,
+                    "[lxmf][mission] propagation send relay attempt failed relay={relay_candidate} destination={requested_destination_hex} reason={err}",
                 );
                 last_error = Some(err);
             }

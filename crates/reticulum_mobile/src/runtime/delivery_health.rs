@@ -183,14 +183,16 @@ fn direct_attempt_budget_for_send(
     direct_priority_hops: Option<u8>,
 ) -> usize {
     delivery_policy::direct_attempt_budget_for_send(
-        send_mode,
-        has_active_relay,
-        can_try_stored_lxmf_route,
-        has_current_lxmf_route,
-        direct_delivery_ready,
-        direct_priority_hops,
-        MISSION_DIRECT_PRIORITY_FREE_HOPS,
-        LXMF_DIRECT_ATTEMPTS,
+        delivery_policy::DirectAttemptBudget {
+            send_mode,
+            has_active_relay,
+            can_try_stored_lxmf_route,
+            has_current_lxmf_route,
+            direct_delivery_ready,
+            direct_priority_hops,
+            direct_priority_free_hops: MISSION_DIRECT_PRIORITY_FREE_HOPS,
+            lxmf_direct_attempts: LXMF_DIRECT_ATTEMPTS,
+        },
     )
 }
 
@@ -263,7 +265,9 @@ async fn mark_peer_direct_delivery_unhealthy(
     if destinations.is_empty() {
         return;
     }
-    let until_ms = now_ms().saturating_add(DIRECT_DELIVERY_FAILURE_COOLDOWN.as_millis() as u64);
+    let until_ms = now_ms().saturating_add(crate::numeric::u128_to_u64_saturating(
+        DIRECT_DELIVERY_FAILURE_COOLDOWN.as_millis(),
+    ));
     state
         .direct_delivery_health
         .mark_unhealthy(destinations.iter().map(String::as_str), until_ms);
@@ -324,8 +328,7 @@ async fn close_output_links_for_direct_delivery_failure(
     for (destination, link) in stale_links {
         link.lock().await.close();
         debug!(
-            "[link][maintain] destination={} status=closed reason=direct-delivery-failed",
-            destination,
+            "[link][maintain] destination={destination} status=closed reason=direct-delivery-failed",
         );
     }
 }

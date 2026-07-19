@@ -141,7 +141,9 @@ fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
 fn propagated_pending_deliveries_keep_waiting_for_late_acknowledgements() {
     let now = now_ms();
     let mut direct = test_pending_delivery(None);
-    direct.sent_at_ms = now.saturating_sub(DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64);
+    direct.sent_at_ms = now.saturating_sub(crate::numeric::u128_to_u64_saturating(
+        DEFAULT_LXMF_ACK_TIMEOUT.as_millis(),
+    ));
     assert!(pending_ack_timeout_elapsed(&direct, now));
 
     let mut propagated = direct.clone();
@@ -149,7 +151,9 @@ fn propagated_pending_deliveries_keep_waiting_for_late_acknowledgements() {
     propagated.relay_destination_hex = Some("cccccccccccccccccccccccccccccccc".to_string());
     assert!(!pending_ack_timeout_elapsed(&propagated, now));
 
-    propagated.sent_at_ms = now.saturating_sub(PROPAGATED_LXMF_ACK_TIMEOUT.as_millis() as u64);
+    propagated.sent_at_ms = now.saturating_sub(crate::numeric::u128_to_u64_saturating(
+        PROPAGATED_LXMF_ACK_TIMEOUT.as_millis(),
+    ));
     assert!(pending_ack_timeout_elapsed(&propagated, now));
 }
 
@@ -175,10 +179,14 @@ fn propagation_fallback_pending_deliveries_keep_waiting_for_late_acknowledgement
     }));
     propagated.method = LxmfDeliveryMethod::Propagated {};
     propagated.relay_destination_hex = Some("dddddddddddddddddddddddddddddddd".to_string());
-    propagated.sent_at_ms = now.saturating_sub(DEFAULT_LXMF_ACK_TIMEOUT.as_millis() as u64);
+    propagated.sent_at_ms = now.saturating_sub(crate::numeric::u128_to_u64_saturating(
+        DEFAULT_LXMF_ACK_TIMEOUT.as_millis(),
+    ));
 
     assert!(!pending_ack_timeout_elapsed(&propagated, now));
-    propagated.sent_at_ms = now.saturating_sub(PROPAGATED_LXMF_ACK_TIMEOUT.as_millis() as u64);
+    propagated.sent_at_ms = now.saturating_sub(crate::numeric::u128_to_u64_saturating(
+        PROPAGATED_LXMF_ACK_TIMEOUT.as_millis(),
+    ));
     assert!(pending_ack_timeout_elapsed(&propagated, now));
 }
 

@@ -23,6 +23,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
+import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.annotation.RequiresApi;
@@ -30,6 +31,7 @@ import java.util.Collections;
 import java.util.Set;
 
 public final class PairingActivity extends Activity {
+    private static final String TAG = "REM.HeartRatePair";
     private static final int REQUEST_PERMISSIONS = 41;
     private static final int REQUEST_COMPANION = 42;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -226,7 +228,11 @@ public final class PairingActivity extends Activity {
     private void stopScan() {
         handler.removeCallbacksAndMessages(null);
         if (scanner != null) {
-            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
+            try {
+                scanner.stopScan(scanCallback);
+            } catch (Exception cleanupError) {
+                Log.d(TAG, "Ignoring scan stop failure during cleanup", cleanupError);
+            }
             scanner = null;
         }
     }

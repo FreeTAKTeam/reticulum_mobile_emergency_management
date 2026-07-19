@@ -84,8 +84,7 @@ async fn compat_fetch_propagated_lxmf(
             Err(err) => {
                 if batch_len > 1 {
                     info!(
-                        "[sync] propagation sync fetch batch split relay={} destination={} batch={} size={} reason={}",
-                        relay_hex, destination_hex, batch_index, batch_len, err
+                        "[sync] propagation sync fetch batch split relay={relay_hex} destination={destination_hex} batch={batch_index} size={batch_len} reason={err}"
                     );
                     for transient_id in batch.into_iter().rev() {
                         fetch_queue.push_front((batch_index, vec![transient_id]));
@@ -94,8 +93,7 @@ async fn compat_fetch_propagated_lxmf(
                 }
                 failed_count = failed_count.saturating_add(batch_len);
                 info!(
-                    "[sync] propagation sync fetch batch failed relay={} destination={} batch={} reason={}",
-                    relay_hex, destination_hex, batch_index, err
+                    "[sync] propagation sync fetch batch failed relay={relay_hex} destination={destination_hex} batch={batch_index} reason={err}"
                 );
                 last_fetch_error = Some(err);
                 continue;
@@ -210,21 +208,18 @@ async fn compat_fetch_propagated_lxmf(
                 Err(err) => {
                     purge_failed_count = purge_failed_count.saturating_add(batch_count);
                     info!(
-                        "[sync] propagation sync purge batch failed relay={} destination={} purged={} reason={}",
-                        relay_hex, destination_hex, batch_count, err
+                        "[sync] propagation sync purge batch failed relay={relay_hex} destination={destination_hex} purged={batch_count} reason={err}"
                     );
                 }
             }
         }
         if purged_count > 0 {
             info!(
-                "[sync] propagation sync queued purge for fetched entries relay={} destination={} purged={} failed={}",
-                relay_hex, destination_hex, purged_count, purge_failed_count
+                "[sync] propagation sync queued purge for fetched entries relay={relay_hex} destination={destination_hex} purged={purged_count} failed={purge_failed_count}"
             );
         } else if purge_failed_count > 0 {
             info!(
-                "[sync] propagation sync purge failed relay={} destination={} purged={} reason=all_batches_failed",
-                relay_hex, destination_hex, purge_count
+                "[sync] propagation sync purge failed relay={relay_hex} destination={destination_hex} purged={purge_count} reason=all_batches_failed"
             );
         }
     }

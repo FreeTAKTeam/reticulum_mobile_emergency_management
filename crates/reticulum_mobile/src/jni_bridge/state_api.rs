@@ -1,3 +1,4 @@
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAppSettingsJson(
     mut env: JNIEnv,
@@ -33,6 +34,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAppSe
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSavedPeersJson(
     mut env: JNIEnv,
@@ -58,6 +60,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getSaved
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSavedPeersJson(
     mut env: JNIEnv,
@@ -91,6 +94,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getOperationalSummaryJson(
     mut env: JNIEnv,
@@ -113,6 +117,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getOpera
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistsJson(
     mut env: JNIEnv,
@@ -159,6 +164,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistJson(
     mut env: JNIEnv,
@@ -200,6 +206,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getChecklistTemplatesJson(
     mut env: JNIEnv,
@@ -246,6 +253,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCheck
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importChecklistTemplateCsvJson(
     mut env: JNIEnv,
@@ -283,6 +291,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importCh
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createChecklistFromTemplateJson(
     mut env: JNIEnv,
@@ -329,6 +338,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createCh
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createOnlineChecklistJson(
     mut env: JNIEnv,
@@ -362,6 +372,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_createOn
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_updateChecklistJson(
     mut env: JNIEnv,
@@ -395,6 +406,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_updateCh
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteChecklistJson(
     mut env: JNIEnv,

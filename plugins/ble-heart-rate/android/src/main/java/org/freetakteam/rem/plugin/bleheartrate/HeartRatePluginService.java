@@ -16,6 +16,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import java.util.Arrays;
@@ -30,6 +31,7 @@ import network.reticulum.emergency.plugin.api.RemPluginService;
 import org.json.JSONObject;
 
 public final class HeartRatePluginService extends RemPluginService {
+    private static final String TAG = "REM.HeartRatePlugin";
     static final UUID HEART_RATE_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
     static final UUID HEART_RATE_MEASUREMENT = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb");
     static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
@@ -381,7 +383,11 @@ public final class HeartRatePluginService extends RemPluginService {
         final BluetoothGatt current = gatt;
         gatt = null;
         if (current != null) {
-            try { current.disconnect(); } catch (Exception ignored) {}
+            try {
+                current.disconnect();
+            } catch (Exception cleanupError) {
+                Log.d(TAG, "Ignoring GATT disconnect failure during cleanup", cleanupError);
+            }
             safeClose(current);
         }
         connectionState = "Disconnected";
@@ -389,7 +395,11 @@ public final class HeartRatePluginService extends RemPluginService {
 
     @SuppressLint("MissingPermission")
     private void safeClose(BluetoothGatt value) {
-        try { value.close(); } catch (Exception ignored) {}
+        try {
+            value.close();
+        } catch (Exception cleanupError) {
+            Log.d(TAG, "Ignoring GATT close failure during cleanup", cleanupError);
+        }
         if (gatt == value) gatt = null;
     }
 

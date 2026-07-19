@@ -37,7 +37,7 @@ async fn delete_conversation_records(
     let peers = state
         .peers_snapshot
         .lock()
-        .map_err(|_| NodeError::InternalError {})?
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
         .clone();
     let resolver = conversation_peer_resolver(&peers);
     for invalidation in state
@@ -208,7 +208,8 @@ fn prune_expired_buffered_acknowledgements(
 ) -> usize {
     let before = pending_lxmf_acknowledgements.len();
     pending_lxmf_acknowledgements.retain(|_, pending| {
-        now_ms.saturating_sub(pending.buffered_at_ms) < DEFAULT_BUFFERED_ACK_TTL.as_millis() as u64
+        now_ms.saturating_sub(pending.buffered_at_ms)
+            < crate::numeric::u128_to_u64_saturating(DEFAULT_BUFFERED_ACK_TTL.as_millis())
     });
     before.saturating_sub(pending_lxmf_acknowledgements.len())
 }
@@ -220,7 +221,9 @@ fn prune_expired_receipt_tracking(
     let before = receipt_message_ids.len();
     receipt_message_ids.retain(|_, tracking| {
         now_ms.saturating_sub(tracking.recorded_at_ms)
-            < DEFAULT_RECEIPT_TRACKING_TTL.as_millis() as u64
+            < crate::numeric::u128_to_u64_saturating(
+                DEFAULT_RECEIPT_TRACKING_TTL.as_millis(),
+            )
     });
     before.saturating_sub(receipt_message_ids.len())
 }

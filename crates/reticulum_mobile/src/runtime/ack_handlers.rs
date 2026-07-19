@@ -198,15 +198,15 @@ async fn acknowledge_chat_delivery(
         .messaging
         .lock()
         .await
-        .update_message_delivery_state(
-            message_id_hex.as_str(),
-            Some(sdkmsg::MessageState::Delivered),
-            Some(sdkmsg::TransportDeliveryState::TransportDelivered),
-            Some(sdkmsg::ApplicationAckState::Accepted),
-            Some("chat delivery ack".to_string()),
-            None,
-            now_ms(),
-        )
+        .update_message_delivery_state(sdkmsg::MessageDeliveryUpdate {
+            message_id_hex: message_id_hex.as_str(),
+            state: Some(sdkmsg::MessageState::Delivered),
+            transport_state: Some(sdkmsg::TransportDeliveryState::TransportDelivered),
+            application_ack_state: Some(sdkmsg::ApplicationAckState::Accepted),
+            detail: Some("chat delivery ack".to_string()),
+            last_wire_message_id_hex: None,
+            updated_at_ms: now_ms(),
+        })
         .map(from_sdk_message_record);
 
     if let Some(record) = maybe_record {
@@ -271,8 +271,7 @@ async fn send_chat_delivery_ack_if_needed(
         }
         Err(err) => {
             warn!(
-                "[lxmf][chat] delivery acknowledgement send failed destination={} acked_message_id={} reason={}",
-                source_hex, message_id_hex, err,
+                "[lxmf][chat] delivery acknowledgement send failed destination={source_hex} acked_message_id={message_id_hex} reason={err}",
             );
         }
     }

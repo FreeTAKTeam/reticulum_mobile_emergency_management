@@ -271,7 +271,17 @@ public abstract class ReticulumNodePluginBase extends Plugin {
             final String message = payload.getString("message", fallbackMessage);
             Log.e(TAG, "rejectFromNative code=" + code + " message=" + message);
             Logger.error(TAG, "Native error [" + code + "]: " + message, new Exception(message));
-            call.reject(message, code);
+            final JSObject details = new JSObject();
+            details.put("code", code);
+            details.put("message", message);
+            details.put("retryable", payload.getBoolean("retryable", false));
+            if (payload.has("operation")) {
+                details.put("operation", payload.getString("operation"));
+            }
+            if (payload.has("cause")) {
+                details.put("cause", payload.getString("cause"));
+            }
+            call.reject(message, code, details);
         } catch (JSONException ex) {
             call.reject(fallbackMessage, ex);
         }

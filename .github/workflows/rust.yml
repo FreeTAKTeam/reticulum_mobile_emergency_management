@@ -47,6 +47,10 @@ jobs:
         working-directory: rem
         run: npm run check:source-size
 
+      - name: Audit npm dependencies
+        working-directory: rem
+        run: npm audit --audit-level=moderate
+
       - name: Build node client
         working-directory: rem
         run: npm run node-client:build
@@ -63,8 +67,12 @@ jobs:
         working-directory: rem
         run: npm run web:build
 
+      - name: Build mobile app
+        working-directory: rem
+        run: npm run mobile:build
+
   e2e:
-    name: Playwright Smoke
+    name: Playwright Matrix
     runs-on: ubuntu-latest
 
     steps:
@@ -88,11 +96,11 @@ jobs:
         working-directory: rem
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright smoke tests
+      - name: Run complete Playwright matrix
         working-directory: rem
         env:
           CHOKIDAR_USEPOLLING: "1"
-        run: npm run test:e2e -- e2e/android-back-navigation.spec.ts
+        run: npm run test:e2e
 
   rust:
     name: Rust Runtime (pinned LXMF)
@@ -123,15 +131,26 @@ jobs:
 
       - name: Check Rust formatting
         working-directory: rem
-        run: cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+        run: |
+          cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+          cargo fmt --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all -- --check
 
       - name: Run clippy
         working-directory: rem
-        run: cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets
+        run: |
+          cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Rust tests
         working-directory: rem
-        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
+        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Rust dependencies
+        working-directory: rem
+        run: cargo audit --file crates/reticulum_mobile/Cargo.lock
 
   rust-current-lxmf:
     name: Rust Runtime (current LXMF main)
@@ -157,17 +176,25 @@ jobs:
           toolchain: "1.88"
           components: rustfmt, clippy
 
-      - name: Check locked Rust dependencies
+      - name: Generate ephemeral lockfile for current LXMF
         working-directory: rem
-        run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+        run: cargo generate-lockfile --manifest-path crates/reticulum_mobile/Cargo.toml
+
+      - name: Fetch current Rust dependencies
+        working-directory: rem
+        run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml
 
       - name: Check Rust formatting
         working-directory: rem
-        run: cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+        run: |
+          cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
+          cargo fmt --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all -- --check
 
       - name: Run clippy
         working-directory: rem
-        run: cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets
+        run: |
+          cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
 
       - name: Run Rust tests
         working-directory: rem

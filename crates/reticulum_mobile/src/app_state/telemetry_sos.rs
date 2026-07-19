@@ -13,7 +13,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_telemetry_tx(&transaction, position)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -21,7 +21,7 @@ impl AppStateStore {
             Some(position.callsign.to_ascii_lowercase()),
             Some("telemetry-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -32,20 +32,20 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         transaction
             .execute(
                 "DELETE FROM telemetry_positions WHERE callsign_key = ?1",
                 params![callsign.trim().to_ascii_lowercase()],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Telemetry {},
             Some(callsign.trim().to_ascii_lowercase()),
             Some("telemetry-deleted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -56,7 +56,7 @@ impl AppStateStore {
                 row.get(0)
             })
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value)).transpose()
     }
 
@@ -67,22 +67,22 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let json = serialize_json(settings)?;
         transaction
             .execute(
                 "INSERT INTO sos_settings (id, json, updated_at_ms) VALUES (1, ?1, ?2)
                  ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at_ms = excluded.updated_at_ms",
-                params![json, now_ms() as i64],
+                params![json, crate::numeric::u64_to_i64_saturating(now_ms())],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Sos {},
             Some("settings".to_string()),
             Some("sos-settings-updated".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -93,7 +93,7 @@ impl AppStateStore {
                 row.get(0)
             })
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value)).transpose()
     }
 
@@ -105,22 +105,25 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let json = serialize_json(status)?;
         transaction
             .execute(
                 "INSERT INTO sos_state (id, json, updated_at_ms) VALUES (1, ?1, ?2)
                  ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at_ms = excluded.updated_at_ms",
-                params![json, status.updated_at_ms as i64],
+                params![
+                    json,
+                    crate::numeric::u64_to_i64_saturating(status.updated_at_ms)
+                ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Sos {},
             Some("status".to_string()),
             Some(reason.to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -173,7 +176,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value)).transpose()
     }
 
@@ -184,7 +187,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_sos_alert_tx(&transaction, alert)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -192,7 +195,7 @@ impl AppStateStore {
             Some(alert.incident_id.clone()),
             Some("sos-alert-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -210,7 +213,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let json = serialize_json(location)?;
         transaction
             .execute(
@@ -220,18 +223,18 @@ impl AppStateStore {
                 params![
                     location.incident_id,
                     location.source_hex,
-                    location.recorded_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(location.recorded_at_ms),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Sos {},
             Some(location.incident_id.clone()),
             Some("sos-location-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -249,7 +252,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let json = serialize_json(audio)?;
         transaction
             .execute(
@@ -264,18 +267,18 @@ impl AppStateStore {
                     audio.audio_id,
                     audio.incident_id,
                     audio.source_hex,
-                    audio.created_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(audio.created_at_ms),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Sos {},
             Some(audio.incident_id.clone()),
             Some("sos-audio-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 

@@ -1,7 +1,7 @@
 impl Node {
     pub fn announce_now(&self) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner
                 .priority_cmd_tx
                 .clone()
@@ -14,7 +14,7 @@ impl Node {
 
     pub fn request_peer_identity(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
@@ -33,7 +33,7 @@ impl Node {
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
         let request = SendLxmfRequest {
@@ -57,7 +57,7 @@ impl Node {
 
     pub fn retry_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
@@ -76,7 +76,7 @@ impl Node {
 
     pub fn cancel_lxmf(&self, message_id_hex: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner
                 .priority_cmd_tx
                 .clone()
@@ -102,7 +102,7 @@ impl Node {
         destination_hex: Option<String>,
     ) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
@@ -121,7 +121,7 @@ impl Node {
 
     pub fn request_lxmf_sync(&self, limit: Option<u32>) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
@@ -140,9 +140,9 @@ impl Node {
 
     pub fn list_announces(&self) -> Result<Vec<AnnounceRecord>, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
-                Some(tx)
+                tx
             } else {
                 return inner.app_state.list_announces();
             }
@@ -150,7 +150,7 @@ impl Node {
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
-            &tx.expect("checked above"),
+            &tx,
             Command::ListAnnounces { resp: resp_tx },
         )?;
         resp_rx
@@ -160,21 +160,21 @@ impl Node {
 
     pub fn list_peers(&self) -> Result<Vec<PeerRecord>, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
-                Some(tx)
+                tx
             } else {
                 return inner
                     .peers_snapshot
                     .lock()
                     .map(|guard| guard.clone())
-                    .map_err(|_| NodeError::InternalError {});
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error));
             }
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
-            &tx.expect("checked above"),
+            &tx,
             Command::ListPeers { resp: resp_tx },
         )?;
         resp_rx
@@ -184,14 +184,14 @@ impl Node {
 
     pub fn list_conversations(&self) -> Result<Vec<ConversationRecord>, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
-                Some(tx)
+                tx
             } else {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let resolver = conversation_peer_resolver(&peers);
                 return inner.app_state.list_conversations_resolved(&resolver);
@@ -200,7 +200,7 @@ impl Node {
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
-            &tx.expect("checked above"),
+            &tx,
             Command::ListConversations { resp: resp_tx },
         )?;
         resp_rx
@@ -213,14 +213,14 @@ impl Node {
         conversation_id: Option<String>,
     ) -> Result<Vec<MessageRecord>, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
-                Some(tx)
+                tx
             } else {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let resolver = conversation_peer_resolver(&peers);
                 return inner
@@ -231,7 +231,7 @@ impl Node {
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
-            &tx.expect("checked above"),
+            &tx,
             Command::ListMessages {
                 conversation_id,
                 resp: resp_tx,
@@ -244,14 +244,14 @@ impl Node {
 
     pub fn delete_conversation(&self, conversation_id: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
                 Some(tx)
             } else {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let resolver = conversation_peer_resolver(&peers);
                 for invalidation in inner
@@ -283,21 +283,21 @@ impl Node {
 
     pub fn get_lxmf_sync_status(&self) -> Result<SyncStatus, NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             if let Some(tx) = inner.cmd_tx.clone() {
-                Some(tx)
+                tx
             } else {
                 return inner
                     .sync_status_snapshot
                     .lock()
                     .map(|guard| guard.clone())
-                    .map_err(|_| NodeError::InternalError {});
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error));
             }
         };
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
-            &tx.expect("checked above"),
+            &tx,
             Command::GetLxmfSyncStatus { resp: resp_tx },
         )?;
         resp_rx
@@ -306,26 +306,26 @@ impl Node {
     }
 
     pub fn list_telemetry_destinations(&self) -> Result<Vec<String>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let status = inner
             .status
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let peers = inner
             .peers_snapshot
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let hub_directory_snapshot = inner
             .hub_directory_snapshot
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let sync_status = inner
             .sync_status_snapshot
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         Ok(build_runtime_telemetry_destinations(
             &status,
@@ -341,7 +341,7 @@ impl Node {
 
     pub fn set_announce_capabilities(&self, capability_string: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 
@@ -368,12 +368,12 @@ impl Node {
     }
 
     pub fn legacy_import_completed(&self) -> Result<bool, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.legacy_import_completed()
     }
 
     pub fn import_legacy_state(&self, payload: LegacyImportPayload) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidations = inner.app_state.import_legacy_state(&payload)?;
         for invalidation in invalidations {
             emit_projection_invalidation(&inner.bus, invalidation);
@@ -382,12 +382,12 @@ impl Node {
     }
 
     pub fn get_app_settings(&self) -> Result<Option<AppSettingsRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_app_settings()
     }
 
     pub fn set_app_settings(&self, settings: AppSettingsRecord) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.set_app_settings(&settings)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         let summary = inner.app_state.bump_projection_revision(
@@ -400,13 +400,13 @@ impl Node {
     }
 
     pub fn get_saved_peers(&self) -> Result<Vec<SavedPeerRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_saved_peers()
     }
 
     pub fn set_saved_peers(&self, peers: Vec<SavedPeerRecord>) -> Result<(), NodeError> {
         let cmd_tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let invalidation = inner.app_state.set_saved_peers(&peers)?;
             emit_projection_invalidation(&inner.bus, invalidation);
             let summary = inner.app_state.bump_projection_revision(

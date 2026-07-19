@@ -69,7 +69,7 @@ fn build_operational_ack_fields(
         MsgPackValue::from(FIELD_RESULTS),
         MsgPackValue::Map(result_entries),
     )]);
-    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn compact_event_uid_ack_value(command_id: &str) -> Option<MsgPackValue> {
@@ -117,7 +117,7 @@ fn build_compact_operational_ack_fields(ack: &OperationalAck) -> Result<Vec<u8>,
         MsgPackValue::from(FIELD_RESULTS),
         MsgPackValue::Map(result_entries),
     )]);
-    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn telemetry_position_from_sos(

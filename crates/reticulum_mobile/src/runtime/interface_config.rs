@@ -333,9 +333,6 @@ fn spawn_rnode_ble_interface(
             return;
         }
     };
-    if matches!(connection_mode, RnodeConnectionMode::Tcp) {
-        return;
-    }
     let message = match connection_mode {
             RnodeConnectionMode::Ble => {
                 "RNode BLE LoRa is only available on Android builds.".to_string()
@@ -346,7 +343,7 @@ fn spawn_rnode_ble_interface(
             RnodeConnectionMode::Usb => {
                 "RNode USB serial is only available after a platform USB backend is configured.".to_string()
             }
-            RnodeConnectionMode::Tcp => unreachable!(),
+            RnodeConnectionMode::Tcp => return,
         };
     set_runtime_interface_readiness(
         &status,

@@ -47,7 +47,7 @@ fn eam_status_score(status: &str) -> u32 {
 }
 
 fn clamp_score(value: f64) -> u32 {
-    value.round().clamp(0.0, 100.0) as u32
+    crate::numeric::f64_to_u32_saturating(value.clamp(0.0, 100.0))
 }
 
 fn readiness_band(score: u32) -> &'static str {
@@ -69,7 +69,7 @@ fn blend_hex_color(start: &str, end: &str, ratio: f64) -> String {
     let mixed = [0, 1, 2].map(|index| {
         let start_value = f64::from(start[index]);
         let end_value = f64::from(end[index]);
-        (start_value + ((end_value - start_value) * safe_ratio)).round() as u8
+        crate::numeric::f64_to_u8_saturating(start_value + ((end_value - start_value) * safe_ratio))
     });
     format!("#{:02x}{:02x}{:02x}", mixed[0], mixed[1], mixed[2])
 }
@@ -126,7 +126,12 @@ fn eam_overall_readiness_score(record: &EamProjectionRecord) -> u32 {
         .iter()
         .map(|(field, _)| eam_status_score(eam_status_value(record, field)))
         .sum();
-    clamp_score(f64::from(total) / EAM_STATUS_FIELDS.len() as f64)
+    clamp_score(
+        f64::from(total)
+            / f64::from(crate::numeric::usize_to_u32_saturating(
+                EAM_STATUS_FIELDS.len(),
+            )),
+    )
 }
 
 fn build_eam_readiness_summary(records: Vec<EamProjectionRecord>) -> EamReadinessSummaryRecord {
@@ -139,7 +144,7 @@ fn build_eam_readiness_summary(records: Vec<EamProjectionRecord>) -> EamReadines
         .into_iter()
         .filter(|record| record.deleted_at_ms.is_none())
         .collect();
-    let active_total = active_records.len() as u32;
+    let active_total = crate::numeric::usize_to_u32_saturating(active_records.len());
 
     let status_metrics = EAM_STATUS_FIELDS
         .iter()
@@ -151,7 +156,12 @@ fn build_eam_readiness_summary(records: Vec<EamProjectionRecord>) -> EamReadines
                     .iter()
                     .map(|record| eam_status_score(eam_status_value(record, field)))
                     .sum();
-                clamp_score(f64::from(total) / active_records.len() as f64)
+                clamp_score(
+                    f64::from(total)
+                        / f64::from(crate::numeric::usize_to_u32_saturating(
+                            active_records.len(),
+                        )),
+                )
             };
             readiness_metric(field, label, score)
         })

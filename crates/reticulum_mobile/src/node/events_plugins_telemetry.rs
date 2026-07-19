@@ -1,17 +1,17 @@
 impl Node {
     pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_events()
     }
 
     pub fn upsert_event(&self, record: EventProjectionRecord) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let invalidation = inner.app_state.upsert_event(&record)?;
             emit_projection_invalidation(&inner.bus, invalidation);
@@ -26,12 +26,12 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers =
                     saved_peers_for_replication(&inner.app_state, &inner.bus, "event-upsert");
@@ -40,7 +40,7 @@ impl Node {
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let mut replication_targets = match build_runtime_event_replication_targets(
                     &status,
@@ -112,11 +112,11 @@ impl Node {
     pub fn delete_event(&self, uid: String, deleted_at_ms: u64) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let existing_record = inner
                 .app_state
@@ -137,12 +137,12 @@ impl Node {
                     let peers = inner
                         .peers_snapshot
                         .lock()
-                        .map_err(|_| NodeError::InternalError {})?
+                        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                         .clone();
                     let hub_directory_snapshot = inner
                         .hub_directory_snapshot
                         .lock()
-                        .map_err(|_| NodeError::InternalError {})?
+                        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                         .clone();
                     let saved_peers =
                         saved_peers_for_replication(&inner.app_state, &inner.bus, "event-delete");
@@ -151,7 +151,7 @@ impl Node {
                     let sync_status = inner
                         .sync_status_snapshot
                         .lock()
-                        .map_err(|_| NodeError::InternalError {})?
+                        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                         .clone();
                     let mut replication_targets = match build_runtime_event_replication_targets(
                         &status,
@@ -216,8 +216,7 @@ impl Node {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
                     message: format!(
-                        "event delete replication enqueue failed destination={} uid={} reason={}",
-                        destination_hex, uid, err
+                        "event delete replication enqueue failed destination={destination_hex} uid={uid} reason={err}"
                     ),
                 });
             }
@@ -227,12 +226,12 @@ impl Node {
     }
 
     pub fn get_telemetry_positions(&self) -> Result<Vec<TelemetryPositionRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_telemetry_positions()
     }
 
     pub fn list_plugins(&self) -> Result<Vec<InstalledPluginRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.list_plugins()
     }
 
@@ -240,7 +239,7 @@ impl Node {
         &self,
         plugins: Vec<DiscoveredPluginRecord>,
     ) -> Result<Vec<InstalledPluginRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner
             .app_state
             .sync_discovered_plugins(plugins.as_slice())?;
@@ -253,7 +252,7 @@ impl Node {
         plugin_id: &str,
         display_name: Option<&str>,
     ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner
             .app_state
             .approve_plugin_publisher(plugin_id, display_name)?;
@@ -262,14 +261,14 @@ impl Node {
     }
 
     pub fn revoke_plugin_publisher(&self, fingerprint: &str) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.revoke_plugin_publisher(fingerprint)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         Ok(())
     }
 
     pub fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.set_plugin_enabled(plugin_id, enabled)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         Ok(())
@@ -280,7 +279,7 @@ impl Node {
         plugin_id: &str,
         capabilities: PluginCapabilityRecord,
     ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner
             .app_state
             .grant_plugin_capabilities(plugin_id, capabilities)?;
@@ -294,7 +293,7 @@ impl Node {
         state: &str,
         diagnostic: Option<String>,
     ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner
             .app_state
             .set_plugin_runtime_state(plugin_id, state, diagnostic)?;
@@ -303,7 +302,7 @@ impl Node {
     }
 
     pub fn list_plugin_sensors(&self) -> Result<Vec<PluginSensorRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.list_plugin_sensors()
     }
 
@@ -312,14 +311,14 @@ impl Node {
         plugin_id: &str,
         sample: PluginSensorSampleRequest,
     ) -> Result<PluginSensorRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let (record, invalidation) = inner.app_state.record_plugin_sensor(plugin_id, sample)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         Ok(record)
     }
 
     pub fn publish_plugin_event(&self, plugin_id: &str, event: JsonValue) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let plugin = inner
             .app_state
             .get_plugin(plugin_id)?
@@ -336,7 +335,7 @@ impl Node {
             event: PluginEventRecord {
                 plugin_id: plugin_id.to_string(),
                 event_json: serde_json::to_string(&event)
-                    .map_err(|_| NodeError::InvalidConfig {})?,
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error))?,
             },
         });
         Ok(())
@@ -344,7 +343,7 @@ impl Node {
 
     pub fn send_plugin_lxmf(&self, request: PluginLxmfSendRequest) -> Result<(), NodeError> {
         let fields_bytes = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let plugin = inner
                 .app_state
                 .get_plugin(request.plugin_id.as_str())?
@@ -377,7 +376,7 @@ impl Node {
         let Some(plugin_id) = crate::plugin_runtime::plugin_id_from_fields(fields_bytes)? else {
             return Ok(None);
         };
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let plugin = inner
             .app_state
             .get_plugin(plugin_id.as_str())?
@@ -398,11 +397,11 @@ impl Node {
     ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let invalidation = inner.app_state.record_local_telemetry_fix(&position)?;
             emit_projection_invalidation(&inner.bus, invalidation);
@@ -417,17 +416,17 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let telemetry_destinations = build_runtime_telemetry_destinations(
                     &status,
@@ -476,7 +475,7 @@ impl Node {
     }
 
     pub fn delete_local_telemetry(&self, callsign: String) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.delete_local_telemetry(&callsign)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         let summary = inner.app_state.bump_projection_revision(

@@ -41,8 +41,7 @@ fn spawn_link_event_listener(state: &NodeRuntimeState, bus: &EventBus) {
                             {
                                 ManagedPeerReconnectStart::Started(target) => {
                                     info!(
-                                        "[link][event] kind=closed destination={} desired=true status=reconnect-scheduled",
-                                        destination_hex,
+                                        "[link][event] kind=closed destination={destination_hex} desired=true status=reconnect-scheduled",
                                     );
                                     spawn_managed_peer_link_reconnect(
                                         state.clone(),
@@ -63,8 +62,7 @@ fn spawn_link_event_listener(state: &NodeRuntimeState, bus: &EventBus) {
                                 }
                                 ManagedPeerReconnectStart::AlreadyReconnecting => {
                                     debug!(
-                                        "[link][event] kind=closed destination={} desired=true status=reconnect-deferred detail=reconnecting",
-                                        destination_hex,
+                                        "[link][event] kind=closed destination={destination_hex} desired=true status=reconnect-deferred detail=reconnecting",
                                     );
                                 }
                                 ManagedPeerReconnectStart::NotDesired => {}
@@ -92,7 +90,7 @@ fn spawn_periodic_hub_refresh(config: &NodeConfig, state: &NodeRuntimeState, bus
         let state = state.clone();
         let interval_secs = config.hub_refresh_interval_seconds;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs as u64));
+            let mut interval = tokio::time::interval(Duration::from_secs(u64::from(interval_secs)));
             loop {
                 interval.tick().await;
                 match refresh_hub_directory_lxmf(&config, &state).await {

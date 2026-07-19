@@ -17,6 +17,11 @@ instead of rebuilding protocol behavior in another layer.
   capacity. Normal queue saturation cannot consume that capacity.
 - Potentially slow Reticulum and LXMF work runs outside the central command
   consumer and uses explicit retry budgets or timeouts.
+- `error_context.rs` retains the causal value at category-preserving error
+  conversions. It logs the owning module and makes synchronous context
+  available to the native last-error envelope without changing `NodeError`.
+- `numeric.rs` owns checked or deliberately saturating conversions at database,
+  timestamp, counter, coordinate, timeout, and size boundaries.
 
 The compiled Rust and LXMF-rs layer remains the only implementation of LXMF
 encoding, delivery tracking, and Reticulum transport behavior.
@@ -27,6 +32,10 @@ The Java plugin and service retain their existing Capacitor/JNI contract. Their
 implementation is split into lifecycle, bridge dispatch, polling, restoration,
 notification, conversion, RNode, and plugin API components. Generated UniFFI
 bindings and packaged native libraries are not hand-edited.
+
+All 85 Java exports use the local `jni-boundary-macro` attribute. A contained
+panic returns `1` for integer calls or null for object calls and records a
+non-retryable `InternalError`; no Rust panic crosses into the JVM.
 
 ## TypeScript client boundary
 
@@ -41,6 +50,10 @@ owned by:
 
 Web builds resolve the package root to `web-entry.ts`, so native Capacitor and
 mock implementations are not eagerly included in the production web bundle.
+All Capacitor plugin calls are proxied through the shared error classifier.
+Consumers receive `ReticulumNodeError` with stable code, operation,
+retryability, and cause fields while existing promise signatures remain
+unchanged.
 
 ## Vue application boundary
 
@@ -72,6 +85,9 @@ controls preserve access to the complete collection.
   without limit.
 - Priority SOS and acknowledgement work remains available when normal work is
   saturated.
+- Production Rust denies panic, unwrap, expect, unreachable, and first-party
+  unsafe implementation code. Required JNI/UniFFI export attributes are the
+  narrowly documented exception.
 
 The scale matrix is executable in `packages/node-client/src/scale.test.ts` and
 the runtime priority tests under `crates/reticulum_mobile/src/runtime/tests`.

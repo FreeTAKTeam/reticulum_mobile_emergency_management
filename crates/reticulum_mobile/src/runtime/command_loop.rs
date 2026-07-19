@@ -248,8 +248,7 @@
                 log_send_task(
                     SendTaskClass::General,
                     format!(
-                        "[lxmf][queue] enqueued general retry message_id={}",
-                        message_id_hex,
+                        "[lxmf][queue] enqueued general retry message_id={message_id_hex}",
                     ),
                 );
                 command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
@@ -337,8 +336,7 @@
                         bus.emit(NodeEvent::Error {
                             code: node_error_code(err).to_string(),
                             message: format!(
-                                "retry_lxmf failed message_id={} reason={}",
-                                message_id_hex, err
+                                "retry_lxmf failed message_id={message_id_hex} reason={err}"
                             ),
                         });
                     }
