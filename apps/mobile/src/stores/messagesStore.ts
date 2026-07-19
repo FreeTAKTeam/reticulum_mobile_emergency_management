@@ -197,6 +197,13 @@ export const useMessagesStore = defineStore("messages", () => {
     cleanups.push(client.on("statusChanged", () => {
       void refreshAll();
     }));
+    cleanups.push(watch(
+      () => nodeStore.status.running,
+      (running) => {
+        if (running) void refreshAll();
+      },
+      { immediate: true },
+    ));
 
     watch(
       () => nodeStore.hubRegistration.linkage?.teamUid ?? "",

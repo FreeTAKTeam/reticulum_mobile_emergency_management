@@ -1,6 +1,6 @@
 import type { EventProjectionRecord, ProjectionInvalidationEvent } from "@reticulum/node-client";
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import {
   notifyOperationalUpdateOnce,
@@ -126,9 +126,13 @@ export const useEventsStore = defineStore("events", () => {
     const client = getProjectionClient(nodeStore.settings.clientMode);
     cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
     cleanups.push(client.on("statusChanged", requestNativeRefresh));
-    // Close the startup race where the runtime becomes ready after init() skips
-    // hydration but before the status listener above is registered.
-    requestNativeRefresh();
+    // Projection clients are distinct from the primary node client. Watch the
+    // shared runtime state so a one-time native status replay cannot be missed.
+    cleanups.push(watch(
+      () => nodeStore.status.running,
+      requestNativeRefresh,
+      { immediate: true },
+    ));
   }
 
   async function persistNativeEventUpsert(

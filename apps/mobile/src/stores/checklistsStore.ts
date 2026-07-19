@@ -5,7 +5,7 @@ import {
   type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import {
   runtimeChecklistToUi,
@@ -286,6 +286,13 @@ export const useChecklistsStore = defineStore("checklists", () => {
     cleanups.push(projectionClient.on("statusChanged", () => {
       void refreshAll();
     }));
+    cleanups.push(watch(
+      () => nodeStore.status.running,
+      (running) => {
+        if (running) void refreshAll();
+      },
+      { immediate: true },
+    ));
   }
 
   async function importTemplateCsv(file: File, name?: string, description?: string): Promise<RuntimeChecklistTemplateRecord> {
