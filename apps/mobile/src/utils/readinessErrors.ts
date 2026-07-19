@@ -61,20 +61,22 @@ export function hasConfiguredNonTcpInterface(
   if (connectionMode === "tcp" || connectionMode === "wifi" || connectionMode === "wi-fi") {
     return false;
   }
-  return Boolean(rnode?.enabled) && String(rnode?.peripheralId ?? "").trim().length > 0;
+  return rnode?.enabled === true && String(rnode?.peripheralId ?? "").trim().length > 0;
 }
 
-function interfaceIsRnodeBle(record: Pick<InterfaceStatusRecord, "kind" | "label">): boolean {
-  return record.kind === "rnode_ble" || record.label.toLowerCase().startsWith("rnode-ble:");
+function interfaceIsRnodeBle(
+  record: Partial<Pick<InterfaceStatusRecord, "kind" | "label">> | null | undefined,
+): boolean {
+  const kind = typeof record?.kind === "string" ? record.kind.trim().toLowerCase() : "";
+  const label = typeof record?.label === "string" ? record.label.trim().toLowerCase() : "";
+  return kind === "rnode_ble" || label.startsWith("rnode-ble:");
 }
 
-function interfaceIsReceiving(record: Pick<InterfaceStatusRecord, "state" | "rxPackets" | "rxBytes" | "lastActivityMs">): boolean {
-  return record.state === "connected"
-    && (
-      Number(record.rxPackets) > 0
-      || Number(record.rxBytes) > 0
-      || Number(record.lastActivityMs) > 0
-    );
+function interfaceIsAvailable(
+  record: Partial<Pick<InterfaceStatusRecord, "state">> | null | undefined,
+): boolean {
+  return typeof record?.state === "string"
+    && record.state.trim().toLowerCase() === "connected";
 }
 
 export function summarizeRnodeInterfaceState(
@@ -82,8 +84,8 @@ export function summarizeRnodeInterfaceState(
   settings: { rnode?: { enabled?: unknown; connectionMode?: unknown; peripheralId?: unknown } | null } | null | undefined,
 ): RnodeInterfaceSummary {
   const interfaces = Array.isArray(status?.interfaces) ? status.interfaces : [];
-  const rnodeAvailable = interfaces.some((entry) => interfaceIsRnodeBle(entry) && interfaceIsReceiving(entry));
-  const otherAvailableCount = interfaces.filter((entry) => !interfaceIsRnodeBle(entry) && interfaceIsReceiving(entry)).length;
+  const rnodeAvailable = interfaces.some((entry) => interfaceIsRnodeBle(entry) && interfaceIsAvailable(entry));
+  const otherAvailableCount = interfaces.filter((entry) => !interfaceIsRnodeBle(entry) && interfaceIsAvailable(entry)).length;
   const anyInterfaceAvailable = rnodeAvailable || otherAvailableCount > 0;
   const rnodeConfigured = hasConfiguredNonTcpInterface(settings);
 
@@ -114,9 +116,9 @@ export function summarizeRnodeInterfaceState(
   }
   if (!rnodeAvailable) {
     return {
-      severity: "blocking",
-      message: "REM not ready: RNode LoRa is configured but no active interface is receiving traffic.",
-      notificationLabel: "REM not ready: RNode not receiving",
+      severity: "degraded",
+      message: "RNode LoRa is configured but unavailable. REM is running and will keep retrying the interface.",
+      notificationLabel: "RNode unavailable; REM is still running",
       rnodeConfigured: true,
       rnodeAvailable,
       otherAvailableCount,
@@ -136,6 +138,9 @@ export function logIndicatesTcpInterfaceReadinessError(message: string): boolean
 
 export function logIndicatesReadinessError(message: string): boolean {
   if (DELIVERY_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message))) {
+    return false;
+  }
+  if (TCP_INTERFACE_READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message))) {
     return false;
   }
   return GLOBAL_READINESS_ERROR_LOG_PATTERNS.some((pattern) => pattern.test(message));

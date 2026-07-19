@@ -10,6 +10,9 @@ public final class SharingPolicyTest {
     public void rejectsUnconfiguredSharingAndRateLimitsConfiguredSharing() {
         assertFalse(SharingPolicy.shouldSend("", 0L, 30_000L, 30_000L));
         assertFalse(SharingPolicy.shouldSend("not-a-destination", 0L, 30_000L, 30_000L));
+        assertFalse(SharingPolicy.shouldSend(DESTINATION, 0L, 30_000L, 0L));
+        assertFalse(SharingPolicy.shouldSend(DESTINATION, 0L, 30_000L, -1L));
+        assertFalse(SharingPolicy.shouldSend(DESTINATION, 60_000L, 30_000L, 30_000L));
         assertTrue(SharingPolicy.shouldSend(DESTINATION, 0L, 30_000L, 30_000L));
         assertFalse(SharingPolicy.shouldSend(DESTINATION, 30_000L, 59_999L, 30_000L));
         assertTrue(SharingPolicy.shouldSend(DESTINATION, 30_000L, 60_000L, 30_000L));
