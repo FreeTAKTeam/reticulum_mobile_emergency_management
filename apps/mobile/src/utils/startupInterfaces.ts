@@ -12,6 +12,28 @@ export interface StartupInterfaceItem {
   state: StartupInterfaceState;
 }
 
+interface RuntimeReadinessRecordLike {
+  id: string;
+  label: string;
+  detail: string;
+  lastError?: string;
+  state: string;
+}
+
+function isRuntimeReadinessRecord(value: unknown): value is RuntimeReadinessRecordLike {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Partial<RuntimeReadinessRecordLike>;
+  return typeof record.id === "string"
+    && record.id.trim().length > 0
+    && typeof record.label === "string"
+    && record.label.trim().length > 0
+    && typeof record.detail === "string"
+    && typeof record.state === "string"
+    && (record.lastError === undefined || typeof record.lastError === "string");
+}
+
 export function buildStartupInterfaceItems(
   status: Pick<NodeStatus, "running" | "readiness">,
   _settings?: unknown,
@@ -19,7 +41,7 @@ export function buildStartupInterfaceItems(
   const interfaces = Array.isArray(status.readiness?.interfaces)
     ? status.readiness.interfaces
     : [];
-  return interfaces.map((record) => ({
+  return interfaces.filter(isRuntimeReadinessRecord).map((record) => ({
     id: record.id,
     label: record.label,
     detail: record.lastError || record.detail,
@@ -43,7 +65,7 @@ function runtimeStateToStartupState(state: string): StartupInterfaceState {
   }
 }
 
-export function statusHasRuntimeReceiveReadiness(
+export function statusHasRuntimeStartupReadiness(
   status: Pick<NodeStatus, "running" | "readiness"> | null | undefined,
   _options?: { requiresInterfaceTelemetry?: boolean },
 ): boolean {

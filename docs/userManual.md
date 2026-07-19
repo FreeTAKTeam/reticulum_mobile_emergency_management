@@ -25,7 +25,7 @@ The top of the app shows:
 - saved peer and connected peer count
 - whether REM is **Ready**
 
-If the app says **Not Ready**, sending may be limited until the node starts.
+If the app says **Not Ready**, the local node has not started. A configured TCP or LoRa interface may still show as unavailable after REM starts; REM remains open and retries that interface in the background, but network sends can fail until an interface reconnects.
 
 The bottom bar gives fast access to:
 

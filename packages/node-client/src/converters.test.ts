@@ -51,7 +51,7 @@ describe("app settings conversion", () => {
       transportNodeEnabled: true,
       announceIntervalSeconds: 1800,
       telemetry: {
-        accuracyThresholdMeters: 0,
+        accuracyThresholdMeters: undefined,
         publishIntervalSeconds: 360,
       },
       hub: {
@@ -66,5 +66,85 @@ describe("app settings conversion", () => {
   it("returns null for absent or malformed plugin settings", () => {
     expect(toAppSettingsRecord({})).toBeNull();
     expect(toAppSettingsRecord({ settings: "invalid" })).toBeNull();
+  });
+
+  it("bounds nested wrappers and fails closed for malformed nested sections", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.settings = cyclic;
+    const coercionTrap = { toString: () => { throw new Error("unexpected coercion"); } };
+    let deeplyNested: Record<string, unknown> = { displayName: "too deep" };
+    for (let depth = 0; depth < 1_000; depth += 1) {
+      deeplyNested = { settings: deeplyNested };
+    }
+
+    expect(toAppSettingsRecord(cyclic)).toBeNull();
+    expect(toAppSettingsRecord(deeplyNested)).toBeNull();
+    expect(toAppSettingsRecord({
+      settings: {
+        announceIntervalSeconds: "not-a-number",
+        autoConnectSaved: "false",
+        broadcast: "true",
+        transportNodeEnabled: "false",
+        tcpClients: [" mesh.example:4242 ", "mesh.example:4242", 42, ""],
+        telemetry: null,
+        hub: { mode: coercionTrap, identityHash: coercionTrap },
+        checklists: null,
+        rnode: {
+          connectionMode: coercionTrap,
+          peripheralId: coercionTrap,
+          region: coercionTrap,
+          profile: coercionTrap,
+        },
+      },
+    })).toMatchObject({
+      announceIntervalSeconds: 1800,
+      autoConnectSaved: false,
+      broadcast: false,
+      transportNodeEnabled: true,
+      tcpClients: ["mesh.example:4242"],
+      telemetry: {
+        publishIntervalSeconds: 360,
+        accuracyThresholdMeters: undefined,
+        staleAfterMinutes: 30,
+        expireAfterMinutes: 180,
+      },
+      hub: {
+        mode: "Autonomous",
+        identityHash: "",
+        refreshIntervalSeconds: 3600,
+      },
+      checklists: { defaultTaskDueStepMinutes: 30 },
+      rnode: {
+        enabled: false,
+        connectionMode: "ble",
+        peripheralId: "",
+        region: "US915",
+        profile: "REM-LF-RURAL-v1",
+      },
+    });
+  });
+
+  it("clamps numeric boundary values to valid runtime settings", () => {
+    expect(toAppSettingsRecord({
+      announceIntervalSeconds: 0,
+      telemetry: {
+        publishIntervalSeconds: 0,
+        accuracyThresholdMeters: -1,
+        staleAfterMinutes: 0,
+        expireAfterMinutes: 0,
+      },
+      hub: { refreshIntervalSeconds: 0 },
+      checklists: { defaultTaskDueStepMinutes: Number.POSITIVE_INFINITY },
+    })).toMatchObject({
+      announceIntervalSeconds: 60,
+      telemetry: {
+        publishIntervalSeconds: 1,
+        accuracyThresholdMeters: 0,
+        staleAfterMinutes: 1,
+        expireAfterMinutes: 1,
+      },
+      hub: { refreshIntervalSeconds: 60 },
+      checklists: { defaultTaskDueStepMinutes: 30 },
+    });
   });
 });

@@ -30,7 +30,7 @@ import {
   STARTUP_INTERFACE_LOADING_DETAIL,
   STARTUP_INTERFACE_LOADING_SUMMARY,
   buildStartupInterfaceItems,
-  statusHasRuntimeReceiveReadiness,
+  statusHasRuntimeStartupReadiness,
   type StartupInterfaceItem,
 } from "./utils/startupInterfaces";
 
@@ -173,7 +173,7 @@ const startupConfiguredInterfaceItems = computed(() =>
 );
 const startupInterfacesNeedGrace = computed(() =>
   startupConfiguredInterfaceItems.value.length > 0
-  && !statusHasRuntimeReceiveReadiness(nodeStore.status),
+  && !statusHasRuntimeStartupReadiness(nodeStore.status),
 );
 const menuOpen = shallowRef(false);
 const splashMinimumElapsed = shallowRef(false);

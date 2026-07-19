@@ -13,7 +13,7 @@ const transpiled = ts.transpileModule(source, {
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
   buildStartupInterfaceItems,
-  statusHasRuntimeReceiveReadiness,
+  statusHasRuntimeStartupReadiness,
 } = await import(moduleUrl);
 
 function status(state, interfaces, running = true) {
@@ -69,12 +69,34 @@ test("surfaces failed and unsupported interface details", () => {
 });
 
 test("runtime readiness uses the typed aggregate state", () => {
-  assert.equal(statusHasRuntimeReceiveReadiness(status("Pending", [], true)), false);
-  assert.equal(statusHasRuntimeReceiveReadiness(status("Failed", [], true)), false);
-  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], false)), false);
-  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], true)), true);
+  assert.equal(statusHasRuntimeStartupReadiness(status("Pending", [], true)), false);
+  assert.equal(statusHasRuntimeStartupReadiness(status("Failed", [], true)), false);
+  assert.equal(statusHasRuntimeStartupReadiness(status("Ready", [], false)), false);
+  assert.equal(statusHasRuntimeStartupReadiness(status("Ready", [], true)), true);
 });
 
-test("web and mock runtimes can report ready without interface telemetry", () => {
-  assert.equal(statusHasRuntimeReceiveReadiness(status("Ready", [], true)), true);
+test("failed network interface does not block a running ready runtime", () => {
+  const runtimeStatus = status("Ready", [
+    record("tcp", "Failed", "Configured endpoint unavailable", "connection refused"),
+    record("local", "Ready", "Runtime is ready"),
+  ]);
+
+  assert.equal(statusHasRuntimeStartupReadiness(runtimeStatus), true);
+  assert.equal(itemById(buildStartupInterfaceItems(runtimeStatus), "tcp").state, "failed");
+});
+
+test("corrupt native readiness records are ignored instead of breaking startup", () => {
+  const items = buildStartupInterfaceItems(status("Ready", [
+    null,
+    {},
+    { id: "tcp", label: 7, state: "Ready", detail: "invalid" },
+    record("local", "Ready", "Runtime is ready"),
+  ]));
+
+  assert.deepEqual(items, [{
+    id: "local",
+    label: "Reticulum Net",
+    detail: "Runtime is ready",
+    state: "ready",
+  }]);
 });

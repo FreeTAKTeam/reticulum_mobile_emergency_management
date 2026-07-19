@@ -82,14 +82,20 @@ test("keeps different projection keys independent", async () => {
   await first;
 });
 
-test("clears failed refreshes so the key can be retried", async () => {
+test("clears state after a trailing refresh fails so the key can be retried", async () => {
   const coordinator = new ProjectionRefreshCoordinator();
+  const gate = deferred();
+  const initial = coordinator.run("settings", async () => {
+    await gate.promise;
+  });
+  const trailing = coordinator.run("settings", async () => {
+    throw new Error("trailing failed");
+  }, { trailing: true });
 
+  gate.resolve();
   await assert.rejects(
-    coordinator.run("settings", async () => {
-      throw new Error("failed");
-    }),
-    /failed/,
+    Promise.all([initial, trailing]),
+    /trailing failed/,
   );
 
   let retried = false;
@@ -97,4 +103,17 @@ test("clears failed refreshes so the key can be retried", async () => {
     retried = true;
   });
   assert.equal(retried, true);
+});
+
+test("rejects empty keys before starting an operation", async () => {
+  const coordinator = new ProjectionRefreshCoordinator();
+  let called = false;
+
+  await assert.rejects(
+    coordinator.run("   ", async () => {
+      called = true;
+    }),
+    /must not be empty/,
+  );
+  assert.equal(called, false);
 });

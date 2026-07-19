@@ -258,37 +258,16 @@ impl RuntimeReadinessSnapshot {
     }
 
     fn recompute_state(&mut self, running: bool) {
-        let local_ready = running
-            && self
-                .interfaces
-                .iter()
-                .any(|record| record.id == "local" && record.state == RuntimeReadinessState::Ready);
-        let configured = self
+        let local_state = self
             .interfaces
             .iter()
-            .filter(|record| {
-                record.id != "local" && record.state != RuntimeReadinessState::Disabled
-            })
-            .collect::<Vec<_>>();
-        self.state = if local_ready
-            && (configured.is_empty()
-                || configured
-                    .iter()
-                    .any(|record| record.state == RuntimeReadinessState::Ready))
-        {
-            RuntimeReadinessState::Ready
-        } else if configured
-            .iter()
-            .any(|record| record.state == RuntimeReadinessState::Failed)
-        {
-            RuntimeReadinessState::Failed
-        } else if configured
-            .iter()
-            .any(|record| record.state == RuntimeReadinessState::Unsupported)
-        {
-            RuntimeReadinessState::Unsupported
-        } else {
-            RuntimeReadinessState::Pending
+            .find(|record| record.id == "local")
+            .map(|record| &record.state);
+        self.state = match local_state {
+            Some(RuntimeReadinessState::Ready) if running => RuntimeReadinessState::Ready,
+            Some(RuntimeReadinessState::Failed) => RuntimeReadinessState::Failed,
+            Some(RuntimeReadinessState::Unsupported) => RuntimeReadinessState::Unsupported,
+            _ => RuntimeReadinessState::Pending,
         };
     }
 }

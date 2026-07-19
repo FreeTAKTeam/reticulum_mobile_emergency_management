@@ -9,7 +9,7 @@ import type {
   SavedPeer,
 } from "../types/domain";
 import { isValidDestinationHex, normalizeDestinationHex } from "../utils/peers";
-import { statusHasRuntimeReceiveReadiness } from "../utils/startupInterfaces";
+import { statusHasRuntimeStartupReadiness } from "../utils/startupInterfaces";
 import { storeRemovedPeerDestinations } from "./nodeSettingsModel";
 import {
   PEER_ONLINE_FRESHNESS_MS,
@@ -260,7 +260,7 @@ export function createNodePeerSelectors(context: NodePeerSelectorsContext) {
   });
 
   const readinessErrorMessage = computed(() => asTrimmedString(readinessError.value));
-  const ready = computed(() => status.value.running && statusHasRuntimeReceiveReadiness(status.value));
+  const ready = computed(() => status.value.running && statusHasRuntimeStartupReadiness(status.value));
   const hubBootstrapProfile = computed(() => currentHubBootstrapProfile());
   const hubRegistrationReady = computed(
     () => hubRegistration.status === "ready" && Boolean(hubRegistration.linkage),
