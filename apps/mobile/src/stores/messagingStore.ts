@@ -112,7 +112,6 @@ export const useMessagingStore = defineStore("messaging", () => {
 
   const {
     dispose,
-    hydrateStartupHistory,
     init,
     pendingConversationForDestination,
     refreshConversations,
@@ -471,7 +470,6 @@ export const useMessagingStore = defineStore("messaging", () => {
     dispose,
     selectConversation,
     openConversationTarget,
-    hydrateStartupHistory,
     ensureConversationForDestination,
     applyVisualMockChatData,
     appendVisualMockOutboundMessage,

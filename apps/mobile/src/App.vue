@@ -26,6 +26,7 @@ import {
 } from "./utils/androidBackNavigation";
 import { appVersion } from "./utils/appVersion";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
+import { runRecoverableStartupStep } from "./utils/startupInitialization";
 import {
   STARTUP_INTERFACE_LOADING_DETAIL,
   STARTUP_INTERFACE_LOADING_SUMMARY,
@@ -128,33 +129,59 @@ onMounted(async () => {
     // Bind telemetry before fallible history hydration. Native startup may still be
     // pending here; telemetryStore watches runtime readiness and starts once ready.
     telemetryStore.init();
-    await messagingStore.init();
     if (setupCompleted) {
       await repairStartupRnodeSelection();
-      await reconcileStartupRuntime(
-        {
-          running: nodeStore.status.running,
-          restartRequired: nodeStore.nodeConfigRestartRequired,
-        },
-        {
-          start: () => nodeStore.startNode(),
-          restart: () => nodeStore.restartNode(),
+      await runRecoverableStartupStep(
+        "runtime reconciliation",
+        () => reconcileStartupRuntime(
+          {
+            running: nodeStore.status.running,
+            restartRequired: nodeStore.nodeConfigRestartRequired,
+          },
+          {
+            start: () => nodeStore.startNode(),
+            restart: () => nodeStore.restartNode(),
+          },
+        ),
+        (message) => {
+          nodeStore.setLastError(message);
+          nodeStore.logUi("Warn", `[startup] ${message}`);
         },
       );
     }
-    await messagingStore.hydrateStartupHistory();
 
+    // Initialize every projection before awaiting optional history hydration. A
+    // transient failure in one projection must not suppress the other stores.
     messagesStore.init();
     eventsStore.init();
     checklistsStore.init();
-    await sosStore.init();
-
     messagesStore.initReplication();
     eventsStore.initReplication();
     checklistsStore.initReplication();
     telemetryStore.initReplication();
+
+    await runRecoverableStartupStep(
+      "chat history hydration",
+      () => messagingStore.init(),
+      (message) => {
+        nodeStore.setLastError(message);
+        nodeStore.logUi("Warn", `[startup] ${message}`);
+      },
+    );
+    await runRecoverableStartupStep(
+      "SOS projection hydration",
+      () => sosStore.init(),
+      (message) => {
+        nodeStore.setLastError(message);
+        nodeStore.logUi("Warn", `[startup] ${message}`);
+      },
+    );
     if (setupCompleted && nodeStore.settings.telemetry.enabled) {
-      await telemetryStore.requestStartupPermission();
+      await runRecoverableStartupStep(
+        "telemetry permission request",
+        () => telemetryStore.requestStartupPermission(),
+        (message) => nodeStore.logUi("Warn", `[startup] ${message}`),
+      );
     }
     if (!setupCompleted && route.path !== "/setup" && !startupMockEnabled.value) {
       await router.replace("/setup");
