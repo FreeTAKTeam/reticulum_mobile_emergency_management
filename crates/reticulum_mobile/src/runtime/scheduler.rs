@@ -92,7 +92,9 @@ impl SendTaskClass {
         if is_accepted_result_metadata(metadata) {
             return Self::MissionAck;
         }
-        if is_sos_status_metadata(metadata) {
+        if is_sos_status_metadata(metadata)
+            && !matches!(send_mode, SendMode::PropagationOnly {})
+        {
             return Self::MissionRecovery;
         }
         if matches!(send_mode, SendMode::PropagationOnly {}) {

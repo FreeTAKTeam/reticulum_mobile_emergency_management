@@ -47,7 +47,7 @@ fn sos_telemetry_without_coordinates_does_not_create_map_position() {
 }
 
 #[test]
-fn sos_status_sends_use_dedicated_recovery_lane() {
+fn direct_sos_status_sends_use_dedicated_recovery_lane() {
     let metadata = MissionSyncMetadata {
         command_present: true,
         command_id: Some("sos:incident-1:active:123".to_string()),
@@ -62,6 +62,6 @@ fn sos_status_sends_use_dedicated_recovery_lane() {
     );
     assert_eq!(
         SendTaskClass::from_lxmf_request(true, Some(&metadata), &SendMode::PropagationOnly {}),
-        SendTaskClass::MissionRecovery
+        SendTaskClass::MissionPropagation
     );
 }

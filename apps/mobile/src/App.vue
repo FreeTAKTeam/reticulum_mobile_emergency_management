@@ -124,6 +124,9 @@ onMounted(async () => {
       await initAppNotifications();
     }
     await nodeStore.init();
+    // Bind telemetry before fallible history hydration. Native startup may still be
+    // pending here; telemetryStore watches runtime readiness and starts once ready.
+    telemetryStore.init();
     await messagingStore.init();
     if (setupCompleted) {
       await repairStartupRnodeSelection();
@@ -138,7 +141,6 @@ onMounted(async () => {
     messagesStore.init();
     eventsStore.init();
     checklistsStore.init();
-    telemetryStore.init();
     await sosStore.init();
 
     messagesStore.initReplication();

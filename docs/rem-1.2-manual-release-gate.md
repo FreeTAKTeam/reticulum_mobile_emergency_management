@@ -57,16 +57,16 @@ Each row requires a unique marker string recorded in issue #168.
 
 | Workflow | LoRa-only | TCP-only | Mixed TCP+LoRa |
 | --- | --- | --- | --- |
-| Announce peer visibility | Pending | Pending | Pending |
-| Peer connection after announce | Pending | Pending | Pending |
-| Packet and resource delivery | Pending | Pending | Pending |
-| Chat delivery and acknowledgement | Pending | Pending | Pending |
-| Event replication | Pending | Pending | Pending |
-| EAM/preparedness update | Pending | Pending | Pending |
-| Checklist create/join/update | Pending | Pending | Pending |
-| Telemetry and SOS update/cancel | Pending | Pending | Pending |
+| Announce peer visibility | Pending | Pass | Pending |
+| Peer connection after announce | Pending | Pass | Pending |
+| Packet and resource delivery | Pending | Pass | Pending |
+| Chat delivery and acknowledgement | Pending | Pass | Pending |
+| Event replication | Pending | Pass | Pending |
+| EAM/preparedness update | Pending | Pass | Pending |
+| Checklist create/join/update | Pending | Pass | Pending |
+| Telemetry and SOS update/cancel | Pending | Pass | Pending |
 | Duplicate suppression | Pending | Pending | Pending |
-| Restart recovery and reconnect | Pending | Pending | Pending |
+| Restart recovery and reconnect | Pending | Pass | Pending |
 
 ## Mixed Mode Routing Contract
 

@@ -301,6 +301,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         nodeStore.settings.telemetry.enabled,
         nodeStore.settings.telemetry.publishIntervalSeconds,
         nodeStore.settings.displayName,
+        nodeStore.status.running,
       ],
       () => {
         syncPublishLoopFromSettings();

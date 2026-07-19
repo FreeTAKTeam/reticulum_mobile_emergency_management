@@ -15,6 +15,9 @@ instead of rebuilding protocol behavior in another layer.
   `runtime_projection` modules.
 - SOS, acknowledgements, stop, and lifecycle work use reserved priority
   capacity. Normal queue saturation cannot consume that capacity.
+- Direct and Auto SOS sends use the reserved recovery lane. Propagation-only
+  SOS fanout uses the propagation lane so unreachable relay recipients cannot
+  consume direct emergency capacity.
 - Potentially slow Reticulum and LXMF work runs outside the central command
   consumer and uses explicit retry budgets or timeouts.
 - `error_context.rs` retains the causal value at category-preserving error
