@@ -297,11 +297,11 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     }
 
     watch(
-      () => [
-        nodeStore.settings.telemetry.enabled,
-        nodeStore.settings.telemetry.publishIntervalSeconds,
-        nodeStore.settings.displayName,
-        nodeStore.status.running,
+      [
+        () => nodeStore.settings.telemetry.enabled,
+        () => nodeStore.settings.telemetry.publishIntervalSeconds,
+        () => nodeStore.settings.displayName,
+        () => nodeStore.status.running,
       ],
       () => {
         syncPublishLoopFromSettings();

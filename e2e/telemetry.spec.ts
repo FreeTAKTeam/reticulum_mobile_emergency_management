@@ -211,6 +211,12 @@ test("telemetry publishing reacts when runtime readiness changes", async ({ page
     const nodeStore = nodeMod.useNodeStore();
     nodeStore.status = {
       ...nodeStore.status,
+    };
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    const attemptsAfterSameStateReplacement = attempts;
+
+    nodeStore.status = {
+      ...nodeStore.status,
       running: !nodeStore.status.running,
     };
 
@@ -218,10 +224,14 @@ test("telemetry publishing reacts when runtime readiness changes", async ({ page
     while (attempts === 0 && Date.now() < deadline) {
       await new Promise((resolve) => window.setTimeout(resolve, 20));
     }
-    return attempts;
+    return {
+      attemptsAfterReadinessTransition: attempts,
+      attemptsAfterSameStateReplacement,
+    };
   });
 
-  expect(publishAttempts).toBeGreaterThan(0);
+  expect(publishAttempts.attemptsAfterSameStateReplacement).toBe(0);
+  expect(publishAttempts.attemptsAfterReadinessTransition).toBeGreaterThan(0);
 });
 
 test("telemetry map hides locations for cancelled SOS emergencies", async ({ page }) => {
