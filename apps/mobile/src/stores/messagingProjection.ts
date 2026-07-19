@@ -59,6 +59,15 @@ export function createMessagingProjectionController(context: MessagingProjection
   } = context;
   let initPromise: Promise<void> | null = null;
 
+  function runDetached(operation: string, task: () => Promise<void>): void {
+    void task().catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      const message = `[chat] ${operation} failed: ${detail}`;
+      nodeStore.setLastError(message);
+      nodeStore.logUi("Warn", message);
+    });
+  }
+
   function mergeFetchedMessages(items: MessageRecord[]): void {
     const fetchedMessages = items.map((message) => cloneMessage(message));
 
@@ -322,12 +331,12 @@ export function createMessagingProjectionController(context: MessagingProjection
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
     if (event.scope === "Conversations") {
-      void refreshConversations();
+      runDetached("conversation refresh", refreshConversations);
       return;
     }
     if (event.scope === "Messages") {
-      void refreshMessages();
-      void refreshConversations();
+      runDetached("message refresh", () => refreshMessages());
+      runDetached("conversation refresh", refreshConversations);
     }
   }
 
@@ -336,6 +345,9 @@ export function createMessagingProjectionController(context: MessagingProjection
       return initPromise;
     }
     if (initialized.value) {
+      if (!hydrated.value) {
+        await hydrateStartupHistory();
+      }
       return;
     }
 
@@ -350,15 +362,19 @@ export function createMessagingProjectionController(context: MessagingProjection
       const client = getProjectionClient(nodeStore.settings.clientMode);
       cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
       cleanups.push(client.on("statusChanged", () => {
-        void refreshAll();
+        if (hydrated.value) {
+          runDetached("projection refresh", refreshAll);
+        } else {
+          runDetached("history hydration retry", init);
+        }
       }));
       cleanups.push(client.on("messageReceived", (message) => {
-        void syncConversationStateForMessage(message);
-        void notifyForInboundMessage(message);
+        runDetached("received message projection", () => syncConversationStateForMessage(message));
+        runDetached("received message notification", () => notifyForInboundMessage(message));
       }));
       cleanups.push(client.on("messageUpdated", (message) => {
-        void syncConversationStateForMessage(message);
-        void notifyForInboundMessage(message);
+        runDetached("updated message projection", () => syncConversationStateForMessage(message));
+        runDetached("updated message notification", () => notifyForInboundMessage(message));
       }));
       await hydrateStartupHistory();
     })().finally(() => {

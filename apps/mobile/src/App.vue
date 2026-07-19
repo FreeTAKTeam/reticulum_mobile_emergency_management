@@ -160,7 +160,7 @@ onMounted(async () => {
     checklistsStore.initReplication();
     telemetryStore.initReplication();
 
-    await runRecoverableStartupStep(
+    const chatHistoryHydrated = await runRecoverableStartupStep(
       "chat history hydration",
       () => messagingStore.init(),
       (message) => {
@@ -168,6 +168,16 @@ onMounted(async () => {
         nodeStore.logUi("Warn", `[startup] ${message}`);
       },
     );
+    if (!chatHistoryHydrated && nodeStore.status.running) {
+      void runRecoverableStartupStep(
+        "chat history hydration retry",
+        () => messagingStore.init(),
+        (message) => {
+          nodeStore.setLastError(message);
+          nodeStore.logUi("Warn", `[startup] ${message}`);
+        },
+      );
+    }
     await runRecoverableStartupStep(
       "SOS projection hydration",
       () => sosStore.init(),

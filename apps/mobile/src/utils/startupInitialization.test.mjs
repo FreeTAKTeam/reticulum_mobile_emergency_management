@@ -43,10 +43,11 @@ test("successful startup steps return true without reporting a failure", async (
   assert.equal(reported, false);
 });
 
-test("App initializes projections before the sole chat hydration path", async () => {
+test("App initializes projections before recoverable chat initialization", async () => {
   const appSource = await readFile(new URL("../App.vue", import.meta.url), "utf8");
   assert.equal(appSource.includes("messagingStore.hydrateStartupHistory"), false);
-  assert.equal((appSource.match(/messagingStore\.init\(\)/g) ?? []).length, 1);
+  assert.equal((appSource.match(/messagingStore\.init\(\)/g) ?? []).length, 2);
+  assert.match(appSource, /chatHistoryHydrated/);
   assert.ok(appSource.indexOf("eventsStore.init();") < appSource.indexOf("messagingStore.init()"));
   assert.ok(appSource.indexOf("eventsStore.initReplication();") < appSource.indexOf("messagingStore.init()"));
 });
