@@ -155,6 +155,7 @@ public abstract class ReticulumNodePluginBase extends Plugin {
     protected final void startServiceForRuntime() {
         final Context appContext = getContext().getApplicationContext();
         final Intent serviceIntent = new Intent(appContext, ReticulumNodeService.class);
+        serviceIntent.setAction(ReticulumNodeService.ACTION_START_RUNTIME);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(appContext, serviceIntent);
         } else {

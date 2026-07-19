@@ -37,6 +37,7 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     private static final String TAG = "ReticulumNodeService";
     private static final String PREFS_NAME = "reticulum-node-service";
+    static final String ACTION_START_RUNTIME = "network.reticulum.emergency.action.START_NODE";
     static final String ACTION_RESTORE_AFTER_BOOT = "network.reticulum.emergency.action.RESTORE_AFTER_BOOT";
     static final String ACTION_STOP_SERVICE = "network.reticulum.emergency.action.STOP_NODE";
 
@@ -137,17 +138,23 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_STOP_SERVICE.equals(intent.getAction())) {
-            stopNode();
-            return START_NOT_STICKY;
-        }
-        if (intent != null && ACTION_RESTORE_AFTER_BOOT.equals(intent.getAction())) {
-            runtimeController.scheduleRestore("boot");
-            return START_STICKY;
-        }
-
-        if (runtimeController.shouldBeRunning()) {
-            runtimeController.scheduleRestore("process recreation");
+        final String action = intent == null ? null : intent.getAction();
+        final RuntimeServiceStartDecision.Command command = RuntimeServiceStartDecision.decide(
+            action,
+            runtimeController.shouldBeRunning()
+        );
+        switch (command) {
+            case STOP:
+                stopNode();
+                return START_NOT_STICKY;
+            case RESTORE_AFTER_BOOT:
+                runtimeController.scheduleRestore("boot");
+                break;
+            case RESTORE_AFTER_PROCESS_RECREATION:
+                runtimeController.scheduleRestore("process recreation");
+                break;
+            case KEEP_RUNNING:
+                break;
         }
         return START_STICKY;
     }
