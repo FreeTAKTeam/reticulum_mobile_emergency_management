@@ -18,6 +18,9 @@ instead of rebuilding protocol behavior in another layer.
 - Direct and Auto SOS sends use the reserved recovery lane. Propagation-only
   SOS fanout uses the propagation lane so unreachable relay recipients cannot
   consume direct emergency capacity.
+- RNode interface creation publishes `connecting`; only a validated startup
+  probe with an online radio promotes the interface to `connected`. Failed or
+  powered-off paired radios cannot make LoRa readiness green.
 - Potentially slow Reticulum and LXMF work runs outside the central command
   consumer and uses explicit retry budgets or timeouts.
 - `error_context.rs` retains the causal value at category-preserving error

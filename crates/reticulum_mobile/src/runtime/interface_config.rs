@@ -143,6 +143,87 @@ fn rnode_ble_wiring_from_settings(
     })
 }
 
+#[cfg(any(target_os = "android", test))]
+fn rnode_runtime_interface_state(
+    snapshot: &serde_json::Value,
+    startup_timed_out: bool,
+) -> (&'static str, Option<String>) {
+    let detected = snapshot
+        .pointer("/probe_status/detected")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let online = snapshot
+        .get("online")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let last_error = snapshot
+        .get("last_command_error")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if detected && online && last_error.is_none() {
+        ("connected", None)
+    } else if let Some(error) = last_error {
+        ("failed", Some(error))
+    } else if startup_timed_out {
+        (
+            "failed",
+            Some(
+                "RNode BLE/KISS startup did not report a detected online radio within 30 seconds"
+                    .to_string(),
+            ),
+        )
+    } else {
+        ("connecting", None)
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn monitor_rnode_runtime_status(
+    runtime_status: rns_transport::iface::rnode_ble::RnodeBleRuntimeStatusHandle,
+    iface: AddressHash,
+    label: String,
+    active_interface_registry: ActiveInterfaceRegistry,
+    status: Arc<Mutex<NodeStatus>>,
+    bus: EventBus,
+) {
+    let startup_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let snapshot = runtime_status.to_json();
+        let (next_state, next_error) = rnode_runtime_interface_state(
+            &snapshot,
+            tokio::time::Instant::now() >= startup_deadline,
+        );
+        let update = {
+            let mut registry = active_interface_registry.lock().await;
+            registry.get_mut(&iface).and_then(|record| {
+                if record.state == next_state && record.last_error == next_error {
+                    return None;
+                }
+                record.state = next_state.to_string();
+                record.last_error = next_error.clone();
+                Some(record.clone())
+            })
+        };
+        if let Some(update) = update {
+            info!(
+                "rnode_ble: runtime state changed label={} iface={} state={}",
+                label, iface, next_state
+            );
+            publish_interface_registry_snapshot(
+                &active_interface_registry,
+                &status,
+                &bus,
+                Some(update),
+            )
+            .await;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 #[cfg(target_os = "android")]
 fn spawn_rnode_ble_interface(
     transport: Arc<Transport>,
@@ -249,6 +330,23 @@ fn spawn_rnode_ble_interface(
                 NativeRnodeBleKissInterface::new(label.clone(), wiring.native, wiring.kiss)
                     .with_rnode_validation(wiring.lora, Duration::from_millis(15_000))
                     .with_detection_fallback_timeout(Duration::from_millis(5_000));
+            let Some(runtime_status) = adapter.runtime_status_handle() else {
+                let error = "RNode runtime status monitor was not initialized".to_string();
+                set_runtime_interface_readiness(
+                    &status,
+                    &bus,
+                    "rnode",
+                    RuntimeReadinessState::Failed,
+                    "RNode interface startup failed".to_string(),
+                    Some(error.clone()),
+                );
+                bus.emit(NodeEvent::Error {
+                    code: "Internal".to_string(),
+                    message: error,
+                });
+                tokio::time::sleep(RNODE_BLE_INTERFACE_RETRY_INTERVAL).await;
+                continue;
+            };
 
             active.store(true, Ordering::Release);
             let context = transport
@@ -257,7 +355,9 @@ fn spawn_rnode_ble_interface(
                 .await
                 .new_context_with_role_and_mode(adapter, IfaceRole::Unicast, InterfaceMode::Full);
             let iface = *context.channel.address();
-            let status_update = new_interface_status(iface, label.clone(), "connected");
+            // Creating the context does not mean that Bluetooth or the KISS session is
+            // usable. Keep readiness pending until the RNode is detected and online.
+            let status_update = new_interface_status(iface, label.clone(), "connecting");
             active_interface_registry
                 .lock()
                 .await
@@ -288,7 +388,24 @@ fn spawn_rnode_ble_interface(
             let bus_for_task = bus.clone();
             let label_for_task = label.clone();
             tokio::spawn(async move {
+                let runtime_monitor = tokio::spawn(monitor_rnode_runtime_status(
+                    runtime_status,
+                    iface,
+                    label_for_task.clone(),
+                    registry_for_task.clone(),
+                    status_for_task.clone(),
+                    bus_for_task.clone(),
+                ));
                 NativeRnodeBleKissInterface::spawn(context).await;
+                runtime_monitor.abort();
+                if let Err(error) = runtime_monitor.await {
+                    if !error.is_cancelled() {
+                        warn!(
+                            "rnode_ble: runtime status monitor failed label={} iface={} error={}",
+                            label_for_task, iface, error
+                        );
+                    }
+                }
                 let removed = registry_for_task.lock().await.remove(&iface);
                 if let Some(mut removed) = removed {
                     removed.state = "disconnected".to_string();

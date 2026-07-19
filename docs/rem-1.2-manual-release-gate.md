@@ -27,6 +27,11 @@ Validate the full workflow set in each mode:
 | TCP-only | TCP enabled, RNode LoRa disabled | TCP enabled, RNode LoRa disabled | Announce, connect, and workflow delivery all use TCP-capable paths. |
 | Mixed TCP+LoRa | TCP and RNode LoRa enabled on the source | One target TCP-only and one target LoRa-only | The same workflow update from the mixed source reaches both targets. |
 
+For LoRa evidence, do not rely on the aggregate runtime `Ready` state alone.
+The LoRa readiness row must be `Ready`, the native RNode interface must be
+`connected`, and the run must capture non-zero radio packet activity. A
+`connecting` interface with BLE/KISS retry logs is not a LoRa pass.
+
 After changing TCP or LoRa settings, save settings and restart REM before validating traffic. Restart-free interface reconfiguration is not required for 1.2 final.
 
 ## Diagnostic ADB Control
