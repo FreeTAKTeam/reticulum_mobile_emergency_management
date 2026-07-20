@@ -75,6 +75,7 @@ test("known fallible detached call sites use the shared containment helper", asy
     new URL("../views/DashboardView.vue", import.meta.url),
     new URL("../stores/nodeAnnounceController.ts", import.meta.url),
     new URL("../views/InboxView.vue", import.meta.url),
+    new URL("../views/ActionMessagesView.vue", import.meta.url),
   ];
   const sources = await Promise.all(sourceUrls.map((url) => readFile(url, "utf8")));
   for (const callSite of sources) {
@@ -86,4 +87,5 @@ test("known fallible detached call sites use the shared containment helper", asy
   assert.doesNotMatch(sources[3], /void checklistsStore\.refreshLive/);
   assert.doesNotMatch(sources[4], /void persistSavedPeersProjection/);
   assert.doesNotMatch(sources[5], /void messagingStore/);
+  assert.doesNotMatch(sources[6], /deleteLocal\(callsign\)\.catch/);
 });

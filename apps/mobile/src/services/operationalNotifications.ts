@@ -44,7 +44,12 @@ export async function notifyOperationalUpdateOnce(
     return false;
   }
   bucket.add(normalizedKey);
-  await notifyOperationalUpdate(title, body, extra).catch(() => undefined);
+  await notifyOperationalUpdate(title, body, extra).catch((error: unknown) => {
+    console.warn(
+      `[notifications] ${scope} update failed: ${error instanceof Error ? error.message : String(error)}`,
+      error,
+    );
+  });
   return true;
 }
 

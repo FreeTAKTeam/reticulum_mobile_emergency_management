@@ -81,7 +81,8 @@ export function listNotificationActivity(): NotificationActivityRecord[] {
       .filter((record): record is NotificationActivityRecord => Boolean(record))
       .sort((left, right) => right.at - left.at)
       .slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS);
-  } catch {
+  } catch (error: unknown) {
+    reportNotificationFailure("activity-history read", error);
     return [];
   }
 }
@@ -93,8 +94,9 @@ function saveNotificationActivity(records: NotificationActivityRecord[]): void {
       JSON.stringify(records.slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS)),
     );
     window.dispatchEvent(new CustomEvent(NOTIFICATION_ACTIVITY_CHANGED_EVENT));
-  } catch {
-    // Activity history is best-effort and must never block notifications.
+  } catch (error: unknown) {
+    // Activity history is best-effort and must never block notification delivery.
+    reportNotificationFailure("activity-history persistence", error);
   }
 }
 
@@ -169,8 +171,13 @@ export async function checkNotificationPermission(): Promise<boolean> {
     return false;
   }
 
-  const permission = await LocalNotifications.checkPermissions().catch(() => ({ display: "denied" }));
-  return permission.display === "granted";
+  try {
+    const permission = await LocalNotifications.checkPermissions();
+    return permission.display === "granted";
+  } catch (error: unknown) {
+    reportNotificationFailure("permission check", error);
+    return false;
+  }
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
@@ -178,7 +185,10 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return false;
   }
 
-  const permission = await LocalNotifications.requestPermissions().catch(() => ({ display: "denied" }));
+  const permission = await LocalNotifications.requestPermissions().catch((error: unknown) => {
+    reportNotificationFailure("permission request", error);
+    return { display: "denied" as const };
+  });
   if (permission.display !== "granted") {
     return false;
   }
@@ -270,7 +280,10 @@ export async function notifyOperationalUpdate(
   const id = getNextNotificationId();
   appendNotificationActivity(id, title, body, extra);
 
-  if (!(await ensureNotificationsReady().catch(() => false))) {
+  if (!(await ensureNotificationsReady().catch((error: unknown) => {
+    reportNotificationFailure("delivery initialization", error);
+    return false;
+  }))) {
     return;
   }
 

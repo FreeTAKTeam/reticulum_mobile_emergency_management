@@ -13,6 +13,7 @@ import {
   ACTION_MESSAGE_STATUS_CONFIG,
   type ActionMessageStatusField,
 } from "../utils/actionMessageStatus";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   DEFAULT_R3AKT_TEAM_COLOR,
   R3AKT_TEAM_COLORS,
@@ -212,7 +213,8 @@ function deleteMessage(callsign: string): void {
   if (!message) {
     return;
   }
-  messagesStore.deleteLocal(callsign).catch(() => undefined);
+  runDetachedStoreTask(nodeStore, "eam", `delete ${callsign}`, () =>
+    messagesStore.deleteLocal(callsign));
 }
 </script>
 

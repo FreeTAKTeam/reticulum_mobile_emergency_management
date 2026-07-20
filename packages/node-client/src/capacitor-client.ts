@@ -17,6 +17,17 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
   private attachPromise: Promise<void> | null = null;
   private generation = 0;
 
+  private async removeListenerHandle(
+    handle: PluginListenerHandle,
+    operation: string,
+  ): Promise<void> {
+    try {
+      await handle.remove();
+    } catch (error: unknown) {
+      console.warn(`[node-client] ${operation} failed`, error);
+    }
+  }
+
   private async attachListeners(): Promise<void> {
     if (this.attachPromise) {
       return this.attachPromise;
@@ -34,6 +45,9 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
         }
         const handle = await Promise.resolve(
           this.plugin.addListener(eventName, (payload: unknown) => {
+            if (generation !== this.generation) {
+              return;
+            }
             const objectPayload =
               payload && typeof payload === "object"
                 ? (payload as Record<string, unknown>)
@@ -42,7 +56,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
           }),
         );
         if (generation !== this.generation) {
-          await handle.remove().catch(() => undefined);
+          await this.removeListenerHandle(handle, "stale listener cleanup");
           return;
         }
         this.listenerHandles.push(handle);
@@ -77,7 +91,8 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
       await register("error", toErrorEvent);
     })().catch(async (error: unknown) => {
       const partialHandles = this.listenerHandles.splice(initialHandleCount);
-      await Promise.all(partialHandles.map((handle) => handle.remove().catch(() => undefined)));
+      await Promise.all(partialHandles.map((handle) =>
+        this.removeListenerHandle(handle, "partial listener cleanup")));
       this.attachPromise = null;
       throw error;
     });
@@ -294,10 +309,9 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
 
   async dispose(): Promise<void> {
     this.generation += 1;
-    for (const handle of this.listenerHandles) {
-      await handle.remove().catch(() => undefined);
-    }
-    this.listenerHandles = [];
+    const handles = this.listenerHandles.splice(0);
+    await Promise.all(handles.map((handle) =>
+      this.removeListenerHandle(handle, "listener disposal")));
     this.attachPromise = null;
     this.emitter.clear();
   }
