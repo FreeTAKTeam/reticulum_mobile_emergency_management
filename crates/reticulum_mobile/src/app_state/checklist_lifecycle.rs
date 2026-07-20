@@ -18,7 +18,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value))
             .transpose()
             .map(|record| record.and_then(sanitize_active_checklist))
@@ -47,7 +47,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| {
             let mut record: ChecklistTemplateRecord = deserialize_json(&value)?;
             normalize_checklist_template(&mut record);
@@ -68,7 +68,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         raw.map(|value| deserialize_json(&value)).transpose()
     }
 
@@ -80,7 +80,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut normalized = checklist.clone();
         normalize_checklist(&mut normalized);
         self.write_checklist_tx(&transaction, &normalized)?;
@@ -89,7 +89,7 @@ impl AppStateStore {
             normalized.uid.as_str(),
             reason,
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -204,11 +204,13 @@ impl AppStateStore {
                 .map(|value| vec![value])
                 .unwrap_or_default(),
             expected_task_count: Some(
-                template
-                    .tasks
-                    .iter()
-                    .filter(|task| task.deleted_at.is_none())
-                    .count() as u32,
+                crate::numeric::usize_to_u32_saturating(
+                    template
+                        .tasks
+                        .iter()
+                        .filter(|task| task.deleted_at.is_none())
+                        .count(),
+                ),
             ),
             progress_percent: 0.0,
             counts: crate::types::ChecklistStatusCounts {
@@ -249,7 +251,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -281,7 +283,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-updated",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -301,7 +303,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, checklist_uid)?;
         let timestamp = current_timestamp_rfc3339();
         checklist.deleted_at = Some(timestamp.clone());
@@ -313,7 +315,7 @@ impl AppStateStore {
             checklist_uid,
             "checklist-deleted",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 
@@ -324,7 +326,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut checklist = self.load_checklist_tx(&transaction, request.checklist_uid.as_str())?;
         if checklist.deleted_at.is_some() {
             return Err(NodeError::InvalidConfig {});
@@ -361,7 +363,7 @@ impl AppStateStore {
             checklist.uid.as_str(),
             "checklist-task-status-set",
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 

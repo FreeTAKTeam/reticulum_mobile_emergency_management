@@ -61,7 +61,7 @@ pub(crate) fn msgpack_f64(value: &MsgPackValue) -> Option<f64> {
     match value {
         MsgPackValue::F32(value) => Some(f64::from(*value)),
         MsgPackValue::F64(value) => Some(*value),
-        MsgPackValue::Integer(value) => value.as_i64().map(|entry| entry as f64),
+        MsgPackValue::Integer(value) => value.as_i64().and_then(crate::numeric::i64_to_f64_exact),
         _ => None,
     }
 }

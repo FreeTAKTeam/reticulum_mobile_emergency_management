@@ -13,10 +13,10 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         transaction
             .execute("DELETE FROM saved_peers", [])
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         for peer in peers {
             self.write_saved_peer_tx(&transaction, peer)?;
         }
@@ -26,7 +26,7 @@ impl AppStateStore {
             None,
             Some("saved-peers-updated".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -37,7 +37,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_saved_peer_tx(&transaction, peer)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -45,7 +45,7 @@ impl AppStateStore {
             None,
             Some("saved-peer-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -53,13 +53,13 @@ impl AppStateStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT destination_hex FROM ignored_peers ORDER BY updated_at_ms DESC")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut destinations = Vec::new();
         for row in rows {
-            destinations.push(row.map_err(|_| NodeError::IoError {})?);
+            destinations.push(row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?);
         }
         Ok(destinations)
     }
@@ -74,8 +74,8 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
-        let updated_at_ms = now_ms() as i64;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        let updated_at_ms = crate::numeric::u64_to_i64_saturating(now_ms());
         for destination in destinations {
             let normalized = destination.trim().to_ascii_lowercase();
             if normalized.is_empty() {
@@ -89,9 +89,9 @@ impl AppStateStore {
                         updated_at_ms = excluded.updated_at_ms",
                     params![normalized, updated_at_ms],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -105,7 +105,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         for destination in destinations {
             let normalized = destination.trim().to_ascii_lowercase();
             if normalized.is_empty() {
@@ -116,9 +116,9 @@ impl AppStateStore {
                     "DELETE FROM ignored_peers WHERE destination_hex = ?1",
                     params![normalized],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -135,10 +135,13 @@ impl AppStateStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         if existing
             .as_ref()
-            .is_some_and(|(received_at_ms, _)| *received_at_ms > record.received_at_ms as i64)
+            .is_some_and(|(received_at_ms, _)| {
+                *received_at_ms
+                    > crate::numeric::u64_to_i64_saturating(record.received_at_ms)
+            })
         {
             return Ok(());
         }
@@ -189,11 +192,11 @@ impl AppStateStore {
                     normalized.display_name,
                     i64::from(normalized.hops),
                     normalized.interface_hex,
-                    normalized.received_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(normalized.received_at_ms),
                     json,
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -214,7 +217,7 @@ impl AppStateStore {
                  FROM announces
                  ORDER BY received_at_ms DESC, destination_hex ASC",
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| {
                 let announce_class: String = row.get(3)?;
@@ -227,15 +230,15 @@ impl AppStateStore {
                     announce_class: announce_class_from_name(announce_class.as_str()),
                     app_data: row.get(4)?,
                     display_name: row.get(5)?,
-                    hops: hops.clamp(0, u8::MAX as i64) as u8,
+                    hops: crate::numeric::i64_to_u8_saturating(hops),
                     interface_hex: row.get(7)?,
-                    received_at_ms: received_at_ms.max(0) as u64,
+                    received_at_ms: crate::numeric::i64_to_u64_saturating(received_at_ms),
                 })
             })
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(row.map_err(|_| NodeError::IoError {})?);
+            records.push(row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?);
         }
         Ok(records)
     }

@@ -63,8 +63,9 @@ fn dispatch_command(tx: &mpsc::Sender<Command>, command: Command) -> Result<(), 
         });
     }
 
-    tx.blocking_send(command)
-        .map_err(|_| NodeError::NotRunning {})
+    tx.blocking_send(command).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::NotRunning {}, error)
+    })
 }
 
 fn build_node_runtime() -> Result<Runtime, NodeError> {
@@ -74,7 +75,9 @@ fn build_node_runtime() -> Result<Runtime, NodeError> {
         .worker_threads(2)
         .thread_name("rem-node")
         .build()
-        .map_err(|_| NodeError::InternalError {})
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })
 }
 
 fn latest_sos_telemetry(
@@ -160,7 +163,9 @@ fn create_app_state_store_with_fallback(
 ) -> Result<AppStateStore, NodeError> {
     match AppStateStore::new(storage_dir) {
         Ok(store) => Ok(store),
-        Err(_) => AppStateStore::new(Some(fallback)).map_err(|_| NodeError::IoError {}),
+        Err(_) => AppStateStore::new(Some(fallback)).map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::IoError {}, error)
+        }),
     }
 }
 

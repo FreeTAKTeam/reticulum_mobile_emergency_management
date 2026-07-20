@@ -30,6 +30,7 @@ import {
   toTeamSummary,
 } from "../utils/eamProjection";
 import { buildWebEamReadinessSummary, computeWebEamTeamSummary } from "../utils/eamReadiness";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
@@ -160,7 +161,7 @@ export const useMessagesStore = defineStore("messages", () => {
   function init(): void {
     if (initialized.value) {
       if (supportsNativeNodeRuntime) {
-        void refreshAll();
+        runDetachedStoreTask(nodeStore, "eams", "projection refresh", refreshAll);
       }
       return;
     }
@@ -169,16 +170,16 @@ export const useMessagesStore = defineStore("messages", () => {
     if (!supportsNativeNodeRuntime) {
       byCallsign.value = loadWebMessages();
       refreshWebReadiness();
-      void refreshTeamSummary();
+      runDetachedStoreTask(nodeStore, "eams", "team summary refresh", refreshTeamSummary);
       return;
     }
 
-    void refreshAll();
+    runDetachedStoreTask(nodeStore, "eams", "startup projection refresh", refreshAll);
   }
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
     if (event.scope === "Eams") {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "eams", "projection invalidation refresh", refreshAll);
     }
   }
 
@@ -195,13 +196,20 @@ export const useMessagesStore = defineStore("messages", () => {
     const client = getProjectionClient(nodeStore.settings.clientMode);
     cleanups.push(client.on("projectionInvalidated", handleProjectionInvalidation));
     cleanups.push(client.on("statusChanged", () => {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "eams", "status projection refresh", refreshAll);
     }));
+    cleanups.push(watch(
+      () => nodeStore.status.running,
+      (running) => {
+        if (running) runDetachedStoreTask(nodeStore, "eams", "runtime-ready projection refresh", refreshAll);
+      },
+      { immediate: true },
+    ));
 
     watch(
       () => nodeStore.hubRegistration.linkage?.teamUid ?? "",
       () => {
-        void refreshTeamSummary();
+        runDetachedStoreTask(nodeStore, "eams", "team linkage refresh", refreshTeamSummary);
       },
       { immediate: true },
     );
@@ -298,7 +306,7 @@ export const useMessagesStore = defineStore("messages", () => {
       [keyFor(updated.callsign)]: cloneMessage(updated),
     };
     webPersist();
-    void upsertLocal(updated);
+    runDetachedStoreTask(nodeStore, "eams", "status update", () => upsertLocal(updated));
   }
 
   async function requestList(): Promise<void> {

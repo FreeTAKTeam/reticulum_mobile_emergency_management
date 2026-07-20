@@ -126,6 +126,38 @@ fn event_projection_from_verbose_fields_remains_compatible() {
 }
 
 #[test]
+fn event_projection_from_minimal_compact_fields_uses_lxmf_fallbacks() {
+    let event_uid_bytes = hex::decode("fad7f9fe856d478b9126e6965e42ccab").expect("event uid");
+    let fields = MsgPackValue::Map(vec![(
+        MsgPackValue::from(FIELD_COMMANDS),
+        MsgPackValue::Array(vec![MsgPackValue::Map(vec![(
+            MsgPackValue::from("a"),
+            MsgPackValue::Map(vec![(
+                MsgPackValue::from("u"),
+                MsgPackValue::Binary(event_uid_bytes),
+            )]),
+        )])]),
+    )]);
+    let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
+
+    let record = event_projection_from_fields(
+        &bytes,
+        Some(b"P01 RC1TCPMECP1853"),
+        Some("a1c8126d7cb806e6bde086d582b6cb0d"),
+        None,
+        1_784_498_570_531,
+    )
+    .expect("compact event projection");
+
+    assert_eq!(record.uid, "evt-fad7f9fe-856d-478b-9126-e6965e42ccab");
+    assert_eq!(record.command_type, "mission.registry.log_entry.upsert");
+    assert_eq!(record.mission_uid, "r3akt-default-mission");
+    assert_eq!(record.content, "P01 RC1TCPMECP1853");
+    assert_eq!(record.callsign, "a1c8126d");
+    assert_eq!(record.source_identity, "a1c8126d7cb806e6bde086d582b6cb0d");
+}
+
+#[test]
 fn event_projection_from_fields_preserves_tombstone_timestamp() {
     let fields = MsgPackValue::Map(vec![(
         MsgPackValue::from(FIELD_COMMANDS),

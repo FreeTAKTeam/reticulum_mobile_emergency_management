@@ -1,17 +1,17 @@
 impl Node {
     pub fn get_eams(&self) -> Result<Vec<EamProjectionRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_eams()
     }
 
     pub fn upsert_eam(&self, record: EamProjectionRecord) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let normalized_record = populate_eam_defaults(&status, &record);
             let invalidation = inner.app_state.upsert_eam(&normalized_record)?;
@@ -27,12 +27,12 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers =
                     saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-upsert");
@@ -41,7 +41,7 @@ impl Node {
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
@@ -113,11 +113,11 @@ impl Node {
     pub fn delete_eam(&self, callsign: String, deleted_at_ms: u64) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let invalidation = inner.app_state.delete_eam(&callsign, deleted_at_ms)?;
             emit_projection_invalidation(&inner.bus, invalidation);
@@ -132,12 +132,12 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers =
                     saved_peers_for_replication(&inner.app_state, &inner.bus, "eam-delete");
@@ -146,7 +146,7 @@ impl Node {
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let mut replication_targets = match build_runtime_mission_replication_targets(
                     &status,
@@ -205,8 +205,7 @@ impl Node {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
                     message: format!(
-                        "eam delete replication enqueue failed destination={} callsign={} reason={}",
-                        destination_hex, callsign, err
+                        "eam delete replication enqueue failed destination={destination_hex} callsign={callsign} reason={err}"
                     ),
                 });
             }
@@ -216,7 +215,7 @@ impl Node {
     }
 
     pub fn delete_local_eam(&self, callsign: String, deleted_at_ms: u64) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.delete_eam(&callsign, deleted_at_ms)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         let summary = inner.app_state.bump_projection_revision(
@@ -232,12 +231,12 @@ impl Node {
         &self,
         team_uid: String,
     ) -> Result<Option<EamTeamSummaryRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_eam_team_summary(&team_uid)
     }
 
     pub fn get_eam_readiness_summary(&self) -> Result<EamReadinessSummaryRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_eam_readiness_summary()
     }
 

@@ -1,5 +1,9 @@
 # R.E.M. User Manual
 
+> This Markdown manual is authoritative for REM `1.2.7-rc.1`. PDF and DOCX
+> files in `docs/` are archived snapshots and may describe older screens or
+> behavior.
+
 R.E.M. stands for Reticulum Emergency Management.
 
 It is a secure Mesh  coordination app for small teams.  It helps people share status, send chat messages, record events, manage checklists, and see recent positions over Reticulum mesh networking.
@@ -280,6 +284,88 @@ When enabled, it can:
 - require a PIN to cancel, if configured
 
 Before relying on SOS, test it with trusted peers in a safe setting.
+
+## Examples
+
+These examples use the current Android release. Button names can be slightly
+different on narrow screens, but the sequence and recovery rules are the same.
+
+### First Launch With TCP Or Autonomous Operation
+
+1. Open REM and complete the setup wizard. Enter a unique call sign.
+2. For normal internet or LAN access, keep **TCP** enabled and select a
+   community server or enter `host:port`. For an isolated team, remove TCP
+   endpoints and choose **Autonomous** mode.
+3. Enable an RNode only after its BLE, USB, or TCP connection has been selected
+   and tested. Save the settings.
+4. Start or restart REM. The splash closes when the local Rust runtime is
+   ready. A configured interface can still say **Pending**, **Failed**, or
+   **Unsupported**; this is degraded network access, not a blocked app.
+5. Open **Settings > Node** to inspect each interface. Correct the endpoint,
+   radio selection, Android permission, or cable, then restart REM if needed.
+
+If RCH is disabled, misconfigured, or temporarily unreachable, Autonomous and
+local TCP operation still start. RCH directory refresh retries separately and
+must not keep the splash screen open.
+
+### Discover, Save, Connect, And Chat
+
+1. On both phones, open **Peers** and tap **Announce**.
+2. Confirm each call sign appears with REM/LXMF capability evidence.
+3. Save the other phone on both devices. Discovery alone does not grant trust.
+4. Tap **Connect** and wait for **Connected**. **Reachable** means a route is
+   known, but it is not the same as an active direct link.
+5. Open **Chat**, select the saved peer, send `CHAT-TEST-01`, and confirm it is
+   received in the matching conversation.
+6. Watch the delivery state. `Delivered`, `Failed`, `TimedOut`, and `Cancelled`
+   are terminal. Retry only failed or timed-out messages after correcting the
+   route; do not resend a delivered message.
+
+### Create An EAM And A MECP Event
+
+1. Open **Action Messages**, tap **+**, enter a call sign, and choose the most
+   accurate Security, Capability, Preparedness, Medical, Mobility, and Comms
+   states. Save the EAM and confirm the Dashboard rings update.
+2. Open **Events**, tap **+**, and choose severity, category, and event. For
+   example, Safety + Position + Stranded produces `MECP/2/P01`.
+3. Add a unique detail such as `RIDGE-01`, review the body, and tap **Add
+   Event**.
+4. Confirm the saved peer receives one EAM projection and one event row with
+   the same marker. If delivery fails, reconnect the peer or propagation node
+   and use the item status rather than creating a duplicate.
+
+### Create And Synchronize A Checklist
+
+1. Open **Checklists**, tap **+**, enter a title such as `SEARCH-A-01`, and
+   select a built-in or imported CSV template.
+2. Set the start time and create the checklist. Open it and assign or update a
+   row.
+3. Ensure both phones saved each other, then use **Upload/Sync** when shown.
+4. On the second phone, join the checklist and change one task to **Complete**.
+5. Confirm the creator receives the same task state and that repeating the
+   update does not create a duplicate row.
+6. A timed-out synchronization is safe to retry. Do not delete and recreate the
+   checklist unless the original is intentionally abandoned, because its UID
+   is the replication identity.
+
+### Activate, Update, Cancel, And Recover SOS
+
+1. In **Settings > SOS**, configure the emergency and cancellation text,
+   trusted recipients, location/update choices, and an optional cancellation
+   PIN. Test this in a safe exercise first.
+2. Activate SOS from the configured control. Wait through the countdown and
+   confirm the active SOS indicator appears.
+3. If location or battery data changes, send or wait for the configured update.
+   The receiving phone should update the existing incident rather than create
+   duplicate active alerts.
+4. Cancel SOS and enter the PIN when required. Confirm peers show the incident
+   as cancelled and the Map no longer treats its position as active.
+5. If activation or cancellation reports a retryable network error, keep the
+   local incident state, restore an interface or propagation route, and retry.
+   If the app restarts during an active incident, inspect **SOS Status** before
+   taking another action; REM restores persisted incident state.
+6. For a non-retryable configuration error, correct the recipient, PIN, or
+   permission first. Never assume a failed local send reached the team.
 
 ## Typical Field Workflow
 

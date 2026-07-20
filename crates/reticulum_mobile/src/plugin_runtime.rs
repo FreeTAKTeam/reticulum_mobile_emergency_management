@@ -72,12 +72,18 @@ pub fn encode_plugin_fields(
     let envelope_value = rmpv::ext::from_value(
         rmp_serde::from_slice::<MsgPackValue>(
             rmp_serde::to_vec_named(&envelope)
-                .map_err(|_| NodeError::InvalidConfig {})?
+                .map_err(|error| {
+                    crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+                })?
                 .as_slice(),
         )
-        .map_err(|_| NodeError::InvalidConfig {})?,
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+        })?,
     )
-    .map_err(|_| NodeError::InvalidConfig {})?;
+    .map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })?;
     let fields = MsgPackValue::Map(vec![
         (
             MsgPackValue::from(FIELD_CUSTOM_TYPE),
@@ -85,15 +91,18 @@ pub fn encode_plugin_fields(
         ),
         (MsgPackValue::from(FIELD_CUSTOM_DATA), envelope_value),
     ]);
-    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InvalidConfig {})
+    rmp_serde::to_vec(&fields).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })
 }
 
 pub fn decode_plugin_fields(
     fields_bytes: &[u8],
     plugin: &InstalledPluginRecord,
 ) -> Result<Option<PluginLxmfEnvelope>, NodeError> {
-    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes)
-        .map_err(|_| NodeError::InvalidConfig {})?;
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })?;
     let MsgPackValue::Map(entries) = fields else {
         return Ok(None);
     };
@@ -109,8 +118,9 @@ pub fn decode_plugin_fields(
         .iter()
         .find_map(|(key, value)| (key.as_i64() == Some(FIELD_CUSTOM_DATA)).then_some(value))
         .ok_or(NodeError::InvalidConfig {})?;
-    let envelope: PluginLxmfEnvelope =
-        rmpv::ext::from_value(data.clone()).map_err(|_| NodeError::InvalidConfig {})?;
+    let envelope: PluginLxmfEnvelope = rmpv::ext::from_value(data.clone()).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })?;
     if envelope.plugin_id != plugin.discovered.plugin_id {
         return Err(NodeError::InvalidConfig {});
     }
@@ -123,8 +133,9 @@ pub fn decode_plugin_fields(
 }
 
 pub fn plugin_id_from_fields(fields_bytes: &[u8]) -> Result<Option<String>, NodeError> {
-    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes)
-        .map_err(|_| NodeError::InvalidConfig {})?;
+    let fields = rmp_serde::from_slice::<MsgPackValue>(fields_bytes).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })?;
     let MsgPackValue::Map(entries) = fields else {
         return Ok(None);
     };
@@ -140,8 +151,9 @@ pub fn plugin_id_from_fields(fields_bytes: &[u8]) -> Result<Option<String>, Node
         .iter()
         .find_map(|(key, value)| (key.as_i64() == Some(FIELD_CUSTOM_DATA)).then_some(value))
         .ok_or(NodeError::InvalidConfig {})?;
-    let envelope: PluginLxmfEnvelope =
-        rmpv::ext::from_value(data.clone()).map_err(|_| NodeError::InvalidConfig {})?;
+    let envelope: PluginLxmfEnvelope = rmpv::ext::from_value(data.clone()).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InvalidConfig {}, error)
+    })?;
     Ok(Some(envelope.plugin_id))
 }
 

@@ -48,7 +48,11 @@ final class WatchStatusServer {
 
     private void stopLocked() {
         if (socket != null) {
-            try { socket.close(); } catch (IOException ignored) {}
+            try {
+                socket.close();
+            } catch (IOException cleanupError) {
+                Log.d(TAG, "Ignoring socket close failure during cleanup", cleanupError);
+            }
             socket = null;
         }
         if (connections != null) connections.shutdownNow();

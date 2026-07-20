@@ -3,7 +3,7 @@ impl AppStateStore {
         let base_dir = storage_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_STORAGE_DIR));
-        fs::create_dir_all(&base_dir).map_err(|_| NodeError::IoError {})?;
+        fs::create_dir_all(&base_dir).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let store = Self {
             db_path: base_dir.join(DB_FILE_NAME),
         };
@@ -13,10 +13,10 @@ impl AppStateStore {
     }
 
     fn connect(&self) -> Result<Connection, NodeError> {
-        let connection = Connection::open(&self.db_path).map_err(|_| NodeError::IoError {})?;
+        let connection = Connection::open(&self.db_path).map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         connection
             .busy_timeout(SQLITE_BUSY_TIMEOUT)
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(connection)
     }
 
@@ -24,10 +24,10 @@ impl AppStateStore {
         let connection = self.connect()?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         connection
             .pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         connection
             .execute_batch(
                 "
@@ -161,7 +161,7 @@ impl AppStateStore {
                 );
                 ",
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
         Ok(())
     }
@@ -175,7 +175,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(value.as_deref() == Some("1"))
     }
 
@@ -186,7 +186,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut invalidations = Vec::new();
 
         if let Some(settings) = payload.settings.as_ref() {
@@ -202,7 +202,7 @@ impl AppStateStore {
         if !payload.saved_peers.is_empty() {
             transaction
                 .execute("DELETE FROM saved_peers", [])
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             for peer in &payload.saved_peers {
                 self.write_saved_peer_tx(&transaction, peer)?;
             }
@@ -274,8 +274,8 @@ impl AppStateStore {
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [],
             )
-            .map_err(|_| NodeError::IoError {})?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidations)
     }
 

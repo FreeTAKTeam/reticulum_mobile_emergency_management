@@ -3,14 +3,17 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import { useChecklistsStore } from "../stores/checklistsStore";
+import { useNodeStore } from "../stores/nodeStore";
 import {
   type ChecklistFilter,
   type ChecklistSegment,
   type ChecklistStatus,
 } from "../utils/checklists";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 
 export function useChecklistList() {
   const checklistsStore = useChecklistsStore();
+  const nodeStore = useNodeStore();
   const {
     liveUiRecords,
     templateUiRecords,
@@ -141,6 +144,11 @@ export function useChecklistList() {
     }
   }
 
+  function ensureChecklistDataDetached(segment?: ChecklistSegment): void {
+    runDetachedStoreTask(nodeStore, "checklists", "list refresh", () =>
+      ensureChecklistData(segment));
+  }
+
   async function createChecklist(): Promise<void> {
     const title = createForm.title.trim();
     if (!title || !selectedTemplateId.value || isMutating.value) {
@@ -176,10 +184,12 @@ export function useChecklistList() {
   }
 
   function openChecklist(checklistId: string, edit = false): void {
-    void router.push({
-      name: "checklist-detail",
-      params: { checklistId },
-      query: edit ? { edit: "1" } : undefined,
+    runDetachedStoreTask(nodeStore, "checklists", "detail navigation", async () => {
+      await router.push({
+        name: "checklist-detail",
+        params: { checklistId },
+        query: edit ? { edit: "1" } : undefined,
+      });
     });
   }
 
@@ -239,11 +249,11 @@ export function useChecklistList() {
   }
 
   watch(activeSegment, (segment) => {
-    void ensureChecklistData(segment);
+    ensureChecklistDataDetached(segment);
   });
 
   onMounted(() => {
-    void ensureChecklistData();
+    ensureChecklistDataDetached();
   });
 
   return {

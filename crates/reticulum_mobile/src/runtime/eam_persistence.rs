@@ -115,8 +115,7 @@ async fn persist_received_eam_if_present(
                 bus.emit(NodeEvent::Error {
                     code: "IoError".to_string(),
                     message: format!(
-                        "failed to delete inbound eam callsign={} reason={}",
-                        callsign, err
+                        "failed to delete inbound eam callsign={callsign} reason={err}"
                     ),
                 });
                 false

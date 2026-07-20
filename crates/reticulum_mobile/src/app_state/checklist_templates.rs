@@ -72,7 +72,7 @@ fn checklist_template_from_rows(
             let task_uid = format!("{uid}-task-{}", index + 1);
             ChecklistTaskRecord {
                 task_uid: task_uid.clone(),
-                number: (index + 1) as u32,
+                number: crate::numeric::usize_to_u32_saturating(index.saturating_add(1)),
                 user_status: ChecklistUserTaskStatus::Pending {},
                 task_status: ChecklistTaskStatus::Pending {},
                 is_late: false,
@@ -80,7 +80,8 @@ fn checklist_template_from_rows(
                 deleted_at: None,
                 custom_status: None,
                 due_relative_minutes: Some(
-                    (index as u32 + 1) * DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+                    crate::numeric::usize_to_u32_saturating(index.saturating_add(1))
+                        .saturating_mul(DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES),
                 ),
                 due_dtg: None,
                 notes: Some((*description).to_string()),

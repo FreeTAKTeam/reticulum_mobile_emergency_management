@@ -107,7 +107,8 @@ final class RuntimeConfigResolver {
         String name = "";
         try {
             name = singleRnode.getName();
-        } catch (SecurityException ignored) {
+        } catch (SecurityException error) {
+            Log.w(TAG, "Bluetooth permission denied while reading the RNode display name", error);
         }
         rnode.put("peripheralId", address);
         rnode.put("displayName", name == null || name.trim().isEmpty() ? address : name.trim());

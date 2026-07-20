@@ -402,8 +402,9 @@ final class RNodeBluetoothController {
     private void unregisterReceiverQuietly(BroadcastReceiver receiver) {
         try {
             context.unregisterReceiver(receiver);
-        } catch (IllegalArgumentException ignored) {
-            // Already unregistered.
+        } catch (IllegalArgumentException cleanupError) {
+            // Cleanup is idempotent; Android throws when the receiver was already unregistered.
+            Log.d(TAG, "Bluetooth receiver was already unregistered", cleanupError);
         }
     }
 

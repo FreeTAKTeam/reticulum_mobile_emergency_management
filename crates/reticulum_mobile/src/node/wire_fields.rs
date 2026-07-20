@@ -183,7 +183,7 @@ fn compact_u64_token(value: u64) -> String {
     let mut remaining = value;
     let mut chars = Vec::new();
     while remaining > 0 {
-        let digit = (remaining % 36) as u8;
+        let digit = u8::try_from(remaining % 36).unwrap_or(0);
         chars.push(match digit {
             0..=9 => (b'0' + digit) as char,
             _ => (b'a' + (digit - 10)) as char,
@@ -357,7 +357,7 @@ fn build_checklist_command_fields(
             MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![msgpack_map(command_entries)]),
         )]);
-        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+        return rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error));
     }
     if command_type == "checklist.create.online" {
         let command_entries = MsgPackValue::Array(vec![
@@ -383,7 +383,7 @@ fn build_checklist_command_fields(
             MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![command_entries]),
         )]);
-        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+        return rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error));
     }
     if command_type == "checklist.task.row.add" {
         let mut command_entries = vec![("t", MsgPackValue::from(command_wire_value(command_type)))];
@@ -407,7 +407,7 @@ fn build_checklist_command_fields(
             MsgPackValue::from(FIELD_COMMANDS),
             MsgPackValue::Array(vec![msgpack_map(command_entries)]),
         )]);
-        return rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {});
+        return rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error));
     }
     let topics = checklist_topics_from_args(args)
         .into_iter()
@@ -431,5 +431,5 @@ fn build_checklist_command_fields(
             ("a", checklist_args_to_msgpack(args)?),
         ])]),
     )]);
-    rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }

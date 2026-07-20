@@ -20,7 +20,7 @@ fn normalize_hex(value: &str) -> String {
 fn current_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
+        .map(|duration| crate::numeric::u128_to_u64_saturating(duration.as_millis()))
         .unwrap_or(0)
 }
 

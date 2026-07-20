@@ -12,15 +12,14 @@ struct RestoredSavedPeerManagement {
 }
 
 fn record_saved_peer_profile(messaging: &mut sdkmsg::MessagingStore, peer: &SavedPeerRecord) {
-    messaging.record_saved_peer_profile(
-        peer.destination_hex.as_str(),
-        peer.identity_hex.as_deref(),
-        peer.lxmf_destination_hex.as_deref(),
-        peer.app_data.as_deref(),
-        peer.display_name.as_deref().or(peer.label.as_deref()),
-        peer.last_route_seen_at_ms,
-        peer.last_hops,
-    );
+    messaging.record_saved_peer_profile(sdkmsg::SavedPeerProfileInput {
+        destination_hex: peer.destination_hex.as_str(),
+        identity_hex: peer.identity_hex.as_deref(),
+        lxmf_destination_hex: peer.lxmf_destination_hex.as_deref(),
+        app_data: peer.app_data.as_deref(),
+        display_name: peer.display_name.as_deref().or(peer.label.as_deref()),
+        last_route_seen_at_ms: peer.last_route_seen_at_ms,
+    });
 }
 
 fn saved_peer_matches_selected_destination(
@@ -472,8 +471,7 @@ async fn record_peer_link_state(
         );
     } else {
         debug!(
-            "[peers][link-state] link_destination={} canonical_destination={} active={} projected_destination=- state=missing",
-            link_destination_hex, canonical_destination_hex, active,
+            "[peers][link-state] link_destination={link_destination_hex} canonical_destination={canonical_destination_hex} active={active} projected_destination=- state=missing",
         );
     }
     if let Some(change) = change {

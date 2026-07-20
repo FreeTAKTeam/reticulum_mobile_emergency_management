@@ -13,15 +13,15 @@ fn spawn_cancel_lxmf_command(
             .messaging
             .lock()
             .await
-            .update_message_delivery_state(
-                message_id_hex.as_str(),
-                Some(sdkmsg::MessageState::Cancelled),
-                Some(sdkmsg::TransportDeliveryState::Cancelled),
-                Some(sdkmsg::ApplicationAckState::Failed),
-                Some("cancelled locally".to_string()),
-                None,
-                now_ms(),
-            )
+            .update_message_delivery_state(sdkmsg::MessageDeliveryUpdate {
+                message_id_hex: message_id_hex.as_str(),
+                state: Some(sdkmsg::MessageState::Cancelled),
+                transport_state: Some(sdkmsg::TransportDeliveryState::Cancelled),
+                application_ack_state: Some(sdkmsg::ApplicationAckState::Failed),
+                detail: Some("cancelled locally".to_string()),
+                last_wire_message_id_hex: None,
+                updated_at_ms: now_ms(),
+            })
             .map(from_sdk_message_record)
             .ok_or(NodeError::InvalidConfig {})?;
         upsert_message_record(&state, &bus, updated, false).await;

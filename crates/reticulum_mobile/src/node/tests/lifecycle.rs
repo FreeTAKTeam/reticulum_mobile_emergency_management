@@ -89,7 +89,8 @@ async fn runtime_only_commands_still_fail_before_start() {
 
 #[test]
 fn lifecycle_and_cancel_commands_use_reserved_priority_capacity() {
-    assert!(PRIORITY_COMMAND_QUEUE_CAPACITY >= 1_000);
+    let priority_capacity = std::hint::black_box(PRIORITY_COMMAND_QUEUE_CAPACITY);
+    assert!(priority_capacity >= 1_000);
     let storage_dir = prepare_storage_dir("priority-lifecycle-commands");
     let storage_dir_text = storage_dir.to_string_lossy().to_string();
     let node = Node::with_storage_dir(Some(storage_dir_text.as_str())).expect("node storage");

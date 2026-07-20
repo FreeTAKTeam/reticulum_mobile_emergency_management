@@ -5,7 +5,7 @@ import {
   type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import {
   runtimeChecklistToUi,
@@ -13,6 +13,7 @@ import {
   type ChecklistRecord as UiChecklistRecord,
 } from "../utils/checklists";
 import { createChecklistNotificationCoordinator } from "../utils/checklistNotifications";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordinator";
 import { createProjectionClientAccessor } from "../utils/projectionClient";
 import { useNodeStore } from "./nodeStore";
@@ -259,20 +260,20 @@ export const useChecklistsStore = defineStore("checklists", () => {
 
   function init(): void {
     if (initialized.value) {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "checklists", "projection refresh", refreshAll);
       return;
     }
     initialized.value = true;
-    void refreshAll();
+    runDetachedStoreTask(nodeStore, "checklists", "startup projection refresh", refreshAll);
   }
 
   function handleProjectionInvalidation(event: ProjectionInvalidationEvent): void {
     if (event.scope === "Checklists") {
-      void refreshLive();
+      runDetachedStoreTask(nodeStore, "checklists", "list invalidation refresh", refreshLive);
       return;
     }
     if (event.scope === "ChecklistDetail" && typeof event.key === "string" && event.key.trim()) {
-      void refreshDetail(event.key);
+      runDetachedStoreTask(nodeStore, "checklists", "detail invalidation refresh", () => refreshDetail(event.key ?? ""));
     }
   }
 
@@ -284,8 +285,15 @@ export const useChecklistsStore = defineStore("checklists", () => {
     const projectionClient = client();
     cleanups.push(projectionClient.on("projectionInvalidated", handleProjectionInvalidation));
     cleanups.push(projectionClient.on("statusChanged", () => {
-      void refreshAll();
+      runDetachedStoreTask(nodeStore, "checklists", "status projection refresh", refreshAll);
     }));
+    cleanups.push(watch(
+      () => nodeStore.status.running,
+      (running) => {
+        if (running) runDetachedStoreTask(nodeStore, "checklists", "runtime-ready projection refresh", refreshAll);
+      },
+      { immediate: true },
+    ));
   }
 
   async function importTemplateCsv(file: File, name?: string, description?: string): Promise<RuntimeChecklistTemplateRecord> {
@@ -308,17 +316,31 @@ export const useChecklistsStore = defineStore("checklists", () => {
     description: string;
     startTime: string;
   }): Promise<void> {
-    await client().createChecklistFromTemplate({
-      checklistUid: input.checklistUid,
+    const checklistUid = input.checklistUid?.trim() || `chk-${Date.now()}`;
+    const description = input.description.trim();
+    const startTime = input.startTime.trim() || new Date().toISOString();
+    const projectionClient = client();
+    await projectionClient.createChecklistFromTemplate({
+      checklistUid,
       missionUid: normalizeMissionUid(input.missionUid?.trim() || input.name),
       templateUid: input.templateUid,
       name: input.name.trim(),
-      description: input.description.trim(),
-      startTime: input.startTime.trim() || new Date().toISOString(),
+      description,
+      startTime,
       createdByTeamMemberRnsIdentity: nodeStore.status.identityHex.trim() || undefined,
       createdByTeamMemberDisplayName: nodeStore.settings.displayName.trim() || undefined,
     });
-    await refreshAfterMutation(input.checklistUid);
+    // The compact create envelope deliberately omits descriptive metadata so it
+    // fits an RNode packet. Replicate those fields with the existing update
+    // command instead of silently replacing them with receiver-side defaults.
+    await projectionClient.updateChecklist({
+      checklistUid,
+      patch: {
+        description,
+        startTime,
+      },
+    });
+    await refreshAfterMutation(checklistUid);
   }
 
   async function updateChecklist(input: {

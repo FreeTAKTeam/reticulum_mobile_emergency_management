@@ -1,5 +1,6 @@
 #[cfg(target_os = "android")]
 use std::ffi::c_void;
+use std::cell::RefCell;
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -53,25 +54,36 @@ pub extern "system" fn JNI_OnLoad(vm: jni19::JavaVM, _reserved: *mut c_void) -> 
 
 #[derive(Default)]
 struct BridgeState {
-    node: Option<Node>,
+    node: Option<Arc<Node>>,
     subscription: Option<Arc<EventSubscription>>,
 }
 
-fn ensure_node(guard: &mut BridgeState) -> Result<&Node, NodeError> {
+fn ensure_node(guard: &mut BridgeState) -> Result<Arc<Node>, NodeError> {
     if guard.node.is_none() {
-        guard.node = Some(Node::new()?);
+        guard.node = Some(Arc::new(Node::new()?));
     }
-    guard.node.as_ref().ok_or(NodeError::InternalError {})
+    guard.node.clone().ok_or(NodeError::InternalError {})
 }
 
-fn ensure_node_with_storage<'a>(
-    guard: &'a mut BridgeState,
+fn ensure_node_with_storage(
+    guard: &mut BridgeState,
     storage_dir: Option<&str>,
-) -> Result<&'a Node, NodeError> {
+) -> Result<Arc<Node>, NodeError> {
     if guard.node.is_none() {
-        guard.node = Some(Node::with_storage_dir(storage_dir)?);
+        guard.node = Some(Arc::new(Node::with_storage_dir(storage_dir)?));
     }
-    guard.node.as_ref().ok_or(NodeError::InternalError {})
+    guard.node.clone().ok_or(NodeError::InternalError {})
+}
+
+fn initialized_node() -> Result<Arc<Node>, NodeError> {
+    initialized_node_from(bridge_state())
+}
+
+fn initialized_node_from(state: &Mutex<BridgeState>) -> Result<Arc<Node>, NodeError> {
+    let guard = state.lock().map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })?;
+    guard.node.clone().ok_or(NodeError::NotRunning {})
 }
 
 trait JniNodeFailure {
@@ -91,8 +103,22 @@ impl JniNodeFailure for jstring {
 }
 
 macro_rules! ensure_node_or_return {
-    ($guard:expr) => {
-        match ensure_node($guard) {
+    (&mut $guard:ident) => {{
+        let node = match ensure_node(&mut $guard) {
+            Ok(node) => node,
+            Err(error) => {
+                set_last_node_error(error);
+                return <_ as JniNodeFailure>::node_failure();
+            }
+        };
+        drop($guard);
+        node
+    }};
+}
+
+macro_rules! initialized_node_or_return {
+    () => {
+        match initialized_node() {
             Ok(node) => node,
             Err(error) => {
                 set_last_node_error(error);
@@ -102,11 +128,39 @@ macro_rules! ensure_node_or_return {
     };
 }
 
+#[cfg(test)]
+mod bridge_state_lock_tests {
+    use super::*;
+
+    #[test]
+    fn initialized_node_snapshot_releases_bridge_state_lock() {
+        let node = Arc::new(Node::new().expect("test node should initialize"));
+        let state = Mutex::new(BridgeState {
+            node: Some(Arc::clone(&node)),
+            subscription: None,
+        });
+
+        let snapshot = initialized_node_from(&state).expect("node snapshot should succeed");
+
+        assert!(Arc::ptr_eq(&node, &snapshot));
+        assert!(state.try_lock().is_ok());
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LastError {
     code: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation: Option<String>,
+    retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cause: Option<String>,
+}
+
+thread_local! {
+    static LAST_JNI_ERROR: RefCell<Option<LastError>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Deserialize)]

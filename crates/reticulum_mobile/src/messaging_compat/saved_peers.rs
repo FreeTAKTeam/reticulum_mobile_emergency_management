@@ -16,16 +16,15 @@ impl MessagingStore {
         }
     }
 
-    pub fn record_saved_peer_profile(
-        &mut self,
-        destination_hex: &str,
-        identity_hex: Option<&str>,
-        lxmf_destination_hex: Option<&str>,
-        app_data: Option<&str>,
-        display_name: Option<&str>,
-        last_route_seen_at_ms: Option<u64>,
-        _last_hops: Option<u8>,
-    ) {
+    pub fn record_saved_peer_profile(&mut self, input: SavedPeerProfileInput<'_>) {
+        let SavedPeerProfileInput {
+            destination_hex,
+            identity_hex,
+            lxmf_destination_hex,
+            app_data,
+            display_name,
+            last_route_seen_at_ms,
+        } = input;
         let destination_hex = normalize_hex(destination_hex);
         if destination_hex.is_empty() {
             return;

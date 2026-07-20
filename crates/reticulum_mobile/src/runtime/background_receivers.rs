@@ -224,8 +224,7 @@ fn spawn_delivery_tracking_tasks(
                 };
                 if pruned_acks > 0 || pruned_receipts > 0 {
                     debug!(
-                        "[runtime] pruned stale state buffered_acks={} receipt_tracking={}",
-                        pruned_acks, pruned_receipts,
+                        "[runtime] pruned stale state buffered_acks={pruned_acks} receipt_tracking={pruned_receipts}",
                     );
                 }
             }

@@ -8,9 +8,9 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let invalidation = self.bump_projection_revision_tx(&transaction, scope, key, reason)?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -24,9 +24,9 @@ impl AppStateStore {
             .execute(
                 "INSERT INTO app_settings (id, json, updated_at_ms) VALUES (1, ?1, ?2)
                  ON CONFLICT(id) DO UPDATE SET json = excluded.json, updated_at_ms = excluded.updated_at_ms",
-                params![json, now_ms() as i64],
+                params![json, crate::numeric::u64_to_i64_saturating(now_ms())],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -42,9 +42,13 @@ impl AppStateStore {
                  ON CONFLICT(destination_hex) DO UPDATE SET
                     json = excluded.json,
                     updated_at_ms = excluded.updated_at_ms",
-                params![peer.destination_hex, json, peer.saved_at_ms as i64],
+                params![
+                    peer.destination_hex,
+                    json,
+                    crate::numeric::u64_to_i64_saturating(peer.saved_at_ms)
+                ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -68,12 +72,14 @@ impl AppStateStore {
                     record.callsign.to_ascii_lowercase(),
                     record.team_uid,
                     record.overall_status,
-                    record.updated_at_ms as i64,
-                    record.deleted_at_ms.map(|value| value as i64),
+                    crate::numeric::u64_to_i64_saturating(record.updated_at_ms),
+                    record
+                        .deleted_at_ms
+                        .map(crate::numeric::u64_to_i64_saturating),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -95,12 +101,14 @@ impl AppStateStore {
                 params![
                     record.uid,
                     record.mission_uid,
-                    record.updated_at_ms as i64,
-                    record.deleted_at_ms.map(|value| value as i64),
+                    crate::numeric::u64_to_i64_saturating(record.updated_at_ms),
+                    record
+                        .deleted_at_ms
+                        .map(crate::numeric::u64_to_i64_saturating),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -125,11 +133,11 @@ impl AppStateStore {
                     checklist.mission_uid,
                     checklist.template_uid,
                     checklist.checklist_status.as_str(),
-                    now_ms() as i64,
+                    crate::numeric::u64_to_i64_saturating(now_ms()),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -140,9 +148,9 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_checklist_template_tx(&transaction, template)?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -161,9 +169,13 @@ impl AppStateStore {
                  ON CONFLICT(uid) DO UPDATE SET
                     updated_at_ms = excluded.updated_at_ms,
                     json = excluded.json",
-                params![normalized.uid, now_ms() as i64, json],
+                params![
+                    normalized.uid,
+                    crate::numeric::u64_to_i64_saturating(now_ms()),
+                    json
+                ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -171,11 +183,11 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         for template in default_checklist_templates() {
             self.write_checklist_template_tx(&transaction, &template)?;
         }
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -191,7 +203,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         match raw {
             Some(value) => deserialize_json(&value),
             None => Err(NodeError::InvalidConfig {}),
@@ -216,11 +228,11 @@ impl AppStateStore {
                 params![
                     canonical_message.message_id_hex,
                     canonical_message.conversation_id,
-                    canonical_message.updated_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(canonical_message.updated_at_ms),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -231,15 +243,15 @@ impl AppStateStore {
     ) -> Result<(), NodeError> {
         let mut statement = connection
             .prepare("SELECT message_id_hex, json FROM messages")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut repairs = Vec::new();
         for row in rows {
-            let (message_id_hex, raw) = row.map_err(|_| NodeError::IoError {})?;
+            let (message_id_hex, raw) = row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             let message: MessageRecord = deserialize_json(&raw)?;
             let canonical_message = canonicalize_chat_message_with_resolver(&message, resolver);
             if canonical_message.conversation_id != message.conversation_id {
@@ -261,12 +273,12 @@ impl AppStateStore {
                      WHERE message_id_hex = ?4",
                     params![
                         message.conversation_id,
-                        message.updated_at_ms as i64,
+                        crate::numeric::u64_to_i64_saturating(message.updated_at_ms),
                         json,
                         message_id_hex,
                     ],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
         Ok(())
     }
@@ -286,11 +298,11 @@ impl AppStateStore {
                     json = excluded.json",
                 params![
                     position.callsign.to_ascii_lowercase(),
-                    position.updated_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(position.updated_at_ms),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -312,11 +324,11 @@ impl AppStateStore {
                     alert.incident_id,
                     alert.source_hex,
                     if alert.active { 1_i64 } else { 0_i64 },
-                    alert.updated_at_ms as i64,
+                    crate::numeric::u64_to_i64_saturating(alert.updated_at_ms),
                     json
                 ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(())
     }
 
@@ -331,13 +343,13 @@ impl AppStateStore {
 
         let mut statement = transaction
             .prepare("SELECT json FROM sos_alerts")
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let rows = statement
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let mut records_to_delete = Vec::<(String, String)>::new();
         for row in rows {
-            let alert: SosAlertRecord = deserialize_json(&row.map_err(|_| NodeError::IoError {})?)?;
+            let alert: SosAlertRecord = deserialize_json(&row.map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?)?;
             let alert_conversation = normalize_message_peer_key(alert.conversation_id.as_str());
             if conversation_ids.iter().any(|id| id == &alert_conversation) {
                 records_to_delete.push((alert.incident_id, alert.source_hex));
@@ -353,13 +365,13 @@ impl AppStateStore {
                     "DELETE FROM sos_locations WHERE incident_id = ?1 AND source_hex = ?2",
                     params![incident_id, source_hex],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
             transaction
                 .execute(
                     "DELETE FROM sos_alerts WHERE incident_id = ?1 AND source_hex = ?2",
                     params![incident_id, source_hex],
                 )
-                .map_err(|_| NodeError::IoError {})?;
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         }
 
         Ok(!records_to_delete.is_empty())
@@ -380,7 +392,7 @@ impl AppStateStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         let updated_at_ms = now_ms();
         let revision = current.unwrap_or(0) + 1;
         transaction
@@ -388,13 +400,17 @@ impl AppStateStore {
                 "INSERT INTO projection_versions (scope, revision, updated_at_ms)
                  VALUES (?1, ?2, ?3)
                  ON CONFLICT(scope) DO UPDATE SET revision = excluded.revision, updated_at_ms = excluded.updated_at_ms",
-                params![scope_name, revision, updated_at_ms as i64],
+                params![
+                    scope_name,
+                    revision,
+                    crate::numeric::u64_to_i64_saturating(updated_at_ms)
+                ],
             )
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(ProjectionInvalidation {
             scope,
             key,
-            revision: revision as u64,
+            revision: crate::numeric::i64_to_u64_saturating(revision),
             updated_at_ms,
             reason,
         })

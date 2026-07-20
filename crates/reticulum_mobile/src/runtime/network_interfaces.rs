@@ -3,8 +3,7 @@ async fn connect_tcp_endpoint(connect_addr: &str) -> Option<TcpStream> {
         Ok(stream) => Some(stream),
         Err(error) => {
             warn!(
-                "tcp_client: connect failed endpoint=<{}>: {}",
-                connect_addr, error
+                "tcp_client: connect failed endpoint=<{connect_addr}>: {error}"
             );
             None
         }
@@ -109,8 +108,7 @@ fn spawn_tcp_client_interface_manager(
 
             if let Some(stream) = connect_tcp_endpoint(connect_addr.as_str()).await {
                 info!(
-                    "tcp_client: starting connected interface for <{}>",
-                    connect_addr
+                    "tcp_client: starting connected interface for <{connect_addr}>"
                 );
                 active.store(true, Ordering::Release);
                 let active_for_task = active.clone();
@@ -130,7 +128,7 @@ fn spawn_tcp_client_interface_manager(
                         )
                         .await;
                         active_for_task.store(false, Ordering::Release);
-                        info!("tcp_client: stopped interface for <{}>", task_addr);
+                        info!("tcp_client: stopped interface for <{task_addr}>");
                     },
                 );
                 let status_update = new_interface_status(iface, connect_addr.clone(), "connected");
@@ -146,8 +144,7 @@ fn spawn_tcp_client_interface_manager(
                 )
                 .await;
                 info!(
-                    "tcp_client: connected interface endpoint=<{}> iface={}",
-                    connect_addr, iface
+                    "tcp_client: connected interface endpoint=<{connect_addr}> iface={iface}"
                 );
             }
 
@@ -190,7 +187,7 @@ fn spawn_tcp_client_readiness_monitor(
                 data_path_down = false;
             } else if !data_path_down {
                 let message = tcp_data_path_unavailable_message(endpoints.as_slice());
-                warn!("{}", message);
+                warn!("{message}");
                 bus.emit(NodeEvent::Error {
                     code: "NetworkError".to_string(),
                     message: message.clone(),

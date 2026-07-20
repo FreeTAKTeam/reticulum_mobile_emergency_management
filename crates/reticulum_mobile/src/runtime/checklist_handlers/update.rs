@@ -61,7 +61,10 @@ fn handle_inbound_checklist_update(ctx: &InboundChecklistCommand<'_>) -> bool {
         checklist.start_time = normalize_optional_string(Some(value.as_str()));
     }
     if let Some(column) =
-        checklist_column_from_patch(patch, checklist.columns.len() as u32)
+        checklist_column_from_patch(
+            patch,
+            crate::numeric::usize_to_u32_saturating(checklist.columns.len()),
+        )
     {
         merge_checklist_column(&mut checklist, column);
     }

@@ -21,7 +21,7 @@ impl EventSubscription {
         }
 
         self.rx
-            .recv_timeout(Duration::from_millis(timeout_ms as u64))
+            .recv_timeout(Duration::from_millis(u64::from(timeout_ms)))
             .ok()
     }
 

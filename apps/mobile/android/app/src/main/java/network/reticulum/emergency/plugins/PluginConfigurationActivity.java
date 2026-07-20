@@ -215,14 +215,20 @@ public final class PluginConfigurationActivity extends Activity implements Servi
                                     );
                                     handleConfigurationResponse(responseJson);
                                     nativePort.postMessage(new WebMessage(responseJson));
-                                } catch (Exception ignored) {
+                                } catch (Exception error) {
+                                    android.util.Log.w(
+                                        "REM.PluginConfig",
+                                        "Unable to deliver the plugin configuration response",
+                                        error
+                                    );
                                 }
                             }
                         });
                     }
                 }
             );
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            android.util.Log.w("REM.PluginConfig", "Unable to initialize the configuration message channel", error);
         }
     }
 
@@ -256,7 +262,8 @@ public final class PluginConfigurationActivity extends Activity implements Servi
                 return;
             }
             startActivity(intent);
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            android.util.Log.w("REM.PluginConfig", "Unable to launch the approved external configuration URL", error);
         }
     }
 
@@ -271,7 +278,8 @@ public final class PluginConfigurationActivity extends Activity implements Servi
         if (bound) {
             try {
                 unbindService(this);
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException cleanupError) {
+                android.util.Log.d("REM.PluginConfig", "Plugin configuration service was already unbound", cleanupError);
             }
             bound = false;
         }

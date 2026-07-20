@@ -5,11 +5,11 @@ impl Node {
     ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let mut request = request;
             if request
@@ -28,18 +28,18 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let checklist = inner
                     .app_state
@@ -116,11 +116,11 @@ impl Node {
     ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let mut request = request;
             if request
@@ -151,18 +151,18 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let checklist = inner
                     .app_state

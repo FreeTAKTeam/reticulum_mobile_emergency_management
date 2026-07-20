@@ -10,6 +10,8 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_CONNECT_PEER = "network.reticulum.emergency.action.ADB_CONNECT_PEER";
     public static final String ACTION_DISCONNECT_PEER = "network.reticulum.emergency.action.ADB_DISCONNECT_PEER";
     public static final String ACTION_APP_SETTINGS = "network.reticulum.emergency.action.ADB_APP_SETTINGS";
+    public static final String ACTION_EAMS = "network.reticulum.emergency.action.ADB_EAMS";
+    public static final String ACTION_EVENTS = "network.reticulum.emergency.action.ADB_EVENTS";
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
     public static final String EXTRA_DESTINATION_HEX = "destinationHex";
 
@@ -43,6 +45,10 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
                 logResult("disconnect destination=" + destinationHex, ReticulumBridge.disconnectPeer(destinationHex));
             } else if (ACTION_APP_SETTINGS.equals(action)) {
                 Log.i(TAG, "appSettings " + ReticulumBridge.getAppSettingsJson());
+            } else if (ACTION_EAMS.equals(action)) {
+                Log.i(TAG, "eams " + ReticulumBridge.getEamsJson());
+            } else if (ACTION_EVENTS.equals(action)) {
+                Log.i(TAG, "events " + ReticulumBridge.getEventsJson());
             } else if (ACTION_STATUS.equals(action)) {
                 Log.i(TAG, "status " + ReticulumBridge.getStatusJson());
             } else {

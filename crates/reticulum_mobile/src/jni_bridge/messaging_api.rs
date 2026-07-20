@@ -1,3 +1,4 @@
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_broadcastBase64(
     mut env: JNIEnv,
@@ -13,14 +14,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_broadcas
         Err(e) => return err_result("InvalidConfig", format!("invalid base64 payload: {e}")),
     };
 
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.broadcast_bytes(bytes) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -30,6 +24,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_broadcas
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAnnounceCapabilities(
     mut env: JNIEnv,
@@ -40,14 +35,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAnnou
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.set_announce_capabilities(value) {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -57,6 +45,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setAnnou
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setLogLevel(
     mut env: JNIEnv,
@@ -67,31 +56,18 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setLogLe
         Ok(v) => v,
         Err(e) => return err_result("InvalidConfig", e),
     };
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     node.set_log_level(parse_log_level(Some(value.as_str())));
     ok_result()
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshHubDirectory(
     _env: JNIEnv,
     _class: JClass,
 ) -> jint {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => return err_result("InternalError", "bridge lock poisoned"),
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => return err_result("NotRunning", "node not initialized"),
-    };
+    let node = initialized_node_or_return!();
     match node.refresh_hub_directory() {
         Ok(_) => ok_result(),
         Err(err) => {
@@ -101,25 +77,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshH
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnnouncesJson(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_announces() {
         Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
         Err(err) => {
@@ -129,25 +93,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnno
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listPeersJson(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_peers() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -162,6 +114,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listPeer
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConversationsJson(
     mut env: JNIEnv,
@@ -189,6 +142,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listConv
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMessagesJson(
     mut env: JNIEnv,
@@ -235,6 +189,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listMess
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteConversationJson(
     mut env: JNIEnv,
@@ -276,25 +231,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_deleteCo
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfSyncStatusJson(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.get_lxmf_sync_status() {
         Ok(status) => ok_json_result(&mut env, &status),
         Err(err) => {
@@ -304,25 +247,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getLxmfS
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listTelemetryDestinationsJson(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let guard = match bridge_state().lock() {
-        Ok(v) => v,
-        Err(_) => {
-            set_last_error("InternalError", "bridge lock poisoned");
-            return ptr::null_mut();
-        }
-    };
-    let node = match guard.node.as_ref() {
-        Some(v) => v,
-        None => {
-            set_last_error("NotRunning", "node not initialized");
-            return ptr::null_mut();
-        }
-    };
+    let node = initialized_node_or_return!();
     match node.list_telemetry_destinations() {
         Ok(items) => ok_json_result(
             &mut env,
@@ -337,6 +268,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listTele
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_legacyImportCompletedJson(
     mut env: JNIEnv,
@@ -359,6 +291,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_legacyIm
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLegacyStateJson(
     mut env: JNIEnv,
@@ -440,6 +373,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLe
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getAppSettingsJson(
     mut env: JNIEnv,

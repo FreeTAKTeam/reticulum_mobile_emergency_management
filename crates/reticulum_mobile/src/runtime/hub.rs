@@ -234,7 +234,7 @@ async fn refresh_hub_directory_lxmf(
     let signer = lxmf_private_identity(&state.identity)?;
     let wire = message
         .to_wire(Some(&signer))
-        .map_err(|_| NodeError::InternalError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
 
     // Subscribe before transmitting so a fast hub response cannot arrive
     // between the send and creation of the response receiver.
@@ -244,7 +244,7 @@ async fn refresh_hub_directory_lxmf(
         .lock()
         .await
         .data_packet(&wire)
-        .map_err(|_| NodeError::InternalError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
     let outcome = state.transport.send_packet_with_outcome(packet).await;
     if !matches!(
         outcome,

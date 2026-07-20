@@ -131,6 +131,7 @@ export const useNodeStore = defineStore("node", () => {
     persistSavedPeersProjection,
     presenceNow,
     savedByDestination,
+    setLastError,
     startupSettling,
     status,
     refreshMessagingState: () => refreshMessagingState(),

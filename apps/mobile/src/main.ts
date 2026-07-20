@@ -44,6 +44,10 @@ const app = createApp(App);
 app.use(createPinia());
 app.use(router);
 
-void router.isReady().finally(() => {
-  app.mount("#app");
-});
+void router.isReady()
+  .catch((error: unknown) => {
+    console.error("Router initialization failed; mounting the recovery UI.", error);
+  })
+  .finally(() => {
+    app.mount("#app");
+  });

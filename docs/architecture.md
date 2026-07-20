@@ -159,7 +159,7 @@ Live checklist deadlines are calculated from the checklist start DTG plus each t
 
 Initial autonomous sharing uses packet-first replication:
 
-- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits task and column snapshots so the create command remains packet-sized.
+- `checklist.create.online` carries the RCH-compatible checklist identity, template, participant, and count metadata. It deliberately omits descriptive metadata plus task and column snapshots so the create command remains packet-sized. The sender follows creation with the existing `checklist.update` command for description and start time, preserving metadata without changing the compact create envelope.
 - Checklist column schema is fanned out as compact per-column `checklist.update` patches before row/cell data. This is required for new/non-template checklists where the receiver cannot hydrate columns from a local template.
 - The initial rows are fanned out as compact `checklist.task.row.add` commands plus compact `checklist.task.cell.set` commands for non-empty cells, so the first sync can stay under the small LXMF packet budget instead of forcing resource transfer.
 - `checklist.upload` remains available for full snapshot hydration. Its content uses `rem.checklist.snapshot.v2` with a `zlib+msgpack` snapshot body; receivers also accept the older uncompressed `rem.checklist.snapshot.v1` format.
@@ -306,6 +306,7 @@ Transport:
 - In the runtime, any `sendBytes(...)` call that includes `fieldsBase64` is wrapped into an LXMF message and sent to the peer's **`lxmf/delivery` destination**.
 - The body bytes are empty for the mission-sync event path; the meaningful data is in the LXMF fields map.
 - On Android, the Capacitor `send` bridge is enqueue-only for mission/LXMF sends. The plugin resolves as soon as Rust accepts the work, and later `lxmfDelivery` / `messageUpdated` / `error` events from Rust own timeout and failure reporting. TypeScript does not run a separate transport timeout for Event or EAM sends.
+- Scheduler capacity is separated by delivery intent. Direct and Auto SOS status traffic uses the reserved recovery lane; propagation-only SOS recipients use the propagation lane. A slow or stale propagation fanout therefore cannot occupy every permit needed by a reachable direct emergency peer.
 
 Verification:
 - `npm --workspace apps/mobile run typecheck`
@@ -487,11 +488,12 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - REM does not force a TCP-first or LoRa-first route when both interface types are active. The runtime registers both interfaces and lets Reticulum resolve the outbound interface from its routing state.
 - TCP-only, LoRa-only, and mixed TCP+LoRa are all supported configurations. Configured interfaces are managed independently and retry in the background; an unavailable interface does not prevent the local REM runtime from starting, even when it is the only configured network interface.
 - `NodeStatus.readiness` is the authoritative startup contract. The aggregate becomes `Ready` when the local Rust runtime is running. Rust also reports one record per configured interface as `Pending`, `Ready`, `Failed`, `Unsupported`, or `Disabled`, so Vue can show degraded network access without converting it into a fatal runtime failure or waiting for packet traffic. Browser and mock clients publish a ready local-runtime record without native interface telemetry.
+- Creating an RNode transport context is not a readiness signal. The native RNode record remains `connecting` and LoRa remains `Pending` until the startup probe detects the device and reports the radio online; validated command failures remain attached to the interface. If startup does not validate within 30 seconds, the interface becomes `failed` with an actionable timeout while background reconnection continues. A powered-off or unavailable paired radio therefore cannot appear ready while its BLE/KISS session retries.
 - REM acts as a Reticulum transport node by default by enabling Reticulum packet retransmit on the runtime transport. Operators can turn off transport-node forwarding in Settings without changing broadcast discovery.
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 
-1.2 release gate:
+1.2.7-rc.1 release gate:
 - The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
 - For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
 - Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
@@ -503,7 +505,7 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
 - Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
 - Settings clearly document that REM must be restarted after interface configuration changes for this release.
-- 1.2.0 remains a prerelease until this matrix passes on the connected phones.
+- 1.2.7-rc.1 remains a prerelease until issue #168 passes on two authorized phones.
 
 ## Mobile Runtime Ownership Status
 
@@ -527,7 +529,34 @@ The mobile runtime is now moving toward a Rust-authoritative projection model on
 - Route-level views no longer own startup orchestration. `App.vue` coordinates node startup before store refreshes that depend on runtime state.
 - Saved peers are rehydrated into the Rust managed-peer set during runtime startup, so the app does not depend on a later UI-driven connect pass before EAM/Event/message sends can target intentional peers.
 
-This cutover is incomplete. Telemetry permission/fix acquisition still originates in TypeScript, and remaining long-session validation must prove that every operational lifecycle is fully native-owned.
+Telemetry permission and fix acquisition intentionally originate in TypeScript
+because they are platform UX concerns; persisted operational state and mesh
+delivery remain Rust-owned.
+
+## Error And Native Boundary Contract
+
+`NodeError` remains the stable UniFFI category enum. First-party Rust records an
+internal failure alongside the category whenever an I/O, database,
+serialization, channel, network, SDK, or lock operation fails. The record has a
+stable `code`, useful `message`, boundary `operation`, retry classification, and
+causal diagnostic text.
+
+The internal record does not change LXMF payloads, persisted records, or the
+UniFFI enum. At JNI, `takeLastErrorJson()` returns camel-case JSON. `operation`
+and `cause` are optional for compatibility; `retryable` is always a boolean.
+JNI integer operations keep `0` for success and `1` for failure. Object
+operations return null on failure.
+
+Every Java JNI export is wrapped in `catch_unwind`. A Rust panic becomes a
+non-retryable `InternalError` and the compatible failure value; it never
+unwinds into the JVM. Java passes the envelope through Capacitor rejection data,
+and `@reticulum/node-client` exposes `ReticulumNodeError` and
+`classifyNodeError()` so callers do not parse message text.
+
+Retry is appropriate only for bounded transient categories (`IoError`,
+`NetworkError`, `ReticulumError`, `Timeout`, and `EventStreamClosed`). Invalid
+configuration, wire construction, oversize packets, and internal errors require
+correction or operator attention. See `docs/developer-examples.md`.
 
 ## UniFFI Code Generation
 

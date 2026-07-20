@@ -17,10 +17,10 @@ fn write_plugin_tx(
                 plugin.discovered.package_name,
                 plugin.discovered.publisher_fingerprint,
                 serialize_json(plugin)?,
-                plugin.updated_at_ms as i64
+                crate::numeric::u64_to_i64_saturating(plugin.updated_at_ms)
             ],
         )
-        .map_err(|_| NodeError::IoError {})?;
+        .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
     Ok(())
 }
 
@@ -129,11 +129,11 @@ fn sensor_status(
 }
 
 fn serialize_json<T: Serialize>(value: &T) -> Result<String, NodeError> {
-    serde_json::to_string(value).map_err(|_| NodeError::InternalError {})
+    serde_json::to_string(value).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn deserialize_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, NodeError> {
-    serde_json::from_str(value).map_err(|_| NodeError::InternalError {})
+    serde_json::from_str(value).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
 
 fn announce_class_name(class: AnnounceClass) -> &'static str {

@@ -1,7 +1,7 @@
 fn unix_seconds_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
+        .map(|duration| crate::numeric::u64_to_i64_saturating(duration.as_secs()))
         .unwrap_or_default()
 }
 

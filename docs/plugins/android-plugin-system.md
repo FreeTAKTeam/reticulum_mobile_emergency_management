@@ -69,6 +69,9 @@ Plugin host requests are JSON objects no larger than 64 KiB:
 
 REM derives plugin identity from the Binder connection and overwrites any supplied `pluginId`.
 Responses carry the request ID, `ok`, and either `result` or a typed `error`.
+Plugins must treat a Binder exception, `ok: false`, timeout, and Binder death as
+different outcomes. Retry only bounded transient failures and preserve the
+request ID in diagnostics; never loop on validation or permission failures.
 
 ## Configuration web UI
 
@@ -107,3 +110,9 @@ bash ./gradlew :rem-plugin-sdk:assembleDebug :plugin-test-fixture:assembleDebug 
 The fixture APK is an integration aid, not a public example. BLE Heart Rate and Watch Status Server
 are supported plugins built and distributed as separate APK artifacts; neither is embedded or
 automatically installed by REM.
+
+The example plugins log cleanup failures from scan stop, GATT disconnect/close,
+socket close, and callback delivery. Cleanup remains best-effort and must not
+replace the primary operation result, but exceptions are never silently
+discarded. Tests cover reconnect policy, sample bounds/rate limits,
+configuration validation, SDK packaging, discovery, and Binder integration.

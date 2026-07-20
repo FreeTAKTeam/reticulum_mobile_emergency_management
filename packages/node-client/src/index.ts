@@ -116,6 +116,13 @@ import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultCheckl
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, normalizeInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";
 
 export * from "./contracts";
+export {
+  NODE_ERROR_CODES,
+  ReticulumNodeError,
+  classifyNodeError,
+  type NodeErrorCode,
+  type NodeErrorDetails,
+} from "./errors";
 export { normalizeRnodeSettings, parseRnodeConnectionMode } from "./converters";
 export { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 export { DEFAULT_NODE_CONFIG, generateDefaultCallSign } from "./client-defaults";

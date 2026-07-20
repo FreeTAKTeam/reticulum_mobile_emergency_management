@@ -8,6 +8,15 @@ use crate::types::{
     PeerRecord, PeerState, ProjectionScope, TransportDeliveryState,
 };
 
+fn temporary_projection_path(name: &str) -> std::path::PathBuf {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    std::env::temp_dir()
+        .join(format!("rem-projection-{name}-{}-{unique}", std::process::id()))
+        .join("runtime_projection.json")
+}
+
 fn build_persisted_peer(
     destination_hex: &str,
     saved: Option<bool>,
@@ -150,6 +159,24 @@ fn pruned_for_restore_drops_unsaved_peers_but_keeps_other_projection_data() {
         Some("relay")
     );
     assert_eq!(pruned.updated_at_ms, 999);
+}
+
+#[test]
+fn load_snapshot_distinguishes_missing_and_malformed_files_without_panicking() {
+    let missing_path = temporary_projection_path("missing");
+    let missing = RuntimeProjectionJournal::new(Some(missing_path), EventBus::new());
+    assert!(missing.load_snapshot().is_none());
+
+    let malformed_path = temporary_projection_path("malformed");
+    let parent = malformed_path
+        .parent()
+        .expect("temporary path parent")
+        .to_path_buf();
+    std::fs::create_dir_all(&parent).expect("create temporary projection directory");
+    std::fs::write(&malformed_path, b"{not-json").expect("write malformed projection");
+    let malformed = RuntimeProjectionJournal::new(Some(malformed_path), EventBus::new());
+    assert!(malformed.load_snapshot().is_none());
+    std::fs::remove_dir_all(&parent).expect("remove temporary projection directory");
 }
 
 #[test]

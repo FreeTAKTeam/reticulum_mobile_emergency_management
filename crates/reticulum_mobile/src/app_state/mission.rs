@@ -13,7 +13,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_eam_tx(&transaction, record)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -21,7 +21,7 @@ impl AppStateStore {
             Some(record.callsign.to_ascii_lowercase()),
             Some("eam-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -33,7 +33,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         if let Some(raw) = transaction
             .query_row(
                 "SELECT json FROM eams WHERE callsign_key = ?1",
@@ -41,7 +41,7 @@ impl AppStateStore {
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?
         {
             let mut record: EamProjectionRecord = deserialize_json(&raw)?;
             record.deleted_at_ms = Some(deleted_at_ms);
@@ -54,7 +54,7 @@ impl AppStateStore {
             Some(callsign.trim().to_ascii_lowercase()),
             Some("eam-deleted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -72,7 +72,7 @@ impl AppStateStore {
         }
         let mut summary = EamTeamSummaryRecord {
             team_uid: team_uid.to_string(),
-            total: records.len() as u32,
+            total: crate::numeric::usize_to_u32_saturating(records.len()),
             active_total: 0,
             deleted_total: 0,
             overall_status: None,
@@ -125,7 +125,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.write_event_tx(&transaction, record)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
@@ -133,7 +133,7 @@ impl AppStateStore {
             Some(record.uid.clone()),
             Some("event-upserted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 
@@ -145,7 +145,7 @@ impl AppStateStore {
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
-            .map_err(|_| NodeError::IoError {})?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         if let Some(raw) = transaction
             .query_row(
                 "SELECT json FROM events WHERE uid = ?1",
@@ -153,7 +153,7 @@ impl AppStateStore {
                 |row| row.get::<_, String>(0),
             )
             .optional()
-            .map_err(|_| NodeError::IoError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?
         {
             let mut record: EventProjectionRecord = deserialize_json(&raw)?;
             record.deleted_at_ms = Some(deleted_at_ms);
@@ -166,7 +166,7 @@ impl AppStateStore {
             Some(uid.to_string()),
             Some("event-deleted".to_string()),
         )?;
-        transaction.commit().map_err(|_| NodeError::IoError {})?;
+        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         Ok(invalidation)
     }
 

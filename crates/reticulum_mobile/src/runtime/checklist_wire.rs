@@ -68,13 +68,13 @@ fn merge_uploaded_checklist_snapshot(
         .expected_task_count
         .or(existing.expected_task_count)
         .or_else(|| {
-            Some(
+            Some(crate::numeric::usize_to_u32_saturating(
                 merged
                     .tasks
                     .iter()
                     .filter(|task| task.deleted_at.is_none())
-                    .count() as u32,
-            )
+                    .count(),
+            ))
         });
     merged.feed_publications =
         merge_uploaded_feed_publications(existing.feed_publications, incoming.feed_publications);
@@ -109,13 +109,13 @@ fn hydrate_checklist_from_local_template(
     checklist.template_version = Some(template.version);
     checklist.template_name = Some(template.name);
     checklist.origin_type = template.origin_type;
-    checklist.expected_task_count = Some(
+    checklist.expected_task_count = Some(crate::numeric::usize_to_u32_saturating(
         checklist
             .tasks
             .iter()
             .filter(|task| task.deleted_at.is_none())
-            .count() as u32,
-    );
+            .count(),
+    ));
 }
 
 fn blank_task_cells(columns: &[ChecklistColumnRecord], task_uid: &str) -> Vec<ChecklistCellRecord> {
@@ -159,7 +159,7 @@ fn checklist_column_from_patch(
         .unwrap_or_else(|| column_uid.clone());
     let display_order = msgpack_get_checklist_arg(patch, "display_order")
         .and_then(msgpack_u64)
-        .map_or(fallback_display_order, |value| value as u32);
+        .map_or(fallback_display_order, crate::numeric::u64_to_u32_saturating);
     let column_type = msgpack_get_checklist_arg(patch, "column_type")
         .and_then(msgpack_string)
         .map_or(ChecklistColumnType::ShortString {}, |value| {
@@ -385,25 +385,17 @@ fn positional_checklist_command_args(
     if command_type != "checklist.create.online" || values.len() < 5 {
         return None;
     }
+    let checklist_uid = values.get(1)?.clone();
+    let mission_uid = values.get(2)?.clone();
+    let template_uid = values.get(3)?.clone();
+    let name = values.get(4)?.clone();
     Some((
         command_type,
         vec![
-            (
-                MsgPackValue::from("cl"),
-                values.get(1).expect("checked length").clone(),
-            ),
-            (
-                MsgPackValue::from("m"),
-                values.get(2).expect("checked length").clone(),
-            ),
-            (
-                MsgPackValue::from("tp"),
-                values.get(3).expect("checked length").clone(),
-            ),
-            (
-                MsgPackValue::from("n"),
-                values.get(4).expect("checked length").clone(),
-            ),
+            (MsgPackValue::from("cl"), checklist_uid),
+            (MsgPackValue::from("m"), mission_uid),
+            (MsgPackValue::from("tp"), template_uid),
+            (MsgPackValue::from("n"), name),
         ],
     ))
 }

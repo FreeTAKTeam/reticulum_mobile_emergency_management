@@ -141,6 +141,25 @@ struct SavedPeerProfile {
     last_route_seen_at_ms: Option<u64>,
 }
 
+pub(crate) struct SavedPeerProfileInput<'a> {
+    pub destination_hex: &'a str,
+    pub identity_hex: Option<&'a str>,
+    pub lxmf_destination_hex: Option<&'a str>,
+    pub app_data: Option<&'a str>,
+    pub display_name: Option<&'a str>,
+    pub last_route_seen_at_ms: Option<u64>,
+}
+
+pub(crate) struct MessageDeliveryUpdate<'a> {
+    pub message_id_hex: &'a str,
+    pub state: Option<MessageState>,
+    pub transport_state: Option<TransportDeliveryState>,
+    pub application_ack_state: Option<ApplicationAckState>,
+    pub detail: Option<String>,
+    pub last_wire_message_id_hex: Option<String>,
+    pub updated_at_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerChange {
     pub destination_hex: String,

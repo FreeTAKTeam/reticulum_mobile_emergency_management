@@ -68,8 +68,7 @@ fn spawn_send_bytes_command(
                 log_send_task(
                     SendTaskClass::General,
                     format!(
-                        "[lxmf][queue] waiting for general send slot destination={} mode=transport-bytes",
-                        destination_hex,
+                        "[lxmf][queue] waiting for general send slot destination={destination_hex} mode=transport-bytes",
                     ),
                 );
                 let _permit =
@@ -78,8 +77,7 @@ fn spawn_send_bytes_command(
                 log_send_task(
                     SendTaskClass::General,
                     format!(
-                        "[lxmf][queue] acquired general send slot destination={} mode=transport-bytes",
-                        destination_hex,
+                        "[lxmf][queue] acquired general send slot destination={destination_hex} mode=transport-bytes",
                     ),
                 );
                 let dest = parse_address_hash(&destination_hex)?;
@@ -207,15 +205,13 @@ fn spawn_send_bytes_command(
         if let Err(err) = &result {
             if !should_emit_global_send_bytes_error(send_task_class) {
                 info!(
-                    "[lxmf][mission] propagation send exhausted destination={} reason={}",
-                    destination_hex, err
+                    "[lxmf][mission] propagation send exhausted destination={destination_hex} reason={err}"
                 );
             } else {
                 bus.emit(NodeEvent::Error {
                     code: node_error_code(err).to_string(),
                     message: format!(
-                        "send_bytes failed destination={} reason={}",
-                        destination_hex, err
+                        "send_bytes failed destination={destination_hex} reason={err}"
                     ),
                 });
             }

@@ -324,7 +324,11 @@ fn prune_expired_buffered_acknowledgements_removes_only_stale_entries() {
                 detail: None,
                 application_ack_state: ApplicationAckState::Accepted {},
                 buffered_at_ms: now
-                    .saturating_sub(DEFAULT_BUFFERED_ACK_TTL.as_millis() as u64 + 1),
+                    .saturating_sub(
+                        crate::numeric::u128_to_u64_saturating(
+                            DEFAULT_BUFFERED_ACK_TTL.as_millis(),
+                        ) + 1,
+                    ),
             },
         ),
     ]);
@@ -352,7 +356,11 @@ fn prune_expired_receipt_tracking_removes_only_stale_entries() {
             ReceiptMessageTracking {
                 message_id_hex: "msg-stale".to_string(),
                 recorded_at_ms: now
-                    .saturating_sub(DEFAULT_RECEIPT_TRACKING_TTL.as_millis() as u64 + 1),
+                    .saturating_sub(
+                        crate::numeric::u128_to_u64_saturating(
+                            DEFAULT_RECEIPT_TRACKING_TTL.as_millis(),
+                        ) + 1,
+                    ),
             },
         ),
     ]);

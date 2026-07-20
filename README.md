@@ -9,6 +9,10 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
+The current stabilization target is `1.2.7-rc.1` for Android, built against
+LXMF-rs `v0.9.5`. It is a prerelease until the automated gates and the two-phone
+[manual release matrix](docs/rem-1.2-manual-release-gate.md) are complete.
+
 ## Current UI
 
 These screenshots were captured from the current app UI.
@@ -77,18 +81,29 @@ The current module ownership and responsiveness invariants are documented in
 [`docs/runtime-modules.md`](docs/runtime-modules.md). Performance and footprint
 acceptance results for version 1.2.6 are in
 [`docs/performance/final-1.2.6.md`](docs/performance/final-1.2.6.md).
+The [documentation index](docs/README.md) identifies the authoritative Markdown
+manuals and clearly separates the archived PDF/DOCX snapshots.
 
 Useful checks from the repository root:
 
-```powershell
+```bash
+npm ci
+npm audit --audit-level=moderate
 npm run check:source-size
 npm run test:unit
 npm --workspace apps/mobile run typecheck
 npm run web:build
+npm run mobile:build
 npm run test:e2e
-cargo test --manifest-path crates/reticulum_mobile/Cargo.toml
+cargo +1.88 fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+cargo +1.88 clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
+cargo +1.88 test --manifest-path crates/reticulum_mobile/Cargo.toml --locked
+cargo audit --file crates/reticulum_mobile/Cargo.lock
 ```
 
 The source-size check is a hard gate: first-party source and test files, and
 class declarations inside them, must remain at or below 500 physical lines.
 Generated bindings, vendored code, and build output are excluded.
+
+See [developer examples](docs/developer-examples.md) for classified native
+errors, retry policy, runtime readiness, and delivery terminal states.

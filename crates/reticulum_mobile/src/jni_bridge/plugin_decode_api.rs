@@ -1,3 +1,4 @@
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_decodePluginLxmfFieldsJson(
     mut env: JNIEnv,
@@ -39,6 +40,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_decodePl
     }
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_nextEventJson(
     mut env: JNIEnv,
@@ -60,7 +62,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_nextEven
         return ptr::null_mut();
     };
 
-    let timeout = if timeout_ms < 0 { 0 } else { timeout_ms as u32 };
+    let timeout = u32::try_from(timeout_ms).unwrap_or(0);
     let Some(event) = subscription.next(timeout) else {
         return ptr::null_mut();
     };
@@ -68,18 +70,13 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_nextEven
     make_jstring_or_null(&mut env, event_to_wire_json(event))
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_takeLastErrorJson(
     mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    let value = {
-        let mut guard = match last_error().lock() {
-            Ok(v) => v,
-            Err(_) => return ptr::null_mut(),
-        };
-        guard.take()
-    };
+    let value = take_last_error();
 
     let Some(value) = value else {
         return ptr::null_mut();

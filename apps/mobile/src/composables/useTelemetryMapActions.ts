@@ -15,6 +15,7 @@ import {
   positionLabel as resolvePositionLabel,
   safeTrim,
 } from "../utils/telemetryMapModel";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 
 export function useTelemetryMapActions() {
   const messagesStore = useMessagesStore();
@@ -28,9 +29,11 @@ export function useTelemetryMapActions() {
 
   function openEamDetails(callsign: string): void {
     const targetCallsign = safeTrim(callsign);
-    void router.push({
-      name: "messages",
-      query: targetCallsign ? { callsign: targetCallsign } : undefined,
+    runDetachedStoreTask(nodeStore, "telemetry", "EAM navigation", async () => {
+      await router.push({
+        name: "messages",
+        query: targetCallsign ? { callsign: targetCallsign } : undefined,
+      });
     });
   }
 
@@ -59,7 +62,8 @@ export function useTelemetryMapActions() {
       : undefined;
     return createTelemetryPopupElement(
       buildTelemetryPopupHtml(position, label, eamPieHtml(message, readiness)),
-      () => void openChat(position),
+      () => runDetachedStoreTask(nodeStore, "telemetry", "chat navigation", () =>
+        openChat(position)),
       () => openEamDetails(position.callsign),
     );
   }

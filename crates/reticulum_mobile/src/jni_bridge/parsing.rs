@@ -3,47 +3,89 @@ fn bridge_state() -> &'static Mutex<BridgeState> {
     STATE.get_or_init(|| Mutex::new(BridgeState::default()))
 }
 
-fn last_error() -> &'static Mutex<Option<LastError>> {
-    static LAST_ERROR: OnceLock<Mutex<Option<LastError>>> = OnceLock::new();
-    LAST_ERROR.get_or_init(|| Mutex::new(None))
+fn set_last_error(code: impl Into<String>, message: impl Into<String>) {
+    set_last_error_with_context(code, message, None, None);
 }
 
-fn set_last_error(code: impl Into<String>, message: impl Into<String>) {
-    if let Ok(mut guard) = last_error().lock() {
-        *guard = Some(LastError {
-            code: code.into(),
+fn set_last_error_with_context(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    operation: Option<&str>,
+    cause: Option<String>,
+) {
+    let code = code.into();
+    LAST_JNI_ERROR.with(|slot| {
+        slot.replace(Some(LastError {
+            retryable: node_error_code_is_retryable(code.as_str()),
+            code,
             message: message.into(),
-        });
-    }
+            operation: operation.map(ToOwned::to_owned),
+            cause,
+        }));
+    });
 }
 
 fn clear_last_error() {
-    if let Ok(mut guard) = last_error().lock() {
-        *guard = None;
-    }
+    LAST_JNI_ERROR.with(|slot| slot.replace(None));
+}
+
+fn take_last_error() -> Option<LastError> {
+    LAST_JNI_ERROR.with(|slot| slot.borrow_mut().take())
+}
+
+#[cfg(test)]
+fn current_last_error() -> Option<LastError> {
+    LAST_JNI_ERROR.with(|slot| slot.borrow().clone())
 }
 
 fn set_last_node_error(err: NodeError) {
-    let code = node_error_code(&err).to_string();
-    let message = err.to_string();
-    set_last_error(code, message);
+    set_last_node_error_with_operation(None, err);
 }
 
-fn node_error_code(err: &NodeError) -> &'static str {
-    match err {
-        NodeError::InvalidConfig {} => "InvalidConfig",
-        NodeError::IoError {} => "IoError",
-        NodeError::NetworkError {} => "NetworkError",
-        NodeError::ReticulumError {} => "ReticulumError",
-        NodeError::AlreadyRunning {} => "AlreadyRunning",
-        NodeError::NotRunning {} => "NotRunning",
-        NodeError::Timeout {} => "Timeout",
-        NodeError::LxmfWireEncodeError {} => "LxmfWireEncodeError",
-        NodeError::LxmfMessageIdParseError {} => "LxmfMessageIdParseError",
-        NodeError::LxmfPacketTooLarge {} => "LxmfPacketTooLarge",
-        NodeError::LxmfPacketBuildError {} => "LxmfPacketBuildError",
-        NodeError::EventStreamClosed {} => "EventStreamClosed",
-        NodeError::InternalError {} => "InternalError",
+fn set_last_node_error_for(operation: &'static str, err: NodeError) {
+    set_last_node_error_with_operation(Some(operation), err);
+}
+
+fn set_last_node_error_with_operation(operation: Option<&str>, err: NodeError) {
+    let code = crate::error_context::node_error_code(&err);
+    if let Some(context) = crate::error_context::take_internal_failure(code) {
+        let cause = format!("{}: {}", context.operation, context.cause);
+        set_last_error_with_context(
+            context.code,
+            context.message,
+            operation.or(Some(context.operation.as_str())),
+            Some(cause),
+        );
+    } else {
+        set_last_error_with_context(code, err.to_string(), operation, None);
+    }
+}
+
+fn node_error_code_is_retryable(code: &str) -> bool {
+    crate::error_context::node_error_code_is_retryable(code)
+}
+
+fn contain_jni_panic<T>(operation: &'static str, action: impl FnOnce() -> T) -> T
+where
+    T: JniNodeFailure,
+{
+    crate::error_context::clear_internal_failure();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let cause = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_string());
+            set_last_error_with_context(
+                "InternalError",
+                "native operation failed unexpectedly",
+                Some(operation),
+                Some(cause),
+            );
+            T::node_failure()
+        }
     }
 }
 
@@ -183,6 +225,7 @@ fn parse_node_config(input: NodeConfigInput) -> Result<NodeConfig, NodeError> {
     })
 }
 
+#[jni_boundary]
 #[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initializeStorage(
     mut env: JNIEnv,
@@ -222,6 +265,7 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initiali
             return RESULT_ERR;
         }
     };
+    drop(guard);
     match node.initialize_storage(storage_dir.as_deref()) {
         Ok(()) => RESULT_OK,
         Err(err) => {
@@ -376,5 +420,51 @@ fn to_sos_telemetry_record(input: SosTelemetryInput) -> SosDeviceTelemetryRecord
         battery_percent: input.battery_percent,
         battery_charging: input.battery_charging,
         updated_at_ms: input.updated_at_ms.unwrap_or_else(crate::runtime::now_ms),
+    }
+}
+
+#[cfg(test)]
+mod panic_boundary_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn panic_is_contained_and_returns_compatible_failure_values() {
+        clear_last_error();
+
+        let result: jint = contain_jni_panic("testInt", || panic!("boundary failure"));
+
+        assert_eq!(result, RESULT_ERR);
+        let error = current_last_error().expect("panic boundary should set last error");
+        assert_eq!(error.code, "InternalError");
+        assert_eq!(error.operation.as_deref(), Some("testInt"));
+        assert!(!error.retryable);
+        assert_eq!(error.cause.as_deref(), Some("boundary failure"));
+
+        let result: jstring = contain_jni_panic("testObject", || panic!("object failure"));
+
+        assert!(result.is_null());
+        let error = current_last_error().expect("panic boundary should set last error");
+        assert_eq!(error.operation.as_deref(), Some("testObject"));
+    }
+
+    #[test]
+    fn last_error_envelopes_are_scoped_to_the_calling_thread() {
+        clear_last_error();
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = ["first", "second"].map(|code| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                set_last_error(code, format!("{code} failure"));
+                barrier.wait();
+                take_last_error().expect("thread should retrieve its own error")
+            })
+        });
+
+        let errors = handles.map(|handle| handle.join().expect("error thread should finish"));
+
+        assert_eq!(errors[0].code, "first");
+        assert_eq!(errors[1].code, "second");
+        assert!(take_last_error().is_none());
     }
 }

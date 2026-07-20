@@ -155,8 +155,7 @@ async fn upsert_eam_replicates_to_native_peer_projection() {
                 if identity == node_a_status.lxmf_destination_hex
                     || identity == node_a_status.app_destination_hex
         ),
-        "unexpected EAM source identity {:?}",
-        source_identity
+        "unexpected EAM source identity {source_identity:?}"
     );
 
     stop_node(node_a).await;

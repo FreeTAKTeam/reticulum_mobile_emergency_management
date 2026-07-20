@@ -98,6 +98,12 @@ export function createNodeActionsController(context: NodeActionsContext) {
     upsertDiscovered,
   } = context;
 
+  function refreshHubRegistrationDetached(attemptBootstrap: boolean): void {
+    void refreshHubRegistrationState(attemptBootstrap).catch((error: unknown) => {
+      appendLog("Warn", `Hub registration refresh failed: ${errorMessage(error)}`);
+    });
+  }
+
   async function refreshHubDirectory(): Promise<void> {
     try {
       if (!hubModeUsesRch(settings.hub.mode)) {
@@ -311,7 +317,7 @@ export function createNodeActionsController(context: NodeActionsContext) {
       appendLog("Info", "Node interface settings changed. Restart the app or node to apply them.");
     }
     if (!hubRoutingChanged || !status.value.running || !hubModeUsesRch(settings.hub.mode)) {
-      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      refreshHubRegistrationDetached(hubModeUsesRch(settings.hub.mode));
       return;
     }
     if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
@@ -320,14 +326,14 @@ export function createNodeActionsController(context: NodeActionsContext) {
         lastError.value = message;
         appendLog("Warn", message);
       }
-      void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+      refreshHubRegistrationDetached(hubModeUsesRch(settings.hub.mode));
       return;
     }
     appendLog(
       "Info",
       "Hub routing settings changed. Restart the node to apply the selected hub and refresh from the hub directory.",
     );
-    void refreshHubRegistrationState(hubModeUsesRch(settings.hub.mode));
+    refreshHubRegistrationDetached(hubModeUsesRch(settings.hub.mode));
   }
 
   function getSavedPeerList(): PeerListV1 {

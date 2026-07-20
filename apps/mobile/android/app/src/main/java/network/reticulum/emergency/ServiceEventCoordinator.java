@@ -133,7 +133,8 @@ final class ServiceEventCoordinator {
                 "status",
                 new JSObject(JsonPayloads.orFallback(latestStatusJson, "{}"))
             );
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to decode the cached runtime status event", error);
             statusPayload.put("status", new JSObject());
         }
         dispatchEventToListeners("statusChanged", statusPayload);
@@ -232,7 +233,8 @@ final class ServiceEventCoordinator {
             try {
                 final JSObject status = payload.getJSObject("status", payload);
                 latestStatusJson = status.toString();
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.d(TAG, "Status event uses the legacy unwrapped payload shape", error);
                 latestStatusJson = payload.toString();
             }
             return;
@@ -245,7 +247,8 @@ final class ServiceEventCoordinator {
             try {
                 final JSObject status = payload.getJSObject("status", payload);
                 latestSosStatusJson = status.toString();
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.d(TAG, "SOS event uses the legacy unwrapped payload shape", error);
                 latestSosStatusJson = payload.toString();
             }
         }
@@ -271,7 +274,8 @@ final class ServiceEventCoordinator {
                 new JSObject(JsonPayloads.orFallback(latestStatusJson, "{}"))
             );
             listener.onNodeEvent("statusChanged", statusPayload);
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to replay the cached runtime status event", error);
             listener.onNodeEvent("statusChanged", new JSObject());
         }
 
@@ -280,7 +284,8 @@ final class ServiceEventCoordinator {
                 "syncUpdated",
                 new JSObject(JsonPayloads.orFallback(latestSyncStatusJson, "{}"))
             );
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to replay the cached sync event", error);
             listener.onNodeEvent("syncUpdated", new JSObject());
         }
 
@@ -291,14 +296,16 @@ final class ServiceEventCoordinator {
                 new JSObject(JsonPayloads.orFallback(latestSosStatusJson, "{}"))
             );
             listener.onNodeEvent("sosStatusChanged", statusPayload);
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            Log.w(TAG, "Unable to replay the cached SOS status event", error);
             listener.onNodeEvent("sosStatusChanged", new JSObject());
         }
 
         if (latestRuntimeErrorJson != null && !latestRuntimeErrorJson.trim().isEmpty()) {
             try {
                 listener.onNodeEvent("error", new JSObject(latestRuntimeErrorJson));
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.w(TAG, "Unable to replay the structured runtime error", error);
                 final JSObject fallback = new JSObject();
                 fallback.put("code", "InternalError");
                 fallback.put("message", "node runtime failed");
@@ -351,7 +358,8 @@ final class ServiceEventCoordinator {
             try {
                 status.put("running", false);
                 status.put("lastError", message);
-            } catch (JSONException ignored) {
+            } catch (JSONException error) {
+                Log.w(TAG, "Unable to augment the runtime failure status", error);
                 return "{\"running\":false}";
             }
             return status.toString();

@@ -9,8 +9,16 @@ const MAX_NOTIFICATION_ACTIVITY_RECORDS = 20;
 let initState: Promise<boolean> | null = null;
 let nextNotificationId = Number(Date.now() % 2_000_000_000);
 let actionListenerRegistered = false;
+let actionListenerRegistration: Promise<void> | null = null;
 let pendingNotificationTarget: NotificationNavigationTarget | null = null;
 let notificationNavigationHandler: ((target: NotificationNavigationTarget) => void | Promise<void>) | null = null;
+
+function reportNotificationFailure(operation: string, error: unknown): void {
+  console.warn(
+    `[notifications] ${operation} failed: ${error instanceof Error ? error.message : String(error)}`,
+    error,
+  );
+}
 
 export interface NotificationNavigationTarget {
   route?: string;
@@ -73,7 +81,8 @@ export function listNotificationActivity(): NotificationActivityRecord[] {
       .filter((record): record is NotificationActivityRecord => Boolean(record))
       .sort((left, right) => right.at - left.at)
       .slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS);
-  } catch {
+  } catch (error: unknown) {
+    reportNotificationFailure("activity-history read", error);
     return [];
   }
 }
@@ -85,8 +94,9 @@ function saveNotificationActivity(records: NotificationActivityRecord[]): void {
       JSON.stringify(records.slice(0, MAX_NOTIFICATION_ACTIVITY_RECORDS)),
     );
     window.dispatchEvent(new CustomEvent(NOTIFICATION_ACTIVITY_CHANGED_EVENT));
-  } catch {
-    // Activity history is best-effort and must never block notifications.
+  } catch (error: unknown) {
+    // Activity history is best-effort and must never block notification delivery.
+    reportNotificationFailure("activity-history persistence", error);
   }
 }
 
@@ -123,7 +133,7 @@ async function ensureNotificationsReady(): Promise<boolean> {
     return false;
   }
 
-  registerNotificationActionListener();
+  await registerNotificationActionListener();
 
   if (!initState) {
     initState = (async () => {
@@ -146,7 +156,7 @@ async function ensureNotificationsReady(): Promise<boolean> {
           lights: true,
           lightColor: "#16edff",
           vibration: true,
-        }).catch(() => undefined);
+        });
       }
 
       return true;
@@ -161,8 +171,13 @@ export async function checkNotificationPermission(): Promise<boolean> {
     return false;
   }
 
-  const permission = await LocalNotifications.checkPermissions().catch(() => ({ display: "denied" }));
-  return permission.display === "granted";
+  try {
+    const permission = await LocalNotifications.checkPermissions();
+    return permission.display === "granted";
+  } catch (error: unknown) {
+    reportNotificationFailure("permission check", error);
+    return false;
+  }
 }
 
 export async function requestNotificationPermission(): Promise<boolean> {
@@ -170,12 +185,18 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return false;
   }
 
-  const permission = await LocalNotifications.requestPermissions().catch(() => ({ display: "denied" }));
+  const permission = await LocalNotifications.requestPermissions().catch((error: unknown) => {
+    reportNotificationFailure("permission request", error);
+    return { display: "denied" as const };
+  });
   if (permission.display !== "granted") {
     return false;
   }
-  initState = Promise.resolve(true);
-  return true;
+  initState = null;
+  return ensureNotificationsReady().catch((error: unknown) => {
+    reportNotificationFailure("permission initialization", error);
+    return false;
+  });
 }
 
 function notificationTargetFromExtra(extra: unknown): NotificationNavigationTarget | null {
@@ -201,23 +222,36 @@ function dispatchNotificationTarget(target: NotificationNavigationTarget): void 
     pendingNotificationTarget = target;
     return;
   }
-  void notificationNavigationHandler(target);
+  void Promise.resolve(notificationNavigationHandler(target)).catch((error: unknown) => {
+    reportNotificationFailure("notification navigation", error);
+  });
 }
 
-function registerNotificationActionListener(): void {
+function registerNotificationActionListener(): Promise<void> {
   if (actionListenerRegistered || !isNotificationRuntimeSupported()) {
-    return;
+    return Promise.resolve();
   }
-  actionListenerRegistered = true;
-  void LocalNotifications.addListener(
-    "localNotificationActionPerformed",
-    (action: ActionPerformed) => {
-      const target = notificationTargetFromExtra(action.notification.extra);
-      if (target) {
-        dispatchNotificationTarget(target);
-      }
-    },
-  ).catch(() => undefined);
+  if (!actionListenerRegistration) {
+    actionListenerRegistration = LocalNotifications.addListener(
+      "localNotificationActionPerformed",
+      (action: ActionPerformed) => {
+        const target = notificationTargetFromExtra(action.notification.extra);
+        if (target) {
+          dispatchNotificationTarget(target);
+        }
+      },
+    )
+      .then(() => {
+        actionListenerRegistered = true;
+      })
+      .catch((error: unknown) => {
+        reportNotificationFailure("action-listener registration", error);
+      })
+      .finally(() => {
+        actionListenerRegistration = null;
+      });
+  }
+  return actionListenerRegistration;
 }
 
 export function registerNotificationNavigationHandler(
@@ -232,7 +266,10 @@ export function registerNotificationNavigationHandler(
 }
 
 export async function initAppNotifications(): Promise<void> {
-  await ensureNotificationsReady().catch(() => false);
+  await ensureNotificationsReady().catch((error: unknown) => {
+    reportNotificationFailure("initialization", error);
+    return false;
+  });
 }
 
 export async function notifyOperationalUpdate(
@@ -243,7 +280,10 @@ export async function notifyOperationalUpdate(
   const id = getNextNotificationId();
   appendNotificationActivity(id, title, body, extra);
 
-  if (!(await ensureNotificationsReady().catch(() => false))) {
+  if (!(await ensureNotificationsReady().catch((error: unknown) => {
+    reportNotificationFailure("delivery initialization", error);
+    return false;
+  }))) {
     return;
   }
 
@@ -264,5 +304,7 @@ export async function notifyOperationalUpdate(
         },
       },
     ],
-  }).catch(() => undefined);
+  }).catch((error: unknown) => {
+    reportNotificationFailure("delivery", error);
+  });
 }

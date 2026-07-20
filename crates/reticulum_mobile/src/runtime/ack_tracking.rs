@@ -164,7 +164,8 @@ fn pending_ack_timeout_elapsed(pending: &PendingLxmfDelivery, now: u64) -> bool 
     } else {
         DEFAULT_LXMF_ACK_TIMEOUT
     };
-    now.saturating_sub(pending.sent_at_ms) >= timeout.as_millis() as u64
+    now.saturating_sub(pending.sent_at_ms)
+        >= crate::numeric::u128_to_u64_saturating(timeout.as_millis())
 }
 
 fn record_pending_delivery_timed_out(

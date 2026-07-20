@@ -38,6 +38,7 @@ final class NodeRuntimeLifecycleController {
     private final ServiceNotificationController notificationController;
     private final PluginCoordinator pluginCoordinator;
     private final RuntimeConfigResolver configResolver;
+    private final RuntimeOperationGate runtimeOperationGate = new RuntimeOperationGate();
     private final AtomicBoolean restoreRunning = new AtomicBoolean(false);
 
     private ServiceEventCoordinator eventCoordinator;
@@ -80,6 +81,10 @@ final class NodeRuntimeLifecycleController {
     }
 
     int startNode(String configJson) {
+        return runtimeOperationGate.runExplicit(() -> startNodeInternal(configJson));
+    }
+
+    private int startNodeInternal(String configJson) {
         try {
             final RuntimeConfigResolver.ResolvedConfig resolved = configResolver.resolve(configJson);
             initializeStorage(resolved.storageDir);
@@ -118,6 +123,10 @@ final class NodeRuntimeLifecycleController {
     }
 
     int stopNode() {
+        return runtimeOperationGate.runExplicit(this::stopNodeInternal);
+    }
+
+    private int stopNodeInternal() {
         events().stop();
         pluginCoordinator.setNodeRunning(false);
         final int result = ReticulumBridge.stop();
@@ -131,6 +140,10 @@ final class NodeRuntimeLifecycleController {
     }
 
     int restartNode(String configJson) {
+        return runtimeOperationGate.runExplicit(() -> restartNodeInternal(configJson));
+    }
+
+    private int restartNodeInternal(String configJson) {
         try {
             final RuntimeConfigResolver.ResolvedConfig resolved = configResolver.resolve(configJson);
             promoteServiceForRuntime();
@@ -167,10 +180,15 @@ final class NodeRuntimeLifecycleController {
             return;
         }
 
+        final long restoreGeneration = runtimeOperationGate.snapshot();
         promoteServiceForRuntime();
         final AtomicBoolean restoreCompleted = new AtomicBoolean(false);
         mainHandler.postDelayed(() -> {
-            if (restoreCompleted.get() || !restoreRunning.get()) {
+            if (
+                restoreCompleted.get()
+                    || !restoreRunning.get()
+                    || restoreGeneration != runtimeOperationGate.snapshot()
+            ) {
                 return;
             }
             events().reportRuntimeReadinessFailure(
@@ -180,17 +198,22 @@ final class NodeRuntimeLifecycleController {
         }, RUNTIME_RESTORE_TIMEOUT_MS);
         restoreExecutor.execute(() -> {
             try {
-                if (isNodeRunning()) {
-                    resumeRestoredRuntime();
-                    return;
-                }
+                final boolean restored = runtimeOperationGate.runRestore(restoreGeneration, () -> {
+                    if (isNodeRunning()) {
+                        resumeRestoredRuntime();
+                        return;
+                    }
 
-                final int result = startNode(persistedConfig);
-                if (result != 0) {
-                    events().reportRuntimeReadinessFailure(
-                        "InternalError",
-                        "node runtime failed to restore after " + reason
-                    );
+                    final int result = startNodeInternal(persistedConfig);
+                    if (result != 0) {
+                        events().reportRuntimeReadinessFailure(
+                            "InternalError",
+                            "node runtime failed to restore after " + reason
+                        );
+                    }
+                });
+                if (!restored) {
+                    Log.i(TAG, "Skipped stale node runtime restore after " + reason);
                 }
             } catch (Exception ex) {
                 Logger.error(TAG, "Failed to restore node after " + reason, ex);
@@ -212,7 +235,14 @@ final class NodeRuntimeLifecycleController {
         return preferences.getInt(PREF_LAST_BOOT_COUNT, -1) == configResolver.currentBootCount();
     }
 
-    synchronized void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
+    void handleForegroundServiceTimeout(int startId, int foregroundServiceType) {
+        runtimeOperationGate.runExplicit(() -> {
+            handleForegroundServiceTimeoutInternal(startId, foregroundServiceType);
+            return 0;
+        });
+    }
+
+    private void handleForegroundServiceTimeoutInternal(int startId, int foregroundServiceType) {
         events().reportRuntimeReadinessFailure(
             "InternalError",
             "node runtime foreground service timed out; stopping Reticulum node service. type="

@@ -249,7 +249,8 @@ final class ServiceNotificationController {
                     : truncate(item.optString("groupName", "Team") + " status " + item.optString("overallStatus", "updated"));
                 postBackgroundNotification("EAM from " + item.optString("reportedBy", callsign), body);
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotifications", "Unable to process EAM notification payload", error);
         }
     }
 
@@ -299,7 +300,8 @@ final class ServiceNotificationController {
                     truncate(args.optString("content", "Event updated"))
                 );
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotifications", "Unable to process event notification payload", error);
         }
     }
 
@@ -355,7 +357,8 @@ final class ServiceNotificationController {
                     truncate(pendingCount + " pending, " + completeCount + " complete" + lateSummary + " across " + taskSummary)
                 );
             }
-        } catch (JSONException ignored) {
+        } catch (JSONException error) {
+            android.util.Log.w("ReticulumNotifications", "Unable to process checklist notification payload", error);
         }
     }
 

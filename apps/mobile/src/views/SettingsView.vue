@@ -156,7 +156,11 @@ function syncSettingsForm(): void {
 onMounted(() => {
   void nodeStore.init()
     .then(syncSettingsForm)
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      const message = `Settings initialization failed: ${error instanceof Error ? error.message : String(error)}`;
+      nodeStore.setLastError(message);
+      nodeStore.logUi("Warn", message);
+    });
 });
 
 async function applySettings(): Promise<void> {

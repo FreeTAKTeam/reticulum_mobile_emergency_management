@@ -30,7 +30,7 @@ fn build_eam_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
 
     Ok((body, fields))
 }
@@ -69,7 +69,7 @@ fn build_eam_delete_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
 
     Ok((body, fields))
 }
@@ -120,7 +120,7 @@ fn build_event_replication_payload(
         MsgPackValue::from(FIELD_COMMANDS),
         MsgPackValue::Array(vec![MsgPackValue::Map(command_entries)]),
     )]);
-    let fields_bytes = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
+    let fields_bytes = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
 
     Ok((body, fields_bytes))
 }
@@ -210,7 +210,7 @@ fn build_telemetry_replication_payload(
             ),
         ])]),
     )]);
-    let fields = rmp_serde::to_vec(&fields).map_err(|_| NodeError::InternalError {})?;
+    let fields = rmp_serde::to_vec(&fields).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
 
     Ok((body, fields))
 }

@@ -7,6 +7,7 @@ import { useRoute } from "vue-router";
 
 import { useChecklistsStore } from "../stores/checklistsStore";
 import { useNodeStore } from "../stores/nodeStore";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   runtimeChecklistDetailToUi,
   runtimeChecklistToUi,
@@ -68,6 +69,11 @@ export function useChecklistDetail() {
   const editingTaskValue = ref("");
   const cellDrafts = ref<Record<string, string>>({});
   const routeEditConsumed = ref(false);
+
+  function refreshDetailDetached(value: string): void {
+    runDetachedStoreTask(nodeStore, "checklists", "detail refresh", () =>
+      checklistsStore.refreshDetail(value));
+  }
 
   function taskStatusClass(status: ChecklistTaskStatus): string {
     return `task-${status}`;
@@ -272,7 +278,7 @@ export function useChecklistDetail() {
     if (!value) {
       return;
     }
-    void checklistsStore.refreshDetail(value);
+    refreshDetailDetached(value);
   }, { immediate: true });
 
   watch([visibleTasks, () => route.query.edit], ([tasks, edit]) => {
@@ -285,7 +291,7 @@ export function useChecklistDetail() {
 
   onMounted(() => {
     if (checklistId.value) {
-      void checklistsStore.refreshDetail(checklistId.value);
+      refreshDetailDetached(checklistId.value);
     }
   });
 

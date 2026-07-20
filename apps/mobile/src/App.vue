@@ -25,7 +25,9 @@ import {
   runBackNavigationHandlers,
 } from "./utils/androidBackNavigation";
 import { appVersion } from "./utils/appVersion";
+import { runDetachedStoreTask } from "./utils/detachedStoreTask";
 import { hasCompletedSetupWizard } from "./utils/setupWizardState";
+import { runRecoverableStartupStep } from "./utils/startupInitialization";
 import {
   STARTUP_INTERFACE_LOADING_DETAIL,
   STARTUP_INTERFACE_LOADING_SUMMARY,
@@ -33,6 +35,7 @@ import {
   statusHasRuntimeStartupReadiness,
   type StartupInterfaceItem,
 } from "./utils/startupInterfaces";
+import { reconcileStartupRuntime } from "./utils/startupRuntime";
 
 const nodeStore = useNodeStore();
 const messagingStore = useMessagingStore();
@@ -97,6 +100,11 @@ async function repairStartupRnodeSelection(): Promise<void> {
   }
 }
 
+function reportStartupFailure(message: string): void {
+  nodeStore.setLastError(message);
+  nodeStore.logUi("Warn", `[startup] ${message}`);
+}
+
 registerNotificationNavigationHandler(async (target) => {
   if (target.route && target.route !== "/inbox") {
     await router.push(target.route);
@@ -124,29 +132,60 @@ onMounted(async () => {
       await initAppNotifications();
     }
     await nodeStore.init();
-    await messagingStore.init();
+    // Bind telemetry before fallible history hydration. Native startup may still be
+    // pending here; telemetryStore watches runtime readiness and starts once ready.
+    telemetryStore.init();
     if (setupCompleted) {
       await repairStartupRnodeSelection();
-      if (nodeStore.status.running && nodeStore.nodeConfigRestartRequired) {
-        await nodeStore.restartNode();
-      } else if (!nodeStore.status.running) {
-        await nodeStore.startNode();
-      }
+      await runRecoverableStartupStep(
+        "runtime reconciliation",
+        () => reconcileStartupRuntime(
+          {
+            running: nodeStore.status.running,
+            restartRequired: nodeStore.nodeConfigRestartRequired,
+          },
+          {
+            start: () => nodeStore.startNode(),
+            restart: () => nodeStore.restartNode(),
+          },
+        ),
+        reportStartupFailure,
+      );
     }
-    await messagingStore.hydrateStartupHistory();
 
+    // Initialize every projection before awaiting optional history hydration. A
+    // transient failure in one projection must not suppress the other stores.
     messagesStore.init();
     eventsStore.init();
     checklistsStore.init();
-    telemetryStore.init();
-    await sosStore.init();
-
     messagesStore.initReplication();
     eventsStore.initReplication();
     checklistsStore.initReplication();
     telemetryStore.initReplication();
+
+    const chatHistoryHydrated = await runRecoverableStartupStep(
+      "chat history hydration",
+      () => messagingStore.init(),
+      reportStartupFailure,
+    );
+    if (!chatHistoryHydrated && nodeStore.status.running) {
+      void runRecoverableStartupStep(
+        "chat history hydration retry",
+        () => messagingStore.init(),
+        reportStartupFailure,
+      );
+    }
+    await runRecoverableStartupStep(
+      "SOS projection hydration",
+      () => sosStore.init(),
+      reportStartupFailure,
+    );
     if (setupCompleted && nodeStore.settings.telemetry.enabled) {
-      await telemetryStore.requestStartupPermission();
+      await runRecoverableStartupStep(
+        "telemetry permission request",
+        () => telemetryStore.requestStartupPermission(),
+        (message) => nodeStore.logUi("Warn", `[startup] ${message}`),
+      );
     }
     if (!setupCompleted && route.path !== "/setup" && !startupMockEnabled.value) {
       await router.replace("/setup");
@@ -300,7 +339,7 @@ async function registerAndroidBackButtonHandler(): Promise<void> {
     return;
   }
   androidBackButtonListener = await App.addListener("backButton", (event) => {
-    void handleAndroidBackButton(event);
+    runDetachedStoreTask(nodeStore, "navigation", "Android back action", () => handleAndroidBackButton(event));
   });
 }
 
@@ -311,13 +350,13 @@ watch(
   },
 );
 
-void registerAndroidBackButtonHandler();
-
+runDetachedStoreTask(nodeStore, "navigation", "back-listener registration", registerAndroidBackButtonHandler);
 onUnmounted(() => {
   if (splashTimer !== undefined) {
     window.clearTimeout(splashTimer);
   }
-  void androidBackButtonListener?.remove();
+  // Listener removal is cleanup-only; the app is already unmounting and cannot surface it safely.
+  void androidBackButtonListener?.remove().catch(() => undefined);
   androidBackButtonListener = undefined;
 });
 </script>

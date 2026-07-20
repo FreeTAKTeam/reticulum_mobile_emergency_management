@@ -162,14 +162,14 @@ const DEFAULT_R3AKT_MISSION_UID: &str = "r3akt-default-mission";
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .map(|d| crate::numeric::u128_to_u64_saturating(d.as_millis()))
         .unwrap_or(0)
 }
 
 fn current_timestamp_rfc3339() -> String {
     let seconds_since_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
+        .map(|duration| crate::numeric::u64_to_i64_saturating(duration.as_secs()))
         .unwrap_or(0);
     let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
     let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);
@@ -181,7 +181,7 @@ fn current_timestamp_rfc3339() -> String {
 }
 
 fn timestamp_ms_to_rfc3339(timestamp_ms: u64) -> String {
-    let seconds_since_epoch = (timestamp_ms / 1_000) as i64;
+    let seconds_since_epoch = crate::numeric::u64_to_i64_saturating(timestamp_ms / 1_000);
     let millis = timestamp_ms % 1_000;
     let days_since_epoch = seconds_since_epoch.div_euclid(86_400);
     let seconds_of_day = seconds_since_epoch.rem_euclid(86_400);

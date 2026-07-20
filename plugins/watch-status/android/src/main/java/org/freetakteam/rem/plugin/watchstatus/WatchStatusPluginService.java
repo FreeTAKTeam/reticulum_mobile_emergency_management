@@ -3,6 +3,7 @@ package org.freetakteam.rem.plugin.watchstatus;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -17,6 +18,7 @@ import network.reticulum.emergency.plugin.api.RemPluginService;
 import org.json.JSONObject;
 
 public final class WatchStatusPluginService extends RemPluginService {
+    private static final String TAG = "REM.WatchStatusPlugin";
     private static final long REFRESH_MS = 1_000L;
     private static final long STALE_MS = 5_000L;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -92,7 +94,8 @@ public final class WatchStatusPluginService extends RemPluginService {
                     latestSnapshotAtMs = System.currentTimeMillis();
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to apply the watch-status host response", error);
         } finally {
             if (matchesPendingRequest) {
                 pendingRequestId = "";
@@ -122,7 +125,9 @@ public final class WatchStatusPluginService extends RemPluginService {
         } catch (Exception error) {
             try {
                 callback.onResponse(new JSONObject().put("type", "validationError").put("message", error.getMessage()).toString());
-            } catch (Exception ignored) {}
+            } catch (Exception callbackError) {
+                Log.w(TAG, "Failed to return configuration validation error", callbackError);
+            }
         }
     }
 

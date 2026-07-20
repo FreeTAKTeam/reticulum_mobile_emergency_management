@@ -149,7 +149,7 @@ foreach ($target in $targets) {
   if ($LASTEXITCODE -ne 0) {
     throw "rustup target add failed for $target"
   }
-  cargo build --manifest-path $crateManifest --target-dir $cargoTargetDir --release --target $target
+  cargo build --manifest-path $crateManifest --locked --target-dir $cargoTargetDir --release --target $target
   if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed for $target"
   }

@@ -272,7 +272,10 @@ export const useTelemetryStore = defineStore("telemetry", () => {
       return;
     }
 
-    void startPublishLoop();
+    void startPublishLoop().catch((error: unknown) => {
+      loopStatus.value = "error";
+      telemetryError.value = error instanceof Error ? error.message : String(error);
+    });
   }
 
   async function initializeAsync(): Promise<void> {
@@ -297,10 +300,11 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     }
 
     watch(
-      () => [
-        nodeStore.settings.telemetry.enabled,
-        nodeStore.settings.telemetry.publishIntervalSeconds,
-        nodeStore.settings.displayName,
+      [
+        () => nodeStore.settings.telemetry.enabled,
+        () => nodeStore.settings.telemetry.publishIntervalSeconds,
+        () => nodeStore.settings.displayName,
+        () => nodeStore.status.running,
       ],
       () => {
         syncPublishLoopFromSettings();

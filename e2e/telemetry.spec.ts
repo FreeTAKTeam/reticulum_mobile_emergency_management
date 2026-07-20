@@ -177,6 +177,63 @@ test("telemetry popup opens a chat thread for the matched peer", async ({ page }
   await expect(page.getByText("No messages yet for this conversation.")).toBeVisible();
 });
 
+test("telemetry publishing reacts when runtime readiness changes", async ({ page, context }) => {
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({ latitude: 44.6488, longitude: -63.5752 });
+  await seedAppStorage(page, {
+    settings: {
+      ...defaultSettings,
+      telemetry: {
+        enabled: true,
+        publishIntervalSeconds: 3600,
+        staleAfterMinutes: 5,
+        expireAfterMinutes: 10,
+      },
+    },
+  });
+
+  await gotoApp(page, "/dashboard");
+  await expect.poll(async () => page.evaluate(async () => {
+    const mod = await import("/src/stores/telemetryStore.ts");
+    return mod.useTelemetryStore().loopStatus;
+  })).toBe("running");
+
+  const publishAttempts = await page.evaluate(async () => {
+    const telemetryMod = await import("/src/services/telemetry.ts");
+    const nodeMod = await import("/src/stores/nodeStore.ts");
+    const original = telemetryMod.telemetryService.getCurrentPosition.bind(telemetryMod.telemetryService);
+    let attempts = 0;
+    telemetryMod.telemetryService.getCurrentPosition = async () => {
+      attempts += 1;
+      return original();
+    };
+
+    const nodeStore = nodeMod.useNodeStore();
+    nodeStore.status = {
+      ...nodeStore.status,
+    };
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    const attemptsAfterSameStateReplacement = attempts;
+
+    nodeStore.status = {
+      ...nodeStore.status,
+      running: !nodeStore.status.running,
+    };
+
+    const deadline = Date.now() + 2_000;
+    while (attempts === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    }
+    return {
+      attemptsAfterReadinessTransition: attempts,
+      attemptsAfterSameStateReplacement,
+    };
+  });
+
+  expect(publishAttempts.attemptsAfterSameStateReplacement).toBe(0);
+  expect(publishAttempts.attemptsAfterReadinessTransition).toBeGreaterThan(0);
+});
+
 test("telemetry map hides locations for cancelled SOS emergencies", async ({ page }) => {
   const now = Date.now();
 

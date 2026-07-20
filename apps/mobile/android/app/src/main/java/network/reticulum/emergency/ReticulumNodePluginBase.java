@@ -155,6 +155,7 @@ public abstract class ReticulumNodePluginBase extends Plugin {
     protected final void startServiceForRuntime() {
         final Context appContext = getContext().getApplicationContext();
         final Intent serviceIntent = new Intent(appContext, ReticulumNodeService.class);
+        serviceIntent.setAction(ReticulumNodeService.ACTION_START_RUNTIME);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(appContext, serviceIntent);
         } else {
@@ -271,7 +272,17 @@ public abstract class ReticulumNodePluginBase extends Plugin {
             final String message = payload.getString("message", fallbackMessage);
             Log.e(TAG, "rejectFromNative code=" + code + " message=" + message);
             Logger.error(TAG, "Native error [" + code + "]: " + message, new Exception(message));
-            call.reject(message, code);
+            final JSObject details = new JSObject();
+            details.put("code", code);
+            details.put("message", message);
+            details.put("retryable", payload.getBoolean("retryable", false));
+            if (payload.has("operation")) {
+                details.put("operation", payload.getString("operation"));
+            }
+            if (payload.has("cause")) {
+                details.put("cause", payload.getString("cause"));
+            }
+            call.reject(message, code, details);
         } catch (JSONException ex) {
             call.reject(fallbackMessage, ex);
         }

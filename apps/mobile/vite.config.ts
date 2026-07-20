@@ -60,5 +60,19 @@ export default defineConfig(({ mode }) => ({
         }]
       : [],
   },
+  server: {
+    watch: {
+      ignored: [
+        "**/android/**",
+        "**/ios/**",
+        "**/node_modules/**",
+        "**/playwright-report/**",
+        "**/target/**",
+        "**/test-results/**",
+        "**/tmp/**",
+        "**/tmp-playwright-ui.*",
+      ],
+    },
+  },
   plugins: [vue()],
 }));

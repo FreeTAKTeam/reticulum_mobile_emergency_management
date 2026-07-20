@@ -9,12 +9,11 @@ impl fmt::Display for PropagationPayloadDecryptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PayloadTooShort { len } => {
-                write!(f, "payload too short for propagation transient len={}", len)
+                write!(f, "payload too short for propagation transient len={len}")
             }
             Self::DestinationMismatch { expected, actual } => write!(
                 f,
-                "destination prefix mismatch expected={} actual={}",
-                expected, actual
+                "destination prefix mismatch expected={expected} actual={actual}"
             ),
             Self::DecryptFailed => write!(f, "propagation transient decrypt failed"),
         }

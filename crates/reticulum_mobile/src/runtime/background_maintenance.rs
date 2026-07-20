@@ -81,8 +81,7 @@ fn spawn_propagation_maintenance_task(state: &NodeRuntimeState, bus: &EventBus) 
             }
             let requested_at_ms = now_ms();
             info!(
-                "[sync] automatic propagation sync scheduled relay={} limit={}",
-                relay_hex, AUTO_PROPAGATION_SYNC_LIMIT
+                "[sync] automatic propagation sync scheduled relay={relay_hex} limit={AUTO_PROPAGATION_SYNC_LIMIT}"
             );
             tokio::spawn(run_propagation_sync_job(
                 state.clone(),
@@ -109,15 +108,15 @@ fn spawn_receipt_listener(
                 .messaging
                 .lock()
                 .await
-                .update_message_delivery_state(
-                    message_id_hex.as_str(),
-                    None,
-                    Some(sdkmsg::TransportDeliveryState::TransportDelivered),
-                    None,
-                    Some("transport receipt".to_string()),
-                    None,
-                    now_ms(),
-                )
+                .update_message_delivery_state(sdkmsg::MessageDeliveryUpdate {
+                    message_id_hex: message_id_hex.as_str(),
+                    state: None,
+                    transport_state: Some(sdkmsg::TransportDeliveryState::TransportDelivered),
+                    application_ack_state: None,
+                    detail: Some("transport receipt".to_string()),
+                    last_wire_message_id_hex: None,
+                    updated_at_ms: now_ms(),
+                })
                 .map(from_sdk_message_record);
 
             if let Some(record) = maybe_record {

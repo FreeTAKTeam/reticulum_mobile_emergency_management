@@ -23,12 +23,12 @@ jobs:
           repository: FreeTAKTeam/LXMF-rs
           path: LXMF-rs
           ref: ${{ env.LXMF_RS_REF }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: rem/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -115,22 +115,22 @@ jobs:
             bash rem/apps/mobile/android/gradlew -p rem/apps/mobile/android :app:installDebug :app:installDebugAndroidTest
             adb logcat -c
             adb shell am instrument -w -r -e class network.reticulum.emergency.plugins.PluginBinderIntegrationTest network.reticulum.emergency.test/androidx.test.runner.AndroidJUnitRunner || { adb logcat -d '*:E'; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rem-plugin-sdk
           path: |
             rem/packages/android-plugin-sdk/build/outputs/aar/rem-plugin-sdk-debug.aar
             rem/packages/android-plugin-sdk/README.md
             rem/docs/plugins/android-plugin-system.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rem-plugin-test-fixture
           path: rem/apps/mobile/android/plugin-test-fixture/build/outputs/apk/debug/plugin-test-fixture-debug.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rem-ble-heart-rate-plugin
           path: rem/plugins/ble-heart-rate/android/build/outputs/apk/debug/ble-heart-rate-plugin-debug.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rem-watch-status-plugin
           path: rem/plugins/watch-status/android/build/outputs/apk/debug/watch-status-plugin-debug.apk

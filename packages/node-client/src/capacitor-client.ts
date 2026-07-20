@@ -8,13 +8,25 @@ import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImpor
 import { decodeBase64ToBytes, encodeBytesToBase64, normalizeHex, pluginRecord, toAnnounceReceivedEvent, toAnnounceRecord, toInstalledPlugin, toInterfaceStatusChangedEvent, toNodeStatus, toPeerChangedEvent, toPluginSensor, toStatusChangedEvent } from "./runtime-converters";
 import { TypedEmitter } from "./typed-emitter";
 import { CapacitorProjectionClient } from "./capacitor-projection-client";
+import { classifyPluginErrors } from "./errors";
 
 export class CapacitorReticulumNodeClient extends CapacitorProjectionClient implements ReticulumNodeClient {
   private readonly emitter = new TypedEmitter<NodeClientEvents>();
-  protected readonly plugin = ReticulumNodePluginInstance;
+  protected readonly plugin = classifyPluginErrors(ReticulumNodePluginInstance);
   private listenerHandles: PluginListenerHandle[] = [];
   private attachPromise: Promise<void> | null = null;
   private generation = 0;
+
+  private async removeListenerHandle(
+    handle: PluginListenerHandle,
+    operation: string,
+  ): Promise<void> {
+    try {
+      await handle.remove();
+    } catch (error: unknown) {
+      console.warn(`[node-client] ${operation} failed`, error);
+    }
+  }
 
   private async attachListeners(): Promise<void> {
     if (this.attachPromise) {
@@ -22,6 +34,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
     }
 
     const generation = this.generation;
+    const initialHandleCount = this.listenerHandles.length;
     this.attachPromise = (async () => {
       const register = async (
         eventName: keyof NodeClientEvents,
@@ -32,6 +45,9 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
         }
         const handle = await Promise.resolve(
           this.plugin.addListener(eventName, (payload: unknown) => {
+            if (generation !== this.generation) {
+              return;
+            }
             const objectPayload =
               payload && typeof payload === "object"
                 ? (payload as Record<string, unknown>)
@@ -40,7 +56,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
           }),
         );
         if (generation !== this.generation) {
-          await handle.remove().catch(() => undefined);
+          await this.removeListenerHandle(handle, "stale listener cleanup");
           return;
         }
         this.listenerHandles.push(handle);
@@ -73,7 +89,10 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
       }));
       await register("log", toLogEvent);
       await register("error", toErrorEvent);
-    })().catch((error) => {
+    })().catch(async (error: unknown) => {
+      const partialHandles = this.listenerHandles.splice(initialHandleCount);
+      await Promise.all(partialHandles.map((handle) =>
+        this.removeListenerHandle(handle, "partial listener cleanup")));
       this.attachPromise = null;
       throw error;
     });
@@ -283,16 +302,16 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
     event: K,
     handler: (payload: NodeClientEvents[K]) => void,
   ): () => void {
+    // Event subscriptions are synchronous; the next awaited client operation retries and surfaces failures.
     void this.attachListeners().catch(() => undefined);
     return this.emitter.on(event, handler);
   }
 
   async dispose(): Promise<void> {
     this.generation += 1;
-    for (const handle of this.listenerHandles) {
-      await handle.remove().catch(() => undefined);
-    }
-    this.listenerHandles = [];
+    const handles = this.listenerHandles.splice(0);
+    await Promise.all(handles.map((handle) =>
+      this.removeListenerHandle(handle, "listener disposal")));
     this.attachPromise = null;
     this.emitter.clear();
   }

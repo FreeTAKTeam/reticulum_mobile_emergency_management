@@ -3,7 +3,7 @@ impl Node {
         &self,
         request: Option<ChecklistListActiveRequest>,
     ) -> Result<Vec<ChecklistRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let mut items = inner.app_state.get_active_checklists()?;
         if let Some(request) = request {
             if let Some(search) = request
@@ -70,7 +70,7 @@ impl Node {
         &self,
         checklist_uid: String,
     ) -> Result<Option<ChecklistRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_checklist(checklist_uid.trim())
     }
 
@@ -78,7 +78,7 @@ impl Node {
         &self,
         request: Option<ChecklistTemplateListRequest>,
     ) -> Result<Vec<ChecklistTemplateRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let mut items = inner.app_state.list_checklist_templates()?;
         if let Some(request) = request {
             if let Some(search) = request
@@ -105,7 +105,7 @@ impl Node {
         &self,
         template_uid: String,
     ) -> Result<Option<ChecklistTemplateRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_checklist_template(template_uid.trim())
     }
 
@@ -113,7 +113,7 @@ impl Node {
         &self,
         request: ChecklistTemplateImportCsvRequest,
     ) -> Result<ChecklistTemplateRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.import_checklist_template_csv(&request)
     }
 
@@ -125,11 +125,11 @@ impl Node {
         let mut delayed_sends = Vec::<ScheduledMissionSend>::new();
         let mut cmd_tx = None;
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let mut request = request;
             if request
@@ -208,18 +208,18 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let replication_targets = build_runtime_checklist_replication_targets(
                     &status,
@@ -312,11 +312,11 @@ impl Node {
     ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let mut request = request;
             if request
@@ -369,18 +369,18 @@ impl Node {
                 let peers = inner
                     .peers_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let hub_directory_snapshot = inner
                     .hub_directory_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let saved_peers = inner.app_state.get_saved_peers()?;
                 let sync_status = inner
                     .sync_status_snapshot
                     .lock()
-                    .map_err(|_| NodeError::InternalError {})?
+                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
                 let replication_targets = build_runtime_checklist_replication_targets(
                     &status,

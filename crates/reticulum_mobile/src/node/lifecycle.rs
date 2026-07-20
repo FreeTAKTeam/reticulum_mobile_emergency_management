@@ -42,7 +42,7 @@ impl Node {
     }
 
     pub(crate) fn initialize_storage(&self, storage_dir: Option<&str>) -> Result<(), NodeError> {
-        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         if inner.runtime.is_some() {
             return Ok(());
         }
@@ -55,7 +55,7 @@ impl Node {
         config: NodeConfig,
         config_fingerprint: NodeConfigFingerprint,
     ) -> Result<(), NodeError> {
-        let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let mut inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         if inner.runtime.is_some() {
             return Err(NodeError::AlreadyRunning {});
         }
@@ -159,7 +159,7 @@ impl Node {
     pub fn start(&self, config: NodeConfig) -> Result<(), NodeError> {
         let config_fingerprint = NodeConfigFingerprint::from_config(&config)?;
         let should_restart = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             match (&inner.runtime, &inner.active_config) {
                 (Some(_), Some(active_config)) if active_config == &config_fingerprint => {
                     return Ok(());
@@ -187,7 +187,7 @@ impl Node {
             sync_status_snapshot,
             hub_directory_snapshot,
         ) = {
-            let mut inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let mut inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.active_config = None;
             (
                 inner.runtime.take(),
@@ -277,7 +277,7 @@ impl Node {
 
     pub fn connect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner
                 .priority_cmd_tx
                 .clone()
@@ -300,7 +300,7 @@ impl Node {
 
     pub fn disconnect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner
                 .priority_cmd_tx
                 .clone()
@@ -329,11 +329,11 @@ impl Node {
         send_mode: SendMode,
     ) -> Result<(), NodeError> {
         let (tx, active_config, hub_directory_snapshot) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             (
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
@@ -365,11 +365,11 @@ impl Node {
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {
         let (tx, active_config, hub_directory_snapshot) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             (
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,

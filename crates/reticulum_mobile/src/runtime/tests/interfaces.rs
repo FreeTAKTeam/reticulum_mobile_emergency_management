@@ -162,6 +162,62 @@ fn tcp_data_path_unavailable_message_is_readiness_classified() {
 }
 
 #[test]
+fn rnode_runtime_readiness_requires_detected_online_radio() {
+    let connecting = serde_json::json!({
+        "probe_status": { "detected": false },
+        "online": false,
+        "last_command_error": null,
+    });
+    let detected_but_offline = serde_json::json!({
+        "probe_status": { "detected": true },
+        "online": false,
+        "last_command_error": null,
+    });
+    let ready = serde_json::json!({
+        "probe_status": { "detected": true },
+        "online": true,
+        "last_command_error": null,
+    });
+
+    assert_eq!(
+        rnode_runtime_interface_state(&connecting, false),
+        ("connecting", None)
+    );
+    assert_eq!(
+        rnode_runtime_interface_state(&detected_but_offline, false),
+        ("connecting", None)
+    );
+    assert_eq!(
+        rnode_runtime_interface_state(&ready, false),
+        ("connected", None)
+    );
+    assert_eq!(
+        rnode_runtime_interface_state(&connecting, true),
+        (
+            "failed",
+            Some(
+                "RNode BLE/KISS startup did not report a detected online radio within 30 seconds"
+                    .to_string()
+            )
+        )
+    );
+}
+
+#[test]
+fn rnode_runtime_readiness_preserves_command_failure() {
+    let failed = serde_json::json!({
+        "probe_status": { "detected": true },
+        "online": true,
+        "last_command_error": "radio configuration rejected",
+    });
+
+    assert_eq!(
+        rnode_runtime_interface_state(&failed, true),
+        ("failed", Some("radio configuration rejected".to_string()))
+    );
+}
+
+#[test]
 fn direct_delivery_readiness_requires_active_link() {
     let announced_peer = send_peer(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

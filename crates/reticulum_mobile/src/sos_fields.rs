@@ -44,7 +44,9 @@ pub(crate) fn build_sos_fields(
         ));
     }
 
-    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })
 }
 
 pub(crate) fn parse_sos_fields(fields_bytes: &[u8]) -> Option<SosFields> {
@@ -158,20 +160,32 @@ fn command_to_msgpack(command: &SosCommand) -> MsgPackValue {
 fn build_telemeter_payload(telemetry: &SosDeviceTelemetryRecord) -> Result<Vec<u8>, NodeError> {
     let mut entries = vec![(
         MsgPackValue::from(SID_TIME),
-        MsgPackValue::from((telemetry.updated_at_ms / 1000) as i64),
+        MsgPackValue::from(crate::numeric::u64_to_i64_saturating(
+            telemetry.updated_at_ms / 1000,
+        )),
     )];
 
     if let (Some(lat), Some(lon)) = (telemetry.lat, telemetry.lon) {
         entries.push((
             MsgPackValue::from(SID_LOCATION),
             MsgPackValue::Array(vec![
-                MsgPackValue::from((lat * 1_000_000.0).round() as i64),
-                MsgPackValue::from((lon * 1_000_000.0).round() as i64),
-                MsgPackValue::from(telemetry.alt.unwrap_or(0.0).round().max(0.0) as u64),
-                MsgPackValue::from((telemetry.speed.unwrap_or(0.0) * 100.0).round().max(0.0) as u64),
-                MsgPackValue::from((telemetry.course.unwrap_or(0.0) * 100.0).round().max(0.0) as u64),
-                MsgPackValue::from((telemetry.accuracy.unwrap_or(0.0) * 10.0).round().max(0.0) as u64),
-                MsgPackValue::from((telemetry.updated_at_ms / 1000) as i64),
+                MsgPackValue::from(crate::numeric::f64_to_i64_saturating(lat * 1_000_000.0)),
+                MsgPackValue::from(crate::numeric::f64_to_i64_saturating(lon * 1_000_000.0)),
+                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
+                    telemetry.alt.unwrap_or(0.0),
+                )),
+                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
+                    telemetry.speed.unwrap_or(0.0) * 100.0,
+                )),
+                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
+                    telemetry.course.unwrap_or(0.0) * 100.0,
+                )),
+                MsgPackValue::from(crate::numeric::f64_to_u64_saturating(
+                    telemetry.accuracy.unwrap_or(0.0) * 10.0,
+                )),
+                MsgPackValue::from(crate::numeric::u64_to_i64_saturating(
+                    telemetry.updated_at_ms / 1000,
+                )),
             ]),
         ));
     }
@@ -186,7 +200,9 @@ fn build_telemeter_payload(telemetry: &SosDeviceTelemetryRecord) -> Result<Vec<u
         ));
     }
 
-    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|_| NodeError::InternalError {})
+    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })
 }
 
 fn parse_command_field(value: Option<&MsgPackValue>) -> Option<SosCommand> {
@@ -289,7 +305,7 @@ fn msgpack_u64(value: &MsgPackValue) -> Option<u64> {
     match value {
         MsgPackValue::Integer(value) => value
             .as_u64()
-            .or_else(|| value.as_i64().map(|v| v.max(0) as u64)),
+            .or_else(|| value.as_i64().map(crate::numeric::i64_to_u64_saturating)),
         _ => None,
     }
 }

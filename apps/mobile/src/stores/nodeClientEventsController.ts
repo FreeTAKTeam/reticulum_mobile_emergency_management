@@ -148,7 +148,11 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
           clearReadinessError();
         }
         applyRnodeInterfaceReadiness();
-        void refreshHubRegistrationState(event.status.running && hubModeUsesRch(settings.hub.mode));
+        void refreshHubRegistrationState(
+          event.status.running && hubModeUsesRch(settings.hub.mode),
+        ).catch((error: unknown) => {
+          appendLog("Warn", `Hub registration status refresh failed: ${errorMessage(error)}`);
+        });
       }),
       nodeClient.on("interfaceStatusChanged", (event: InterfaceStatusChangedEvent) => {
         const current = status.value.interfaces.filter(

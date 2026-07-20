@@ -1,6 +1,6 @@
 impl Node {
     pub fn get_sos_settings(&self) -> Result<SosSettingsRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         Ok(inner
             .app_state
             .get_sos_settings()?
@@ -9,7 +9,7 @@ impl Node {
     }
 
     pub fn set_sos_settings(&self, settings: SosSettingsRecord) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let normalized = normalize_sos_settings(settings);
         let invalidation = inner.app_state.set_sos_settings(&normalized)?;
         emit_projection_invalidation(&inner.bus, invalidation);
@@ -23,7 +23,7 @@ impl Node {
     }
 
     pub fn get_sos_status(&self) -> Result<SosStatusRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         Ok(inner
             .app_state
             .get_sos_status()?
@@ -31,22 +31,22 @@ impl Node {
     }
 
     pub fn list_sos_alerts(&self) -> Result<Vec<SosAlertRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.list_sos_alerts()
     }
 
     pub fn list_sos_locations(&self) -> Result<Vec<SosLocationRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.list_sos_locations()
     }
 
     pub fn list_sos_audio(&self) -> Result<Vec<SosAudioRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.list_sos_audio()
     }
 
     pub fn record_sos_audio(&self, audio: SosAudioRecord) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.upsert_sos_audio(&audio)?;
         emit_projection_invalidation(&inner.bus, invalidation);
         Ok(())
@@ -56,11 +56,11 @@ impl Node {
         &self,
         telemetry: SosDeviceTelemetryRecord,
     ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         *inner
             .sos_device_telemetry
             .lock()
-            .map_err(|_| NodeError::InternalError {})? = Some(telemetry);
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))? = Some(telemetry);
         Ok(())
     }
 
@@ -72,7 +72,7 @@ impl Node {
         at_ms: u64,
     ) -> Result<Option<SosStatusRecord>, NodeError> {
         let (settings, detector) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let settings = inner
                 .app_state
                 .get_sos_settings()?
@@ -82,7 +82,7 @@ impl Node {
         };
         let trigger = detector
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .accelerometer_sample(&settings, x, y, z, at_ms);
         match trigger {
             Some(source) => self.trigger_sos(source).map(Some),
@@ -95,7 +95,7 @@ impl Node {
         at_ms: u64,
     ) -> Result<Option<SosStatusRecord>, NodeError> {
         let (settings, detector) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let settings = inner
                 .app_state
                 .get_sos_settings()?
@@ -105,7 +105,7 @@ impl Node {
         };
         let trigger = detector
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .screen_event(&settings, at_ms);
         match trigger {
             Some(source) => self.trigger_sos(source).map(Some),
@@ -128,7 +128,7 @@ impl Node {
             telemetry_store,
             current,
         ) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let settings = inner
                 .app_state
                 .get_sos_settings()?
@@ -147,23 +147,23 @@ impl Node {
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let peers = inner
                 .peers_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let active_propagation_node_hex = inner
                 .sync_status_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .active_propagation_node_hex
                 .clone();
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             (
                 inner.app_state.clone(),
@@ -270,7 +270,7 @@ impl Node {
             telemetry,
             current,
         ) = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let settings = inner
                 .app_state
                 .get_sos_settings()?
@@ -282,12 +282,12 @@ impl Node {
             let status = inner
                 .status
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let telemetry = inner
                 .sos_device_telemetry
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let current = inner
                 .app_state
@@ -296,18 +296,18 @@ impl Node {
             let peers = inner
                 .peers_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             let active_propagation_node_hex = inner
                 .sync_status_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .active_propagation_node_hex
                 .clone();
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
-                .map_err(|_| NodeError::InternalError {})?
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
             (
                 inner.app_state.clone(),
@@ -350,38 +350,50 @@ impl Node {
     }
 
     pub fn get_operational_summary(&self) -> Result<OperationalSummary, NodeError> {
-        let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let peers = inner
             .peers_snapshot
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let sync = inner
             .sync_status_snapshot
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let status = inner
             .status
             .lock()
-            .map_err(|_| NodeError::InternalError {})?
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
             .clone();
         let persisted_messages = inner.app_state.list_messages(None)?;
-        let conversation_count = persisted_messages
-            .iter()
-            .map(|message| message.conversation_id.clone())
-            .collect::<std::collections::HashSet<String>>()
-            .len() as u32;
+        let conversation_count = crate::numeric::usize_to_u32_saturating(
+            persisted_messages
+                .iter()
+                .map(|message| message.conversation_id.clone())
+                .collect::<std::collections::HashSet<String>>()
+                .len(),
+        );
         Ok(OperationalSummary {
             running: status.running,
-            peer_count_total: peers.len() as u32,
-            saved_peer_count: inner.app_state.get_saved_peers()?.len() as u32,
-            connected_peer_count: peers.iter().filter(|peer| peer.active_link).count() as u32,
+            peer_count_total: crate::numeric::usize_to_u32_saturating(peers.len()),
+            saved_peer_count: crate::numeric::usize_to_u32_saturating(
+                inner.app_state.get_saved_peers()?.len(),
+            ),
+            connected_peer_count: crate::numeric::usize_to_u32_saturating(
+                peers.iter().filter(|peer| peer.active_link).count(),
+            ),
             conversation_count,
-            message_count: persisted_messages.len() as u32,
-            eam_count: inner.app_state.get_eams()?.len() as u32,
-            event_count: inner.app_state.get_events()?.len() as u32,
-            telemetry_count: inner.app_state.get_telemetry_positions()?.len() as u32,
+            message_count: crate::numeric::usize_to_u32_saturating(persisted_messages.len()),
+            eam_count: crate::numeric::usize_to_u32_saturating(
+                inner.app_state.get_eams()?.len(),
+            ),
+            event_count: crate::numeric::usize_to_u32_saturating(
+                inner.app_state.get_events()?.len(),
+            ),
+            telemetry_count: crate::numeric::usize_to_u32_saturating(
+                inner.app_state.get_telemetry_positions()?.len(),
+            ),
             active_propagation_node_hex: sync.active_propagation_node_hex,
             updated_at_ms: crate::runtime::now_ms(),
         })
@@ -401,7 +413,7 @@ impl Node {
 
     pub fn refresh_hub_directory(&self) -> Result<(), NodeError> {
         let tx = {
-            let inner = self.inner.lock().map_err(|_| NodeError::InternalError {})?;
+            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
 

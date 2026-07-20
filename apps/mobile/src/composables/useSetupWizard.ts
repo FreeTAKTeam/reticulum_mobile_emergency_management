@@ -6,6 +6,7 @@ import { useSosStore } from "../stores/sosStore";
 import { normalizeDisplayName } from "../utils/peers";
 import { DEFAULT_TCP_COMMUNITY_ENDPOINTS, normalizeTcpCommunityClients } from "../utils/tcpCommunityServers";
 import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupWizardState";
+import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   DEFAULT_RNODE_SETTINGS,
   RNODE_PROFILE_SPECS,
@@ -99,7 +100,7 @@ export function useSetupWizard() {
 
   function open(): void {
     markSetupWizardOpened();
-    void refreshPermissions();
+    runDetachedStoreTask(nodeStore, "setup", "permission refresh", refreshPermissions);
   }
 
   async function refreshPermissions(): Promise<void> {

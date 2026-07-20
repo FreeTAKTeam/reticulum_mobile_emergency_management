@@ -6,6 +6,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  workers: 4,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
@@ -31,6 +32,9 @@ export default defineConfig({
   ],
   webServer: {
     command: `npm --workspace apps/mobile run dev:web -- --host 127.0.0.1 --port ${port}`,
+    env: {
+      CHOKIDAR_USEPOLLING: process.env.CHOKIDAR_USEPOLLING ?? "1",
+    },
     url: `${baseURL}/dashboard`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

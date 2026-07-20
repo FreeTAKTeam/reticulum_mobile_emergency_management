@@ -16,6 +16,7 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import java.util.Arrays;
@@ -30,6 +31,7 @@ import network.reticulum.emergency.plugin.api.RemPluginService;
 import org.json.JSONObject;
 
 public final class HeartRatePluginService extends RemPluginService {
+    private static final String TAG = "REM.HeartRatePlugin";
     static final UUID HEART_RATE_SERVICE = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb");
     static final UUID HEART_RATE_MEASUREMENT = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb");
     static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
@@ -119,7 +121,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 "REMOTE",
                 "remote"
             );
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to start the heart-rate foreground service", error);
         }
     }
 
@@ -157,7 +160,8 @@ public final class HeartRatePluginService extends RemPluginService {
                         .put("message", error.getMessage())
                         .toString()
                 );
-            } catch (Exception ignored) {
+            } catch (Exception callbackError) {
+                Log.w(TAG, "Unable to report configuration failure to the host", callbackError);
             }
         }
     }
@@ -317,7 +321,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("timestampMs", atMs)
                 .put("staleAfterMs", preferences.staleAfterMs())
                 .put("origin", origin));
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to publish a heart-rate sensor sample", error);
         }
     }
 
@@ -337,7 +342,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("bodyUtf8", "Heart rate " + bpm + " bpm")
                 .put("title", "Heart rate")
                 .put("sendMode", new JSONObject().put("Auto", new JSONObject())));
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to publish a heart-rate LXMF request", error);
         }
     }
 
@@ -351,7 +357,8 @@ public final class HeartRatePluginService extends RemPluginService {
                 .put("operation", operation)
                 .put("payload", payload)
                 .toString());
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            Log.w(TAG, "Unable to submit a heart-rate host request", error);
         }
     }
 
@@ -381,7 +388,11 @@ public final class HeartRatePluginService extends RemPluginService {
         final BluetoothGatt current = gatt;
         gatt = null;
         if (current != null) {
-            try { current.disconnect(); } catch (Exception ignored) {}
+            try {
+                current.disconnect();
+            } catch (Exception cleanupError) {
+                Log.d(TAG, "Ignoring GATT disconnect failure during cleanup", cleanupError);
+            }
             safeClose(current);
         }
         connectionState = "Disconnected";
@@ -389,7 +400,11 @@ public final class HeartRatePluginService extends RemPluginService {
 
     @SuppressLint("MissingPermission")
     private void safeClose(BluetoothGatt value) {
-        try { value.close(); } catch (Exception ignored) {}
+        try {
+            value.close();
+        } catch (Exception cleanupError) {
+            Log.d(TAG, "Ignoring GATT close failure during cleanup", cleanupError);
+        }
         if (gatt == value) gatt = null;
     }
 
