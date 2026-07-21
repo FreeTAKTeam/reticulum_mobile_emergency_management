@@ -1,4 +1,4 @@
-import type { AnnounceClass, AnnounceDestinationKind, AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
+import type { AnnounceClass, AnnounceDestinationKind, AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectoryUpdatedEvent, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_NODE_CONFIG, browserRuntimeReadiness, countConnectedSavedPeers, randomHex32 } from "./client-defaults";
 import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
@@ -50,6 +50,24 @@ const MOCK_HUB_PEERS: HubDirectoryPeerRecord[] = [
   },
 ];
 
+function mockHubDirectorySnapshot(): HubDirectoryUpdatedEvent {
+  const yellowTeamUid = "d6b6e188b910d6bdd24d04b7a7ec5444";
+  return {
+    schemaVersion: 0,
+    activeTeamUid: yellowTeamUid,
+    effectiveConnectedMode: false,
+    teams: [{ uid: yellowTeamUid, color: "YELLOW", teamName: "YELLOW" }],
+    callerMemberships: [],
+    members: MOCK_HUB_PEERS.map((peer) => ({
+      ...peer,
+      teamUid: yellowTeamUid,
+      teamMemberUid: peer.identity,
+    })),
+    localTeams: [],
+    items: MOCK_HUB_PEERS,
+    receivedAtMs: Date.now(),
+  };
+}
 
 export class MockReticulumNodeClient extends InMemoryProjectionClient implements ReticulumNodeClient {
   protected readonly inMemoryPrefix = "mock";
@@ -467,13 +485,14 @@ export class MockReticulumNodeClient extends InMemoryProjectionClient implements
   }
 
   async refreshHubDirectory(): Promise<void> {
-    this.emitter.emit("hubDirectoryUpdated", {
-      effectiveConnectedMode: false,
-      items: MOCK_HUB_PEERS,
-      receivedAtMs: Date.now(),
-    });
+    this.emitter.emit("hubDirectoryUpdated", mockHubDirectorySnapshot());
   }
 
+  async getHubDirectorySnapshot(): Promise<HubDirectoryUpdatedEvent> {
+    return mockHubDirectorySnapshot();
+  }
+
+  async setActiveTeam(_teamUid: string): Promise<void> {}
 
   async dispose(): Promise<void> {
     this.emitter.clear();

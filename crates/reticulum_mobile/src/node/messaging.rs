@@ -32,21 +32,40 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let tx = {
+        let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
+            let snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
+            (
+                inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
+                inner.active_config.clone(),
+                snapshot,
+            )
         };
+        let requested_destination = normalize_hex_32(request.destination_hex.as_str())
+            .ok_or(NodeError::InvalidConfig {})?;
         let request = SendLxmfRequest {
-            destination_hex: normalize_hex_32(request.destination_hex.as_str())
-                .ok_or(NodeError::InvalidConfig {})?,
+            destination_hex: routed_destination_hex(
+                requested_destination,
+                active_config.as_ref(),
+                hub_directory_snapshot.as_ref(),
+            )?,
             ..request
         };
+        let fields_bytes = fields_with_active_team(
+            None,
+            active_team_uid(hub_directory_snapshot.as_ref()),
+        )?;
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
             &tx,
             Command::SendLxmf {
                 request,
+                fields_bytes,
                 resp: resp_tx,
             },
         )?;
@@ -386,10 +405,23 @@ impl Node {
         inner.app_state.get_app_settings()
     }
 
-    pub fn set_app_settings(&self, settings: AppSettingsRecord) -> Result<(), NodeError> {
+    pub fn set_app_settings(&self, mut settings: AppSettingsRecord) -> Result<(), NodeError> {
+        normalize_team_settings(&mut settings.teams)?;
         let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         let invalidation = inner.app_state.set_app_settings(&settings)?;
         emit_projection_invalidation(&inner.bus, invalidation);
+        let mut snapshot = inner.hub_directory_snapshot.lock().map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?;
+        let mut next_snapshot = snapshot
+            .clone()
+            .unwrap_or_else(|| HubDirectorySnapshot::yellow_only(crate::runtime::now_ms()));
+        apply_local_team_settings(&mut next_snapshot, &settings.teams);
+        *snapshot = Some(next_snapshot.clone());
+        drop(snapshot);
+        inner
+            .bus
+            .emit(NodeEvent::HubDirectoryUpdated { snapshot: next_snapshot });
         let summary = inner.app_state.bump_projection_revision(
             ProjectionScope::OperationalSummary {},
             None,

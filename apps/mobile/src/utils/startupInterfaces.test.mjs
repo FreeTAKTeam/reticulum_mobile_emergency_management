@@ -14,6 +14,7 @@ const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toStrin
 const {
   buildStartupInterfaceItems,
   statusHasRuntimeStartupReadiness,
+  statusNeedsStartupInterfaceGrace,
 } = await import(moduleUrl);
 
 function status(state, interfaces, running = true) {
@@ -83,6 +84,26 @@ test("failed network interface does not block a running ready runtime", () => {
 
   assert.equal(statusHasRuntimeStartupReadiness(runtimeStatus), true);
   assert.equal(itemById(buildStartupInterfaceItems(runtimeStatus), "tcp").state, "failed");
+});
+
+test("stopped runtime never reopens the interface loading screen", () => {
+  const stoppedStatus = status("Pending", [
+    record("tcp", "Pending", "Waiting for configured interface"),
+    record("local", "Pending", "Runtime is stopped"),
+  ], false);
+  const items = buildStartupInterfaceItems(stoppedStatus);
+
+  assert.equal(statusNeedsStartupInterfaceGrace(stoppedStatus, items), false);
+});
+
+test("running pending runtime keeps configured interfaces in startup grace", () => {
+  const startingStatus = status("Pending", [
+    record("tcp", "Pending", "Waiting for configured interface"),
+    record("local", "Ready", "Runtime is ready"),
+  ]);
+  const items = buildStartupInterfaceItems(startingStatus);
+
+  assert.equal(statusNeedsStartupInterfaceGrace(startingStatus, items), true);
 });
 
 test("corrupt native readiness records are ignored instead of breaking startup", () => {

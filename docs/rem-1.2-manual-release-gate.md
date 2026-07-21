@@ -1,7 +1,8 @@
 # REM 1.2 Manual Release Gate
 
-REM `1.2.7-rc.1` stays a prerelease until this matrix passes on two authorized
-physical phones and the evidence is recorded in issue #168.
+REM `1.2.7` gates supported TCP operation on two authorized physical phones.
+The incomplete LoRa-only and mixed-interface rows remain explicit preview scope
+and must not be presented as completed release evidence.
 
 This runbook is for manual validation only. Do not clear app data, uninstall the app, delete Bluetooth pairings, or replace saved RNode configuration while executing it.
 
@@ -41,7 +42,7 @@ Diagnostic builds can expose a small adb-only control receiver for repeatable an
 Build example:
 
 ```powershell
-cmd /c "gradlew.bat :app:assembleRelease -PappVersionName=1.2.7-rc.1 -PappVersionCode=<UTC-yyDDDHHmm> -PenableAdbTestControl=true -PapkClassifierSuffix=adb-test"
+cmd /c "gradlew.bat :app:assembleRelease -PappVersionName=1.2.7 -PappVersionCode=<UTC-yyDDDHHmm> -PenableAdbTestControl=true -PapkClassifierSuffix=adb-test"
 ```
 
 Useful commands:

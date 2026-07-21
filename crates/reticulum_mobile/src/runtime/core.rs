@@ -75,14 +75,16 @@ use crate::types::{
     AnnounceClass, AnnounceRecord, ApplicationAckState, ChecklistCellRecord, ChecklistColumnRecord,
     ChecklistColumnType, ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey,
     ChecklistTaskRecord, ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord,
-    EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubDirectoryPeerRecord,
-    HubDirectorySnapshot, HubMode, InterfaceStatusRecord, LogLevel, LxmfDeliveryMethod,
+    EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubCallerMembershipRecord,
+    HubDirectoryPeerRecord, HubDirectorySnapshot, HubMode, HubTeamMemberRecord, HubTeamRecord,
+    InterfaceStatusRecord, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
     NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState, ProjectionScope,
     RnodeConnectionMode, RnodeSettingsRecord, RuntimeReadinessState, SavedPeerRecord,
     SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
-    SyncStatus, TelemetryPositionRecord, TransportDeliveryState,
+    SyncStatus, TelemetryPositionRecord, TransportDeliveryState, YELLOW_TEAM_UID,
+    HUB_DIRECTORY_SCHEMA_VERSION, canonical_team_color_for_uid,
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
@@ -100,7 +102,8 @@ const TCP_CLIENT_READINESS_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 const RNODE_BLE_INTERFACE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const LXMF_PROPAGATION_NAME: (&str, &str) = ("lxmf", "propagation");
 const STARTUP_ANNOUNCE_DELAYS_SECS: [u64; 3] = [0, 10, 30];
-const MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 3600;
+const MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS: u32 = 60;
+const PEER_PRESENCE_GRACE_SECONDS: u32 = 60;
 const INTERFACE_TRAFFIC_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const PASSIVE_PEER_RESOLUTION_MIN_INTERVAL_MS: u64 = 10_000;
 const SAVED_PEER_ROUTE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);

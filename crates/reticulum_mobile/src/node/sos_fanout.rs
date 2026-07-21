@@ -34,8 +34,8 @@ fn run_sos_fanout(
     saved_peers: Vec<SavedPeerRecord>,
     peers: Vec<PeerRecord>,
     active_propagation_node_hex: Option<String>,
-    _active_config: Option<NodeConfigFingerprint>,
-    _hub_directory_snapshot: Option<HubDirectorySnapshot>,
+    active_config: Option<NodeConfigFingerprint>,
+    hub_directory_snapshot: Option<HubDirectorySnapshot>,
     telemetry: Option<SosDeviceTelemetryRecord>,
     incident_id: String,
     trigger_source: SosTriggerSource,
@@ -68,12 +68,24 @@ fn run_sos_fanout(
     }
 
     let body = compose_sos_body(&settings, kind, telemetry.as_ref());
-    let mut targets = build_sos_replication_targets(
+    let team_uid = active_team_uid(hub_directory_snapshot.as_ref()).to_string();
+    let mut targets = match build_runtime_mission_replication_targets(
         &status,
         peers.as_slice(),
         saved_peers.as_slice(),
         active_propagation_node_hex.as_deref(),
-    );
+        active_config.as_ref(),
+        hub_directory_snapshot.as_ref(),
+    ) {
+        Ok(targets) => targets,
+        Err(error) => {
+            bus.emit(NodeEvent::Error {
+                code: "InvalidConfig".to_string(),
+                message: format!("sos active TEAM routing failed: {error}"),
+            });
+            Vec::new()
+        }
+    };
     let route_hops = route_hops_for_replication(&app_state, &bus, "sos");
     prioritize_sos_replication_targets(
         targets.as_mut_slice(),
@@ -97,7 +109,9 @@ fn run_sos_fanout(
             sent_at_ms: now,
             audio_id: None,
         };
-        let fields = match build_sos_fields(&command, telemetry.as_ref()) {
+        let fields = match build_sos_fields(&command, telemetry.as_ref())
+            .and_then(|fields| fields_with_active_team(Some(fields), &team_uid))
+        {
             Ok(fields) => fields,
             Err(err) => {
                 bus.emit(NodeEvent::Error {

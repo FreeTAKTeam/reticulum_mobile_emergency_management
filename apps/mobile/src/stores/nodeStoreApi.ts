@@ -88,6 +88,7 @@ export function createNodeStoreApi(
     openPluginConfiguration: projections.openPluginConfiguration,
     refreshHubRegistrationState: hub.refreshHubRegistrationState,
     bootstrapHubRegistration: hub.bootstrapHubRegistration,
+    setActiveTeam: hub.setActiveTeam,
     forgetHubRegistryLinkage: actions.forgetHubRegistryLinkage,
     setAnnounceCapabilities: actions.setAnnounceCapabilities,
     savePeer: actions.savePeer,

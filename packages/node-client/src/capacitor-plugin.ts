@@ -165,6 +165,8 @@ export interface ReticulumNodePlugin {
   setLogLevel(options: { level: LogLevel }): Promise<void>;
   logMessage(options: { level: LogLevel; message: string }): Promise<void>;
   refreshHubDirectory(): Promise<void>;
+  getHubDirectorySnapshot(): Promise<Record<string, unknown>>;
+  setActiveTeam(options: { teamUid: string }): Promise<void>;
   addListener(
     eventName: string,
     listener: (event: unknown) => void,

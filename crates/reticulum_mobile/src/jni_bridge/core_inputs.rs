@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::node::{EventSubscription, Node};
+use crate::delivery_policy::normalize_hex_32;
 use crate::runtime::now_ms;
 use crate::types::{
     AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
@@ -23,7 +24,7 @@ use crate::types::{
     ChecklistTemplateRecord, ChecklistUpdatePatch, ChecklistUpdateRequest, ConversationRecord,
     DiscoveredPluginRecord, EamProjectionRecord, EventProjectionRecord, HubDirectoryPeerRecord,
     HubDirectorySnapshot, HubMode, HubSettingsRecord, InstalledPluginRecord, InterfaceStatusRecord,
-    LegacyImportPayload, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
+    LegacyImportPayload, LocalTeamRecord, LogLevel, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus,
     LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig,
     NodeError, NodeEvent, NodeStatus, PeerChange, PeerRecord, PeerState, PluginCapabilityRecord,
     PluginLxmfSendRequest, PluginSensorSampleRequest, ProjectionScope, RnodeConnectionMode,
@@ -31,7 +32,8 @@ use crate::types::{
     RuntimeReadinessState, SavedPeerRecord, SendLxmfRequest, SendMode, SendOutcome, SosAlertRecord,
     SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
     SosState, SosStatusRecord, SosTriggerSource, SyncPhase, TelemetryPositionRecord,
-    TelemetrySettingsRecord, TransportDeliveryState,
+    TeamAliasRecord, TeamSettingsRecord, TelemetrySettingsRecord, TransportDeliveryState,
+    YELLOW_TEAM_UID, canonical_team_color_for_uid,
 };
 
 const RESULT_OK: jint = 0;
@@ -322,9 +324,44 @@ struct AppSettingsInput {
     telemetry: TelemetrySettingsInput,
     hub: HubSettingsInput,
     #[serde(default)]
+    teams: TeamSettingsInput,
+    #[serde(default)]
     checklists: ChecklistSettingsInput,
     #[serde(default)]
     rnode: RnodeSettingsInput,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamSettingsInput {
+    active_team_uid: Option<String>,
+    #[serde(default)]
+    aliases: Vec<TeamAliasInput>,
+    #[serde(default)]
+    local_teams: Vec<LocalTeamInput>,
+    #[serde(default)]
+    local_teams_initialized: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamAliasInput {
+    team_uid: String,
+    alias: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalTeamInput {
+    team_uid: String,
+    #[serde(default)]
+    member_destinations: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetActiveTeamInput {
+    team_uid: String,
 }
 
 #[derive(Debug, Default, Deserialize)]

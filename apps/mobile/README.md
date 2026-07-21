@@ -20,19 +20,23 @@ including peer discovery, replicated status messaging, and incident/event tracki
    - Export saved peers as JSON
    - Share on-device (native share sheet) or copy/download on web
    - Import lists in `merge` or `replace` mode
-4. Manage Emergency Action Messages
+4. Create and exchange local color teams
+   - Assign saved peers to one or more canonical color teams
+   - Export/import the versioned JSON format or scan it directly by QR code
+   - Merge matching local and RCH colors without sharing local aliases
+5. Manage Emergency Action Messages
    - Create/update/delete callsign-based status cards
    - Track Security, Capability, Preparedness, Medical, Mobility, and Comms states
    - Replicate updates across connected peers
-5. Manage Events
+6. Manage Events
    - Create/delete incident/event timeline entries
    - Replicate event updates across connected peers
-6. Manage Checklists
+7. Manage Checklists
    - Create shared operational checklists from built-in or CSV-imported templates
    - Import CSV files with arbitrary columns and optional `CompletedDTG` relative deadlines
    - Track task sync progress, pending/late/complete status, and task completion over LXMF
    - Add/delete rows and edit task cells through the Rust-backed checklist store
-7. Monitor dashboard metrics
+8. Monitor dashboard metrics
    - View readiness widgets and peer counts (discovered/saved/connected)
 
 ## Data behavior
@@ -66,6 +70,9 @@ Or from `apps/mobile` directly:
 
 ## Build and native sync
 
+The Android application requires API 26 or newer. This minimum is required by
+the Capacitor barcode scanner used for offline QR team exchange.
+
 From repo root:
 
 1. Build web assets: `npm run mobile:build`
@@ -75,13 +82,13 @@ Open the Android project:
 
 - Android: `npm --workspace apps/mobile run android`
 
-iOS compilation and CocoaPods are not release gates for `1.2.7-rc.1`.
+iOS compilation and CocoaPods are not release gates for `1.2.7`.
 
 ## Android production build (signed)
 
 1. From the repository root, run `npm run mobile:build`.
 2. From `apps/mobile`, run `npx cap sync android`.
-3. Set release-time metadata. `appVersionName` is `1.2.7-rc.1` and
+3. Set release-time metadata. `appVersionName` is `1.2.7` and
    `appVersionCode` is the UTC `yyDDDHHmm` value.
 4. Build signed Android release artifacts:
    - Linux/macOS, from `apps/mobile/android`: `bash ./gradlew assembleRelease bundleRelease`
@@ -97,7 +104,7 @@ When no Gradle property override is present, release builds generate:
 
 - `versionCode` from UTC timestamp (`yyDDDHHmm`)
 - `versionName` as `1.0.<yyyyMMddHHmmss>`. Official builds override this with
-  the release name, such as `1.2.7-rc.1`.
+  the release name, such as `1.2.7`.
 - artifact file names containing the application name and version
 
 ## Local signing config
@@ -116,9 +123,9 @@ Never commit the keystore, passwords, or `keystore.properties`.
 Verify a release before publishing:
 
 ```bash
-apksigner verify --verbose --print-certs path/to/rem-v1.2.7-rc.1-release.apk
-sha256sum path/to/rem-v1.2.7-rc.1-release.apk path/to/rem-v1.2.7-rc.1-release.aab
-adb install -r path/to/rem-v1.2.7-rc.1-release.apk
+apksigner verify --verbose --print-certs path/to/rem-v1.2.7-release.apk
+sha256sum path/to/rem-v1.2.7-release.apk path/to/rem-v1.2.7-release.aab
+adb install -r path/to/rem-v1.2.7-release.apk
 adb shell dumpsys package network.reticulum.emergency | grep -E 'versionCode|versionName'
 ```
 

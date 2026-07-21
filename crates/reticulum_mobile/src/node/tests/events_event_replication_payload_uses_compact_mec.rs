@@ -412,7 +412,7 @@ async fn upsert_event_replicates_to_native_peer_projection() {
         timestamp: "2026-03-25T16:50:00Z".to_string(),
         command_type: "mission.registry.log_entry.upsert".to_string(),
         mission_uid: "r3akt-default-mission".to_string(),
-        content: "Native replicated event".to_string(),
+        content: "MECP/2/H01 Bolle".to_string(),
         callsign: node_a_status.name.clone(),
         server_time: Some("2026-03-25T16:50:00Z".to_string()),
         client_time: Some("2026-03-25T16:50:00Z".to_string()),

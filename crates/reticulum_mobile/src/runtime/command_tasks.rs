@@ -66,12 +66,31 @@ fn spawn_connect_peer_command(
         let destination_hex_copy = destination_hex.clone();
         let result = async {
             let dest = parse_address_hash(&destination_hex)?;
-            let saved_peer =
-                persist_selected_peer_destination(&state, &bus, destination_hex.as_str()).await?;
+            let directory_member = state
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|error| {
+                    crate::error_context::contextual_node_error(
+                        NodeError::InternalError {},
+                        error,
+                    )
+                })?
+                .as_ref()
+                .is_some_and(|snapshot| {
+                    snapshot.members.iter().any(|member| {
+                        normalize_hex_32(member.destination_hash.as_str()).as_deref()
+                            == Some(destination_hex.as_str())
+                    })
+                });
+            if !directory_member {
+                let saved_peer =
+                    persist_selected_peer_destination(&state, &bus, destination_hex.as_str())
+                        .await?;
+                emit_peer_changed(&state, &bus, saved_peer.destination_hex.as_str()).await;
+            }
             clear_ignored_peer_destinations(&state, std::slice::from_ref(&destination_hex)).await;
-            emit_peer_changed(&state, &bus, saved_peer.destination_hex.as_str()).await;
             state.sdk.record_peer_changed(
-                saved_peer.destination_hex.as_str(),
+                destination_hex.as_str(),
                 PeerState::Connecting {},
                 None,
             );

@@ -68,3 +68,15 @@ test("MECP decoding reports out-of-range coordinates without accepting them", ()
   assert.equal(decoded.extras.coordinates, null);
   assert.deepEqual(decoded.warnings, ['Coordinates outside valid range: "91,0".']);
 });
+
+test("MECP decoding accepts compact wire bodies with additional text", () => {
+  const decoded = decodeMecpMessage("H01 Bolle");
+
+  assert.equal(decoded.valid, true);
+  assert.equal(decoded.severity, 2);
+  assert.equal(decoded.category, "H");
+  assert.deepEqual(decoded.codes, ["H01"]);
+  assert.equal(decoded.codeDetails[0]?.label, "Have water available");
+  assert.equal(decoded.details, "Bolle");
+  assert.equal(decoded.raw, "H01 Bolle");
+});

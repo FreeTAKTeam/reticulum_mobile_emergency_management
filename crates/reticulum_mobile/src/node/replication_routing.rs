@@ -207,47 +207,57 @@ fn build_runtime_mission_replication_targets(
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
         return Ok(build_mission_replication_targets(
             status,
             peers,
-            saved_peers,
+            &active_saved_peers,
             active_propagation_node_hex,
         ));
     };
 
-    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
-        HubMode::Autonomous {} => Ok(build_mission_replication_targets(
+    let local_targets = if !active_saved_peers.is_empty()
+        || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
+    {
+        build_mission_replication_targets(
             status,
             peers,
-            saved_peers,
+            &active_saved_peers,
             active_propagation_node_hex,
-        )),
-        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
-            peers,
-            active_propagation_node_hex,
-            config,
-        )?]),
-        HubMode::SemiAutonomous {} => {
-            let Some(_hub_identity_hash) = config
-                .hub_identity_hash
-                .as_deref()
-                .and_then(normalize_hex_32)
-            else {
-                return Ok(Vec::new());
+        )
+    } else {
+        Vec::new()
+    };
+    let Some(snapshot) = hub_directory_snapshot else {
+        return Ok(local_targets);
+    };
+    let directory_destinations = active_team_directory_destinations(snapshot, None);
+    let directory_targets = build_transient_replication_targets(
+        status,
+        peers,
+        &directory_destinations,
+        active_propagation_node_hex,
+    );
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Connected {} => {
+            let hub_targets = if active_team_has_caller_membership(snapshot)
+                && !directory_destinations.is_empty()
+            {
+                vec![connected_hub_replication_target(
+                    peers,
+                    active_propagation_node_hex,
+                    config,
+                )?]
+            } else {
+                Vec::new()
             };
-            let Some(snapshot) = hub_directory_snapshot else {
-                return Ok(Vec::new());
-            };
-            Ok(build_transient_replication_targets(
-                status,
-                peers,
-                &snapshot
-                    .items
-                    .iter()
-                    .map(|item| item.destination_hash.clone())
-                    .collect::<Vec<_>>(),
-                active_propagation_node_hex,
+            Ok(merge_replication_target_sets(local_targets, hub_targets))
+        }
+        HubMode::Autonomous {} | HubMode::SemiAutonomous {} => {
+            Ok(merge_replication_target_sets(
+                local_targets,
+                directory_targets,
             ))
         }
     }
@@ -257,12 +267,14 @@ fn should_include_checklist_participant_targets(
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> bool {
-    active_config.is_none_or(|config| {
-        matches!(
-            effective_hub_mode(config.hub_mode, hub_directory_snapshot),
-            HubMode::Autonomous {}
-        )
-    })
+    hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
+        && active_team_uid(hub_directory_snapshot) == YELLOW_TEAM_UID
+        && active_config.is_none_or(|config| {
+            matches!(
+                effective_hub_mode(config.hub_mode, hub_directory_snapshot),
+                HubMode::Autonomous {}
+            )
+        })
 }
 
 fn append_checklist_participant_replication_targets(
@@ -346,47 +358,57 @@ fn build_runtime_event_replication_targets(
     active_config: Option<&NodeConfigFingerprint>,
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
+    let active_saved_peers = active_local_saved_peers(saved_peers, hub_directory_snapshot);
     let Some(config) = active_config else {
         return Ok(build_event_replication_targets(
             status,
             peers,
-            saved_peers,
+            &active_saved_peers,
             active_propagation_node_hex,
         ));
     };
 
-    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
-        HubMode::Autonomous {} => Ok(build_event_replication_targets(
+    let local_targets = if !active_saved_peers.is_empty()
+        || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
+    {
+        build_event_replication_targets(
             status,
             peers,
-            saved_peers,
+            &active_saved_peers,
             active_propagation_node_hex,
-        )),
-        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
-            peers,
-            active_propagation_node_hex,
-            config,
-        )?]),
-        HubMode::SemiAutonomous {} => {
-            let Some(_hub_identity_hash) = config
-                .hub_identity_hash
-                .as_deref()
-                .and_then(normalize_hex_32)
-            else {
-                return Ok(Vec::new());
+        )
+    } else {
+        Vec::new()
+    };
+    let Some(snapshot) = hub_directory_snapshot else {
+        return Ok(local_targets);
+    };
+    let directory_destinations = active_team_directory_destinations(snapshot, None);
+    let directory_targets = build_transient_replication_targets(
+        status,
+        peers,
+        &directory_destinations,
+        active_propagation_node_hex,
+    );
+    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
+        HubMode::Connected {} => {
+            let hub_targets = if active_team_has_caller_membership(snapshot)
+                && !directory_destinations.is_empty()
+            {
+                vec![connected_hub_replication_target(
+                    peers,
+                    active_propagation_node_hex,
+                    config,
+                )?]
+            } else {
+                Vec::new()
             };
-            let Some(snapshot) = hub_directory_snapshot else {
-                return Ok(Vec::new());
-            };
-            Ok(build_transient_replication_targets(
-                status,
-                peers,
-                &snapshot
-                    .items
-                    .iter()
-                    .map(|item| item.destination_hash.clone())
-                    .collect::<Vec<_>>(),
-                active_propagation_node_hex,
+            Ok(merge_replication_target_sets(local_targets, hub_targets))
+        }
+        HubMode::Autonomous {} | HubMode::SemiAutonomous {} => {
+            Ok(merge_replication_target_sets(
+                local_targets,
+                directory_targets,
             ))
         }
     }

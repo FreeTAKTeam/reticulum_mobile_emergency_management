@@ -126,9 +126,18 @@ async fn persist_received_eam_if_present(
 
 fn expand_event_wire_content(content: &str) -> String {
     let trimmed = content.trim();
-    if trimmed.contains('/') || trimmed.is_empty() {
-        trimmed.to_string()
-    } else if trimmed.len() <= 8 && trimmed.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+    if trimmed.is_empty() || trimmed.starts_with("MECP/") {
+        return trimmed.to_string();
+    }
+
+    let is_compact_mecp = trimmed.split_whitespace().next().is_some_and(|token| {
+        let bytes = token.as_bytes();
+        bytes.len() == 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1].is_ascii_digit()
+            && bytes[2].is_ascii_digit()
+    });
+    if is_compact_mecp {
         format!("MECP/2/{trimmed}")
     } else {
         trimmed.to_string()

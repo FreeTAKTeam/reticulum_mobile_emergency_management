@@ -4,6 +4,7 @@ import {
   type NodeConfig,
   type SavedPeerRecord,
   generateDefaultCallSign,
+  YELLOW_TEAM_UID,
 } from "@reticulum/node-client";
 import { Capacitor } from "@capacitor/core";
 
@@ -23,6 +24,7 @@ import {
   DEFAULT_RNODE_SETTINGS,
   normalizeRnodeSettings,
 } from "../utils/rnodeProfiles";
+import { normalizeTeamPreferences } from "../utils/teamSettings";
 import {
   DEFAULT_TCP_COMMUNITY_ENDPOINTS,
   normalizeTcpCommunityClients,
@@ -61,6 +63,12 @@ export const DEFAULT_SETTINGS: NodeUiSettings = {
     apiBaseUrl: "",
     apiKey: "",
     refreshIntervalSeconds: 3600,
+  },
+  teams: {
+    activeTeamUid: YELLOW_TEAM_UID,
+    aliases: [],
+    localTeams: [],
+    localTeamsInitialized: false,
   },
 };
 export const RCH_HUB_DIRECTORY_ENABLED = true;
@@ -154,6 +162,15 @@ export function cloneDefaultSettings(): NodeUiSettings {
     telemetry: { ...DEFAULT_SETTINGS.telemetry },
     checklists: { ...DEFAULT_SETTINGS.checklists },
     hub: { ...DEFAULT_SETTINGS.hub },
+    teams: {
+      activeTeamUid: DEFAULT_SETTINGS.teams.activeTeamUid,
+      aliases: DEFAULT_SETTINGS.teams.aliases.map((alias) => ({ ...alias })),
+      localTeams: DEFAULT_SETTINGS.teams.localTeams.map((team) => ({
+        ...team,
+        memberDestinations: [...team.memberDestinations],
+      })),
+      localTeamsInitialized: DEFAULT_SETTINGS.teams.localTeamsInitialized,
+    },
     rnode: { ...DEFAULT_SETTINGS.rnode },
   };
 }
@@ -183,6 +200,15 @@ export function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord
       apiBaseUrl: settings.hub.apiBaseUrl,
       apiKey: settings.hub.apiKey,
       refreshIntervalSeconds: settings.hub.refreshIntervalSeconds,
+    },
+    teams: {
+      activeTeamUid: settings.teams.activeTeamUid,
+      aliases: settings.teams.aliases.map((alias) => ({ ...alias })),
+      localTeams: settings.teams.localTeams.map((team) => ({
+        ...team,
+        memberDestinations: [...team.memberDestinations],
+      })),
+      localTeamsInitialized: settings.teams.localTeamsInitialized,
     },
     rnode: normalizeRnodeSettings(settings.rnode),
   };
@@ -259,6 +285,7 @@ export function normalizeAppSettingsRecord(
       ...runtimeSettings.hub,
       mode: normalizeHubMode(runtimeSettings.hub?.mode),
     },
+    teams: normalizeTeamPreferences(runtimeSettings.teams),
   };
 }
 

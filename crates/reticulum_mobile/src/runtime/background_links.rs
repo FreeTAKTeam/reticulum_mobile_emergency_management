@@ -91,12 +91,13 @@ fn spawn_periodic_hub_refresh(config: &NodeConfig, state: &NodeRuntimeState, bus
         let interval_secs = config.hub_refresh_interval_seconds;
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(u64::from(interval_secs)));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
                 match refresh_hub_directory_lxmf(&config, &state).await {
                     Ok(snapshot) => publish_hub_directory_snapshot(&state, &bus, snapshot).await,
                     Err(error) => {
-                        publish_failed_hub_directory_refresh(&state, &bus, &error).await;
+                        publish_failed_hub_directory_refresh(&bus, &error).await;
                     }
                 }
             }

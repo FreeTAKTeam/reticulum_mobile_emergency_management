@@ -32,7 +32,7 @@ import {
   STARTUP_INTERFACE_LOADING_DETAIL,
   STARTUP_INTERFACE_LOADING_SUMMARY,
   buildStartupInterfaceItems,
-  statusHasRuntimeStartupReadiness,
+  statusNeedsStartupInterfaceGrace,
   type StartupInterfaceItem,
 } from "./utils/startupInterfaces";
 import { reconcileStartupRuntime } from "./utils/startupRuntime";
@@ -207,12 +207,8 @@ const startupInterfaceItems = computed<StartupInterfaceItem[]>(() => {
   }
   return buildStartupInterfaceItems(nodeStore.status, nodeStore.settings);
 });
-const startupConfiguredInterfaceItems = computed(() =>
-  startupInterfaceItems.value.filter((item) => item.id !== "local" && item.state !== "disabled"),
-);
 const startupInterfacesNeedGrace = computed(() =>
-  startupConfiguredInterfaceItems.value.length > 0
-  && !statusHasRuntimeStartupReadiness(nodeStore.status),
+  statusNeedsStartupInterfaceGrace(nodeStore.status, startupInterfaceItems.value),
 );
 const menuOpen = shallowRef(false);
 const splashMinimumElapsed = shallowRef(false);
@@ -248,6 +244,7 @@ const pageTitle = computed(() => {
       return "Peers";
     case "settings":
       return "Settings";
+    case "manage-teams": return "Manage Teams";
     case "setup":
       return "Setup";
     case "telemetry":
@@ -256,10 +253,14 @@ const pageTitle = computed(() => {
       return "R.E.M.";
   }
 });
-
 const readinessError = computed(() => nodeStore.readinessError.trim());
-const runningText = computed(() => (nodeStore.ready ? "Ready" : "Not Ready"));
+const runningText = computed(() => (
+  nodeStore.status.running ? (nodeStore.ready ? "Ready" : "Not Ready") : "Stopped"
+));
 const runningTitle = computed(() => {
+  if (!nodeStore.status.running) {
+    return "Node is stopped. Start it from Settings when networking is needed.";
+  }
   if (nodeStore.ready) {
     return "App ready to send and receive events or messages.";
   }
@@ -297,8 +298,7 @@ const moreRouteNames = new Set([
   "events",
   "event-mecp-help",
   "message-status-help",
-  "peers",
-  "settings",
+  "peers", "settings", "manage-teams",
 ]);
 
 const moreActive = computed(() => menuOpen.value || moreRouteNames.has(String(route.name ?? "")));

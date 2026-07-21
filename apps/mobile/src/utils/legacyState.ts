@@ -54,6 +54,7 @@ import {
   normalizeTcpCommunityClients,
 } from "./tcpCommunityServers";
 import { DEFAULT_RNODE_SETTINGS, normalizeRnodeSettings } from "./rnodeProfiles";
+import { normalizeTeamPreferences } from "./teamSettings";
 
 export {
   LEGACY_EAM_STORAGE_KEY,
@@ -171,6 +172,7 @@ function normalizeRuntimeSettings(
         Number(value.hub?.refreshIntervalSeconds ?? defaults.hub.refreshIntervalSeconds),
       ),
     },
+    teams: normalizeTeamPreferences(value.teams, defaults.teams),
     checklists: {
       defaultTaskDueStepMinutes: Math.max(
         1,
@@ -474,7 +476,6 @@ export function buildLegacyProjectionState(defaults: NodeUiSettings): LegacyProj
   ) {
     return null;
   }
-
   return {
     payload,
     uiSettings,

@@ -121,6 +121,10 @@ impl Node {
         if let Some(prestart_state) = prestart_state {
             inner.app_state.import_legacy_state(&prestart_state)?;
         }
+        let restored_hub_directory = restored_hub_directory_for_config(&inner.app_state, &config)?;
+        if let Ok(mut snapshot) = inner.hub_directory_snapshot.lock() {
+            *snapshot = restored_hub_directory;
+        }
 
         // Forward Rust logs to the UI event bus.
         NodeLogger::global().set_bus(Some(inner.bus.clone()));
@@ -346,6 +350,14 @@ impl Node {
             active_config.as_ref(),
             hub_directory_snapshot.as_ref(),
         )?;
+        let fields_bytes = fields_bytes
+            .map(|fields| {
+                fields_with_active_team(
+                    Some(fields),
+                    active_team_uid(hub_directory_snapshot.as_ref()),
+                )
+            })
+            .transpose()?;
 
         let (resp_tx, resp_rx) = cb::bounded(1);
         dispatch_command(
@@ -364,17 +376,43 @@ impl Node {
     }
 
     pub fn broadcast_bytes(&self, bytes: Vec<u8>) -> Result<(), NodeError> {
-        let (tx, active_config, hub_directory_snapshot) = {
+        let (
+            tx,
+            active_config,
+            hub_directory_snapshot,
+            status,
+            peers,
+            active_propagation_node_hex,
+        ) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
                 .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
+            let status = inner
+                .status
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
+            let peers = inner
+                .peers_snapshot
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
+            let active_propagation_node_hex = inner
+                .sync_status_snapshot
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .active_propagation_node_hex
+                .clone();
             (
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
                 inner.active_config.clone(),
                 hub_directory_snapshot,
+                status,
+                peers,
+                active_propagation_node_hex,
             )
         };
         if let Some(config) = active_config.as_ref() {
@@ -388,24 +426,37 @@ impl Node {
                     );
                 }
                 HubMode::SemiAutonomous {} => {
-                    if config
+                    let hub_is_configured = config
                         .hub_identity_hash
                         .as_deref()
                         .and_then(normalize_hex_32)
-                        .is_some()
-                    {
-                        if let Some(snapshot) = hub_directory_snapshot.as_ref() {
-                            for item in &snapshot.items {
-                                self.send_bytes(
-                                    item.destination_hash.clone(),
-                                    bytes.clone(),
-                                    None,
-                                    SendMode::Auto {},
-                                )?;
-                            }
-                            return Ok(());
-                        }
+                        .is_some();
+                    let Some(snapshot) = hub_directory_snapshot.as_ref() else {
+                        return Ok(());
+                    };
+                    if !hub_is_configured {
+                        return Ok(());
                     }
+                    let directory_destinations = snapshot
+                        .items
+                        .iter()
+                        .map(|item| item.destination_hash.clone())
+                        .collect::<Vec<_>>();
+                    let targets = build_transient_replication_targets(
+                        &status,
+                        peers.as_slice(),
+                        directory_destinations.as_slice(),
+                        active_propagation_node_hex.as_deref(),
+                    );
+                    for target in targets {
+                        self.send_bytes(
+                            target.app_destination_hex,
+                            bytes.clone(),
+                            None,
+                            target.send_mode,
+                        )?;
+                    }
+                    return Ok(());
                 }
                 HubMode::Autonomous {} => {}
             }

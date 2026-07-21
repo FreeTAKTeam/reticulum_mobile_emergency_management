@@ -36,10 +36,6 @@ const teamColorFilterOptions: Array<{ value: TeamColorFilter; label: string }> =
     label: formatR3aktTeamColorLabel(value),
   })),
 ];
-const teamColorOptions = R3AKT_TEAM_COLORS.map((value) => ({
-  value,
-  label: formatR3aktTeamColorLabel(value),
-}));
 const statusOptions = [
   { value: "Unknown", label: "Unknown" },
   { value: "Green", label: "Green" },
@@ -47,6 +43,12 @@ const statusOptions = [
   { value: "Red", label: "Red" },
 ] as const;
 const defaultCallSign = computed(() => nodeStore.settings.displayName.trim());
+const activeTeamColor = computed<R3aktTeamColor>(() => {
+  const activeTeamUid = nodeStore.hubDirectorySnapshot?.activeTeamUid
+    || nodeStore.settings.teams.activeTeamUid;
+  const team = nodeStore.hubDirectorySnapshot?.teams.find((entry) => entry.uid === activeTeamUid);
+  return normalizeR3aktTeamColor(team?.color, DEFAULT_R3AKT_TEAM_COLOR);
+});
 const appReady = computed(() => nodeStore.ready);
 const draftModeActive = computed(
   () => nodeStore.settings.hub.mode !== "Autonomous" && !nodeStore.hubRegistrationReady,
@@ -117,7 +119,7 @@ watch(defaultCallSign, (next, previous) => {
 
 function resetCreateForm(): void {
   createForm.callsign = defaultCallSign.value;
-  createForm.groupName = DEFAULT_R3AKT_TEAM_COLOR;
+  createForm.groupName = activeTeamColor.value;
   createForm.securityStatus = "Unknown";
   createForm.capabilityStatus = "Unknown";
   createForm.preparednessStatus = "Unknown";
@@ -148,10 +150,7 @@ async function createMessage(): Promise<void> {
   if (!callsign) {
     return;
   }
-  const normalizedGroupName = normalizeR3aktTeamColor(
-    createForm.groupName,
-    DEFAULT_R3AKT_TEAM_COLOR,
-  );
+  const normalizedGroupName = activeTeamColor.value;
   const originalCallsign = editingCallsign.value;
   const existing = originalCallsign
     ? messages.value.find((message) => message.callsign === originalCallsign)
@@ -194,7 +193,7 @@ function editMessage(callsign: string): void {
     return;
   }
   createForm.callsign = message.callsign;
-  createForm.groupName = normalizeR3aktTeamColor(message.groupName);
+  createForm.groupName = activeTeamColor.value;
   copyMessageStatuses(message);
   editingCallsign.value = message.callsign;
   isCreateFormVisible.value = true;
@@ -297,15 +296,9 @@ function deleteMessage(callsign: string): void {
           aria-label="Call Sign"
           :disabled="!canManageMessages"
         />
-        <select
-          v-model="createForm.groupName"
-          aria-label="Team color"
-          :disabled="!canManageMessages"
-        >
-          <option v-for="option in teamColorOptions" :key="option.value" :value="option.value">
-            {{ option.label }}
-          </option>
-        </select>
+        <output class="active-team-output" aria-label="Active team">
+          {{ formatR3aktTeamColorLabel(activeTeamColor) }} team
+        </output>
         <button
           type="submit"
           :disabled="!canManageMessages"

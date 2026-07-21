@@ -7,6 +7,7 @@ import type { Ref, ShallowRef } from "vue";
 
 import type {
   DiscoveredPeer,
+  HubDirectorySnapshot,
   NodeUiSettings,
   SavedPeer,
 } from "../types/domain";
@@ -38,6 +39,7 @@ interface NodeLifecycleContext {
   discoveredByDestination: Record<string, DiscoveredPeer>;
   errorMessage: (error: unknown) => string;
   importLegacyProjectionState: () => Promise<void>;
+  hubDirectorySnapshot: Ref<HubDirectorySnapshot | null>;
   initialized: Ref<boolean>;
   isLocalPeerDestination: (destination: string) => boolean;
   logUi: (level: string, message: string) => void;
@@ -48,7 +50,6 @@ interface NodeLifecycleContext {
     destination: string,
   ) => DiscoveredPeer | undefined;
   refreshAnnounceState: () => Promise<void>;
-  refreshHubDirectory: () => Promise<void>;
   refreshHubRegistrationState: (attemptBootstrap?: boolean) => Promise<void>;
   refreshMessagingState: () => Promise<void>;
   refreshOperationalSummaryProjection: () => Promise<void>;
@@ -92,6 +93,7 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
     discoveredByDestination,
     errorMessage,
     importLegacyProjectionState,
+    hubDirectorySnapshot,
     initialized,
     isLocalPeerDestination,
     logUi,
@@ -99,7 +101,6 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
     presenceNow,
     peerByAnyKnownDestination,
     refreshAnnounceState,
-    refreshHubDirectory,
     refreshHubRegistrationState,
     refreshMessagingState,
     refreshOperationalSummaryProjection,
@@ -188,11 +189,6 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       });
       appendNodeControlEntry("Info", "Node started.");
 
-      if (hubModeUsesRch(settings.hub.mode)) {
-        await refreshHubDirectory().catch((error: unknown) => {
-          appendNodeControlEntry("Warn", `Hub refresh failed after start: ${errorMessage(error)}`);
-        });
-      }
     } catch (error: unknown) {
       throw captureRuntimeActionError("Start node failed", error);
     }
@@ -206,6 +202,16 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       clearLastError();
       clearReadinessError();
       await client.value.stop();
+      status.value = {
+        ...status.value,
+        running: false,
+        lastError: undefined,
+        readiness: {
+          state: "Pending",
+          interfaces: [],
+        },
+        interfaces: [],
+      };
       appendNodeControlEntry("Info", "Node stopped.");
       syncStatus.value = { ...EMPTY_SYNC_STATUS };
       clearAnnounceState();
@@ -249,11 +255,6 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       });
       appendNodeControlEntry("Info", "Node restarted with updated settings.");
 
-      if (hubModeUsesRch(settings.hub.mode)) {
-        await refreshHubDirectory().catch((error: unknown) => {
-          appendNodeControlEntry("Warn", `Hub refresh failed after restart: ${errorMessage(error)}`);
-        });
-      }
     } catch (error: unknown) {
       throw captureRuntimeActionError("Restart node failed", error);
     }
@@ -284,7 +285,13 @@ export function createNodeLifecycleController(context: NodeLifecycleContext) {
       throw new Error(message);
     }
     const savedPeer = savedByDestination[destination];
-    if (!savedPeer) {
+    const activeTeamUid = hubDirectorySnapshot.value?.activeTeamUid
+      || settings.teams.activeTeamUid;
+    const isActiveTeamMember = hubDirectorySnapshot.value?.members.some(
+      (member) => member.teamUid === activeTeamUid
+        && normalizeDestinationHex(member.destinationHash) === destination,
+    ) ?? false;
+    if (!savedPeer && !isActiveTeamMember) {
       throw new Error(`Save peer ${destination} before connecting.`);
     }
     const discovered = peerByAnyKnownDestination(discoveredByDestination, destination);

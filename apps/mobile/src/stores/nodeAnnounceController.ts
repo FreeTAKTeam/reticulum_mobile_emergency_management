@@ -18,7 +18,6 @@ import {
   normalizeDestinationHex,
 } from "../utils/peers";
 import {
-  PEER_ONLINE_FRESHNESS_MS,
   STARTUP_ANNOUNCE_SETTLE_MS,
   advancePresenceNow,
   nowMs,

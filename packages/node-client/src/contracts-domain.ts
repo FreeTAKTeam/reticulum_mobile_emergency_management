@@ -129,6 +129,57 @@ export interface HubDirectoryPeerRecord {
   status?: string;
 }
 
+export const YELLOW_TEAM_UID = "d6b6e188b910d6bdd24d04b7a7ec5444";
+export const CANONICAL_TEAMS = [
+  { uid: YELLOW_TEAM_UID, color: "YELLOW" },
+  { uid: "65ce79a3a3e4b51ec0ec52d1d3d2b0b9", color: "RED" },
+  { uid: "43341e5c822d99857fa6e8641f2ca9c0", color: "BLUE" },
+  { uid: "a83eb640e4c4884be14831e3d7ef5ae0", color: "ORANGE" },
+  { uid: "7ac50a910f42b06cd9cb68dad3def681", color: "MAGENTA" },
+  { uid: "372824ef4f15881291455562f7570233", color: "MAROON" },
+  { uid: "4bf2a1d2217c8668942658137f2a6824", color: "PURPLE" },
+  { uid: "cbb35fc9a8f5a91d7bd2b5e5b644edcd", color: "DARK_BLUE" },
+  { uid: "d4cd5030b68df059ec6beabe416dd6a6", color: "CYAN" },
+  { uid: "4d7a7a974beec395bf83491604768499", color: "TEAL" },
+  { uid: "612a32262163b73a80eca944c2158546", color: "GREEN" },
+  { uid: "341653613d4c76d56bee99c1f38177b1", color: "DARK_GREEN" },
+  { uid: "4efe72ac30f5b85142fdcab6d96c7631", color: "BROWN" },
+] as const;
+export const CANONICAL_TEAM_UIDS = new Set<string>(CANONICAL_TEAMS.map(({ uid }) => uid));
+
+export interface HubTeamRecord {
+  uid: string;
+  color: string;
+  teamName: string;
+}
+
+export interface HubCallerMembershipRecord {
+  teamUid: string;
+  teamMemberUid: string;
+}
+
+export interface HubTeamMemberRecord extends HubDirectoryPeerRecord {
+  teamUid: string;
+  teamMemberUid: string;
+}
+
+export interface TeamAliasRecord {
+  teamUid: string;
+  alias: string;
+}
+
+export interface LocalTeamRecord {
+  teamUid: string;
+  memberDestinations: string[];
+}
+
+export interface TeamSettingsRecord {
+  activeTeamUid: string;
+  aliases: TeamAliasRecord[];
+  localTeams: LocalTeamRecord[];
+  localTeamsInitialized: boolean;
+}
+
 export interface TelemetrySettingsRecord {
   enabled: boolean;
   publishIntervalSeconds: number;
@@ -151,6 +202,7 @@ export interface AppSettingsRecord {
   announceIntervalSeconds: number;
   telemetry: TelemetrySettingsRecord;
   hub: HubSettingsRecord;
+  teams: TeamSettingsRecord;
   checklists: ChecklistSettingsRecord;
   rnode: RnodeSettingsRecord;
 }
@@ -386,7 +438,14 @@ export interface OperationalSummary {
 }
 
 export interface HubDirectoryUpdatedEvent {
+  schemaVersion: number;
+  hubIdentityHash?: string;
+  activeTeamUid: string;
   effectiveConnectedMode: boolean;
+  teams: HubTeamRecord[];
+  callerMemberships: HubCallerMembershipRecord[];
+  members: HubTeamMemberRecord[];
+  localTeams: LocalTeamRecord[];
   items: HubDirectoryPeerRecord[];
   receivedAtMs: number;
 }

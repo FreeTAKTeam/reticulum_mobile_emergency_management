@@ -398,11 +398,18 @@ fn operator_announce_message_ignores_legacy_app_peer_announces() {
 }
 
 #[test]
-fn effective_announce_interval_respects_reticulum_rate_limit() {
-    assert_eq!(effective_announce_interval_seconds(0), 3600);
-    assert_eq!(effective_announce_interval_seconds(60), 3600);
-    assert_eq!(effective_announce_interval_seconds(1800), 3600);
+fn effective_announce_interval_honors_configured_default() {
+    assert_eq!(effective_announce_interval_seconds(0), 60);
+    assert_eq!(effective_announce_interval_seconds(60), 60);
+    assert_eq!(effective_announce_interval_seconds(1800), 1800);
     assert_eq!(effective_announce_interval_seconds(7200), 7200);
+}
+
+#[test]
+fn peer_staleness_never_precedes_the_next_announce_window() {
+    assert_eq!(effective_peer_stale_after_minutes(30, 1800), 31);
+    assert_eq!(effective_peer_stale_after_minutes(45, 1800), 45);
+    assert_eq!(effective_peer_stale_after_minutes(1, 60), 2);
 }
 
 #[test]

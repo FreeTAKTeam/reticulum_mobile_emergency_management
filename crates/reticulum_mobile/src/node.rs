@@ -20,7 +20,7 @@ use crate::delivery_policy;
 use crate::delivery_policy::normalize_hex_32;
 use crate::event_bus::EventBus;
 use crate::logger::NodeLogger;
-use crate::lxmf_fields::FIELD_COMMANDS;
+use crate::lxmf_fields::{FIELD_COMMANDS, FIELD_GROUP};
 use crate::messaging_compat as sdkmsg;
 use crate::mission_commands::{checklist_arg_wire_key, command_wire_value};
 use crate::runtime::{load_or_create_identity, now_ms, run_node, Command};
@@ -31,21 +31,22 @@ use crate::sos::{
 use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
-    AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
-    ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
-    ChecklistRecord, ChecklistTaskCellSetRequest, ChecklistTaskRowAddRequest,
-    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatusSetRequest,
-    ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ConversationRecord, DiscoveredPluginRecord, EamProjectionRecord,
-    EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord,
-    HubDirectorySnapshot, HubMode, InstalledPluginRecord, LegacyImportPayload, LogLevel,
-    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginEventRecord,
-    PluginLxmfSendRequest, PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation,
-    ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind,
-    SosSettingsRecord, SosState, SosStatusRecord, SosTriggerSource, SyncStatus,
-    TelemetryPositionRecord, TransportDeliveryState,
+    canonical_team_color_for_uid, AnnounceRecord, AppSettingsRecord, ApplicationAckState,
+    ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest, ChecklistDeleteRequest,
+    ChecklistListActiveRequest, ChecklistRecord, ChecklistTaskCellSetRequest,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
+    ChecklistTemplateRecord, ChecklistUpdateRequest, ConversationRecord, DiscoveredPluginRecord,
+    EamProjectionRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord,
+    EventProjectionRecord, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
+    LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
+    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary,
+    PeerRecord, PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest,
+    PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation, ProjectionScope,
+    RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode, SosAlertRecord,
+    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
+    SosState, SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord,
+    TelemetryPositionRecord, TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -213,6 +214,32 @@ fn conversation_peer_resolver(peers: &[PeerRecord]) -> ConversationPeerResolver 
     resolver
 }
 
+fn fields_with_active_team(
+    fields_bytes: Option<Vec<u8>>,
+    team_uid: &str,
+) -> Result<Vec<u8>, NodeError> {
+    let fields = fields_bytes
+        .as_deref()
+        .map(rmp_serde::from_slice::<MsgPackValue>)
+        .transpose()
+        .map_err(|error| {
+            crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+        })?
+        .unwrap_or_else(|| MsgPackValue::Map(Vec::new()));
+    let MsgPackValue::Map(mut entries) = fields else {
+        return Err(NodeError::InternalError {});
+    };
+    entries.retain(|(key, _)| key.as_i64() != Some(FIELD_GROUP));
+    entries.push((
+        MsgPackValue::from(FIELD_GROUP),
+        MsgPackValue::from(team_uid),
+    ));
+    rmp_serde::to_vec(&MsgPackValue::Map(entries)).map_err(|error| {
+        crate::error_context::contextual_node_error(NodeError::InternalError {}, error)
+    })
+}
+
+include!("node/local_team_routing.rs");
 include!("node/replication_targets.rs");
 include!("node/replication_planning.rs");
 include!("node/replication_routing.rs");
@@ -234,6 +261,7 @@ include!("node/checklist_task_edits.rs");
 include!("node/eam.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
+include!("node/team.rs");
 include!("node/event_subscription.rs");
 
 #[cfg(test)]
@@ -255,6 +283,8 @@ mod tests {
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
     include!("node/tests/peers_routes.rs");
+    include!("node/tests/team_switch.rs");
+    include!("node/tests/local_team_routing.rs");
     include!("node/tests/propagation.rs");
     include!("node/tests/sos_sos_targets_skip_unsaved_stale_stored_rout.rs");
     include!("node/tests/sos_trigger_sos_rebroadcasts_existing_active_i.rs");

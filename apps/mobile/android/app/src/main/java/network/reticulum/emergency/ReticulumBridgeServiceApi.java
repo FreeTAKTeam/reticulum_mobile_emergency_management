@@ -271,6 +271,14 @@ public abstract class ReticulumBridgeServiceApi extends Service {
         return ReticulumBridge.refreshHubDirectory();
     }
 
+    public String getHubDirectorySnapshotJson() {
+        return ReticulumBridge.getHubDirectorySnapshotJson();
+    }
+
+    public int setActiveTeamJson(String payloadJson) {
+        return ReticulumBridge.setActiveTeamJson(payloadJson);
+    }
+
     public String takeLastErrorJson() {
         return ReticulumBridge.takeLastErrorJson();
     }

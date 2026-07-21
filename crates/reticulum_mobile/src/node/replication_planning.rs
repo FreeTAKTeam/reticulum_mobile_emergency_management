@@ -250,6 +250,7 @@ fn build_mission_replication_targets(
     finish_replication_targets(direct_targets, relay_targets)
 }
 
+#[cfg(test)]
 fn build_sos_replication_targets(
     status: &NodeStatus,
     peers: &[PeerRecord],

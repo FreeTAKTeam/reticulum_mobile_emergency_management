@@ -220,6 +220,19 @@ p {
   padding: 0.5rem 0.6rem;
 }
 
+.active-team-output {
+  background: rgb(8 22 50 / 82%);
+  border: 1px solid rgb(75 118 185 / 44%);
+  border-radius: 10px;
+  color: #8fdbff;
+  font-family: var(--font-ui);
+  font-size: 0.88rem;
+  font-weight: 700;
+  min-height: 2.4rem;
+  padding: 0.55rem 0.65rem;
+  text-transform: uppercase;
+}
+
 .create-form button {
   background: linear-gradient(110deg, #00a8ff, #14f0ff);
   border: 0;

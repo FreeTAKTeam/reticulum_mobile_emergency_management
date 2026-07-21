@@ -51,6 +51,11 @@ const routes = [
     component: () => import("./views/SettingsView.vue"),
   },
   {
+    path: "/settings/teams",
+    name: "manage-teams",
+    component: () => import("./views/ManageTeamsView.vue"),
+  },
+  {
     path: "/setup",
     name: "setup",
     component: () => import("./views/SetupWizardView.vue"),

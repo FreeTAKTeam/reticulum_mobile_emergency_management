@@ -241,6 +241,28 @@ test("persisted RCH mode does not block local runtime startup", async ({ page })
   expect(runtimeHub.mode).toBe("SemiAutonomous");
 });
 
+test("stopping the node returns to the regular screen and reports stopped", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings");
+
+  const nodeControlPanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Control" }),
+  });
+  await nodeControlPanel.locator("summary").click();
+  await expect(nodeControlPanel).toContainText("Node is running");
+
+  await nodeControlPanel.getByRole("button", { name: "Stop", exact: true }).click();
+
+  await expect(page.getByTestId("splash-interface-loading")).toHaveCount(0);
+  await expect(nodeControlPanel).toContainText("Node is stopped");
+  await expect(page.locator(".running")).toHaveText("Stopped");
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect.poll(async () => page.evaluate(async () => {
+    const mod = await import("/src/stores/nodeStore.ts");
+    return mod.useNodeStore().status.running;
+  })).toBe(false);
+});
+
 test("semi-autonomous RCH exposes effective connected routing state", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
@@ -296,4 +318,20 @@ test("plugin management is present without storing plugin configuration in the w
     Object.keys(window.localStorage).filter((key) => key.toLowerCase().includes("plugin")),
   );
   expect(pluginSettingsKeys).toEqual([]);
+});
+
+test("Settings replaces Manage Peers with the Manage Teams page", async ({ page }) => {
+  await seedAppStorage(page, { settings: defaultSettings });
+  await gotoApp(page, "/settings");
+
+  const teamEntry = page.locator(".settings-team-entry");
+  await expect(teamEntry.getByRole("heading", { name: "Manage Teams" })).toBeVisible();
+  await expect(page.getByText("Manage Peers")).toHaveCount(0);
+  await teamEntry.getByRole("button", { name: "Open" }).click();
+
+  await expect(page).toHaveURL(/\/settings\/teams$/);
+  await expect(page.getByRole("heading", { name: "Manage Teams" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add team", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Scan QR", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to settings" })).toBeVisible();
 });

@@ -16,7 +16,6 @@ import type {
 } from "../types/domain";
 import { peerHasRemAnnounceEvidence } from "../utils/announceEvidence";
 
-export const PEER_ONLINE_FRESHNESS_MS = 10 * 60_000;
 export const PEER_VISIBLE_UNSAVED_MAX_AGE_MS = 30 * 60_000;
 export const PEER_PRESENCE_TICK_MS = 15_000;
 export const EMPTY_BYTES = new Uint8Array(0);
@@ -91,7 +90,7 @@ export type PacketSendOptions = {
 };
 
 export function shouldDisplayDiscoveredPeer(peer: DiscoveredPeer): boolean {
-  if (peer.saved) {
+  if (peer.saved || peer.activeLink) {
     return true;
   }
 

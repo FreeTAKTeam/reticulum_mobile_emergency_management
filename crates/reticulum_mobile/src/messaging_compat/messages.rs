@@ -169,7 +169,7 @@ impl MessagingStore {
         }
 
         let mut out = by_conversation.into_values().collect::<Vec<_>>();
-        out.sort_by(|left, right| right.last_message_at_ms.cmp(&left.last_message_at_ms));
+        out.sort_by_key(|entry| std::cmp::Reverse(entry.last_message_at_ms));
         out
     }
 

@@ -187,8 +187,21 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
       nodeClient.on("hubDirectoryUpdated", (event: HubDirectoryUpdatedEvent) => {
         presenceNow.value = advancePresenceNow(presenceNow.value, event.receivedAtMs);
         hubDirectorySnapshot.value = {
+          schemaVersion: event.schemaVersion,
+          hubIdentityHash: event.hubIdentityHash,
+          activeTeamUid: event.activeTeamUid,
           effectiveConnectedMode: event.effectiveConnectedMode,
           receivedAtMs: event.receivedAtMs,
+          teams: event.teams.map((team) => ({ ...team })),
+          callerMemberships: event.callerMemberships.map((membership) => ({ ...membership })),
+          members: event.members.map((member) => ({
+            ...member,
+            announceCapabilities: [...member.announceCapabilities],
+          })),
+          localTeams: event.localTeams.map((team) => ({
+            ...team,
+            memberDestinations: [...team.memberDestinations],
+          })),
           items: event.items.map((item) => ({
             ...item,
             announceCapabilities: [...item.announceCapabilities],

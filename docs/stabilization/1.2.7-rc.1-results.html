@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Interactive REM 1.2.7-rc.1 stabilization and scenario results dashboard">
+  <title>REM 1.2.7-rc.1 · Scenario Results</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: #0d1b2e;
+      --panel-2: #10233a;
+      --line: #234462;
+      --text: #ecf7ff;
+      --muted: #91a9bd;
+      --cyan: #25c7f4;
+      --green: #4ce0a0;
+      --amber: #ffc857;
+      --red: #ff6b75;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .28);
+      --radius: 20px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(37, 199, 244, .12), transparent 34rem),
+        radial-gradient(circle at 90% 28%, rgba(76, 224, 160, .07), transparent 30rem),
+        var(--bg);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      content: "";
+      background-image: linear-gradient(rgba(75, 126, 160, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(75, 126, 160, .045) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: linear-gradient(to bottom, black, transparent 78%);
+    }
+    a { color: var(--cyan); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .skip-link { position: fixed; left: 16px; top: -60px; z-index: 20; padding: 10px 14px; border-radius: 10px; background: var(--cyan); color: #00131e; font-weight: 800; }
+    .skip-link:focus { top: 16px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .shell { width: min(1240px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 72px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px; align-items: end; padding: 28px; border: 1px solid var(--line); border-radius: 28px; background: linear-gradient(140deg, rgba(16, 35, 58, .96), rgba(9, 24, 41, .92)); box-shadow: var(--shadow); }
+    .eyebrow { display: flex; gap: 10px; align-items: center; margin: 0 0 10px; color: var(--cyan); font-size: 12px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+    .eyebrow::before { width: 30px; height: 2px; content: ""; background: var(--cyan); }
+    h1 { max-width: 780px; margin: 0; font-size: clamp(32px, 5vw, 64px); line-height: .98; letter-spacing: -.045em; }
+    .lede { max-width: 720px; margin: 18px 0 0; color: #b9cada; font-size: 17px; }
+    .release-badge { min-width: 205px; padding: 18px; border: 1px solid rgba(76, 224, 160, .4); border-radius: 18px; background: rgba(76, 224, 160, .07); }
+    .release-badge span { display: block; color: var(--green); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .release-badge strong { display: block; margin-top: 5px; font-size: 23px; }
+    .release-badge small { display: block; margin-top: 5px; color: var(--muted); }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+    .meta-chip { padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: #b8ccdc; background: rgba(7, 17, 31, .46); font-size: 12px; }
+    .section { margin-top: 30px; }
+    .section-head { display: flex; justify-content: space-between; gap: 18px; align-items: end; margin-bottom: 14px; }
+    .section-head h2 { margin: 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.025em; }
+    .section-head p { max-width: 630px; margin: 4px 0 0; color: var(--muted); }
+    .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .kpi { position: relative; overflow: hidden; min-height: 138px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(13, 27, 46, .9); }
+    .kpi::after { position: absolute; right: -22px; bottom: -32px; width: 110px; height: 110px; border-radius: 50%; content: ""; background: var(--tone, var(--cyan)); opacity: .08; }
+    .kpi-label { color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+    .kpi-value { display: block; margin-top: 13px; font-size: 38px; line-height: 1; letter-spacing: -.04em; }
+    .kpi-note { display: block; margin-top: 9px; color: #aec1d1; font-size: 13px; }
+    .overview { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(13, 27, 46, .91); box-shadow: 0 12px 38px rgba(0, 0, 0, .12); }
+    .coverage { display: grid; place-items: center; padding: 24px; text-align: center; }
+    .donut { display: grid; width: 176px; height: 176px; place-items: center; border-radius: 50%; background: conic-gradient(var(--green) 0 66.67%, var(--amber) 66.67% 100%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+    .donut::before { width: 126px; height: 126px; border: 1px solid var(--line); border-radius: 50%; content: ""; background: var(--panel); }
+    .donut-label { position: absolute; }
+    .donut-label strong { display: block; font-size: 32px; line-height: 1; }
+    .donut-label span { color: var(--muted); font-size: 12px; }
+    .legend { display: flex; justify-content: center; gap: 18px; margin-top: 18px; color: var(--muted); font-size: 13px; }
+    .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: currentColor; }
+    .notes { padding: 24px; }
+    .notes h3 { margin: 0 0 12px; }
+    .notes ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+    .notes li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; color: #b9cada; }
+    .notes b { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--green); background: rgba(76, 224, 160, .1); font-size: 12px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+    .filters { display: flex; gap: 5px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(7, 17, 31, .62); }
+    .filter { padding: 7px 12px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
+    .filter[aria-pressed="true"] { color: #00131e; background: var(--cyan); font-weight: 800; }
+    .search { flex: 1 1 230px; min-width: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; outline: none; color: var(--text); background: rgba(7, 17, 31, .74); }
+    .search:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(37, 199, 244, .15); }
+    .utility { padding: 10px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); cursor: pointer; }
+    .utility:hover { border-color: var(--cyan); }
+    .scenario-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .scenario { display: flex; min-height: 310px; flex-direction: column; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(155deg, rgba(16, 35, 58, .96), rgba(10, 23, 39, .96)); }
+    .scenario[hidden] { display: none; }
+    .scenario-top { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+    .scenario-icon { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--line); border-radius: 14px; color: var(--cyan); background: rgba(37, 199, 244, .07); font-size: 11px; font-weight: 900; letter-spacing: .08em; }
+    .status { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .status-pass { color: var(--green); background: rgba(76, 224, 160, .1); }
+    .status-deferred { color: var(--amber); background: rgba(255, 200, 87, .1); }
+    .scenario h3 { margin: 16px 0 5px; font-size: 21px; }
+    .scenario-meta { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+    .scenario p { margin: 12px 0; color: #b6c8d8; }
+    .metric-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+    .metric { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; color: #c6d7e4; background: rgba(7, 17, 31, .5); font-size: 12px; }
+    .scenario button { margin-top: 15px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: transparent; cursor: pointer; text-align: left; }
+    .scenario button:hover, .scenario button:focus-visible { border-color: var(--cyan); outline: none; }
+    .empty { padding: 26px; color: var(--muted); text-align: center; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(13, 27, 46, .9); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 13px 15px; border-bottom: 1px solid rgba(35, 68, 98, .72); text-align: left; }
+    th { color: #9db4c7; background: rgba(7, 17, 31, .55); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    .cell-status { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 750; }
+    .cell-status::before { width: 8px; height: 8px; border-radius: 50%; content: ""; background: currentColor; }
+    .pass { color: var(--green); }
+    .deferred { color: var(--amber); }
+    .na { color: #72899c; }
+    .gate-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12px; }
+    .gates, .integrity { padding: 22px; }
+    .gate { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 12px; align-items: center; margin-top: 15px; }
+    .gate:first-of-type { margin-top: 6px; }
+    .track { height: 8px; overflow: hidden; border-radius: 99px; background: #172d45; }
+    .track span { display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--green)); }
+    .gate strong { color: var(--green); }
+    .integrity dl { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; margin: 14px 0 0; }
+    .integrity dt { color: var(--muted); }
+    .integrity dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+    code { padding: 2px 5px; border-radius: 6px; color: #c9edfa; background: rgba(37, 199, 244, .08); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    dialog { width: min(620px, calc(100% - 28px)); padding: 0; border: 1px solid var(--line); border-radius: 22px; color: var(--text); background: var(--panel); box-shadow: var(--shadow); }
+    dialog::backdrop { background: rgba(0, 7, 15, .78); backdrop-filter: blur(5px); }
+    .dialog-body { padding: 24px; }
+    .dialog-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+    .dialog-head h2 { margin: 0; }
+    .close { width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 10px; background: transparent; cursor: pointer; }
+    .evidence-list { display: grid; gap: 10px; margin: 20px 0 0; padding: 0; list-style: none; }
+    .evidence-list li { padding: 12px; border: 1px solid var(--line); border-radius: 12px; color: #bdd0df; background: rgba(7, 17, 31, .55); }
+    footer { display: flex; justify-content: space-between; gap: 18px; margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } .release-badge { width: fit-content; } .kpis { grid-template-columns: repeat(2, 1fr); } .overview, .gate-grid { grid-template-columns: 1fr; } .scenario-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 620px) { .shell { width: min(100% - 20px, 1240px); padding-top: 10px; } .hero { padding: 21px; border-radius: 20px; } .kpis, .scenario-grid { grid-template-columns: 1fr; } .section-head, footer { align-items: start; flex-direction: column; } .gate { grid-template-columns: 100px minmax(0, 1fr) auto; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { transition: none !important; } }
+    @media print { body { color: #111; background: white; } body::before, .toolbar, .scenario button { display: none; } .shell { width: 100%; padding: 0; } .hero, .panel, .scenario, .table-wrap { color: #111; background: white; box-shadow: none; break-inside: avoid; } .scenario-grid { grid-template-columns: repeat(2, 1fr); } .scenario[hidden] { display: flex; } a { color: #075985; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to results</a>
+  <main class="shell" id="main">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Release assurance dashboard</p>
+        <h1>Scenario results,<br>without the guesswork.</h1>
+        <p class="lede">A compact view of what REM 1.2.7-rc.1 proves today—and what remains explicitly deferred. Results are derived from the stabilization audit, issue #168, hosted checks, and verified release artifacts.</p>
+        <div class="meta-row" aria-label="Release metadata">
+          <span class="meta-chip">Android target</span>
+          <span class="meta-chip">Rust 1.88</span>
+          <span class="meta-chip">LXMF-rs v0.9.5</span>
+          <span class="meta-chip">2 physical phones</span>
+          <span class="meta-chip">Evidence through 20 Jul 2026</span>
+        </div>
+      </div>
+      <div class="release-badge">
+        <span>Published prerelease</span>
+        <strong>1.2.7-rc.1</strong>
+        <small>Version code 262010047</small>
+      </div>
+    </header>
+
+    <section class="section" aria-labelledby="overview-title">
+      <div class="section-head">
+        <div><h2 id="overview-title">Release posture</h2><p>Deferred hardware rows are visible by design and are not counted as failures.</p></div>
+      </div>
+      <div class="kpis">
+        <article class="kpi" style="--tone: var(--green)"><span class="kpi-label">Validated scenarios</span><strong class="kpi-value">4</strong><span class="kpi-note">Automated, TCP, recovery, release</span></article>
+        <article class="kpi" style="--tone: var(--amber)"><span class="kpi-label">Deferred scenarios</span><strong class="kpi-value">2</strong><span class="kpi-note">LoRa-only and mixed transport</span></article>
+        <article class="kpi" style="--tone: var(--cyan)"><span class="kpi-label">Resolved findings</span><strong class="kpi-value">22</strong><span class="kpi-note">11 high · 11 medium</span></article>
+        <article class="kpi" style="--tone: var(--green)"><span class="kpi-label">Known failures</span><strong class="kpi-value">0</strong><span class="kpi-note">No unresolved correctness defect</span></article>
+      </div>
+      <div class="overview">
+        <article class="panel coverage" aria-label="Scenario disposition: four passed and two deferred">
+          <div class="donut"><div class="donut-label"><strong>4 / 6</strong><span>validated</span></div></div>
+          <div class="legend"><span class="pass"><i></i>Passed 4</span><span class="deferred"><i></i>Deferred 2</span></div>
+        </article>
+        <article class="panel notes">
+          <h3>How to read this dashboard</h3>
+          <ul>
+            <li><b>01</b><span><strong>Passed</strong> means direct evidence covers the named scenario—not merely that no failure was observed.</span></li>
+            <li><b>02</b><span><strong>Deferred</strong> means the prerelease discloses a missing physical gate. It is not silently promoted to supported coverage.</span></li>
+            <li><b>03</b><span><strong>Unavailable-radio recovery</strong> is a negative-path pass: REM stays usable while an absent RNode reports failure.</span></li>
+            <li><b>04</b><span>The final APK/AAB and remote checksums are tied to merged commit <code>d290c2b</code>.</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="scenarios-title">
+      <div class="section-head"><div><h2 id="scenarios-title">Scenario explorer</h2><p>Filter the evidence set or open a card for the exact proof and remaining boundaries.</p></div><span id="result-count" aria-live="polite">6 scenarios</span></div>
+      <div class="toolbar">
+        <div class="filters" aria-label="Filter scenarios by status">
+          <button class="filter" type="button" data-filter="all" aria-pressed="true">All</button>
+          <button class="filter" type="button" data-filter="pass" aria-pressed="false">Passed</button>
+          <button class="filter" type="button" data-filter="deferred" aria-pressed="false">Deferred</button>
+        </div>
+        <label for="scenario-search" class="sr-only">Search scenarios</label>
+        <input class="search" id="scenario-search" type="search" placeholder="Search scenario, evidence, device…" autocomplete="off">
+        <button class="utility" id="export-results" type="button">Export JSON</button>
+        <button class="utility" id="print-results" type="button">Print</button>
+      </div>
+      <div class="scenario-grid" id="scenario-grid"></div>
+      <p class="panel empty" id="empty-state" hidden>No scenarios match this view.</p>
+    </section>
+
+    <section class="section" aria-labelledby="matrix-title">
+      <div class="section-head"><div><h2 id="matrix-title">Workflow matrix</h2><p>Software and TCP evidence are separated from physical LoRa and mixed-interface gates.</p></div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Workflow</th><th scope="col">Automated</th><th scope="col">TCP-only</th><th scope="col">LoRa-only</th><th scope="col">Mixed TCP + LoRa</th></tr></thead>
+          <tbody id="matrix-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="quality-title">
+      <div class="section-head"><div><h2 id="quality-title">Quality and integrity</h2><p>Counts are successful cases from the exact stabilization source; release integrity is verified from fresh GitHub downloads.</p></div></div>
+      <div class="gate-grid">
+        <article class="panel gates">
+          <h3>Executed gates</h3>
+          <div class="gate"><span>Rust</span><div class="track"><span></span></div><strong>368</strong></div>
+          <div class="gate"><span>App unit</span><div class="track"><span></span></div><strong>99</strong></div>
+          <div class="gate"><span>Node client</span><div class="track"><span></span></div><strong>17</strong></div>
+          <div class="gate"><span>Playwright</span><div class="track"><span></span></div><strong>76</strong></div>
+          <div class="gate"><span>Binder</span><div class="track"><span></span></div><strong>2</strong></div>
+        </article>
+        <article class="panel integrity">
+          <h3>Published artifact</h3>
+          <dl>
+            <dt>Commit</dt><dd><code>d290c2bea4a6d116010468bd855dc133599abc98</code></dd>
+            <dt>APK</dt><dd><code>651c62f0e98471e0482d5870540516958d01a74bb8ca2a2f938ae3e789edba4f</code></dd>
+            <dt>AAB</dt><dd><code>72e06208ed2b50e09c7850de9efcb231b51bc53ada52a9f170010e729559ab59</code></dd>
+            <dt>Signer</dt><dd><code>62608481f3ffa0c44d8d36de1055c826e47011fe8b598c8ef9c9e53e46016f1d</code></dd>
+            <dt>ABIs</dt><dd>arm64-v8a · armeabi-v7a · x86_64</dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      <span>REM 1.2.7-rc.1 stabilization evidence</span>
+      <span><a href="../releases/1.2.7-rc.1.md">Release notes</a> · <a href="1.2.7-rc.1-audit.md">Audit ledger</a> · <a href="../rem-1.2-manual-release-gate.md">Release gate</a> · <a href="https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/releases/tag/1.2.7-rc.1">GitHub release</a></span>
+    </footer>
+  </main>
+
+  <dialog id="scenario-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-body">
+      <div class="dialog-head"><div><span class="status" id="dialog-status"></span><h2 id="dialog-title"></h2></div><button class="close" type="button" aria-label="Close details">×</button></div>
+      <p id="dialog-summary"></p>
+      <ul class="evidence-list" id="dialog-evidence"></ul>
+    </div>
+  </dialog>
+
+  <script>
+    const scenarios = [
+      { id: "automation", icon: "CI", title: "Automated release gates", type: "Software · hosted + local", status: "pass", summary: "Strict cross-layer gates passed with pinned dependencies and no active security advisory.", metrics: ["368 Rust", "76 E2E", "0 vulnerabilities"], evidence: ["Rust 1.88 format, locked fetch, strict all-target Clippy, and 368 tests passed.", "99 app unit, 17 node-client, and all 76 desktop/mobile Chromium cases passed.", "Hosted exact-head and exact-main CI plus Android plugin jobs completed successfully."] },
+      { id: "tcp", icon: "TCP", title: "Two-phone TCP-only", type: "Physical · Pixel 7 + Samsung S8", status: "pass", summary: "Bidirectional operational workflows completed over connected TCP-capable paths.", metrics: ["2 phones", "0-hop peers", "ACK terminal"], evidence: ["Mutual announce, discovery, explicit connection, and bidirectional chat acknowledgement passed.", "EAM, MECP event, checklist metadata and 12 tasks replicated between phones.", "Telemetry publish/ack and SOS activation, cancellation, and restart recovery passed."] },
+      { id: "unavailable", icon: "NEG", title: "Unavailable RNode recovery", type: "Physical · negative path", status: "pass", summary: "An absent paired radio fails honestly without trapping the local runtime or splash screen.", metrics: ["30 s bound", "Runtime READY", "Radio FAILED"], evidence: ["Both phones were restarted with saved RNode settings enabled and radios unavailable.", "BLE/KISS probing timed out, RNode readiness became Failed, and false Ready state was prevented.", "The local runtime remained usable and exposed actionable interface diagnostics."] },
+      { id: "release", icon: "RC", title: "Signed release packaging", type: "Release · exact merged commit", status: "pass", summary: "Published Android artifacts match their sidecars, source commit, signatures, and runtime identity.", metrics: ["3 ABIs", "16 KB ELF", "2 installs"], evidence: ["APK v1/v2 and AAB signatures verified with the documented signer certificate.", "All three native ABIs passed 16 KB ELF alignment checks.", "Fresh GitHub downloads matched SHA-256 sidecars and installed as 1.2.7-rc.1 on both phones."] },
+      { id: "lora", icon: "RF", title: "RNode LoRa-only", type: "Physical · radio transport", status: "deferred", summary: "The physical packet path was not run because powered, controllable RNodes were unavailable.", metrics: ["Preview only", "0 packet proof", "Issue #168"], evidence: ["Software configuration, BLE/KISS probing, and failure-state handling are covered.", "A LoRa pass still requires connected RNodes, Ready radio rows, and non-zero packet activity.", "Announce, delivery, reconnect, and workflow rows remain open in issue #168."] },
+      { id: "mixed", icon: "MIX", title: "Mixed TCP + LoRa", type: "Physical · multi-interface", status: "deferred", summary: "Cross-interface routing, physical duplicate suppression, and the bounded soak remain deferred.", metrics: ["Preview only", "60 min soak", "Issue #168"], evidence: ["Reticulum duplicate-cache software regression passes; REM adds no competing deduplication policy.", "Physical proof still needs one mixed source plus TCP-only and LoRa-only targets.", "The 60-minute mixed-load soak must record readiness, reconnects, duplicates, battery, and terminal failures."] },
+    ];
+    const matrix = [
+      ["Announce and peer visibility", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Explicit peer connection", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Packet/resource delivery", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Chat + acknowledgement", "Pass", "Pass", "Deferred", "Deferred"],
+      ["EAM and MECP replication", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Checklist synchronization", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Telemetry and SOS lifecycle", "Pass", "Pass", "Deferred", "Deferred"],
+      ["Duplicate suppression", "Pass", "N/A", "Deferred", "Deferred"],
+      ["Restart and reconnect", "Pass", "Pass", "Deferred", "Deferred"],
+      ["60-minute mixed-load soak", "N/A", "N/A", "N/A", "Deferred"],
+    ];
+    const grid = document.querySelector("#scenario-grid");
+    const empty = document.querySelector("#empty-state");
+    const count = document.querySelector("#result-count");
+    const search = document.querySelector("#scenario-search");
+    const dialog = document.querySelector("#scenario-dialog");
+    let activeFilter = "all";
+
+    function escapeHtml(value) {
+      return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+    }
+    function renderScenarios() {
+      const query = search.value.trim().toLowerCase();
+      const visible = scenarios.filter((scenario) => {
+        const matchesStatus = activeFilter === "all" || scenario.status === activeFilter;
+        const haystack = [scenario.title, scenario.type, scenario.summary, ...scenario.metrics, ...scenario.evidence].join(" ").toLowerCase();
+        return matchesStatus && haystack.includes(query);
+      });
+      grid.innerHTML = visible.map((scenario) => `
+        <article class="scenario" data-id="${scenario.id}">
+          <div class="scenario-top"><span class="scenario-icon">${scenario.icon}</span><span class="status status-${scenario.status}">${scenario.status === "pass" ? "Passed" : "Deferred"}</span></div>
+          <h3>${escapeHtml(scenario.title)}</h3><span class="scenario-meta">${escapeHtml(scenario.type)}</span>
+          <p>${escapeHtml(scenario.summary)}</p>
+          <div class="metric-row">${scenario.metrics.map((metric) => `<span class="metric">${escapeHtml(metric)}</span>`).join("")}</div>
+          <button type="button" data-details="${scenario.id}" aria-label="View evidence for ${escapeHtml(scenario.title)}">View evidence →</button>
+        </article>`).join("");
+      count.textContent = `${visible.length} scenario${visible.length === 1 ? "" : "s"}`;
+      empty.hidden = visible.length !== 0;
+    }
+    function statusCell(value) {
+      const className = value === "Pass" ? "pass" : value === "Deferred" ? "deferred" : "na";
+      return `<span class="cell-status ${className}">${value}</span>`;
+    }
+    document.querySelector("#matrix-body").innerHTML = matrix.map(([name, ...statuses]) => `<tr><td><strong>${name}</strong></td>${statuses.map((status) => `<td>${statusCell(status)}</td>`).join("")}</tr>`).join("");
+    document.querySelectorAll(".filter").forEach((button) => button.addEventListener("click", () => {
+      activeFilter = button.dataset.filter;
+      document.querySelectorAll(".filter").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      renderScenarios();
+    }));
+    search.addEventListener("input", renderScenarios);
+    grid.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-details]");
+      if (!button) return;
+      const scenario = scenarios.find((item) => item.id === button.dataset.details);
+      document.querySelector("#dialog-title").textContent = scenario.title;
+      document.querySelector("#dialog-summary").textContent = scenario.summary;
+      const status = document.querySelector("#dialog-status");
+      status.textContent = scenario.status === "pass" ? "Passed" : "Deferred";
+      status.className = `status status-${scenario.status}`;
+      document.querySelector("#dialog-evidence").innerHTML = scenario.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+      dialog.showModal();
+    });
+    document.querySelector(".close").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+    document.querySelector("#print-results").addEventListener("click", () => window.print());
+    document.querySelector("#export-results").addEventListener("click", () => {
+      const payload = JSON.stringify({ release: "1.2.7-rc.1", generatedFrom: "d290c2bea4a6d116010468bd855dc133599abc98", scenarios, matrix }, null, 2);
+      const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob([payload], { type: "application/json" })), download: "rem-1.2.7-rc.1-scenario-results.json" });
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+    renderScenarios();
+  </script>
+</body>
+</html>

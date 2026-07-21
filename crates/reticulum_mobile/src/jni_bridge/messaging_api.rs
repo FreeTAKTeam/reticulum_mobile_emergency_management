@@ -79,6 +79,52 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_refreshH
 
 #[jni_boundary]
 #[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getHubDirectorySnapshotJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let node = initialized_node_or_return!();
+    match node.get_hub_directory_snapshot() {
+        Ok(snapshot) => ok_json_result(&mut env, &hub_directory_snapshot_json(&snapshot)),
+        Err(err) => {
+            set_last_node_error(err);
+            ptr::null_mut()
+        }
+    }
+}
+
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setActiveTeamJson(
+    mut env: JNIEnv,
+    _class: JClass,
+    payload_json: JString,
+) -> jint {
+    let raw = match jstring_to_rust(&mut env, payload_json) {
+        Ok(value) => value,
+        Err(error) => return err_result("InvalidConfig", error),
+    };
+    let payload: SetActiveTeamInput = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            return err_result(
+                "InvalidConfig",
+                format!("invalid active-team payload: {error}"),
+            )
+        }
+    };
+    let node = initialized_node_or_return!();
+    match node.set_active_team(payload.team_uid) {
+        Ok(()) => ok_result(),
+        Err(err) => {
+            set_last_node_error(err);
+            RESULT_ERR
+        }
+    }
+}
+
+#[jni_boundary]
+#[no_mangle]
 pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_listAnnouncesJson(
     mut env: JNIEnv,
     _class: JClass,

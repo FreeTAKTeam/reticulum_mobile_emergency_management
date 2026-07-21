@@ -1,30 +1,23 @@
 import {
+  YELLOW_TEAM_UID,
   type NodeStatus,
   type ReticulumNodeClient,
 } from "@reticulum/node-client";
 import type { Ref, ShallowRef } from "vue";
 
 import {
-  bootstrapHubRegistry,
   buildHubRegistryBootstrapProfile,
-  clearHubRegistryLinkage,
-  loadHubRegistryLinkage,
-  matchesHubRegistryProfile,
   saveHubRegistryLinkage,
   type HubRegistryBootstrapProfile,
-  type HubRegistryCommandTransport,
   type HubRegistryLinkage,
 } from "../services/hubRegistryBootstrap";
-import type { NodeUiSettings } from "../types/domain";
-import { buildMissionCommandFieldsBase64 } from "../utils/missionSync";
+import type { HubDirectorySnapshot, NodeUiSettings } from "../types/domain";
 import {
   hasSelectedHubIdentity,
   hubModeUsesRch,
 } from "./nodeSettingsModel";
 import {
-  EMPTY_BYTES,
   type HubRegistrationSnapshot,
-  type PacketSendOptions,
   asTrimmedString,
   nowMs,
 } from "./nodeStoreCore";
@@ -33,12 +26,8 @@ interface NodeHubContext {
   appendLog: (level: string, message: string) => void;
   client: ShallowRef<ReticulumNodeClient | null>;
   errorMessage: (error: unknown) => string;
+  hubDirectorySnapshot: Ref<HubDirectorySnapshot | null>;
   hubRegistration: HubRegistrationSnapshot;
-  sendBytes: (
-    destination: string,
-    bytes: Uint8Array,
-    options?: PacketSendOptions,
-  ) => Promise<void>;
   settings: NodeUiSettings;
   status: Ref<NodeStatus>;
 }
@@ -48,18 +37,15 @@ export function createNodeHubController(context: NodeHubContext) {
     appendLog,
     client,
     errorMessage,
+    hubDirectorySnapshot,
     hubRegistration,
-    sendBytes,
     settings,
     status,
   } = context;
-  let hubRegistryBootstrapInFlight: Promise<void> | null = null;
+  let directoryRefreshInFlight: Promise<void> | null = null;
 
   function currentHubBootstrapProfile(): HubRegistryBootstrapProfile | null {
-    if (!hubModeUsesRch(settings.hub.mode)) {
-      return null;
-    }
-    if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
+    if (!hubModeUsesRch(settings.hub.mode) || !hasSelectedHubIdentity(settings.hub.identityHash)) {
       return null;
     }
     return buildHubRegistryBootstrapProfile({
@@ -71,25 +57,7 @@ export function createNodeHubController(context: NodeHubContext) {
 
   function setHubRegistrationPending(lastErrorValue?: string): void {
     hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled";
-    if (lastErrorValue !== undefined) {
-      hubRegistration.lastError = asTrimmedString(lastErrorValue);
-    } else {
-      hubRegistration.lastError = "";
-    }
-  }
-
-  function setHubRegistrationReady(linkage: HubRegistryLinkage): void {
-    hubRegistration.status = "ready";
-    hubRegistration.linkage = { ...linkage };
-    hubRegistration.lastReadyAt = nowMs();
-    hubRegistration.lastError = "";
-    saveHubRegistryLinkage(linkage);
-  }
-
-  function setHubRegistrationError(error: unknown): void {
-    hubRegistration.status = hubModeUsesRch(settings.hub.mode) ? "error" : "disabled";
-    hubRegistration.lastError = errorMessage(error);
-    hubRegistration.lastAttemptAt = nowMs();
+    hubRegistration.lastError = asTrimmedString(lastErrorValue);
   }
 
   function clearHubRegistrationError(): void {
@@ -102,127 +70,118 @@ export function createNodeHubController(context: NodeHubContext) {
   function reconcileHubRegistrationState(): void {
     if (!hubModeUsesRch(settings.hub.mode)) {
       hubRegistration.status = "disabled";
+      hubRegistration.linkage = undefined;
       hubRegistration.lastError = "";
       return;
     }
-
     if (!hasSelectedHubIdentity(settings.hub.identityHash)) {
-      setHubRegistrationPending(
-        settings.hub.mode === "Connected"
-          ? "Connected mode requires selecting an RCH hub before outbound traffic can be routed."
-          : "Select an RCH hub to seed peer routing from the hub directory.",
-      );
+      setHubRegistrationPending("Select an RCH hub before loading the read-only TEAM directory.");
       return;
     }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    hubRegistration.linkage = storedLinkage ?? undefined;
-
-    if (!storedLinkage) {
-      setHubRegistrationPending("Hub registry linkage has not been established yet.");
+    const snapshot = hubDirectorySnapshot.value;
+    const configuredHub = settings.hub.identityHash.trim().toLowerCase();
+    if (!snapshot || snapshot.hubIdentityHash?.toLowerCase() !== configuredHub) {
+      setHubRegistrationPending("Waiting for the selected RCH hub TEAM directory.");
       return;
     }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile) {
-      setHubRegistrationPending("Hub registry bootstrap is waiting on a node identity and hub destination.");
+    const activeTeamUid = snapshot.activeTeamUid || settings.teams.activeTeamUid || YELLOW_TEAM_UID;
+    const membership = snapshot.callerMemberships.find((item) => item.teamUid === activeTeamUid)
+      ?? (activeTeamUid === YELLOW_TEAM_UID && snapshot.schemaVersion === 0
+        ? { teamUid: YELLOW_TEAM_UID, teamMemberUid: status.value.appDestinationHex }
+        : undefined);
+    if (!membership?.teamMemberUid) {
+      if (settings.teams.localTeams.some((team) => team.teamUid === activeTeamUid)) {
+        hubRegistration.status = "ready";
+        hubRegistration.linkage = undefined;
+        hubRegistration.lastReadyAt = nowMs();
+        hubRegistration.lastError = "";
+        return;
+      }
+      hubRegistration.status = "error";
+      hubRegistration.linkage = undefined;
+      hubRegistration.lastError = "RCH has not assigned this REM client to the active TEAM. Ask an RCH operator to add the membership.";
       return;
     }
-
-    if (matchesHubRegistryProfile(storedLinkage, profile)) {
-      hubRegistration.status = "ready";
-      hubRegistration.lastError = "";
-      hubRegistration.lastReadyAt = storedLinkage.updatedAt ?? nowMs();
-      return;
-    }
-
-    setHubRegistrationPending("Stored hub linkage does not match the current callsign, team color, or identity.");
+    const teamColor = snapshot.teams.find((team) => team.uid === membership.teamUid)?.color ?? "YELLOW";
+    const linkage: HubRegistryLinkage = {
+      teamUid: membership.teamUid,
+      teamMemberUid: membership.teamMemberUid,
+      callsign: settings.displayName,
+      teamColor: teamColor as HubRegistryLinkage["teamColor"],
+      localIdentityHex: status.value.identityHex,
+      hubIdentityHash: configuredHub,
+      updatedAt: nowMs(),
+    };
+    hubRegistration.status = "ready";
+    hubRegistration.linkage = linkage;
+    hubRegistration.lastReadyAt = linkage.updatedAt;
+    hubRegistration.lastError = "";
+    saveHubRegistryLinkage(linkage);
   }
 
-  function buildHubRegistryTransport(): HubRegistryCommandTransport {
-    return {
-      sendCommand: async (destinationHex: string, command) => {
-        await sendBytes(destinationHex, EMPTY_BYTES, {
-          fieldsBase64: buildMissionCommandFieldsBase64([command]),
-        });
-      },
-      onPacket: (listener) => client.value?.on("packetReceived", listener) ?? (() => undefined),
-    };
+  async function refreshHubRegistrationState(refreshDirectory = false): Promise<void> {
+    reconcileHubRegistrationState();
+    if (!refreshDirectory || !hubModeUsesRch(settings.hub.mode) || !status.value.running) {
+      return;
+    }
+    const nodeClient = client.value;
+    if (!nodeClient || !hasSelectedHubIdentity(settings.hub.identityHash)) {
+      return;
+    }
+    if (directoryRefreshInFlight) {
+      return directoryRefreshInFlight;
+    }
+    hubRegistration.lastAttemptAt = nowMs();
+    directoryRefreshInFlight = (async () => {
+      try {
+        await nodeClient.refreshHubDirectory();
+        const snapshot = await nodeClient.getHubDirectorySnapshot();
+        hubDirectorySnapshot.value = {
+          ...snapshot,
+          teams: snapshot.teams.map((team) => ({ ...team })),
+          callerMemberships: snapshot.callerMemberships.map((item) => ({ ...item })),
+          members: snapshot.members.map((member) => ({
+            ...member,
+            announceCapabilities: [...member.announceCapabilities],
+          })),
+          localTeams: snapshot.localTeams.map((team) => ({
+            ...team,
+            memberDestinations: [...team.memberDestinations],
+          })),
+          items: snapshot.items.map((item) => ({
+            ...item,
+            announceCapabilities: [...item.announceCapabilities],
+          })),
+        };
+        reconcileHubRegistrationState();
+      } catch (error: unknown) {
+        hubRegistration.status = "error";
+        hubRegistration.lastError = errorMessage(error);
+        appendLog("Warn", `Read-only RCH TEAM directory refresh failed: ${hubRegistration.lastError}`);
+        throw error;
+      } finally {
+        directoryRefreshInFlight = null;
+      }
+    })();
+    return directoryRefreshInFlight;
   }
 
   async function bootstrapHubRegistration(force = false): Promise<void> {
-    if (!hubModeUsesRch(settings.hub.mode)) {
-      reconcileHubRegistrationState();
-      return;
-    }
-
-    if (hubRegistryBootstrapInFlight && !force) {
-      return hubRegistryBootstrapInFlight;
-    }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile) {
-      setHubRegistrationPending(
-        "Hub registry bootstrap is waiting on a callsign, node identity, or hub destination.",
-      );
-      return;
-    }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    if (!force && storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
-      setHubRegistrationReady(storedLinkage);
-      return;
-    }
-
-    if (!status.value.running) {
-      setHubRegistrationPending("Hub registry bootstrap will run after the node is started.");
-      return;
-    }
-
-    clearHubRegistrationError();
-    hubRegistration.lastAttemptAt = nowMs();
-    hubRegistration.lastError = "";
-    hubRegistration.status = "pending";
-
-    const transport = buildHubRegistryTransport();
-    const bootstrapPromise = bootstrapHubRegistry(profile, transport)
-      .then((linkage) => {
-        setHubRegistrationReady(linkage);
-        appendLog(
-          "Info",
-          `Hub registry linkage ready: team=${linkage.teamUid} member=${linkage.teamMemberUid}.`,
-        );
-      })
-      .catch((error: unknown) => {
-        setHubRegistrationError(error);
-        throw error;
-      })
-      .finally(() => {
-        hubRegistryBootstrapInFlight = null;
-      });
-
-    hubRegistryBootstrapInFlight = bootstrapPromise;
-    return bootstrapPromise;
+    await refreshHubRegistrationState(force || !hubDirectorySnapshot.value);
   }
 
-  async function refreshHubRegistrationState(attemptBootstrap = false): Promise<void> {
+  async function setActiveTeam(teamUid: string): Promise<void> {
+    const normalized = teamUid.trim().toLowerCase();
+    const nodeClient = client.value;
+    if (!nodeClient) {
+      throw new Error("Node client is not initialized.");
+    }
+    await nodeClient.setActiveTeam(normalized);
+    settings.teams.activeTeamUid = normalized;
+    if (hubDirectorySnapshot.value) {
+      hubDirectorySnapshot.value.activeTeamUid = normalized;
+    }
     reconcileHubRegistrationState();
-    if (!attemptBootstrap || !hubModeUsesRch(settings.hub.mode)) {
-      return;
-    }
-
-    const profile = currentHubBootstrapProfile();
-    if (!profile || !status.value.running) {
-      return;
-    }
-
-    const storedLinkage = loadHubRegistryLinkage();
-    if (storedLinkage && matchesHubRegistryProfile(storedLinkage, profile)) {
-      setHubRegistrationReady(storedLinkage);
-      return;
-    }
-
-    await bootstrapHubRegistration();
   }
 
   return {
@@ -231,6 +190,7 @@ export function createNodeHubController(context: NodeHubContext) {
     currentHubBootstrapProfile,
     reconcileHubRegistrationState,
     refreshHubRegistrationState,
+    setActiveTeam,
     setHubRegistrationPending,
   };
 }

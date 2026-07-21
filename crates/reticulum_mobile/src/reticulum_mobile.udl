@@ -359,8 +359,39 @@ dictionary HubDirectoryPeerRecord {
   string? status;
 };
 
+dictionary HubTeamRecord {
+  string uid;
+  string color;
+  string team_name;
+};
+
+dictionary HubCallerMembershipRecord {
+  string team_uid;
+  string team_member_uid;
+};
+
+dictionary HubTeamMemberRecord {
+  string team_uid;
+  string team_member_uid;
+  string identity;
+  string destination_hash;
+  string? display_name;
+  sequence<string> announce_capabilities;
+  string? client_type;
+  string? registered_mode;
+  string? last_seen;
+  string? status;
+};
+
 dictionary HubDirectorySnapshot {
+  u32 schema_version;
+  string? hub_identity_hash;
+  string active_team_uid;
   boolean effective_connected_mode;
+  sequence<HubTeamRecord> teams;
+  sequence<HubCallerMembershipRecord> caller_memberships;
+  sequence<HubTeamMemberRecord> members;
+  sequence<LocalTeamRecord> local_teams;
   sequence<HubDirectoryPeerRecord> items;
   u64 received_at_ms;
 };
@@ -411,8 +442,26 @@ dictionary AppSettingsRecord {
   u32 announce_interval_seconds;
   TelemetrySettingsRecord telemetry;
   HubSettingsRecord hub;
+  TeamSettingsRecord teams;
   ChecklistSettingsRecord checklists;
   RnodeSettingsRecord rnode;
+};
+
+dictionary TeamAliasRecord {
+  string team_uid;
+  string alias;
+};
+
+dictionary LocalTeamRecord {
+  string team_uid;
+  sequence<string> member_destinations;
+};
+
+dictionary TeamSettingsRecord {
+  string active_team_uid;
+  sequence<TeamAliasRecord> aliases;
+  sequence<LocalTeamRecord> local_teams;
+  boolean local_teams_initialized;
 };
 
 dictionary SavedPeerRecord {
@@ -998,4 +1047,10 @@ interface Node {
   // Trigger a one-shot hub directory refresh.
   [Throws=NodeError]
   void refresh_hub_directory();
+
+  [Throws=NodeError]
+  HubDirectorySnapshot get_hub_directory_snapshot();
+
+  [Throws=NodeError]
+  void set_active_team(string team_uid);
 };

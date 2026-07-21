@@ -17,13 +17,35 @@ use crate::types::{
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
     ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, DiscoveredPluginRecord,
     EamProjectionRecord, EamReadinessMessageRecord, EamReadinessStatusMetricRecord,
-    EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord,
-    LegacyImportPayload, MessageDirection, MessageRecord, NodeError, PluginCapabilityRecord,
-    PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation, ProjectionScope,
-    SavedPeerRecord, SosAlertRecord, SosAudioRecord, SosLocationRecord, SosSettingsRecord,
-    SosStatusRecord, TelemetryPositionRecord, TrustedPluginPublisherRecord,
-    DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES,
+    EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot,
+    InstalledPluginRecord, LegacyImportPayload, LocalTeamRecord, MessageDirection, MessageRecord,
+    NodeError, PluginCapabilityRecord, PluginSensorRecord, PluginSensorSampleRequest,
+    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
+    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
+    TrustedPluginPublisherRecord, DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES, YELLOW_TEAM_UID,
 };
+
+fn initialize_local_team_settings(
+    settings: &mut AppSettingsRecord,
+    saved_destinations: impl IntoIterator<Item = String>,
+) -> bool {
+    if settings.teams.local_teams_initialized {
+        return false;
+    }
+    let mut members = saved_destinations
+        .into_iter()
+        .map(|destination| destination.trim().to_ascii_lowercase())
+        .filter(|destination| !destination.is_empty())
+        .collect::<Vec<_>>();
+    members.sort();
+    members.dedup();
+    settings.teams.local_teams = vec![LocalTeamRecord {
+        team_uid: YELLOW_TEAM_UID.to_string(),
+        member_destinations: members,
+    }];
+    settings.teams.local_teams_initialized = true;
+    true
+}
 
 const DEFAULT_STORAGE_DIR: &str = "reticulum-mobile";
 const DB_FILE_NAME: &str = "app_state.db";
@@ -269,7 +291,9 @@ impl ConversationPeerResolver {
 }
 
 include!("app_state/storage.rs");
+include!("app_state/settings.rs");
 include!("app_state/plugins.rs");
+include!("app_state/hub_directory.rs");
 include!("app_state/peers.rs");
 include!("app_state/mission.rs");
 include!("app_state/checklist_lifecycle.rs");

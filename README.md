@@ -9,9 +9,10 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current stabilization target is `1.2.7-rc.1` for Android, built against
-LXMF-rs `v0.9.5`. It is a prerelease until the automated gates and the two-phone
-[manual release matrix](docs/rem-1.2-manual-release-gate.md) are complete.
+The current Android release is `1.2.7`, built against LXMF-rs `v0.9.5`.
+Automated validation and the two-phone TCP matrix are release gates; the
+remaining physical LoRa and mixed-interface rows are documented preview scope
+in the [manual release matrix](docs/rem-1.2-manual-release-gate.md).
 
 ## Current UI
 
@@ -35,6 +36,7 @@ These screenshots were captured from the current app UI.
 - Build and share Checklists for field tasks.
 - Watch recent locations on the Map when telemetry is enabled.
 - Discover, save, and connect to trusted peers.
+- Create local color teams, exchange them by JSON or QR code, or use RCH-owned teams to scope every outbound recipient set while keeping shared timelines intact.
 - Configure SOS emergency behavior, telemetry, peer lists, and Reticulum settings.
 
 ## Events And MECP
@@ -58,7 +60,7 @@ In REM, an operator does not need to memorize the code. The Events page shows fr
 - **More**: Opens Action Messages, Events, Peers, and Settings.
 - **Action Messages**: Captures the team status colors used by the Dashboard.
 - **Events**: Records short timeline updates using MECP.
-- **Peers**: Finds REM-capable peers, saves trusted peers, and connects to them.
+- **Peers**: Finds REM-capable peers, creates and shares local color teams by JSON or QR, merges matching RCH rosters, and selects the active team.
 - **Settings**: Controls call sign, networking, telemetry, SOS, peer import/export, and node controls.
 
 ## Install With Obtainium

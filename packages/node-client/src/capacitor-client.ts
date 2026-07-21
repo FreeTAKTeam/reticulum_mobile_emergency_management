@@ -298,6 +298,16 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
     await this.plugin.refreshHubDirectory();
   }
 
+  async getHubDirectorySnapshot() {
+    await this.ready();
+    return toHubDirectoryUpdatedEvent(await this.plugin.getHubDirectorySnapshot());
+  }
+
+  async setActiveTeam(teamUid: string): Promise<void> {
+    await this.ready();
+    await this.plugin.setActiveTeam({ teamUid });
+  }
+
   on<K extends keyof NodeClientEvents>(
     event: K,
     handler: (payload: NodeClientEvents[K]) => void,

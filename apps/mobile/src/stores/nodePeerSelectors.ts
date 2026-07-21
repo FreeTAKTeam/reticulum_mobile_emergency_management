@@ -5,14 +5,15 @@ import type { HubRegistryBootstrapProfile } from "../services/hubRegistryBootstr
 import type {
   DiscoveredPeer,
   HubDirectorySnapshot,
+  NodeUiSettings,
   PeerConnectionState,
   SavedPeer,
 } from "../types/domain";
+import { peerHasFreshPresence } from "../utils/peerPresence";
 import { isValidDestinationHex, normalizeDestinationHex } from "../utils/peers";
 import { statusHasRuntimeStartupReadiness } from "../utils/startupInterfaces";
 import { storeRemovedPeerDestinations } from "./nodeSettingsModel";
 import {
-  PEER_ONLINE_FRESHNESS_MS,
   type EventPeerRoute,
   type HubAnnounceCandidate,
   type HubRegistrationSnapshot,
@@ -35,6 +36,7 @@ interface NodePeerSelectorsContext {
   readinessError: Ref<string>;
   removedByDestination: Record<string, number>;
   savedByDestination: Record<string, SavedPeer>;
+  settings: NodeUiSettings;
   status: Ref<NodeStatus>;
   syncStatus: Ref<SyncStatus>;
 }
@@ -51,14 +53,19 @@ export function createNodePeerSelectors(context: NodePeerSelectorsContext) {
     readinessError,
     removedByDestination,
     savedByDestination,
+    settings,
     status,
     syncStatus,
   } = context;
 
-  function hasFreshPresence(lastSeenAt?: number): boolean {
-    return typeof lastSeenAt === "number"
-      && Number.isFinite(lastSeenAt)
-      && (presenceNow.value - lastSeenAt) <= PEER_ONLINE_FRESHNESS_MS;
+  function hasFreshPresence(activeLink: boolean, lastSeenAt?: number): boolean {
+    return peerHasFreshPresence({
+      activeLink,
+      lastSeenAt,
+      nowMs: presenceNow.value,
+      announceIntervalSeconds: settings.announceIntervalSeconds,
+      staleAfterMinutes: settings.telemetry.staleAfterMinutes,
+    });
   }
 
   function peerPresenceTimestamp(peer: Pick<DiscoveredPeer, "lastSeenAt">): number | undefined {
@@ -87,9 +94,9 @@ export function createNodePeerSelectors(context: NodePeerSelectorsContext) {
   }
 
   function peerPresenceState(
-    peer: Pick<DiscoveredPeer, "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
+    peer: Pick<DiscoveredPeer, "activeLink" | "announceLastSeenAt" | "lxmfLastSeenAt" | "lastSeenAt">,
   ): "online" | "offline" {
-    return hasFreshPresence(peerCachedPresenceTimestamp(peer)) ? "online" : "offline";
+    return hasFreshPresence(peer.activeLink, peerCachedPresenceTimestamp(peer)) ? "online" : "offline";
   }
 
   function peerHasKnownLxmfRoute(
@@ -208,7 +215,9 @@ export function createNodePeerSelectors(context: NodePeerSelectorsContext) {
   );
   const connectedPeers = computed(() => savedVisiblePeers.value.filter((peer) => peer.activeLink));
   const reachablePeers = computed(() =>
-    savedVisiblePeers.value.filter((peer) => hasFreshPresence(peerCachedPresenceTimestamp(peer))),
+    savedVisiblePeers.value.filter((peer) =>
+      hasFreshPresence(peer.activeLink, peerCachedPresenceTimestamp(peer)),
+    ),
   );
   const connectedDestinations = computed(() => connectedPeers.value.map((peer) => peer.destination));
   const intentionalPeerDestinations = computed(() =>

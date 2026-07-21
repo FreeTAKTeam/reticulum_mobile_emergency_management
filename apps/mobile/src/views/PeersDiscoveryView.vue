@@ -1,38 +1,51 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from "vue";
+import {
+  PhBroadcast as Broadcast,
+  PhCaretDown as CaretDown,
+  PhCheck as Check,
+  PhMagnifyingGlass as MagnifyingGlass,
+  PhPlus as Plus,
+} from "@phosphor-icons/vue";
+import { useRoute, useRouter } from "vue-router";
+import { YELLOW_TEAM_UID } from "@reticulum/node-client";
 
 import ListWindowControls from "../components/ListWindowControls.vue";
+import PeersTeamRoster from "../components/PeersTeamRoster.vue";
 import { useListWindow } from "../composables/useListWindow";
+import {
+  teamColorHex,
+  teamColorLabel,
+  useTeamDirectory,
+} from "../composables/useTeamDirectory";
 import { notifyOperationalUpdate } from "../services/notifications";
 import { useNodeStore } from "../stores/nodeStore";
-import type { DiscoveredPeer, HubDirectoryPeerRecord, SavedPeer } from "../types/domain";
-import { discoveredPeerMatchesQuery, savedPeerMatchesQuery } from "../utils/peerSearch";
-import type { PeersVisualMockData } from "../utils/peersVisualMock";
+import type { DiscoveredPeer, HubDirectoryPeerRecord } from "../types/domain";
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
+import { discoveredPeerMatchesQuery } from "../utils/peerSearch";
+import type { PeersVisualMockData } from "../utils/peersVisualMock";
 
 type PeerTab = "discovered" | "peers" | "hub";
-
+const BLUE_TEAM_UID = "43341e5c822d99857fa6e8641f2ca9c0";
 const nodeStore = useNodeStore();
 const route = useRoute();
-
+const router = useRouter();
 const searchText = ref("");
-const activeTab = ref<PeerTab>("discovered");
-let visualMockRefreshInterval: number | undefined;
-
+const activeTab = ref<PeerTab>("peers");
+const teamMenu = useTemplateRef<HTMLDetailsElement>("teamMenu");
+const { activeSection, selectableTeams, setActiveTeam, teamLabel } = useTeamDirectory();
 const mockNow = Date.now();
 let visualMockData: PeersVisualMockData | undefined;
+let visualMockRefreshInterval: number | undefined;
 
 async function applyVisualMockData(): Promise<void> {
-  visualMockData ??= (await import("../utils/peersVisualMock"))
-    .createPeersVisualMockData(mockNow);
+  visualMockData ??= (await import("../utils/peersVisualMock")).createPeersVisualMockData(mockNow);
   for (const destination of Object.keys(nodeStore.discoveredByDestination)) {
     delete nodeStore.discoveredByDestination[destination];
   }
   for (const destination of Object.keys(nodeStore.savedByDestination)) {
     delete nodeStore.savedByDestination[destination];
   }
-
   for (const peer of visualMockData.peers) {
     nodeStore.discoveredByDestination[peer.destination] = { ...peer };
     if (peer.saved) {
@@ -43,51 +56,60 @@ async function applyVisualMockData(): Promise<void> {
       };
     }
   }
-
+  const selectedTeam = nodeStore.settings.teams.activeTeamUid
+    || nodeStore.hubDirectorySnapshot?.activeTeamUid;
+  const activeTeamUid = selectedTeam === BLUE_TEAM_UID ? BLUE_TEAM_UID : YELLOW_TEAM_UID;
   nodeStore.hubDirectorySnapshot = {
+    schemaVersion: 2,
+    activeTeamUid,
     effectiveConnectedMode: true,
+    teams: [
+      { uid: YELLOW_TEAM_UID, color: "YELLOW", teamName: "Yellow" },
+      { uid: BLUE_TEAM_UID, color: "BLUE", teamName: "Blue" },
+    ],
+    callerMemberships: [
+      { teamUid: YELLOW_TEAM_UID, teamMemberUid: "mock-caller-yellow" },
+      { teamUid: BLUE_TEAM_UID, teamMemberUid: "mock-caller-blue" },
+    ],
+    members: visualMockData.hubDirectoryPeers.flatMap((peer, index) => {
+      const member = { ...peer, teamMemberUid: `mock-member-${index}` };
+      return index === 0
+        ? [{ ...member, teamUid: YELLOW_TEAM_UID }, { ...member, teamUid: BLUE_TEAM_UID }]
+        : [{ ...member, teamUid: BLUE_TEAM_UID }];
+    }),
+    localTeams: nodeStore.settings.teams.localTeams.map((team) => ({
+      ...team,
+      memberDestinations: [...team.memberDestinations],
+    })),
     items: visualMockData.hubDirectoryPeers,
     receivedAtMs: mockNow,
   };
   nodeStore.lastHubRefreshAt = mockNow;
 }
 
-function scheduleVisualMockRefresh(): void {
-  runDetachedStoreTask(nodeStore, "peers", "visual mock refresh", applyVisualMockData);
-}
-
 function isVisualMockMode(): boolean {
   return import.meta.env.DEV && route.query.mockPeers === "1";
 }
 
+function scheduleVisualMockRefresh(): void {
+  runDetachedStoreTask(nodeStore, "peers", "visual mock refresh", applyVisualMockData);
+}
+
 onMounted(() => {
-  if (isVisualMockMode()) {
-    scheduleVisualMockRefresh();
-    window.setTimeout(scheduleVisualMockRefresh, 500);
-    window.setTimeout(scheduleVisualMockRefresh, 1500);
-    visualMockRefreshInterval = window.setInterval(scheduleVisualMockRefresh, 2000);
-  }
+  if (!isVisualMockMode()) return;
+  scheduleVisualMockRefresh();
+  window.setTimeout(scheduleVisualMockRefresh, 500);
+  window.setTimeout(scheduleVisualMockRefresh, 1500);
+  visualMockRefreshInterval = window.setInterval(scheduleVisualMockRefresh, 2000);
 });
 
 onUnmounted(() => {
-  if (visualMockRefreshInterval !== undefined) {
-    window.clearInterval(visualMockRefreshInterval);
-  }
+  if (visualMockRefreshInterval !== undefined) window.clearInterval(visualMockRefreshInterval);
 });
 
 watch(activeTab, () => {
-  if (isVisualMockMode()) {
-    window.setTimeout(scheduleVisualMockRefresh, 0);
-  }
+  if (isVisualMockMode()) window.setTimeout(scheduleVisualMockRefresh, 0);
 });
-
-function isSaved(destination: string): boolean {
-  return nodeStore.savedDestinations.has(destination);
-}
-
-function announcedNameFor(destination: string): string | undefined {
-  return nodeStore.discoveredByDestination[destination]?.announcedName;
-}
 
 const filteredDiscovered = computed(() => {
   const query = searchText.value.trim().toLowerCase();
@@ -96,130 +118,30 @@ const filteredDiscovered = computed(() => {
     .sort((left, right) => right.lastSeenAt - left.lastSeenAt);
 });
 
-const filteredPeers = computed(() => {
-  const query = searchText.value.trim().toLowerCase();
-  return nodeStore.savedPeers.filter((peer: SavedPeer) =>
-    !query || savedPeerMatchesQuery(peer, query, announcedNameFor(peer.destination))
-  );
-});
-
 const filteredHubPeers = computed(() => {
   const query = searchText.value.trim().toLowerCase();
-  return nodeStore.hubDirectoryPeers.filter((peer: HubDirectoryPeerRecord) => {
-    if (!query) {
-      return true;
-    }
-    return (
-      peer.identity.toLowerCase().includes(query) ||
-      peer.destinationHash.toLowerCase().includes(query) ||
-      (peer.displayName ?? "").toLowerCase().includes(query) ||
-      peer.announceCapabilities.some((capability) => capability.toLowerCase().includes(query))
-    );
-  });
+  return nodeStore.hubDirectoryPeers.filter((peer: HubDirectoryPeerRecord) => !query || [
+    peer.identity,
+    peer.destinationHash,
+    peer.displayName ?? "",
+    ...peer.announceCapabilities,
+  ].some((value) => value.toLowerCase().includes(query)));
 });
 const discoveredWindow = useListWindow(filteredDiscovered, { resetKey: searchText });
-const savedWindow = useListWindow(filteredPeers, { resetKey: searchText });
 const hubWindow = useListWindow(filteredHubPeers, { resetKey: searchText });
 
 function peerName(peer: Pick<DiscoveredPeer, "announcedName" | "label" | "destination">): string {
   return peer.announcedName || peer.label || peer.destination;
 }
 
-function savedPeerName(peer: SavedPeer): string {
-  return announcedNameFor(peer.destination) || peer.label || "No label";
-}
-
-function peerNotificationName(destination: string): string {
-  const discovered = nodeStore.discoveredByDestination[destination];
-  const saved = nodeStore.savedByDestination[destination];
-  return discovered?.announcedName || discovered?.label || saved?.label || `${destination.slice(0, 5)}...`;
-}
-
 function seenLabel(lastSeenAt?: number): string {
-  if (!lastSeenAt) {
-    return "never seen";
-  }
-  const elapsedMs = Math.max(0, Date.now() - lastSeenAt);
-  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
-  if (elapsedMinutes < 60) {
-    return `seen ${Math.max(1, elapsedMinutes)} min ago`;
-  }
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) {
-    return `seen ${elapsedHours} hr ago`;
-  }
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  return `seen ${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
-}
-
-function discoveredMeta(peer: DiscoveredPeer): string {
-  const hops = typeof peer.hops === "number" ? ` | ${peer.hops} hops` : "";
-  return `${seenLabel(peer.lastSeenAt)}${hops}`;
-}
-
-function savedPeerConnectionLabel(destination: string): string {
-  const peer = nodeStore.discoveredByDestination[destination];
-  return peer?.activeLink ? "Disconnect" : "Connect";
-}
-
-function savedPeerStatusLabel(destination: string): "Connected" | "Reachable" | "Disconnected" {
-  const peer = nodeStore.discoveredByDestination[destination];
-  if (peer?.activeLink) {
-    return "Connected";
-  }
-  return nodeStore.reachablePeers.some((reachablePeer) => reachablePeer.destination === destination)
-    ? "Reachable"
-    : "Disconnected";
-}
-
-function savedPeerMeta(destination: string): string {
-  const peer = nodeStore.discoveredByDestination[destination];
-  return seenLabel(peer?.lastSeenAt);
-}
-
-function resolutionLabel(destination: string): string {
-  const peer = nodeStore.discoveredByDestination[destination];
-  const error = peer?.lastResolutionError?.trim();
-  if (error) {
-    return `Resolution error: ${error}`;
-  }
-  if (peer?.lastResolutionAttemptAt) {
-    return "Resolution attempted";
-  }
-  return "No resolution attempts";
-}
-
-async function onAddPeer(destination: string): Promise<void> {
-  const peerName = peerNotificationName(destination);
-  await runNodeAction(
-    () => nodeStore.savePeer(destination),
-    `added ${peerName}`,
-    "Peer",
-    `add ${peerName}`,
-  );
-}
-
-async function onRemovePeer(destination: string): Promise<void> {
-  const peerName = peerNotificationName(destination);
-  await runNodeAction(
-    () => nodeStore.removePeer(destination),
-    `removed ${peerName}`,
-    "Peer",
-    `remove ${peerName}`,
-  );
-}
-
-async function onSavedPeerConnectToggle(destination: string): Promise<void> {
-  const disconnecting = savedPeerConnectionLabel(destination) === "Disconnect";
-  const peerName = peerNotificationName(destination);
-  await runNodeAction(
-    () => (disconnecting ? nodeStore.disconnectPeer(destination) : nodeStore.connectPeer(destination)),
-    disconnecting
-      ? `disconnect requested ${peerName}`
-      : `connect requested ${peerName}`,
-    "Peer",
-    `${disconnecting ? "disconnect" : "connect"} ${peerName}`,
-  );
+  if (!lastSeenAt) return "never seen";
+  const minutes = Math.floor(Math.max(0, Date.now() - lastSeenAt) / 60_000);
+  if (minutes < 60) return `seen ${Math.max(1, minutes)} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `seen ${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  return `seen ${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 async function runNodeAction(
@@ -232,12 +154,49 @@ async function runNodeAction(
     await action();
     await notifyOperationalUpdate(title, successMessage, { route: "/peers" });
   } catch (error: unknown) {
-    await notifyOperationalUpdate(
-      "Peer",
-      `${failureAction} failed - ${error instanceof Error ? error.message : String(error)}`,
-      { route: "/peers" },
-    );
+    const detail = error instanceof Error ? error.message : String(error);
+    await notifyOperationalUpdate("Peer", `${failureAction} failed - ${detail}`, { route: "/peers" });
   }
+}
+
+async function changeSavedState(destination: string, save: boolean): Promise<void> {
+  const peer = nodeStore.discoveredByDestination[destination];
+  const name = peer?.announcedName || peer?.label || `${destination.slice(0, 5)}...`;
+  await runNodeAction(
+    () => save ? nodeStore.savePeer(destination) : nodeStore.removePeer(destination),
+    `${save ? "added" : "removed"} ${name}`,
+    "Peer",
+    `${save ? "add" : "remove"} ${name}`,
+  );
+}
+
+function selectorLabel(teamUid: string): string {
+  const team = selectableTeams.value.find((entry) => entry.uid === teamUid);
+  if (!team) return "Yellow";
+  const color = teamColorLabel(team.color);
+  const label = teamLabel(team.uid);
+  return label.toLowerCase() === color.toLowerCase() ? color : `${color} · ${label}`;
+}
+
+async function chooseActiveTeam(teamUid: string): Promise<void> {
+  teamMenu.value?.removeAttribute("open");
+  await runNodeAction(
+    () => setActiveTeam(teamUid),
+    `${teamLabel(teamUid)} is now the active team.`,
+    "Teams",
+    "select active team",
+  );
+}
+
+async function openManageTeams(action?: "add"): Promise<void> {
+  teamMenu.value?.removeAttribute("open");
+  await router.push({
+    name: "manage-teams",
+    query: {
+      from: "peers",
+      ...(action ? { action } : {}),
+    },
+  });
 }
 </script>
 
@@ -245,242 +204,101 @@ async function runNodeAction(
   <section class="view">
     <header class="view-header">
       <div class="header-actions">
-        <span class="utility-chip stat-chip">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
-            <circle cx="9.5" cy="7" r="3" />
-            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-            <path d="M16 3.13a3 3 0 0 1 0 5.74" />
-          </svg>
-          <span>{{ nodeStore.savedPeerCount }} Peers</span>
-        </span>
-        <span class="utility-chip stat-chip">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93" />
-            <path d="M14 11a5 5 0 0 0-7.07 0L4.81 13.12a5 5 0 0 0 7.07 7.07L13 19.07" />
-          </svg>
-          <span>{{ nodeStore.connectedPeerCount }} Connected</span>
-        </span>
-        <span class="utility-chip stat-chip">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 20h.01" />
-            <path d="M8.5 16.5a5 5 0 0 1 7 0" />
-            <path d="M5 13a10 10 0 0 1 14 0" />
-            <path d="M2 9.5a15 15 0 0 1 20 0" />
-          </svg>
-          <span>{{ nodeStore.reachablePeerCount }} Reachable</span>
-        </span>
-        <label class="utility-chip search-chip">
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16 16 4 4" />
-          </svg>
-          <input
-            v-model="searchText"
-            type="search"
-            placeholder="Search Peers"
-            aria-label="Search peers"
-          />
-        </label>
-        <button
-          type="button"
-          class="utility-chip announce-chip"
-          @click="
-            runNodeAction(() => nodeStore.announceNow(), 'Announce requested.')
-          "
-        >
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m3 11 14-6v14L3 13v-2Z" />
-            <path d="M17 9.5h2a2 2 0 0 1 0 4h-2" />
-            <path d="M6 13v5" />
-          </svg>
+        <details ref="teamMenu" class="active-team-menu">
+          <summary aria-label="Active team">
+            <span
+              class="team-color-dot"
+              :style="{ '--team-color': teamColorHex(activeSection?.team.color || 'YELLOW') }"
+              aria-hidden="true"
+            ></span>
+            <span class="active-team-copy">
+              <strong>{{ selectorLabel(activeSection?.team.uid || YELLOW_TEAM_UID) }}</strong>
+              <small>Active team</small>
+            </span>
+            <CaretDown class="team-menu-caret" :size="20" aria-hidden="true" />
+          </summary>
+          <div class="team-menu-popover" role="menu" aria-label="Choose active team">
+            <button
+              v-for="team in selectableTeams"
+              :key="team.uid"
+              type="button"
+              class="team-menu-item"
+              role="menuitemradio"
+              :aria-checked="team.uid === activeSection?.team.uid"
+              @click="chooseActiveTeam(team.uid)"
+            >
+              <span
+                class="team-color-dot"
+                :style="{ '--team-color': teamColorHex(team.color) }"
+                aria-hidden="true"
+              ></span>
+              <span>{{ selectorLabel(team.uid) }}</span>
+              <Check v-if="team.uid === activeSection?.team.uid" :size="19" aria-hidden="true" />
+            </button>
+            <button type="button" class="team-menu-item add-team-option" role="menuitem" @click="openManageTeams('add')">
+              <Plus :size="20" aria-hidden="true" />
+              <span>Add team</span>
+            </button>
+          </div>
+        </details>
+        <button type="button" class="utility-chip announce-chip" @click="runNodeAction(() => nodeStore.announceNow(), 'Announce requested.')">
+          <Broadcast :size="20" aria-hidden="true" />
           Announce
         </button>
       </div>
     </header>
 
     <nav class="peer-tabs" aria-label="Peer sections">
-      <button
-        type="button"
-        class="tab-button"
-        :class="{ active: activeTab === 'discovered' }"
-        @click="activeTab = 'discovered'"
-      >
-        <span>Discovered</span>
-        <strong>{{ filteredDiscovered.length }}</strong>
+      <button type="button" class="tab-button" :class="{ active: activeTab === 'discovered' }" @click="activeTab = 'discovered'">
+        <span>Discovered</span><strong>{{ filteredDiscovered.length }}</strong>
       </button>
-      <button
-        type="button"
-        class="tab-button"
-        :class="{ active: activeTab === 'peers' }"
-        @click="activeTab = 'peers'"
-      >
-        <span>Peers</span>
-        <strong>{{ filteredPeers.length }}</strong>
+      <button type="button" class="tab-button" :class="{ active: activeTab === 'peers' }" @click="activeTab = 'peers'">
+        <span>Peers</span><strong>{{ nodeStore.savedPeerCount }}</strong>
       </button>
-      <button
-        type="button"
-        class="tab-button"
-        :class="{ active: activeTab === 'hub' }"
-        @click="activeTab = 'hub'"
-      >
-        <span>Hub</span>
-        <strong>{{ filteredHubPeers.length }}</strong>
+      <button type="button" class="tab-button" :class="{ active: activeTab === 'hub' }" @click="activeTab = 'hub'">
+        <span>Hub</span><strong>{{ filteredHubPeers.length }}</strong>
       </button>
     </nav>
 
     <section v-if="activeTab === 'discovered'" class="panel">
-      <div class="section-header">
-        <h2>Discovered</h2>
-        <p>{{ filteredDiscovered.length }} REM clients heard through announces</p>
-      </div>
+      <div class="section-header"><h2>Discovered</h2><p>{{ filteredDiscovered.length }} REM clients heard through announces</p></div>
+      <label class="panel-search">
+        <MagnifyingGlass :size="21" aria-hidden="true" />
+        <input v-model="searchText" type="search" placeholder="Search discovered peers" aria-label="Search discovered peers" />
+      </label>
       <div v-if="filteredDiscovered.length > 0" class="peer-list">
-        <article
-          v-for="peer in discoveredWindow.items.value"
-          :key="peer.destination"
-          class="peer-item compact"
-        >
+        <article v-for="peer in discoveredWindow.items.value" :key="peer.destination" class="peer-item compact">
           <div class="peer-copy">
             <p class="dest">{{ peer.destination }}</p>
-            <div class="peer-name-line">
-              <span v-if="isSaved(peer.destination)" class="peer-state">Peer</span>
-              <p class="peer-name">{{ peerName(peer) }}</p>
-            </div>
-            <p class="peer-meta">{{ discoveredMeta(peer) }}</p>
+            <div class="peer-name-line"><span v-if="nodeStore.savedDestinations.has(peer.destination)" class="peer-state">Peer</span><p class="peer-name">{{ peerName(peer) }}</p></div>
+            <p class="peer-meta">{{ seenLabel(peer.lastSeenAt) }}{{ typeof peer.hops === "number" ? ` | ${peer.hops} hops` : "" }}</p>
           </div>
-          <div v-if="!isSaved(peer.destination)" class="actions inline-actions">
-            <button
-              type="button"
-              @click="onAddPeer(peer.destination)"
-            >
-              Add
-            </button>
-            <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
+          <div class="actions inline-actions">
+            <button v-if="!nodeStore.savedDestinations.has(peer.destination)" type="button" @click="changeSavedState(peer.destination, true)">Add</button>
+            <button v-else type="button" @click="changeSavedState(peer.destination, false)">Remove</button>
           </div>
         </article>
-        <ListWindowControls
-          :start="discoveredWindow.startIndex.value"
-          :end="discoveredWindow.endIndex.value"
-          :total="discoveredWindow.total.value"
-          :has-previous="discoveredWindow.hasPrevious.value"
-          :has-next="discoveredWindow.hasNext.value"
-          @previous="discoveredWindow.previous"
-          @next="discoveredWindow.next"
-        />
+        <ListWindowControls :start="discoveredWindow.startIndex.value" :end="discoveredWindow.endIndex.value" :total="discoveredWindow.total.value" :has-previous="discoveredWindow.hasPrevious.value" :has-next="discoveredWindow.hasNext.value" @previous="discoveredWindow.previous" @next="discoveredWindow.next" />
       </div>
       <p v-else class="empty-copy">No REM-capable announces match this search.</p>
     </section>
 
-    <section v-else-if="activeTab === 'peers'" class="panel">
-      <div class="section-header split-header">
-        <div>
-          <h2>Peers</h2>
-          <p>{{ filteredPeers.length }} saved peers by last seen | {{ nodeStore.connectedPeerCount }} Connected | {{ nodeStore.reachablePeerCount }} Reachable</p>
-        </div>
-        <div class="actions header-inline-actions">
-          <button
-            type="button"
-            @click="
-              runNodeAction(() => nodeStore.connectAllSaved(), 'Connect requested for saved peers.')
-            "
-          >
-            Connect all
-          </button>
-          <button
-            type="button"
-            @click="
-              runNodeAction(() => nodeStore.disconnectAllSaved(), 'Disconnected all saved peers.')
-            "
-          >
-            Disconnect all
-          </button>
-        </div>
-      </div>
-      <div v-if="filteredPeers.length > 0" class="peer-list">
-        <article v-for="peer in savedWindow.items.value" :key="peer.destination" class="peer-item">
-          <div class="peer-copy">
-            <p class="dest">{{ peer.destination }}</p>
-            <div class="peer-name-line">
-              <span
-                class="peer-connection-pill"
-                :class="savedPeerStatusLabel(peer.destination).toLowerCase()"
-              >
-                {{ savedPeerStatusLabel(peer.destination) }}
-              </span>
-              <p class="peer-name">{{ savedPeerName(peer) }}</p>
-            </div>
-            <p class="peer-meta">{{ savedPeerMeta(peer.destination) }}</p>
-            <p class="peer-resolution">{{ resolutionLabel(peer.destination) }}</p>
-          </div>
-          <div class="actions inline-actions">
-            <button type="button" @click="onSavedPeerConnectToggle(peer.destination)">
-              {{ savedPeerConnectionLabel(peer.destination) }}
-            </button>
-            <button type="button" @click="onRemovePeer(peer.destination)">Remove</button>
-          </div>
-        </article>
-        <ListWindowControls
-          :start="savedWindow.startIndex.value"
-          :end="savedWindow.endIndex.value"
-          :total="savedWindow.total.value"
-          :has-previous="savedWindow.hasPrevious.value"
-          :has-next="savedWindow.hasNext.value"
-          @previous="savedWindow.previous"
-          @next="savedWindow.next"
-        />
-      </div>
-      <p v-else class="empty-copy">No peers saved locally.</p>
-    </section>
+    <PeersTeamRoster v-else-if="activeTab === 'peers'" v-model:search-text="searchText" />
 
     <section v-else class="panel">
       <div class="section-header split-header">
-        <div>
-          <h2>Hub</h2>
-          <p>
-            Mode: {{ nodeStore.settings.hub.mode }} | Last refresh:
-            {{
-              nodeStore.lastHubRefreshAt
-                ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString()
-                : "never"
-            }}
-          </p>
-        </div>
-        <div class="actions header-inline-actions">
-          <button
-            type="button"
-            @click="
-              runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')
-            "
-          >
-            Refresh hub list
-          </button>
-        </div>
+        <div><h2>Hub</h2><p>Mode: {{ nodeStore.settings.hub.mode }} | Last refresh: {{ nodeStore.lastHubRefreshAt ? new Date(nodeStore.lastHubRefreshAt).toLocaleTimeString() : "never" }}</p></div>
+        <div class="actions header-inline-actions"><button type="button" @click="runNodeAction(() => nodeStore.refreshHubDirectory(), 'Hub directory refreshed.')">Refresh hub list</button></div>
       </div>
+      <label class="panel-search">
+        <MagnifyingGlass :size="21" aria-hidden="true" />
+        <input v-model="searchText" type="search" placeholder="Search hub peers" aria-label="Search hub peers" />
+      </label>
       <div v-if="filteredHubPeers.length > 0" class="peer-list">
-        <article
-          v-for="peer in hubWindow.items.value"
-          :key="peer.destinationHash"
-          class="peer-item hub-item"
-        >
-          <div class="peer-copy">
-            <p class="dest">{{ peer.destinationHash }}</p>
-            <p class="peer-name">{{ peer.displayName || peer.identity }}</p>
-            <p class="peer-meta">
-              {{ peer.status || "unknown" }} | {{ peer.registeredMode || "unregistered" }} |
-              {{ peer.clientType || "unknown client" }}
-            </p>
-            <p class="peer-resolution">{{ peer.announceCapabilities.join(", ") }}</p>
-          </div>
+        <article v-for="peer in hubWindow.items.value" :key="peer.destinationHash" class="peer-item hub-item">
+          <div class="peer-copy"><p class="dest">{{ peer.destinationHash }}</p><p class="peer-name">{{ peer.displayName || peer.identity }}</p><p class="peer-meta">{{ peer.status || "unknown" }} | {{ peer.registeredMode || "unregistered" }} | {{ peer.clientType || "unknown client" }}</p><p class="peer-resolution">{{ peer.announceCapabilities.join(", ") }}</p></div>
         </article>
-        <ListWindowControls
-          :start="hubWindow.startIndex.value"
-          :end="hubWindow.endIndex.value"
-          :total="hubWindow.total.value"
-          :has-previous="hubWindow.hasPrevious.value"
-          :has-next="hubWindow.hasNext.value"
-          @previous="hubWindow.previous"
-          @next="hubWindow.next"
-        />
+        <ListWindowControls :start="hubWindow.startIndex.value" :end="hubWindow.endIndex.value" :total="hubWindow.total.value" :has-previous="hubWindow.hasPrevious.value" :has-next="hubWindow.hasNext.value" @previous="hubWindow.previous" @next="hubWindow.next" />
       </div>
       <p v-else class="empty-copy">No hub peers cached.</p>
     </section>

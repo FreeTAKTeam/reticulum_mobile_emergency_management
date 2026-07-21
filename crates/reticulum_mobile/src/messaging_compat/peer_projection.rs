@@ -189,7 +189,7 @@ impl MessagingStore {
             });
         }
 
-        peers.sort_by(|left, right| right.last_seen_at_ms.cmp(&left.last_seen_at_ms));
+        peers.sort_by_key(|peer| std::cmp::Reverse(peer.last_seen_at_ms));
         peers
     }
 
