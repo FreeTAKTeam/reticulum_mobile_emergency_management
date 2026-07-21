@@ -1,34 +1,4 @@
 impl AppStateStore {
-    pub fn get_app_settings(&self) -> Result<Option<AppSettingsRecord>, NodeError> {
-        let connection = self.connect()?;
-        let raw: Option<String> = connection
-            .query_row("SELECT json FROM app_settings WHERE id = 1", [], |row| {
-                row.get(0)
-            })
-            .optional()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        raw.map(|value| deserialize_json(&value)).transpose()
-    }
-
-    pub fn set_app_settings(
-        &self,
-        settings: &AppSettingsRecord,
-    ) -> Result<ProjectionInvalidation, NodeError> {
-        let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        self.write_app_settings_tx(&transaction, settings)?;
-        let invalidation = self.bump_projection_revision_tx(
-            &transaction,
-            ProjectionScope::AppSettings {},
-            None,
-            Some("settings-updated".to_string()),
-        )?;
-        transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        Ok(invalidation)
-    }
-
     pub fn list_plugins(&self) -> Result<Vec<InstalledPluginRecord>, NodeError> {
         let connection = self.connect()?;
         let mut statement = connection

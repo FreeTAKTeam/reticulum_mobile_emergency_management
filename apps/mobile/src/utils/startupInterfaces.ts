@@ -71,3 +71,13 @@ export function statusHasRuntimeStartupReadiness(
 ): boolean {
   return Boolean(status?.running) && status?.readiness?.state === "Ready";
 }
+
+export function statusNeedsStartupInterfaceGrace(
+  status: Pick<NodeStatus, "running" | "readiness"> | null | undefined,
+  items: readonly StartupInterfaceItem[],
+): boolean {
+  if (!status?.running || statusHasRuntimeStartupReadiness(status)) {
+    return false;
+  }
+  return items.some((item) => item.id !== "local" && item.state !== "disabled");
+}

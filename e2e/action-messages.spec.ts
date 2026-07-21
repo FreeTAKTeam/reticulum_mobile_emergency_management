@@ -27,23 +27,23 @@ test("operators can create, edit statuses, cycle status, view help, and delete a
 
   const createForm = page.locator("form.create-form");
   await expect(createForm.getByLabel("Call Sign")).toHaveValue("Raven-6");
+  await expect(createForm.getByLabel("Active team")).toHaveText("Yellow team");
   await createForm.getByLabel("Call Sign").fill("Bravo-2");
-  await createForm.getByLabel("Team color").selectOption("RED");
   await createForm.getByRole("button", { name: "Add message" }).click();
 
   const messageCard = page.locator("article.item:visible").filter({ hasText: "Bravo-2" });
   await expect(messageCard.getByRole("heading", { name: "Bravo-2" })).toBeVisible();
-  await expect(messageCard).toContainText("Team: Red");
+  await expect(messageCard).toContainText("Team: Yellow");
   const createdUpdatedAt = await updatedAtFor("Bravo-2");
   expect(createdUpdatedAt).toBeGreaterThan(0);
 
   await messageCard.getByRole("button", { name: "Edit Bravo-2" }).click();
   await expect(createForm.getByLabel("Call Sign")).toHaveValue("Bravo-2");
-  await createForm.getByLabel("Team color").selectOption("BLUE");
+  await expect(createForm.getByLabel("Active team")).toHaveText("Yellow team");
   await createForm.getByLabel("Security status").selectOption("Yellow");
   await createForm.getByLabel("Comms status").selectOption("Red");
   await createForm.getByRole("button", { name: "Save message" }).click();
-  await expect(messageCard).toContainText("Team: Blue");
+  await expect(messageCard).toContainText("Team: Yellow");
   const editedUpdatedAt = await updatedAtFor("Bravo-2");
   expect(editedUpdatedAt).toBeGreaterThan(createdUpdatedAt);
   await messageCard.getByRole("button", { name: "Show statuses" }).click();

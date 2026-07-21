@@ -98,6 +98,7 @@ fn app_settings_with_due_step(default_task_due_step_minutes: u32) -> AppSettings
             api_key: String::new(),
             refresh_interval_seconds: 3600,
         },
+        teams: crate::types::TeamSettingsRecord::default(),
         checklists: ChecklistSettingsRecord {
             default_task_due_step_minutes,
         },

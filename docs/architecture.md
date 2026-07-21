@@ -9,12 +9,55 @@ This diagram shows the end-to-end mobile event replication flow over LXMF, inclu
 
 Current mobile behavior differs from the older store-centric sketch below in two important ways:
 - Rust now owns local `upsert_eam` and `upsert_event` replication scheduling. The Vue stores persist locally by calling the native command surface; Rust immediately selects mission-capable peer targets and enqueues LXMF sends.
-- When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills `team_member_uid` from the local LXMF delivery destination hash and fills `team_uid` from a fixed team-color hash table before persisting and replicating the record.
+- When an EAM is created without explicit `team_member_uid` or `team_uid`, Rust fills the member linkage from the local identity and the currently active canonical team before persisting and replicating the record.
 - The Rust runtime restores saved peers into the managed set during startup before the first status/peer snapshot is exposed to the app, so immediate post-launch sends use intentional peers instead of waiting for later TypeScript auto-connect work.
 - Saved peers persist a durable route profile when one is known: canonical LXMF delivery destination, identity, REM capability app data, display name, route timestamp, and hop count. The runtime can rebuild a stale saved peer from that profile after restart or missed announces, which lets propagation planning target the peer without waiting for a fresh peer snapshot.
 - Event and EAM replication use intentional native fanout: they never target merely discovered peers, and each target send is handled independently so one unavailable peer does not block the rest. Direct sends require a live managed LXMF link (`active_link=true` with native `Connected` state). Saved peers with known LXMF routes use propagation when an active relay is available, rather than being labeled as direct candidates from a recent announce alone. The Rust send path resolves the peer's LXMF destination at send time even if the current peer snapshot no longer carries `lxmf_destination_hex`.
-- RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` refreshes an authoritative TEAM-scoped hub directory by sending `rem.registry.team_peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH and then uses only those returned peers for direct or propagated sends. A missing, rejected, timed-out, malformed, or unscoped directory fails closed with no team fanout instead of falling back to local discovery. `Connected` sends outbound traffic only to the selected RCH, and an `effective_connected_mode=true` hub response temporarily upgrades `SemiAutonomous` to connected routing.
+- RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` periodically refreshes a TEAM-scoped hub directory by sending `rem.registry.team_peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH. The latest successful directory is a local membership allowlist: routing intersects it with locally observed announce/link state instead of trusting hub presence labels or querying the hub during each send. Refresh failures retain the last successful directory; a node that has never received a valid directory still fails closed for RCH-owned recipients. In `Connected`, local members still use their direct routes while the same-color RCH roster is sent through the selected hub; an `effective_connected_mode=true` hub response temporarily applies that split routing to `SemiAutonomous`.
 - SOS uses the same numeric LXMF command slot in this repo: `FIELD_COMMANDS (0x09)`. The shared Rust constants are the source of truth, and the runtime separates SOS from RCH by envelope keys (`sos_state` / `incident_id` vs `command_type` / `command_id`). The earlier SOS note that said `FIELD_COMMANDS (0x06)` is stale for the current REM/RCH wire contract.
+
+## Local And RCH Multi-Team Routing
+
+RCH owns shared TEAM membership. Its version 2 `rem.registry.team_peers.list`
+response carries canonical team records, the caller's team/member linkages, a
+durable REM-member roster, and the unchanged legacy `items` list. REM accepts
+only the 13 canonical color-team UIDs. Yellow is always available and is the
+default; legacy flat responses are interpreted as Yellow.
+
+REM persists the last valid RCH directory under the selected hub identity. A hub
+change cannot reuse another hub's cache, and a refresh failure does not erase a
+valid cache. If an authoritative refresh removes the selected team, REM returns
+to Yellow and emits an operational notice unless the same color exists locally.
+RCH membership remains read-only in REM. Local membership, the active team, and
+optional aliases are editable; aliases are never placed in LXMF fields, mission
+command arguments, or exported team data.
+
+The active team scopes every outbound recipient set while all local timelines
+remain shared. REM can create any of the 13 canonical color teams and assign a
+saved peer to several local colors. Existing saved peers migrate once to local
+Yellow. A local roster and an RCH roster with the same canonical UID appear as
+one merged section and one deduplicated recipient set. Autonomous and
+Semi-autonomous modes intersect the selected roster with local announce/link
+state. Connected mode sends local members directly and sends the RCH-owned
+portion through the configured hub after validating caller membership. An
+empty merged roster fails closed.
+
+Local teams can be exported as versioned JSON and imported on another REM
+client. Import merges membership by canonical color UID, creates saved peer
+records as needed, and never overwrites the receiving device's local alias.
+The QR path carries a compact form of the same version 1 JSON envelope, limited
+to 40 member destinations so one code remains reliably scannable. It excludes
+local aliases and peer labels. The receiving client scans only QR format,
+validates the schema, canonical UID, member count, and every destination, then
+uses the same merge path as pasted JSON. Android scanning uses the offline
+ZXing backend and requires API 26 or newer.
+
+Every team-scoped mission, checklist, telemetry, chat, EAM, and SOS send carries
+the canonical team UID in LXMF `FIELD_GROUP (0x0B)`. RCH validates the caller's
+membership and constrains Connected-mode fanout to that team. Switching teams
+tombstones the local EAM in the previous team and republishes its retained
+status values with the new linkage; local switching and persistence still work
+while the transport is offline.
 
 ```mermaid
 sequenceDiagram
@@ -138,7 +181,7 @@ sequenceDiagram
 
 ## Flow Differences
 
-- Telemetry routes from `telemetryDestinations`; in `Autonomous` that list is announce-driven, in `SemiAutonomous` it is derived only from the latest valid TEAM-scoped RCH directory snapshot, and in `Connected` it collapses to the selected hub destination.
+- Telemetry routes from `telemetryDestinations`; in `Autonomous` that list is announce-driven, in `SemiAutonomous` it is the intersection of the cached TEAM-scoped directory and locally current peers, and in `Connected` it collapses to the selected hub destination.
 - Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
 - Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
@@ -286,6 +329,7 @@ Implementation mapping:
 
 MECP event body contract:
 - REM event content uses compact MECP text in `args.content`, for example `MECP/2/P01 #A1`.
+- Packet-efficient event replication may omit the `MECP/2/` prefix on the wire. Receivers restore it before native persistence, and the timeline accepts legacy stored compact bodies such as `H01 water cache` so the code and trailing details remain parseable.
 - The event type keyword remains the MECP category selector, stored as `r3akt:event-type:<category>`.
 - Sender and time remain canonical in the REM envelope through `args.callsign`, `args.server_time`, `args.client_time`, and projection timestamps. Outbound REM events must not duplicate callsign or timestamp tokens inside the MECP body.
 - The MECP codec may decode portable external callsign or timestamp tokens when they are received, but timeline display still prefers the REM envelope for callsign and time.
@@ -493,19 +537,20 @@ Mixed TCP and LoRa behavior for the 1.2 release:
 - Restart-free interface reconfiguration is not a 1.2 release requirement. After changing TCP endpoints or RNode LoRa settings, operators should save the configuration and restart REM before validating traffic.
 - Mixed-interface duplicate packets can occur when TCP and LoRa are active at the same time. Reticulum transport owns packet-level duplicate filtering through its packet cache before REM workflow handlers receive payloads; REM must not implement a TCP-first, LoRa-first, or UI-level duplicate cleanup policy for this release gate.
 
-1.2.7-rc.1 release gate:
+1.2.7 release gate:
 - The manual validation procedure is `docs/rem-1.2-manual-release-gate.md`.
 - For each workflow, the manual test sequence is announce, connect to the peer, then test the workflow payload.
-- Announce peer visibility works over LoRa-only, TCP-only, and mixed TCP+LoRa.
-- Peer connection works after announce in all three modes.
-- Chat delivery works in all three modes.
-- Event replication works in all three modes.
-- EAM/preparedness updates work in all three modes.
-- Checklist updates work in all three modes.
+- The supported TCP matrix confirms announce visibility, peer connection, chat,
+  events, EAM/preparedness, checklists, telemetry, SOS, restart recovery, and
+  reconnect behavior on two physical phones.
+- LoRa-only and mixed TCP+LoRa use the same workflow matrix as preview
+  validation, but incomplete rows are not promoted to release evidence.
 - Mixed mode allows Reticulum to choose the interface, with no REM-side forced preference.
 - Duplicate delivery across TCP+LoRa is deduped cleanly by Reticulum transport, not by REM workflow or UI cleanup.
 - Settings clearly document that REM must be restarted after interface configuration changes for this release.
-- 1.2.7-rc.1 remains a prerelease until issue #168 passes on two authorized phones.
+- The two-phone TCP matrix is release-gated. The remaining LoRa-only and mixed
+  physical-radio rows in issue #168 remain documented preview scope and are not
+  represented as completed by the 1.2.7 release.
 
 ## Mobile Runtime Ownership Status
 

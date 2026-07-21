@@ -24,6 +24,12 @@ function manualChunks(id: string): string | undefined {
   if (id.includes("maplibre-gl") || id.includes("@maplibre")) {
     return "maplibre";
   }
+  if (id.includes("@capacitor/barcode-scanner") || id.includes("html5-qrcode")) {
+    return "qr-scanner";
+  }
+  if (id.includes("/qrcode/") || id.includes("\\qrcode\\") || id.includes("dijkstrajs")) {
+    return "qr-generator";
+  }
   if (
     id.includes("/vue/")
     || id.includes("\\vue\\")

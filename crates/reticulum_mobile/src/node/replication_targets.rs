@@ -1,18 +1,3 @@
-const DEFAULT_R3AKT_TEAM_COLOR: &str = "YELLOW";
-const TEAM_UID_YELLOW: &str = "d6b6e188b910d6bdd24d04b7a7ec5444";
-const TEAM_UID_RED: &str = "65ce79a3a3e4b51ec0ec52d1d3d2b0b9";
-const TEAM_UID_BLUE: &str = "43341e5c822d99857fa6e8641f2ca9c0";
-const TEAM_UID_ORANGE: &str = "a83eb640e4c4884be14831e3d7ef5ae0";
-const TEAM_UID_MAGENTA: &str = "7ac50a910f42b06cd9cb68dad3def681";
-const TEAM_UID_MAROON: &str = "372824ef4f15881291455562f7570233";
-const TEAM_UID_PURPLE: &str = "4bf2a1d2217c8668942658137f2a6824";
-const TEAM_UID_DARK_BLUE: &str = "cbb35fc9a8f5a91d7bd2b5e5b644edcd";
-const TEAM_UID_CYAN: &str = "d4cd5030b68df059ec6beabe416dd6a6";
-const TEAM_UID_TEAL: &str = "4d7a7a974beec395bf83491604768499";
-const TEAM_UID_GREEN: &str = "612a32262163b73a80eca944c2158546";
-const TEAM_UID_DARK_GREEN: &str = "341653613d4c76d56bee99c1f38177b1";
-const TEAM_UID_BROWN: &str = "4efe72ac30f5b85142fdcab6d96c7631";
-
 #[derive(Debug, Clone)]
 struct MissionReplicationTarget {
     app_destination_hex: String,
@@ -44,6 +29,73 @@ fn effective_hub_mode(
             }
         }
     }
+}
+
+fn active_team_directory_destinations(
+    snapshot: &HubDirectorySnapshot,
+    required_capability: Option<&str>,
+) -> Vec<String> {
+    let active_team_uid = active_team_uid(Some(snapshot));
+    let mut destinations = Vec::new();
+    let mut seen = HashSet::new();
+    for member in &snapshot.members {
+        if member.team_uid != active_team_uid {
+            continue;
+        }
+        if required_capability.is_some_and(|required| {
+            !member
+                .announce_capabilities
+                .iter()
+                .any(|capability| capability.eq_ignore_ascii_case(required))
+        }) {
+            continue;
+        }
+        if let Some(destination) = normalize_hex_32(&member.destination_hash) {
+            if seen.insert(destination.clone()) {
+                destinations.push(destination);
+            }
+        }
+    }
+    // Directly constructed and legacy snapshots may only carry `items`.
+    if active_team_uid == YELLOW_TEAM_UID && destinations.is_empty() {
+        for item in &snapshot.items {
+            if required_capability.is_some_and(|required| {
+                !item
+                    .announce_capabilities
+                    .iter()
+                    .any(|capability| capability.eq_ignore_ascii_case(required))
+            }) {
+                continue;
+            }
+            if let Some(destination) = normalize_hex_32(&item.destination_hash) {
+                if seen.insert(destination.clone()) {
+                    destinations.push(destination);
+                }
+            }
+        }
+    }
+    destinations
+}
+
+fn active_team_has_caller_membership(snapshot: &HubDirectorySnapshot) -> bool {
+    let team_uid = active_team_uid(Some(snapshot));
+    (team_uid == YELLOW_TEAM_UID && snapshot.schema_version < HUB_DIRECTORY_SCHEMA_VERSION)
+        || snapshot
+            .caller_memberships
+            .iter()
+            .any(|membership| membership.team_uid == team_uid)
+}
+
+fn merge_replication_target_sets(
+    primary: Vec<MissionReplicationTarget>,
+    additional: Vec<MissionReplicationTarget>,
+) -> Vec<MissionReplicationTarget> {
+    let mut seen = HashSet::new();
+    primary
+        .into_iter()
+        .chain(additional)
+        .filter(|target| seen.insert(target.app_destination_hex.clone()))
+        .collect()
 }
 
 fn telemetry_targets_from_peers_with_relay(
@@ -106,18 +158,11 @@ fn telemetry_destinations_from_hub_snapshot(
 ) -> Vec<String> {
     let mut destinations = Vec::new();
     let mut seen = HashSet::<String>::new();
-    for item in &snapshot.items {
-        let Some(destination_hex) = normalize_hex_32(item.destination_hash.as_str()) else {
+    for destination in active_team_directory_destinations(snapshot, Some("telemetry")) {
+        let Some(destination_hex) = normalize_hex_32(destination.as_str()) else {
             continue;
         };
         if self_destination_hex == Some(destination_hex.as_str()) {
-            continue;
-        }
-        if !item
-            .announce_capabilities
-            .iter()
-            .any(|capability| capability.eq_ignore_ascii_case("telemetry"))
-        {
             continue;
         }
         if seen.insert(destination_hex.clone()) {
@@ -135,48 +180,66 @@ fn build_runtime_telemetry_destinations(
     hub_directory_snapshot: Option<&HubDirectorySnapshot>,
 ) -> Result<Vec<MissionReplicationTarget>, NodeError> {
     let self_destination_hex = normalize_hex_32(status.app_destination_hex.as_str());
+    let local_destinations = hub_directory_snapshot
+        .map(active_local_team_destinations)
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let local_peers = if hub_directory_snapshot.is_some_and(|snapshot| !snapshot.local_teams.is_empty()) {
+        peers
+            .iter()
+            .filter(|peer| {
+                local_destinations.contains(&peer.destination_hex.to_ascii_lowercase())
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        peers.to_vec()
+    };
     let Some(config) = active_config else {
         return Ok(telemetry_targets_from_peers_with_relay(
-            peers,
+            &local_peers,
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
         ));
     };
 
-    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
-        HubMode::Autonomous {} => Ok(telemetry_targets_from_peers_with_relay(
-            peers,
+    let mode = effective_hub_mode(config.hub_mode, hub_directory_snapshot);
+    let local_targets = if !local_destinations.is_empty()
+        || hub_directory_snapshot.is_none_or(|snapshot| snapshot.local_teams.is_empty())
+    {
+        telemetry_targets_from_peers_with_relay(
+            &local_peers,
             self_destination_hex.as_deref(),
             active_propagation_node_hex,
-        )),
-        HubMode::Connected {} => Ok(vec![connected_hub_replication_target(
-            peers,
-            active_propagation_node_hex,
-            config,
-        )?]),
-        HubMode::SemiAutonomous {} => {
-            if config
-                .hub_identity_hash
-                .as_deref()
-                .and_then(normalize_hex_32)
-                .is_none()
-            {
-                return Ok(Vec::new());
-            }
-            let Some(snapshot) = hub_directory_snapshot else {
-                return Ok(Vec::new());
-            };
-            Ok(build_transient_replication_targets(
-                status,
+        )
+    } else {
+        Vec::new()
+    };
+    let Some(snapshot) = hub_directory_snapshot else {
+        return Ok(local_targets);
+    };
+    let directory_targets = build_transient_replication_targets(
+        status,
+        peers,
+        &telemetry_destinations_from_hub_snapshot(snapshot, self_destination_hex.as_deref()),
+        active_propagation_node_hex,
+    );
+    if matches!(mode, HubMode::Connected {}) {
+        let hub_targets = if active_team_has_caller_membership(snapshot)
+            && !active_team_directory_destinations(snapshot, Some("telemetry")).is_empty()
+        {
+            vec![connected_hub_replication_target(
                 peers,
-                &telemetry_destinations_from_hub_snapshot(
-                    snapshot,
-                    self_destination_hex.as_deref(),
-                ),
                 active_propagation_node_hex,
-            ))
-        }
+                config,
+            )?]
+        } else {
+            Vec::new()
+        };
+        return Ok(merge_replication_target_sets(local_targets, hub_targets));
     }
+    Ok(merge_replication_target_sets(local_targets, directory_targets))
 }
 
 fn configured_hub_destination(config: &NodeConfigFingerprint) -> Result<String, NodeError> {
@@ -195,65 +258,61 @@ fn routed_destination_hex(
     let Some(config) = active_config else {
         return Ok(requested_destination_hex);
     };
-    match effective_hub_mode(config.hub_mode, hub_directory_snapshot) {
-        HubMode::Connected {} => configured_hub_destination(config),
-        HubMode::Autonomous {} | HubMode::SemiAutonomous {} => Ok(requested_destination_hex),
+    let mode = effective_hub_mode(config.hub_mode, hub_directory_snapshot);
+    if matches!(mode, HubMode::Connected {}) {
+        let snapshot = hub_directory_snapshot.ok_or(NodeError::InvalidConfig {})?;
+        if active_local_team_destinations(snapshot).contains(&requested_destination_hex) {
+            return Ok(requested_destination_hex);
+        }
+        let destinations = active_team_directory_destinations(snapshot, None);
+        if !active_team_has_caller_membership(snapshot) || destinations.is_empty() {
+            return Err(NodeError::InvalidConfig {});
+        }
+        let configured_hub = configured_hub_destination(config)?;
+        if requested_destination_hex != configured_hub
+            && !destinations.contains(&requested_destination_hex)
+        {
+            return Err(NodeError::InvalidConfig {});
+        }
+        return Ok(configured_hub);
     }
+    if hub_directory_snapshot.is_some_and(|snapshot| {
+        !snapshot.local_teams.is_empty()
+            && !active_local_team_destinations(snapshot).contains(&requested_destination_hex)
+            && !active_team_directory_destinations(snapshot, None)
+                .contains(&requested_destination_hex)
+    })
+    {
+        return Err(NodeError::InvalidConfig {});
+    }
+    Ok(requested_destination_hex)
 }
 
 fn is_blank(value: Option<&str>) -> bool {
     value.is_none_or(|entry| entry.trim().is_empty())
 }
 
-fn normalize_team_color(value: &str) -> &'static str {
-    match value.trim().to_ascii_uppercase().as_str() {
-        "RED" => "RED",
-        "BLUE" => "BLUE",
-        "ORANGE" => "ORANGE",
-        "MAGENTA" => "MAGENTA",
-        "MAROON" => "MAROON",
-        "PURPLE" => "PURPLE",
-        "DARK_BLUE" => "DARK_BLUE",
-        "CYAN" => "CYAN",
-        "TEAL" => "TEAL",
-        "GREEN" => "GREEN",
-        "DARK_GREEN" => "DARK_GREEN",
-        "BROWN" => "BROWN",
-        _ => DEFAULT_R3AKT_TEAM_COLOR,
-    }
-}
-
-fn team_uid_for_color(color: &str) -> &'static str {
-    match normalize_team_color(color) {
-        "RED" => TEAM_UID_RED,
-        "BLUE" => TEAM_UID_BLUE,
-        "ORANGE" => TEAM_UID_ORANGE,
-        "MAGENTA" => TEAM_UID_MAGENTA,
-        "MAROON" => TEAM_UID_MAROON,
-        "PURPLE" => TEAM_UID_PURPLE,
-        "DARK_BLUE" => TEAM_UID_DARK_BLUE,
-        "CYAN" => TEAM_UID_CYAN,
-        "TEAL" => TEAM_UID_TEAL,
-        "GREEN" => TEAM_UID_GREEN,
-        "DARK_GREEN" => TEAM_UID_DARK_GREEN,
-        "BROWN" => TEAM_UID_BROWN,
-        _ => TEAM_UID_YELLOW,
-    }
-}
-
-fn populate_eam_defaults(status: &NodeStatus, record: &EamProjectionRecord) -> EamProjectionRecord {
+fn populate_eam_defaults(
+    status: &NodeStatus,
+    record: &EamProjectionRecord,
+    hub_directory_snapshot: Option<&HubDirectorySnapshot>,
+) -> EamProjectionRecord {
     let mut normalized = record.clone();
-    let team_color = normalize_team_color(normalized.group_name.as_str());
+    let active_team_uid = active_team_uid(hub_directory_snapshot);
+    let team_color = canonical_team_color_for_uid(active_team_uid).unwrap_or("YELLOW");
     normalized.group_name = team_color.to_string();
-    if is_blank(normalized.team_member_uid.as_deref()) {
+    normalized.team_uid = Some(active_team_uid.to_string());
+    let active_team_member_uid = hub_directory_snapshot.and_then(|snapshot| {
+        snapshot
+            .caller_memberships
+            .iter()
+            .find(|membership| membership.team_uid == active_team_uid)
+            .map(|membership| membership.team_member_uid.clone())
+    });
+    normalized.team_member_uid = active_team_member_uid.or_else(|| {
         let app_hash = status.app_destination_hex.trim();
-        if !app_hash.is_empty() {
-            normalized.team_member_uid = Some(app_hash.to_string());
-        }
-    }
-    if is_blank(normalized.team_uid.as_deref()) {
-        normalized.team_uid = Some(team_uid_for_color(team_color).to_string());
-    }
+        (!app_hash.is_empty()).then(|| app_hash.to_string())
+    });
     if is_blank(normalized.reported_by.as_deref()) && !status.name.trim().is_empty() {
         normalized.reported_by = Some(status.name.trim().to_string());
     }
@@ -419,3 +478,5 @@ fn announce_route_hops(announces: &[AnnounceRecord]) -> HashMap<String, u8> {
     }
     route_hops
 }
+#[cfg(test)]
+const TEAM_UID_YELLOW: &str = YELLOW_TEAM_UID;

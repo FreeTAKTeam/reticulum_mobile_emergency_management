@@ -162,6 +162,26 @@ test("operators can filter MECP events by severity and category", async ({ page 
   await expect(page.getByRole("heading", { name: "storm approaching" })).toBeVisible();
 });
 
+test("received compact MECP event codes remain parseable when details follow", async ({ page }) => {
+  await seedAppStorage(page, {
+    events: [{
+      uid: "event-h01-bolle",
+      type: "Incident",
+      summary: "H01 Bolle",
+      callsign: "Poco",
+      updatedAt: 1_784_564_964_000,
+    }],
+  });
+  await gotoApp(page, "/events");
+
+  const event = page.getByRole("article").filter({ hasText: "H01 Bolle" });
+  await expect(event.getByText("SAFETY")).toBeVisible();
+  await expect(event.getByText("HAVE / OFFER RESOURCES")).toBeVisible();
+  await expect(event.getByRole("heading", { name: "have water available" })).toBeVisible();
+  await expect(event.getByText("Bolle", { exact: true })).toBeVisible();
+  await expect(event).toContainText("Poco");
+});
+
 test("header shows the connected peer count", async ({ page }) => {
   await seedAppStorage(page, {
     savedPeers: [
@@ -176,9 +196,9 @@ test("header shows the connected peer count", async ({ page }) => {
 
   const connectedPeerCount = page.getByTestId("connected-peer-count");
 
-  await expect(page.getByRole("heading", { name: "Peers" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Peers", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Peers 1" }).click();
-  const savedPeer = page.locator(".peer-list .peer-item").first();
+  const savedPeer = page.locator(".roster-list .roster-row").first();
   await expect(savedPeer).toBeVisible();
   await expect(connectedPeerCount).toHaveText("1/0/0");
 

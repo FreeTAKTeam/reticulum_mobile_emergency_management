@@ -6,9 +6,9 @@ import SettingsAboutPanel from "../components/settings/SettingsAboutPanel.vue";
 import SettingsHubPanel from "../components/settings/SettingsHubPanel.vue";
 import SettingsNodeConfigPanel from "../components/settings/SettingsNodeConfigPanel.vue";
 import SettingsNodeControlPanel from "../components/settings/SettingsNodeControlPanel.vue";
-import SettingsPeerManagementPanel from "../components/settings/SettingsPeerManagementPanel.vue";
 import SettingsPluginsPanel from "../components/settings/SettingsPluginsPanel.vue";
 import SettingsTelemetryPanel from "../components/settings/SettingsTelemetryPanel.vue";
+import SettingsTeamsPanel from "../components/settings/SettingsTeamsPanel.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { useNodeStore } from "../stores/nodeStore";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
@@ -92,7 +92,7 @@ const hasMainSettingsChanges = computed(() =>
   form.displayName !== nodeStore.settings.displayName
   || form.clientMode !== nodeStore.settings.clientMode
   || ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()) !== nodeStore.settings.announceCapabilities
-  || Math.max(5, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
+  || Math.max(60, Number(form.announceIntervalSeconds || 1800)) !== nodeStore.settings.announceIntervalSeconds
   || form.broadcast !== nodeStore.settings.broadcast
   || form.transportNodeEnabled !== nodeStore.settings.transportNodeEnabled
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
@@ -181,7 +181,7 @@ async function applySettings(): Promise<void> {
       displayName: form.displayName,
       clientMode: form.clientMode,
       announceCapabilities: ensureRequiredAnnounceCapabilities(form.announceCapabilities.trim()),
-      announceIntervalSeconds: Math.max(5, Number(form.announceIntervalSeconds || 1800)),
+      announceIntervalSeconds: Math.max(60, Number(form.announceIntervalSeconds || 1800)),
       tcpClients: normalizedTcpClients.value,
       broadcast: form.broadcast,
       transportNodeEnabled: form.transportNodeEnabled,
@@ -347,7 +347,7 @@ function openNodeControlPanel(): void {
 
     <SettingsHubPanel :form="form" :run-node-action="runNodeAction" />
 
-    <SettingsPeerManagementPanel />
+    <SettingsTeamsPanel />
 
     <SosEmergencyCard ref="sosCard" />
 

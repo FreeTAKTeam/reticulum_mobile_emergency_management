@@ -21,6 +21,7 @@ fn to_app_settings_record(input: AppSettingsInput) -> Result<AppSettingsRecord, 
             api_key: input.hub.api_key,
             refresh_interval_seconds: input.hub.refresh_interval_seconds,
         },
+        teams: to_team_settings_record(input.teams)?,
         checklists: ChecklistSettingsRecord {
             default_task_due_step_minutes: input
                 .checklists
@@ -355,7 +356,35 @@ fn hub_directory_peer_json(peer: &HubDirectoryPeerRecord) -> serde_json::Value {
 
 fn hub_directory_snapshot_json(snapshot: &HubDirectorySnapshot) -> serde_json::Value {
     json!({
+        "schemaVersion": snapshot.schema_version,
+        "hubIdentityHash": snapshot.hub_identity_hash,
+        "activeTeamUid": snapshot.active_team_uid,
         "effectiveConnectedMode": snapshot.effective_connected_mode,
+        "teams": snapshot.teams.iter().map(|team| json!({
+            "uid": team.uid,
+            "color": team.color,
+            "teamName": team.team_name,
+        })).collect::<Vec<_>>(),
+        "callerMemberships": snapshot.caller_memberships.iter().map(|membership| json!({
+            "teamUid": membership.team_uid,
+            "teamMemberUid": membership.team_member_uid,
+        })).collect::<Vec<_>>(),
+        "members": snapshot.members.iter().map(|member| json!({
+            "teamUid": member.team_uid,
+            "teamMemberUid": member.team_member_uid,
+            "identity": member.identity,
+            "destinationHash": member.destination_hash,
+            "displayName": member.display_name,
+            "announceCapabilities": member.announce_capabilities,
+            "clientType": member.client_type,
+            "registeredMode": member.registered_mode,
+            "lastSeen": member.last_seen,
+            "status": member.status,
+        })).collect::<Vec<_>>(),
+        "localTeams": snapshot.local_teams.iter().map(|team| json!({
+            "teamUid": team.team_uid,
+            "memberDestinations": team.member_destinations,
+        })).collect::<Vec<_>>(),
         "items": snapshot
             .items
             .iter()
@@ -415,6 +444,18 @@ fn app_settings_json(settings: &AppSettingsRecord) -> serde_json::Value {
         "announceIntervalSeconds": settings.announce_interval_seconds,
         "telemetry": telemetry_settings_json(&settings.telemetry),
         "hub": hub_settings_json(&settings.hub),
+        "teams": {
+            "activeTeamUid": settings.teams.active_team_uid,
+            "aliases": settings.teams.aliases.iter().map(|alias| json!({
+                "teamUid": alias.team_uid,
+                "alias": alias.alias,
+            })).collect::<Vec<_>>(),
+            "localTeams": settings.teams.local_teams.iter().map(|team| json!({
+                "teamUid": team.team_uid,
+                "memberDestinations": team.member_destinations,
+            })).collect::<Vec<_>>(),
+            "localTeamsInitialized": settings.teams.local_teams_initialized
+        },
         "checklists": {
             "defaultTaskDueStepMinutes": settings.checklists.default_task_due_step_minutes
         },

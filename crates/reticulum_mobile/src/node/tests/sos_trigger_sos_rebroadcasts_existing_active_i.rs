@@ -155,7 +155,7 @@ fn sos_targets_all_current_saved_peers_without_hub_narrowing() {
         None,
     )
     .expect("regular mission targets");
-    assert_eq!(regular_targets.len(), 1);
+    assert_eq!(regular_targets.len(), 2);
 
     let saved_peers = [
         build_saved_peer_for("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),

@@ -120,7 +120,11 @@
                     },
                 );
             }
-            Command::SendLxmf { request, resp } => {
+            Command::SendLxmf {
+                request,
+                fields_bytes,
+                resp,
+            } => {
                 let state = state.clone();
                 let bus = bus.clone();
                 let receipt_message_ids = receipt_message_ids.clone();
@@ -141,7 +145,7 @@
                             request.destination_hex.as_str(),
                             body_bytes.as_slice(),
                             request.title.clone(),
-                            None,
+                            Some(fields_bytes),
                             None,
                             request.send_mode,
                             SendTaskClass::General,

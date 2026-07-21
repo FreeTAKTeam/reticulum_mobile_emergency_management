@@ -259,7 +259,7 @@ async fn upsert_eam_defaults_and_replicates_to_native_peer_projection() {
         local.team_member_uid.as_deref(),
         Some(node_a_status.app_destination_hex.as_str())
     );
-    assert_eq!(local.team_uid.as_deref(), Some(TEAM_UID_BLUE));
+    assert_eq!(local.team_uid.as_deref(), Some(TEAM_UID_YELLOW));
 
     let received_deadline = Instant::now() + EAM_REPLICATION_TIMEOUT;
     let received = loop {

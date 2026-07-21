@@ -1,6 +1,6 @@
 # R.E.M. User Manual
 
-> This Markdown manual is authoritative for REM `1.2.7-rc.1`. PDF and DOCX
+> This Markdown manual is authoritative for REM `1.2.7`. PDF and DOCX
 > files in `docs/` are archived snapshots and may describe older screens or
 > behavior.
 
@@ -226,30 +226,57 @@ Use the Peers page to:
 - search peer names or destination text
 - review hub directory entries when hub support is in use
 - announce your presence
+- select the active color team from the menu beside **Announce**
+- search and connect peers in the active roster
+- open **Manage Teams** for local aliases, membership, and sharing
 
 Discovery does not mean trust. Save only the peers you want to work with.
 
-In **Semi-autonomous** RCH mode, the hub directory is authoritative for team
-sharing. RCH returns only recent REM-capable identities belonging to teams you
-share. If that directory cannot be refreshed or validated, REM shows an empty
-hub directory and pauses team fanout instead of sending to locally discovered
-peers. **Autonomous** mode continues to use locally managed peers, while
-**Connected** mode sends through the selected hub.
+In **Semi-autonomous** RCH mode, REM downloads the TEAM-scoped peer directory
+at the configured hub refresh interval and keeps the latest successful result
+as a local membership allowlist. REM determines which listed peers are active
+from local announces and link state; it does not query the hub for every send
+or trust the hub's presence label. A failed refresh keeps the last successful
+directory. A node that has never downloaded a valid directory pauses team
+fanout until a refresh succeeds. **Autonomous** mode continues to use locally
+managed peers, while **Connected** mode sends through the selected hub.
 
-### How Peer Sharing Works Today
+A connected peer remains reachable while its link is active. Without an active
+link, REM waits for the configured announce interval plus a short scheduling
+grace before marking peer presence stale. With the default 1800-second announce
+interval, no earlier proof of life is expected.
 
-When you save or select a peer, you are choosing who REM should try to share information with. This can include chat messages, Action Messages, Events, checklist updates, telemetry, and SOS updates, depending on what is enabled.
+### Teams And Peer Sharing
 
-In the current version, peer sharing is not fully automatic in both directions. The other person also needs to save or select you on their device. If you select them but they do not select you, your device may try to share with them, but their device may not share the same kind of information back to you.
+The selector on the Peers page chooses one active team for all outbound chat,
+Action Messages, Events, checklists, telemetry, SOS, and EAM fanout. Existing
+records and timelines stay visible when the team changes; teams control
+recipients, not storage.
 
-For a working team setup:
+Yellow always exists. Existing saved peers move into local Yellow during the
+one-time upgrade. Open **Settings → Manage Teams** (or tap **Manage Teams** on
+the Peers tab) to create any unused canonical color locally, then add a saved
+peer to one or several local teams. RCH memberships remain read-only. If REM
+and RCH both provide the same color, their members appear in one merged,
+deduplicated roster.
 
-1. You save or select the other peer.
-2. The other peer saves or selects you.
-3. Both devices show Ready.
-4. Send a small chat message or Event to confirm that sharing works.
+You may give a team a local alias, such as `Medical`, from its Manage Teams
+detail. The alias is stored only on that device and is never shared. Local
+membership can be added or removed in REM, but ask the RCH operator to change
+RCH membership. Removing a saved peer removes it from every local team without
+changing RCH.
 
-Think of the peer list as your trusted working group. If someone should receive your operational updates, they should be in your peer list, and you should be in theirs.
+Use the QR action beside a local team to display its code. On the other REM
+client, open **Manage Teams**, tap **Scan QR**, and point the camera at the
+code. Import creates any missing saved-peer records and merges the roster into
+the matching color; it does not replace an existing local alias. QR codes
+contain the canonical color and at most 40 member destinations; local aliases
+and peer labels stay private. For a larger roster, open the team detail and use
+**Export**, then open **Add Team → Import team JSON** on the other device.
+
+If the selected roster is missing or empty, REM deliberately sends to nobody
+rather than falling back to every discovered peer. In Connected mode, non-Yellow
+teams require an RCH that supports the version 2 TEAM directory contract.
 
 ## Settings
 
@@ -321,11 +348,41 @@ must not keep the splash screen open.
    are terminal. Retry only failed or timed-out messages after correcting the
    route; do not resend a delivered message.
 
+### Create, Share, And Use A Team
+
+1. Open **Settings → Manage Teams** and tap **Add Team**. Choose an unused
+   canonical color, optionally enter a private local name such as `Family`,
+   and tap **Create team**. Open the new team and add one or more saved peers;
+   the same peer may belong to several local teams.
+2. To share by QR, tap the QR action beside the local team. On the other phone,
+   open **Manage Teams**, tap **Scan QR**, allow camera access if prompted, and
+   scan the code. The color membership merges, but your local name and peer
+   labels are not transmitted. Up to 40 peers fit in one team QR.
+3. For a larger roster or a non-camera transfer, open the team detail and tap
+   **Export**. On the other device, open **Add Team → Import team JSON**, paste
+   the payload, and tap **Import team**.
+4. For RCH teams, ask the operator to assign both REM clients to canonical
+   colors. Start REM with that RCH selected and refresh the hub directory if
+   the expected sections are not yet visible. A local and RCH team of the same
+   color appear together; for example, local Blue members merge with RCH Blue.
+5. Return to **Peers**, open the styled active-team menu beside **Announce**,
+   and select the desired color. The Peers tab shows only that active roster.
+   Connect reachable members individually. A member may remain listed while
+   offline because the cached destination is durable.
+6. Send a uniquely marked chat or Event. Only members of the active merged team
+   are eligible recipients.
+7. If an RCH refresh fails, REM retains the last directory for that hub. If the hub is
+   replaced, or your membership is removed, refresh and resolve the setup error
+   with the RCH operator; REM does not reuse another hub's roster. Local teams
+   remain available without RCH.
+
 ### Create An EAM And A MECP Event
 
-1. Open **Action Messages**, tap **+**, enter a call sign, and choose the most
+1. Select the intended team on **Peers**. Open **Action Messages**, tap **+**,
+   enter a call sign, and choose the most
    accurate Security, Capability, Preparedness, Medical, Mobility, and Comms
-   states. Save the EAM and confirm the Dashboard rings update.
+   states. The active team is applied automatically; there is no editable team
+   selector in the EAM form. Save the EAM and confirm the Dashboard rings update.
 2. Open **Events**, tap **+**, and choose severity, category, and event. For
    example, Safety + Position + Stranded produces `MECP/2/P01`.
 3. Add a unique detail such as `RIDGE-01`, review the body, and tap **Add

@@ -1,4 +1,4 @@
-import type { NodeStatus, ReticulumNodeClient } from "@reticulum/node-client";
+import { YELLOW_TEAM_UID, type NodeStatus, type ReticulumNodeClient } from "@reticulum/node-client";
 import type { Ref, ShallowRef } from "vue";
 
 import { clearHubRegistryLinkage } from "../services/hubRegistryBootstrap";
@@ -185,6 +185,27 @@ export function createNodeActionsController(context: NodeActionsContext) {
       delete nextSavedPeers[requestedDestination];
     }
     await persistSavedPeersProjection(nextSavedPeers, `explicit save ${destination}`);
+    const localTeams = settings.teams.localTeamsInitialized
+      ? settings.teams.localTeams.map((team) => ({
+          ...team,
+          memberDestinations: team.teamUid === YELLOW_TEAM_UID
+            ? [...new Set([...team.memberDestinations, destination])]
+            : [...team.memberDestinations],
+        }))
+      : [{
+          teamUid: YELLOW_TEAM_UID,
+          memberDestinations: Object.keys(nextSavedPeers),
+        }];
+    if (!localTeams.some((team) => team.teamUid === YELLOW_TEAM_UID)) {
+      localTeams.unshift({ teamUid: YELLOW_TEAM_UID, memberDestinations: [destination] });
+    }
+    await updateSettings({
+      teams: {
+        ...settings.teams,
+        localTeams,
+        localTeamsInitialized: true,
+      },
+    });
   }
 
   async function removePeer(destinationRaw: string): Promise<void> {
@@ -201,6 +222,19 @@ export function createNodeActionsController(context: NodeActionsContext) {
       delete discoveredByDestination[removedDestination];
     }
     await persistSavedPeersProjection(nextSavedPeers, `explicit remove ${destination}`);
+    const retainedDestinations = new Set(Object.keys(nextSavedPeers));
+    await updateSettings({
+      teams: {
+        ...settings.teams,
+        localTeams: settings.teams.localTeams.map((team) => ({
+          ...team,
+          memberDestinations: team.memberDestinations.filter((member) => (
+            retainedDestinations.has(member)
+          )),
+        })),
+        localTeamsInitialized: true,
+      },
+    });
     if (client.value && status.value.running) {
       try {
         await client.value.disconnectPeer(destination);
@@ -223,6 +257,19 @@ export function createNodeActionsController(context: NodeActionsContext) {
       delete nextSavedPeers[canonicalDestination];
     }
     await persistSavedPeersProjection(nextSavedPeers, `explicit unsave ${destination}`);
+    const retainedDestinations = new Set(Object.keys(nextSavedPeers));
+    await updateSettings({
+      teams: {
+        ...settings.teams,
+        localTeams: settings.teams.localTeams.map((team) => ({
+          ...team,
+          memberDestinations: team.memberDestinations.filter((member) => (
+            retainedDestinations.has(member)
+          )),
+        })),
+        localTeamsInitialized: true,
+      },
+    });
   }
 
   async function setPeerLabel(destinationRaw: string, label: string): Promise<void> {
@@ -291,6 +338,21 @@ export function createNodeActionsController(context: NodeActionsContext) {
       ) {
         clearHubDirectoryState();
       }
+    }
+    if (next.teams) {
+      settings.teams = {
+        ...settings.teams,
+        ...next.teams,
+        aliases: next.teams.aliases?.map((alias) => ({ ...alias }))
+          ?? settings.teams.aliases.map((alias) => ({ ...alias })),
+        localTeams: next.teams.localTeams?.map((team) => ({
+          ...team,
+          memberDestinations: [...team.memberDestinations],
+        })) ?? settings.teams.localTeams.map((team) => ({
+          ...team,
+          memberDestinations: [...team.memberDestinations],
+        })),
+      };
     }
     if (next.rnode) {
       settings.rnode = normalizeRnodeSettings({ ...settings.rnode, ...next.rnode });

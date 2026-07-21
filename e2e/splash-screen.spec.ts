@@ -12,7 +12,7 @@ test("can mock the current REM splash screen", async ({ page }) => {
   const splash = page.getByTestId("splash-screen");
   await expect(splash).toBeVisible();
   await expect(splash.getByRole("img", { name: "R.E.M. logo" })).toBeVisible();
-  await expect(splash.getByText("Version 1.2.7-rc.1")).toBeVisible();
+  await expect(splash.getByText("Version 1.2.7")).toBeVisible();
 });
 
 test("can mock interface loading on the current splash screen", async ({ page }) => {

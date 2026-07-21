@@ -172,6 +172,8 @@ export interface ReticulumNodeClient {
   setLogLevel(level: LogLevel): Promise<void>;
   logMessage(level: LogLevel, message: string): Promise<void>;
   refreshHubDirectory(): Promise<void>;
+  getHubDirectorySnapshot(): Promise<HubDirectoryUpdatedEvent>;
+  setActiveTeam(teamUid: string): Promise<void>;
   on<K extends keyof NodeClientEvents>(
     event: K,
     handler: (payload: NodeClientEvents[K]) => void,

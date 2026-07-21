@@ -189,7 +189,7 @@ defineExpose({ openPanel });
           </label>
           <label>
             Announce interval seconds
-            <input v-model.number="form.announceIntervalSeconds" type="number" min="5" />
+            <input v-model.number="form.announceIntervalSeconds" type="number" min="60" />
           </label>
           <label class="checkbox">
             <input v-model="form.broadcast" type="checkbox" />

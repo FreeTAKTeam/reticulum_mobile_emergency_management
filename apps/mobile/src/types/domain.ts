@@ -265,8 +265,36 @@ export interface HubDirectoryPeerRecord {
   status?: string;
 }
 
+export interface HubTeamRecord {
+  uid: string;
+  color: string;
+  teamName: string;
+}
+
+export interface HubCallerMembershipRecord {
+  teamUid: string;
+  teamMemberUid: string;
+}
+
+export interface HubTeamMemberRecord extends HubDirectoryPeerRecord {
+  teamUid: string;
+  teamMemberUid: string;
+}
+
+export interface LocalTeamRecord {
+  teamUid: string;
+  memberDestinations: string[];
+}
+
 export interface HubDirectorySnapshot {
+  schemaVersion: number;
+  hubIdentityHash?: string;
+  activeTeamUid: string;
   effectiveConnectedMode: boolean;
+  teams: HubTeamRecord[];
+  callerMemberships: HubCallerMembershipRecord[];
+  members: HubTeamMemberRecord[];
+  localTeams: LocalTeamRecord[];
   items: HubDirectoryPeerRecord[];
   receivedAtMs: number;
 }
@@ -321,6 +349,12 @@ export interface NodeUiSettings {
     expireAfterMinutes: number;
   };
   hub: HubSettings;
+  teams: {
+    activeTeamUid: string;
+    aliases: Array<{ teamUid: string; alias: string }>;
+    localTeams: LocalTeamRecord[];
+    localTeamsInitialized: boolean;
+  };
   rnode: RnodeSettings;
   checklists: {
     defaultTaskDueStepMinutes: number;

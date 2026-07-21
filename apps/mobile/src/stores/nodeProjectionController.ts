@@ -26,6 +26,7 @@ import { projectionRefreshCoordinator } from "../utils/projectionRefreshCoordina
 import { normalizeDestinationHex } from "../utils/peers";
 import { normalizeRnodeSettings } from "../utils/rnodeProfiles";
 import { runtimeProfile } from "../utils/runtimeProfile";
+import { normalizeTeamPreferences } from "../utils/teamSettings";
 import {
   fromSavedPeerRecords,
   DEFAULT_SETTINGS,
@@ -101,6 +102,7 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
     settings.telemetry = { ...next.telemetry };
     settings.checklists = { ...next.checklists };
     settings.hub = { ...next.hub };
+    settings.teams = normalizeTeamPreferences(next.teams);
     settings.rnode = normalizeRnodeSettings(next.rnode);
     applyUiSettingsProjection(toUiSettingsProjection(next));
   }

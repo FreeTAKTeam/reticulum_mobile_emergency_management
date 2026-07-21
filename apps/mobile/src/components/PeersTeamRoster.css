@@ -1,0 +1,233 @@
+.active-roster-panel {
+  background: rgb(9 24 52 / 86%);
+  border: 1px solid rgb(72 114 184 / 33%);
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.roster-header {
+  align-items: center;
+  display: flex;
+  gap: 0.9rem;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.roster-header h2 {
+  color: #e5f4ff;
+  font-family: var(--font-headline);
+  font-size: 1.55rem;
+  margin: 0;
+}
+
+.roster-header p {
+  color: #77b9eb;
+  font-family: var(--font-body);
+  margin: 0.2rem 0 0;
+}
+
+.manage-teams-button,
+.connection-button {
+  --btn-bg: rgb(6 23 51 / 92%);
+  --btn-border: rgb(41 185 255 / 72%);
+  --btn-color: #62d2ff;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 11px;
+  box-shadow: inset 0 1px 0 rgb(209 244 255 / 8%);
+  color: var(--btn-color);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  min-height: 2.75rem;
+  padding: 0 0.82rem;
+  text-transform: uppercase;
+}
+
+.roster-search {
+  align-items: center;
+  background: rgb(5 17 39 / 76%);
+  border: 1px solid rgb(78 123 196 / 32%);
+  border-radius: 999px;
+  color: #7c9bc8;
+  display: flex;
+  gap: 0.7rem;
+  margin: 0 1rem 0.9rem;
+  min-height: 3rem;
+  padding: 0 0.9rem;
+}
+
+.roster-search input {
+  background: transparent;
+  border: 0;
+  color: #dcefff;
+  flex: 1 1 auto;
+  font: 500 0.95rem var(--font-body);
+  min-width: 0;
+  outline: 0;
+}
+
+.roster-search input::placeholder {
+  color: #7893bc;
+}
+
+.roster-list {
+  border-top: 1px solid rgb(78 123 196 / 26%);
+}
+
+.roster-row {
+  align-items: center;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: auto minmax(0, 1fr) minmax(6.8rem, auto) auto;
+  min-height: 6.7rem;
+  padding: 0.85rem 1rem;
+}
+
+.roster-row + .roster-row {
+  border-top: 1px solid rgb(78 123 196 / 24%);
+}
+
+.peer-avatar {
+  align-items: center;
+  border: 1px solid rgb(69 116 177 / 62%);
+  border-radius: 50%;
+  color: #7f99c0;
+  display: inline-flex;
+  height: 3.35rem;
+  justify-content: center;
+  position: relative;
+  width: 3.35rem;
+}
+
+.peer-avatar.connected {
+  border-color: rgb(69 208 131 / 58%);
+  color: #55d982;
+}
+
+.peer-avatar.reachable {
+  border-color: rgb(41 185 255 / 66%);
+  color: #3cc8ff;
+}
+
+.roster-copy {
+  min-width: 0;
+}
+
+.roster-copy h3 {
+  color: #e4f3ff;
+  font-family: var(--font-headline);
+  font-size: 1.13rem;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roster-copy p {
+  color: #88a5ce;
+  font-family: var(--font-body);
+  font-size: 0.84rem;
+  margin: 0.18rem 0 0;
+}
+
+.roster-copy .last-seen {
+  color: #6f88ac;
+}
+
+.roster-state span {
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.roster-state .connected {
+  color: #65df91;
+}
+
+.roster-state .reachable {
+  color: #46ccff;
+}
+
+.roster-state .offline {
+  color: #7e91b2;
+}
+
+.connection-button {
+  min-width: 7.2rem;
+}
+
+.connection-button.connected {
+  --btn-border: rgb(70 213 135 / 55%);
+  --btn-color: #70e49b;
+}
+
+.empty-copy {
+  border-top: 1px solid rgb(78 123 196 / 24%);
+  color: #96afd5;
+  font-family: var(--font-body);
+  margin: 0;
+  padding: 1.2rem 1rem;
+}
+
+@media (max-width: 760px) {
+  .roster-header {
+    align-items: flex-start;
+  }
+
+  .manage-teams-button {
+    min-width: 8.4rem;
+  }
+
+  .roster-row {
+    gap: 0.6rem;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    min-height: 6.2rem;
+    padding-inline: 0.8rem;
+  }
+
+  .roster-state {
+    grid-column: 2;
+    margin-top: -0.15rem;
+  }
+
+  .connection-button {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    min-width: 6.5rem;
+  }
+}
+
+@media (max-width: 430px) {
+  .roster-header {
+    align-items: center;
+  }
+
+  .manage-teams-button {
+    min-width: 7.6rem;
+  }
+
+  .roster-header h2 {
+    font-size: 1.35rem;
+  }
+
+  .roster-row {
+    grid-template-columns: 2.65rem minmax(0, 1fr) auto;
+  }
+
+  .peer-avatar {
+    height: 2.65rem;
+    width: 2.65rem;
+  }
+
+  .connection-button {
+    font-size: 0.7rem;
+    min-width: 5.8rem;
+    padding-inline: 0.55rem;
+  }
+}

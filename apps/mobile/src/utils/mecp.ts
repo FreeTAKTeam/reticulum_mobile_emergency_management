@@ -388,18 +388,19 @@ export function encodeMecpMessage(input: {
   }
   return `${MECP_PREFIX}${input.severity}/${tokens.join(" ")}`;
 }
-
 export function decodeMecpMessage(input: string): DecodedMecpMessage {
   const raw = input.trim();
-  if (!raw.startsWith(MECP_PREFIX)) {
+  const hasPrefix = raw.startsWith(MECP_PREFIX);
+  const isCompactWireBody = !hasPrefix && /^[A-Za-z]\d{2}(?:\s|$)/.test(raw);
+  if (!hasPrefix && !isCompactWireBody) {
     return createInvalidDecodedMecpMessage(raw);
   }
-  const severity = Number.parseInt(raw.charAt(5), 10);
-  if (!VALID_SEVERITIES.has(severity) || raw.charAt(6) !== "/") {
+  const severity = isCompactWireBody ? 2 : Number.parseInt(raw.charAt(5), 10);
+  if (!isCompactWireBody && (!VALID_SEVERITIES.has(severity) || raw.charAt(6) !== "/")) {
     return createInvalidDecodedMecpMessage(raw, ["Invalid MECP severity or separator."]);
   }
-
-  const tokens = raw.slice(7).split(/\s+/).filter((token) => token.length > 0);
+  const body = isCompactWireBody ? raw : raw.slice(7);
+  const tokens = body.split(/\s+/).filter((token) => token.length > 0);
   const codes: string[] = [];
   let detailsStart = tokens.length;
   for (let index = 0; index < tokens.length; index += 1) {

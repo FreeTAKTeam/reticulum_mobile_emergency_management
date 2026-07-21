@@ -173,11 +173,97 @@ pub struct HubDirectoryPeerRecord {
     pub status: Option<String>,
 }
 
+pub const YELLOW_TEAM_UID: &str = "d6b6e188b910d6bdd24d04b7a7ec5444";
+pub(crate) const HUB_DIRECTORY_SCHEMA_VERSION: u32 = 2;
+
+#[must_use]
+pub(crate) fn canonical_team_color_for_uid(team_uid: &str) -> Option<&'static str> {
+    match team_uid {
+        YELLOW_TEAM_UID => Some("YELLOW"),
+        "65ce79a3a3e4b51ec0ec52d1d3d2b0b9" => Some("RED"),
+        "43341e5c822d99857fa6e8641f2ca9c0" => Some("BLUE"),
+        "a83eb640e4c4884be14831e3d7ef5ae0" => Some("ORANGE"),
+        "7ac50a910f42b06cd9cb68dad3def681" => Some("MAGENTA"),
+        "372824ef4f15881291455562f7570233" => Some("MAROON"),
+        "4bf2a1d2217c8668942658137f2a6824" => Some("PURPLE"),
+        "cbb35fc9a8f5a91d7bd2b5e5b644edcd" => Some("DARK_BLUE"),
+        "d4cd5030b68df059ec6beabe416dd6a6" => Some("CYAN"),
+        "4d7a7a974beec395bf83491604768499" => Some("TEAL"),
+        "612a32262163b73a80eca944c2158546" => Some("GREEN"),
+        "341653613d4c76d56bee99c1f38177b1" => Some("DARK_GREEN"),
+        "4efe72ac30f5b85142fdcab6d96c7631" => Some("BROWN"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HubTeamRecord {
+    pub uid: String,
+    pub color: String,
+    pub team_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HubCallerMembershipRecord {
+    pub team_uid: String,
+    pub team_member_uid: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HubTeamMemberRecord {
+    pub team_uid: String,
+    pub team_member_uid: String,
+    pub identity: String,
+    pub destination_hash: String,
+    pub display_name: Option<String>,
+    pub announce_capabilities: Vec<String>,
+    pub client_type: Option<String>,
+    pub registered_mode: Option<String>,
+    pub last_seen: Option<String>,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubDirectorySnapshot {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub hub_identity_hash: Option<String>,
+    #[serde(default = "default_active_team_uid")]
+    pub active_team_uid: String,
     pub effective_connected_mode: bool,
+    #[serde(default)]
+    pub teams: Vec<HubTeamRecord>,
+    #[serde(default)]
+    pub caller_memberships: Vec<HubCallerMembershipRecord>,
+    #[serde(default)]
+    pub members: Vec<HubTeamMemberRecord>,
+    #[serde(default)]
+    pub local_teams: Vec<LocalTeamRecord>,
     pub items: Vec<HubDirectoryPeerRecord>,
     pub received_at_ms: u64,
+}
+
+impl HubDirectorySnapshot {
+    #[must_use]
+    pub fn yellow_only(received_at_ms: u64) -> Self {
+        Self {
+            schema_version: 0,
+            hub_identity_hash: None,
+            active_team_uid: YELLOW_TEAM_UID.to_string(),
+            effective_connected_mode: false,
+            teams: vec![HubTeamRecord {
+                uid: YELLOW_TEAM_UID.to_string(),
+                color: "YELLOW".to_string(),
+                team_name: "YELLOW".to_string(),
+            }],
+            caller_memberships: Vec::new(),
+            members: Vec::new(),
+            local_teams: Vec::new(),
+            items: Vec::new(),
+            received_at_ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -310,7 +396,49 @@ pub struct AppSettingsRecord {
     pub telemetry: TelemetrySettingsRecord,
     pub hub: HubSettingsRecord,
     #[serde(default)]
+    pub teams: TeamSettingsRecord,
+    #[serde(default)]
     pub checklists: ChecklistSettingsRecord,
     #[serde(default)]
     pub rnode: RnodeSettingsRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamAliasRecord {
+    pub team_uid: String,
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalTeamRecord {
+    pub team_uid: String,
+    #[serde(default)]
+    pub member_destinations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamSettingsRecord {
+    #[serde(default = "default_active_team_uid")]
+    pub active_team_uid: String,
+    #[serde(default)]
+    pub aliases: Vec<TeamAliasRecord>,
+    #[serde(default)]
+    pub local_teams: Vec<LocalTeamRecord>,
+    #[serde(default)]
+    pub local_teams_initialized: bool,
+}
+
+impl Default for TeamSettingsRecord {
+    fn default() -> Self {
+        Self {
+            active_team_uid: default_active_team_uid(),
+            aliases: Vec::new(),
+            local_teams: Vec::new(),
+            local_teams_initialized: false,
+        }
+    }
+}
+
+fn default_active_team_uid() -> String {
+    YELLOW_TEAM_UID.to_string()
 }

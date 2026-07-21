@@ -338,4 +338,30 @@ public abstract class ReticulumNodeTransportPluginApi extends ReticulumNodePlugi
         Logger.info(TAG, "refreshHubDirectory called.");
         runIntServiceCall(call, "Failed to refresh hub directory.", ReticulumNodeService::refreshHubDirectory);
     }
+
+    @PluginMethod
+    public void getHubDirectorySnapshot(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to read hub team directory.",
+            "Native hub team directory JSON parse failed.",
+            ReticulumNodeService::getHubDirectorySnapshotJson
+        );
+    }
+
+    @PluginMethod
+    public void setActiveTeam(PluginCall call) {
+        final String teamUid = call.getString("teamUid");
+        if (teamUid == null || teamUid.isEmpty()) {
+            call.reject("teamUid is required.");
+            return;
+        }
+        final JSObject payload = new JSObject();
+        payload.put("teamUid", teamUid);
+        runIntServiceCall(
+            call,
+            "Failed to select active team.",
+            service -> service.setActiveTeamJson(payload.toString())
+        );
+    }
 }

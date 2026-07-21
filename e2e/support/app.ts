@@ -175,7 +175,12 @@ export const defaultSettings: SettingsSeed = {
 export async function seedAppStorage(page: Page, seed: StorageSeed = {}): Promise<void> {
   await page.addInitScript(
     ({ keys, payload }) => {
+      const seedMarker = "reticulum.mobile.e2e.seeded";
+      if (window.localStorage.getItem(seedMarker) === "1") {
+        return;
+      }
       window.localStorage.clear();
+      window.localStorage.setItem(seedMarker, "1");
 
       if (payload.messages) {
         window.localStorage.setItem(keys.messages, JSON.stringify(payload.messages));

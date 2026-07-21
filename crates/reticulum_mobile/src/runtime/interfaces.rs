@@ -104,6 +104,18 @@ fn effective_announce_interval_seconds(configured_seconds: u32) -> u32 {
     configured_seconds.max(MIN_EFFECTIVE_ANNOUNCE_INTERVAL_SECONDS)
 }
 
+fn effective_peer_stale_after_minutes(
+    configured_minutes: u32,
+    announce_interval_seconds: u32,
+) -> u32 {
+    let required_seconds = u64::from(effective_announce_interval_seconds(
+        announce_interval_seconds,
+    ))
+    .saturating_add(u64::from(PEER_PRESENCE_GRACE_SECONDS));
+    let required_minutes = required_seconds.saturating_add(59) / 60;
+    configured_minutes.max(u32::try_from(required_minutes).unwrap_or(u32::MAX))
+}
+
 fn spawn_interface_traffic_monitor(
     transport: Arc<Transport>,
     active_interface_registry: ActiveInterfaceRegistry,

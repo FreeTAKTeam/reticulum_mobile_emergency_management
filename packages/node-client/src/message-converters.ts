@@ -1,4 +1,4 @@
-import type { ApplicationAckState, ConversationRecord, HubDirectoryUpdatedEvent, LogLevel, LxmfDeliveryEvent, LxmfDeliveryMethod, LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfFallbackStage, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeErrorEvent, NodeLogEvent, NodeOperationalNoticeEvent, PacketReceivedEvent, PacketSentEvent, PeerRecord, ProjectionInvalidationEvent, ProjectionScope, SyncPhase, SyncStatus, TransportDeliveryState } from "./contracts";
+import { type ApplicationAckState, type ConversationRecord, type LogLevel, type LxmfDeliveryEvent, type LxmfDeliveryMethod, type LxmfDeliveryRepresentation, type LxmfDeliveryStatus, type LxmfFallbackStage, type MessageDirection, type MessageMethod, type MessageRecord, type MessageState, type NodeErrorEvent, type NodeLogEvent, type NodeOperationalNoticeEvent, type PacketReceivedEvent, type PacketSentEvent, type PeerRecord, type ProjectionInvalidationEvent, type ProjectionScope, type SyncPhase, type SyncStatus, type TransportDeliveryState } from "./contracts";
 import { toOptionalNumber } from "./converters";
 import { decodeBase64ToBytes, enumVariantName, hasValue, normalizeHex, pluginRecord, toOptionalBoolean, toOptionalHex, toPeerState, toSavedFlag, toSendOutcome } from "./runtime-converters";
 
@@ -404,55 +404,7 @@ export function toSyncStatus(raw: Record<string, unknown>): SyncStatus {
   };
 }
 
-export function toHubDirectoryUpdatedEvent(
-  raw: Record<string, unknown>,
-): HubDirectoryUpdatedEvent {
-  const snapshot = raw.snapshot && typeof raw.snapshot === "object" && !Array.isArray(raw.snapshot)
-    ? raw.snapshot as Record<string, unknown>
-    : raw;
-  const items = Array.isArray(snapshot.items)
-    ? snapshot.items
-      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-      .map((item) => ({
-        identity: normalizeHex(item.identity ?? ""),
-        destinationHash: normalizeHex(item.destinationHash ?? item.destination_hash ?? ""),
-        displayName: typeof item.displayName === "string"
-          ? item.displayName
-          : typeof item.display_name === "string"
-            ? item.display_name
-            : undefined,
-        announceCapabilities: Array.isArray(item.announceCapabilities)
-          ? item.announceCapabilities.map((value) => String(value))
-          : Array.isArray(item.announce_capabilities)
-            ? item.announce_capabilities.map((value) => String(value))
-            : [],
-        clientType: typeof item.clientType === "string"
-          ? item.clientType
-          : typeof item.client_type === "string"
-            ? item.client_type
-            : undefined,
-        registeredMode: typeof item.registeredMode === "string"
-          ? item.registeredMode
-          : typeof item.registered_mode === "string"
-            ? item.registered_mode
-            : undefined,
-        lastSeen: typeof item.lastSeen === "string"
-          ? item.lastSeen
-          : typeof item.last_seen === "string"
-            ? item.last_seen
-            : undefined,
-        status: typeof item.status === "string" ? item.status : undefined,
-      }))
-      .filter((item) => item.destinationHash.length > 0)
-    : [];
-  return {
-    effectiveConnectedMode: Boolean(
-      snapshot.effectiveConnectedMode ?? snapshot.effective_connected_mode,
-    ),
-    items,
-    receivedAtMs: Number(snapshot.receivedAtMs ?? snapshot.received_at_ms ?? Date.now()),
-  };
-}
+export { toHubDirectoryUpdatedEvent } from "./hub-directory-converter";
 
 export function toLogEvent(raw: Record<string, unknown>): NodeLogEvent {
   return {

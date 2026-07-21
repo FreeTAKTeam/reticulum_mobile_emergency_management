@@ -26,18 +26,32 @@ impl RuntimeLxmfSdk {
                         .with_requested_capability("reticulum.capability.msgpack_fields"),
                 )
                 .map(|_| ())
+                .map_err(|error| {
+                    crate::error_context::contextual_node_error(
+                        NodeError::InternalError {},
+                        error,
+                    )
+                })
         })
         .await
         .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-        .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), NodeError> {
         let client = self.client.clone();
-        tokio::task::spawn_blocking(move || client.shutdown(ShutdownMode::Graceful).map(|_| ()))
+        tokio::task::spawn_blocking(move || {
+            client
+                .shutdown(ShutdownMode::Graceful)
+                .map(|_| ())
+                .map_err(|error| {
+                    crate::error_context::contextual_node_error(
+                        NodeError::InternalError {},
+                        error,
+                    )
+                })
+        })
             .await
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
     }
 
     pub(crate) async fn send_lxmf_via_propagation_relay(
@@ -171,13 +185,17 @@ impl RuntimeLxmfSdk {
             .map_err(map_sdk_error_to_node_error)?;
 
         let client = self.client.clone();
-        let message_id = tokio::task::spawn_blocking(move || client.send(request))
+        let send_destination_hex = requested_destination_hex.clone();
+        let message_id = tokio::task::spawn_blocking(move || {
+            client.send(request).map_err(|error| {
+                warn!(
+                    "in-process LXMF send failed destination={send_destination_hex}: {error}"
+                );
+                map_sdk_error_to_node_error(error)
+            })
+        })
             .await
-            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-            .map_err(|err| {
-                warn!("in-process LXMF send failed destination={requested_destination_hex}: {err}");
-                map_sdk_error_to_node_error(err)
-            })?;
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))??;
         let report = self
             .client
             .backend()

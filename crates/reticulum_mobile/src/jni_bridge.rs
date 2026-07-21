@@ -3,6 +3,7 @@ use reticulum_mobile_jni_boundary::jni_boundary;
 include!("jni_bridge/core_inputs.rs");
 include!("jni_bridge/domain_inputs.rs");
 include!("jni_bridge/parsing.rs");
+include!("jni_bridge/team_conversions.rs");
 include!("jni_bridge/conversions.rs");
 include!("jni_bridge/json_records.rs");
 include!("jni_bridge/wire_events.rs");

@@ -66,6 +66,22 @@ test("timeline projection retains plain event summaries and type tags", () => {
   });
 });
 
+test("timeline projection parses received compact MECP bodies with details", () => {
+  const event = normalizeEvent({
+    uid: "event-h01-bolle",
+    type: "Incident",
+    summary: "H01 Bolle",
+    callsign: "Poco",
+    updatedAt: 1_784_564_964_000,
+  });
+  const timeline = toTimelineRecord(event);
+
+  assert.equal(timeline.type, "Have / Offer Resources");
+  assert.equal(timeline.mecp?.severity, "Safety");
+  assert.deepEqual(timeline.mecp?.codeLabels, ["have water available"]);
+  assert.equal(timeline.mecp?.details, "Bolle");
+});
+
 test("event type keywords replace stale tags and remove duplicates", () => {
   assert.deepEqual(
     encodeEventTypeKeywords("Medical", ["ops", "ops", "r3akt:event-type:Old"]),

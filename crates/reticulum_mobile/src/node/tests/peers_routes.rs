@@ -4,6 +4,7 @@ fn effective_hub_mode_uses_server_connected_override() {
         effective_connected_mode: true,
         items: Vec::new(),
         received_at_ms: 123,
+        ..HubDirectorySnapshot::yellow_only(123)
     };
 
     assert!(matches!(
@@ -43,6 +44,7 @@ fn semi_autonomous_replication_targets_use_current_hub_directory_peers() {
             status: Some("active".to_string()),
         }],
         received_at_ms: 456,
+        ..HubDirectorySnapshot::yellow_only(456)
     };
 
     let targets = build_runtime_mission_replication_targets(
@@ -61,6 +63,70 @@ fn semi_autonomous_replication_targets_use_current_hub_directory_peers() {
         "abababababababababababababababab"
     );
     assert!(matches!(targets[0].send_mode, SendMode::Auto {}));
+}
+
+#[test]
+fn semi_autonomous_directory_membership_uses_local_activity_state() {
+    let status = build_status_for_tests();
+    let config = build_config_fingerprint_for_tests(
+        HubMode::SemiAutonomous {},
+        Some("56565656565656565656565656565656"),
+    );
+    let mut inactive_local_peer = build_peer_record(
+        "abababababababababababababababab",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        true,
+        false,
+        false,
+    );
+    inactive_local_peer.stale = true;
+    let snapshot = HubDirectorySnapshot {
+        effective_connected_mode: false,
+        items: vec![crate::types::HubDirectoryPeerRecord {
+            identity: "78787878787878787878787878787878".to_string(),
+            destination_hash: "abababababababababababababababab".to_string(),
+            display_name: Some("Pixel".to_string()),
+            announce_capabilities: vec![
+                "r3akt".to_string(),
+                "emergencymessages".to_string(),
+            ],
+            client_type: Some("rem".to_string()),
+            registered_mode: Some("semi_autonomous".to_string()),
+            last_seen: None,
+            status: Some("active".to_string()),
+        }],
+        received_at_ms: 456,
+        ..HubDirectorySnapshot::yellow_only(456)
+    };
+
+    let inactive_targets = build_runtime_mission_replication_targets(
+        &status,
+        &[inactive_local_peer],
+        &[],
+        None,
+        Some(&config),
+        Some(&snapshot),
+    )
+    .expect("inactive targets");
+    assert!(inactive_targets.is_empty());
+
+    let active_local_peer = build_peer_record(
+        "abababababababababababababababab",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        true,
+        true,
+        true,
+    );
+    let active_targets = build_runtime_mission_replication_targets(
+        &status,
+        &[active_local_peer],
+        &[],
+        None,
+        Some(&config),
+        Some(&snapshot),
+    )
+    .expect("active targets");
+    assert_eq!(active_targets.len(), 1);
 }
 
 #[test]
@@ -102,7 +168,7 @@ fn semi_autonomous_replication_targets_fail_closed_without_hub_directory() {
 }
 
 #[test]
-fn connected_replication_targets_route_to_selected_hub_without_current_peer() {
+fn connected_replication_targets_fail_closed_without_team_directory() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(
         HubMode::Connected {},
@@ -116,24 +182,57 @@ fn connected_replication_targets_route_to_selected_hub_without_current_peer() {
         build_runtime_event_replication_targets(&status, &[], &[], None, Some(&config), None)
             .expect("connected event targets");
 
-    assert_eq!(mission_targets.len(), 1);
+    assert!(mission_targets.is_empty());
+    assert!(event_targets.is_empty());
+}
+
+#[test]
+fn connected_direct_routing_requires_active_team_membership_and_roster() {
+    let config = build_config_fingerprint_for_tests(
+        HubMode::Connected {},
+        Some("56565656565656565656565656565656"),
+    );
+    assert!(routed_destination_hex(
+        "abababababababababababababababab".to_string(),
+        Some(&config),
+        None,
+    )
+    .is_err());
+
+    let mut snapshot = HubDirectorySnapshot::yellow_only(123);
+    snapshot.schema_version = HUB_DIRECTORY_SCHEMA_VERSION;
+    snapshot.caller_memberships = vec![crate::types::HubCallerMembershipRecord {
+        team_uid: YELLOW_TEAM_UID.to_string(),
+        team_member_uid: "caller-member".to_string(),
+    }];
+    snapshot.members = vec![crate::types::HubTeamMemberRecord {
+        team_uid: YELLOW_TEAM_UID.to_string(),
+        team_member_uid: "peer-member".to_string(),
+        identity: "78787878787878787878787878787878".to_string(),
+        destination_hash: "abababababababababababababababab".to_string(),
+        display_name: Some("Pixel".to_string()),
+        announce_capabilities: vec!["r3akt".to_string()],
+        client_type: Some("rem".to_string()),
+        registered_mode: Some("connected".to_string()),
+        last_seen: None,
+        status: Some("active".to_string()),
+    }];
+
     assert_eq!(
-        mission_targets[0].app_destination_hex,
+        routed_destination_hex(
+            "abababababababababababababababab".to_string(),
+            Some(&config),
+            Some(&snapshot),
+        )
+        .expect("active-team peer routes through the hub"),
         "56565656565656565656565656565656"
     );
-    assert!(matches!(
-        mission_targets[0].send_mode,
-        SendMode::PropagationOnly {}
-    ));
-    assert_eq!(event_targets.len(), 1);
-    assert_eq!(
-        event_targets[0].app_destination_hex,
-        "56565656565656565656565656565656"
-    );
-    assert!(matches!(
-        event_targets[0].send_mode,
-        SendMode::PropagationOnly {}
-    ));
+    assert!(routed_destination_hex(
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd".to_string(),
+        Some(&config),
+        Some(&snapshot),
+    )
+    .is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

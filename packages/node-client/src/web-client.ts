@@ -360,11 +360,33 @@ export class WebReticulumNodeClient extends InMemoryProjectionClient implements 
 
   async refreshHubDirectory(): Promise<void> {
     this.emitter.emit("hubDirectoryUpdated", {
+      schemaVersion: 0,
+      activeTeamUid: "d6b6e188b910d6bdd24d04b7a7ec5444",
       effectiveConnectedMode: false,
+      teams: [{ uid: "d6b6e188b910d6bdd24d04b7a7ec5444", color: "YELLOW", teamName: "YELLOW" }],
+      callerMemberships: [],
+      members: [],
+      localTeams: [],
       items: [],
       receivedAtMs: Date.now(),
     });
   }
+
+  async getHubDirectorySnapshot() {
+    return {
+      schemaVersion: 0,
+      activeTeamUid: "d6b6e188b910d6bdd24d04b7a7ec5444",
+      effectiveConnectedMode: false,
+      teams: [{ uid: "d6b6e188b910d6bdd24d04b7a7ec5444", color: "YELLOW", teamName: "YELLOW" }],
+      callerMemberships: [],
+      members: [],
+      localTeams: [],
+      items: [],
+      receivedAtMs: Date.now(),
+    };
+  }
+
+  async setActiveTeam(_teamUid: string): Promise<void> {}
 
 
   async dispose(): Promise<void> {

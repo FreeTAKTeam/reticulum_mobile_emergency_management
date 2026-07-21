@@ -42,8 +42,9 @@ pub enum MessageState {
     Received,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransportDeliveryState {
+    #[default]
     Queued,
     Sending,
     SentDirect,
@@ -54,26 +55,15 @@ pub enum TransportDeliveryState {
     Cancelled,
 }
 
-impl Default for TransportDeliveryState {
-    fn default() -> Self {
-        Self::Queued
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ApplicationAckState {
+    #[default]
     NotRequired,
     Waiting,
     Accepted,
     Completed,
     Rejected,
     Failed,
-}
-
-impl Default for ApplicationAckState {
-    fn default() -> Self {
-        Self::NotRequired
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

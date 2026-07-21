@@ -13,7 +13,13 @@ impl Node {
                 .lock()
                 .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                 .clone();
-            let normalized_record = populate_eam_defaults(&status, &record);
+            let hub_directory_snapshot = inner
+                .hub_directory_snapshot
+                .lock()
+                .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
+                .clone();
+            let normalized_record =
+                populate_eam_defaults(&status, &record, hub_directory_snapshot.as_ref());
             let invalidation = inner.app_state.upsert_eam(&normalized_record)?;
             emit_projection_invalidation(&inner.bus, invalidation);
             let summary = inner.app_state.bump_projection_revision(
@@ -26,11 +32,6 @@ impl Node {
             if inner.cmd_tx.is_some() {
                 let peers = inner
                     .peers_snapshot
-                    .lock()
-                    .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
-                    .clone();
-                let hub_directory_snapshot = inner
-                    .hub_directory_snapshot
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();

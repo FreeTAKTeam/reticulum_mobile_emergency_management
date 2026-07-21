@@ -21,6 +21,7 @@ include!("runtime/ack_retries.rs");
 include!("runtime/delivery_send.rs");
 include!("runtime/receive.rs");
 include!("runtime/ack_handlers.rs");
+include!("runtime/hub_team_selection.rs");
 include!("runtime/hub.rs");
 include!("runtime/interface_config.rs");
 include!("runtime/network_interfaces.rs");
@@ -146,7 +147,10 @@ pub async fn run_node(
         TokioMutex<HashMap<String, PendingLxmfAcknowledgement>>,
     > = Arc::new(TokioMutex::new(HashMap::new()));
     let messaging = Arc::new(TokioMutex::new(sdkmsg::MessagingStore::new(
-        config.stale_after_minutes,
+        effective_peer_stale_after_minutes(
+            config.stale_after_minutes,
+            config.announce_interval_seconds,
+        ),
     )));
     let active_propagation_node_hex: Arc<TokioMutex<Option<String>>> =
         Arc::new(TokioMutex::new(None));
@@ -335,6 +339,7 @@ mod tests {
     include!("runtime/tests/core.rs");
     include!("runtime/tests/delivery_compact_eam_fields_derive_sender_identity_.rs");
     include!("runtime/tests/delivery_mission_recovery_sends_do_not_wait_on_satu.rs");
+    include!("runtime/tests/hub_directory.rs");
     include!("runtime/tests/interfaces.rs");
     include!("runtime/tests/mission_events.rs");
     include!("runtime/tests/peers_routes_direct_delivery_health_blocks_and_restores.rs");

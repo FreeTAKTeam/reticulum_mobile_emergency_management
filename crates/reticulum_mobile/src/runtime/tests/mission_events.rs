@@ -152,7 +152,7 @@ fn event_projection_from_minimal_compact_fields_uses_lxmf_fallbacks() {
     assert_eq!(record.uid, "evt-fad7f9fe-856d-478b-9126-e6965e42ccab");
     assert_eq!(record.command_type, "mission.registry.log_entry.upsert");
     assert_eq!(record.mission_uid, "r3akt-default-mission");
-    assert_eq!(record.content, "P01 RC1TCPMECP1853");
+    assert_eq!(record.content, "MECP/2/P01 RC1TCPMECP1853");
     assert_eq!(record.callsign, "a1c8126d");
     assert_eq!(record.source_identity, "a1c8126d7cb806e6bde086d582b6cb0d");
 }

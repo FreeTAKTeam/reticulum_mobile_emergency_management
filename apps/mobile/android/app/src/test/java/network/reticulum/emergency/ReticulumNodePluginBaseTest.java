@@ -60,6 +60,6 @@ public class ReticulumNodePluginBaseTest {
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(93L, methodCount);
+        assertEquals(95L, methodCount);
     }
 }

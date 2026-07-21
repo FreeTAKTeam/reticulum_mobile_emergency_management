@@ -162,8 +162,8 @@ export const useNodeStore = defineStore("node", () => {
     appendLog,
     client,
     errorMessage,
+    hubDirectorySnapshot,
     hubRegistration,
-    sendBytes: (destination, bytes, options) => transport.sendBytes(destination, bytes, options),
     settings,
     status,
   });
@@ -226,6 +226,7 @@ export const useNodeStore = defineStore("node", () => {
     readinessError,
     removedByDestination,
     savedByDestination,
+    settings,
     status,
     syncStatus,
   });
@@ -255,6 +256,7 @@ export const useNodeStore = defineStore("node", () => {
     discoveredByDestination,
     errorMessage,
     importLegacyProjectionState,
+    hubDirectorySnapshot,
     initialized,
     isLocalPeerDestination,
     logUi,
@@ -262,7 +264,6 @@ export const useNodeStore = defineStore("node", () => {
     presenceNow,
     peerByAnyKnownDestination,
     refreshAnnounceState,
-    refreshHubDirectory: () => actions.refreshHubDirectory(),
     refreshHubRegistrationState,
     refreshMessagingState,
     refreshOperationalSummaryProjection,

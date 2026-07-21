@@ -90,6 +90,8 @@ public final class ReticulumBridge {
     public static native int setAnnounceCapabilities(String capabilityString);
     public static native int setLogLevel(String levelString);
     public static native int refreshHubDirectory();
+    public static native String getHubDirectorySnapshotJson();
+    public static native int setActiveTeamJson(String payloadJson);
     public static native String nextEventJson(int timeoutMs);
     public static native String takeLastErrorJson();
 }

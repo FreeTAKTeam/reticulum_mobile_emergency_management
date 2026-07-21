@@ -9,4 +9,5 @@
 // envelope keys, not by different numeric field IDs.
 pub(crate) const FIELD_COMMANDS: i64 = 0x09;
 pub(crate) const FIELD_RESULTS: i64 = 0x0A;
+pub(crate) const FIELD_GROUP: i64 = 0x0B;
 pub(crate) const FIELD_EVENT: i64 = 0x0D;

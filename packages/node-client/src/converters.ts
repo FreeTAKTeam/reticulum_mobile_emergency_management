@@ -1,10 +1,13 @@
-import type {
-  AppSettingsRecord,
-  HubMode,
-  RnodeConnectionMode,
-  RnodeProfileId,
-  RnodeRegion,
-  RnodeSettingsRecord,
+import {
+  CANONICAL_TEAM_UIDS,
+  YELLOW_TEAM_UID,
+  type TeamAliasRecord,
+  type AppSettingsRecord,
+  type HubMode,
+  type RnodeConnectionMode,
+  type RnodeProfileId,
+  type RnodeRegion,
+  type RnodeSettingsRecord,
 } from "./contracts";
 
 export function toOptionalNumber(value: unknown): number | undefined {
@@ -53,6 +56,15 @@ function strictBoolean(value: unknown, fallback: boolean): boolean {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function normalizedDestination(value: unknown): string {
+  const normalized = stringValue(value).trim().toLowerCase();
+  return /^[0-9a-f]{32}$/.test(normalized) ? normalized : "";
+}
+
+function unknownArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function normalizeTcpClients(value: unknown): string[] {
@@ -163,6 +175,22 @@ export function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRe
   const telemetry = asRecord(current.telemetry) ?? {};
   const hub = asRecord(current.hub) ?? {};
   const checklists = asRecord(current.checklists) ?? {};
+  const teams = asRecord(current.teams) ?? {};
+  const activeTeamUid = stringValue(teams.activeTeamUid ?? teams.active_team_uid)
+    .trim()
+    .toLowerCase();
+  const aliases: TeamAliasRecord[] = Array.isArray(teams.aliases)
+    ? teams.aliases
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => entry !== null)
+      .map((entry) => ({
+        teamUid: stringValue(entry.teamUid ?? entry.team_uid).trim().toLowerCase(),
+        alias: stringValue(entry.alias).trim().slice(0, 48),
+      }))
+      .filter((entry) => CANONICAL_TEAM_UIDS.has(entry.teamUid) && entry.alias.length > 0)
+      .filter((entry, index, all) => all.findIndex((candidate) => candidate.teamUid === entry.teamUid) === index)
+      .slice(0, 13)
+    : [];
   const staleAfterMinutes = finiteInteger(telemetry.staleAfterMinutes, 30, 1);
   const expireAfterMinutes = Math.max(
     staleAfterMinutes,
@@ -195,6 +223,24 @@ export function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRe
       apiBaseUrl: stringValue(hub.apiBaseUrl),
       apiKey: stringValue(hub.apiKey),
       refreshIntervalSeconds: finiteInteger(hub.refreshIntervalSeconds, 3600, 60),
+    },
+    teams: {
+      activeTeamUid: CANONICAL_TEAM_UIDS.has(activeTeamUid) ? activeTeamUid : YELLOW_TEAM_UID,
+      aliases,
+      localTeams: unknownArray(teams.localTeams ?? teams.local_teams).map((team) => {
+        const record = asRecord(team) ?? {};
+        return {
+          teamUid: stringValue(record.teamUid ?? record.team_uid).trim().toLowerCase(),
+          memberDestinations: unknownArray(
+            record.memberDestinations ?? record.member_destinations,
+          )
+            .map(normalizedDestination).filter(Boolean),
+        };
+      }).filter((team) => CANONICAL_TEAM_UIDS.has(team.teamUid)),
+      localTeamsInitialized: strictBoolean(
+        teams.localTeamsInitialized ?? teams.local_teams_initialized,
+        false,
+      ),
     },
     checklists: {
       defaultTaskDueStepMinutes: finiteInteger(checklists.defaultTaskDueStepMinutes, 30, 1),

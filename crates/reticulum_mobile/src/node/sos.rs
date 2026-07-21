@@ -411,16 +411,4 @@ impl Node {
         Arc::new(EventSubscription::new(rx))
     }
 
-    pub fn refresh_hub_directory(&self) -> Result<(), NodeError> {
-        let tx = {
-            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-            inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
-        };
-
-        let (resp_tx, resp_rx) = cb::bounded(1);
-        dispatch_command(&tx, Command::RefreshHubDirectory { resp: resp_tx })?;
-        resp_rx
-            .recv_timeout(Duration::from_secs(30))
-            .unwrap_or(Err(NodeError::Timeout {}))
-    }
 }

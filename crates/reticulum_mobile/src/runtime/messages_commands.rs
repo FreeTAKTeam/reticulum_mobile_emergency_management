@@ -133,6 +133,7 @@ pub enum Command {
     },
     SendLxmf {
         request: SendLxmfRequest,
+        fields_bytes: Vec<u8>,
         resp: cb::Sender<Result<String, NodeError>>,
     },
     RetryLxmf {

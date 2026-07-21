@@ -36,6 +36,11 @@ impl AppStateStore {
                     json TEXT NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS hub_directories (
+                    hub_identity_hash TEXT PRIMARY KEY,
+                    json TEXT NOT NULL,
+                    updated_at_ms INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS saved_peers (
                     destination_hex TEXT PRIMARY KEY,
                     json TEXT NOT NULL,

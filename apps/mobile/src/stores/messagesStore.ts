@@ -136,7 +136,10 @@ export const useMessagesStore = defineStore("messages", () => {
   }
 
   async function refreshTeamSummary(): Promise<void> {
-    const teamUid = nodeStore.hubRegistration.linkage?.teamUid?.trim() ?? "";
+    const teamUid = (
+      nodeStore.hubDirectorySnapshot?.activeTeamUid
+      || nodeStore.settings.teams.activeTeamUid
+    ).trim();
     if (!teamUid) {
       teamSummary.value = null;
       return;
@@ -207,7 +210,7 @@ export const useMessagesStore = defineStore("messages", () => {
     ));
 
     watch(
-      () => nodeStore.hubRegistration.linkage?.teamUid ?? "",
+      () => nodeStore.hubDirectorySnapshot?.activeTeamUid || nodeStore.settings.teams.activeTeamUid,
       () => {
         runDetachedStoreTask(nodeStore, "eams", "team linkage refresh", refreshTeamSummary);
       },

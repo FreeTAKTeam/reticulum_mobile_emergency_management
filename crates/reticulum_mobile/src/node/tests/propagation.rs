@@ -52,6 +52,17 @@ fn assert_packet_received(
             match (expected_fields, fields_bytes.as_deref()) {
                 (None, None) => {}
                 (Some(expected), Some(actual)) => {
+                    let actual = rmp_serde::from_slice::<MsgPackValue>(actual)
+                        .expect("actual mission fields");
+                    let mut expected = rmp_serde::from_slice::<MsgPackValue>(expected)
+                        .expect("expected mission fields");
+                    let MsgPackValue::Map(entries) = &mut expected else {
+                        panic!("expected mission field map");
+                    };
+                    entries.push((
+                        MsgPackValue::from(FIELD_GROUP),
+                        MsgPackValue::from(YELLOW_TEAM_UID),
+                    ));
                     assert_eq!(actual, expected);
                 }
                 (None, Some(_)) => panic!("unexpected mission fields"),
@@ -106,6 +117,7 @@ fn build_app_settings() -> AppSettingsRecord {
             api_key: String::new(),
             refresh_interval_seconds: 3600,
         },
+        teams: crate::types::TeamSettingsRecord::default(),
         checklists: crate::types::ChecklistSettingsRecord::default(),
         rnode: crate::types::RnodeSettingsRecord::default(),
     }
@@ -257,6 +269,7 @@ fn semi_autonomous_replication_targets_use_propagation_for_unsaved_directory_pee
             status: Some("active".to_string()),
         }],
         received_at_ms: 456,
+        ..HubDirectorySnapshot::yellow_only(456)
     };
 
     let targets = build_runtime_mission_replication_targets(

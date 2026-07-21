@@ -192,14 +192,14 @@ fn populate_eam_defaults_uses_local_app_hash_and_team_color_hash() {
     record.source = None;
     record.overall_status = None;
 
-    let normalized = populate_eam_defaults(&status, &record);
+    let normalized = populate_eam_defaults(&status, &record, None);
 
-    assert_eq!(normalized.group_name, "BLUE");
+    assert_eq!(normalized.group_name, "YELLOW");
     assert_eq!(
         normalized.team_member_uid.as_deref(),
         Some("22222222222222222222222222222222")
     );
-    assert_eq!(normalized.team_uid.as_deref(), Some(TEAM_UID_BLUE));
+    assert_eq!(normalized.team_uid.as_deref(), Some(TEAM_UID_YELLOW));
     assert_eq!(normalized.reported_by.as_deref(), Some("Pixel"));
     assert_eq!(
         normalized

@@ -140,6 +140,7 @@ fn sample_app_settings() -> AppSettingsRecord {
             api_key: String::new(),
             refresh_interval_seconds: 0,
         },
+        teams: crate::types::TeamSettingsRecord::default(),
         checklists: crate::types::ChecklistSettingsRecord::default(),
         rnode: crate::types::RnodeSettingsRecord::default(),
     }

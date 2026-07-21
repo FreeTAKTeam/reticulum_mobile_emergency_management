@@ -81,6 +81,41 @@ fn upsert_saved_peer_persists_selected_lxmf_route() {
     assert_eq!(restored[0].last_route_seen_at_ms, Some(84));
 }
 
+#[test]
+fn legacy_saved_peers_migrate_once_into_local_yellow() {
+    let storage_dir = test_storage_dir("local-yellow-migration");
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    let mut settings = app_settings_with_due_step(30);
+    settings.teams.local_teams.clear();
+    settings.teams.local_teams_initialized = false;
+    store.set_app_settings(&settings).expect("settings");
+    store
+        .set_saved_peers(&[SavedPeerRecord {
+            destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            label: Some("Family".to_string()),
+            saved_at_ms: 1,
+            identity_hex: None,
+            lxmf_destination_hex: None,
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
+        }])
+        .expect("saved peer");
+
+    let migrated = store
+        .get_app_settings()
+        .expect("get settings")
+        .expect("settings exist");
+    assert!(migrated.teams.local_teams_initialized);
+    assert_eq!(migrated.teams.local_teams.len(), 1);
+    assert_eq!(migrated.teams.local_teams[0].team_uid, YELLOW_TEAM_UID);
+    assert_eq!(
+        migrated.teams.local_teams[0].member_destinations,
+        vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    );
+}
+
 fn message(
     id: &str,
     conversation_id: &str,
@@ -368,4 +403,40 @@ fn peer_identity_aliases_fold_existing_split_threads() {
     assert!(messages
         .iter()
         .all(|message| message.conversation_id == "identity"));
+}
+#[test]
+fn hub_team_directories_are_durable_and_scoped_by_hub_identity() {
+    let storage_dir = test_storage_dir("hub-team-directory-scope");
+    let hub_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let hub_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let mut snapshot = crate::types::HubDirectorySnapshot::yellow_only(123);
+    snapshot.hub_identity_hash = Some(hub_a.to_string());
+    snapshot.items.push(crate::types::HubDirectoryPeerRecord {
+        identity: "11111111111111111111111111111111".to_string(),
+        destination_hash: "22222222222222222222222222222222".to_string(),
+        display_name: Some("Yellow peer".to_string()),
+        announce_capabilities: vec!["r3akt".to_string(), "emergencymessages".to_string()],
+        client_type: Some("rem".to_string()),
+        registered_mode: Some("semi_autonomous".to_string()),
+        last_seen: None,
+        status: Some("offline".to_string()),
+    });
+
+    let store = AppStateStore::new(storage_dir.to_str()).expect("store");
+    store
+        .set_hub_directory(hub_a, &snapshot)
+        .expect("persist hub A directory");
+    assert!(store.get_hub_directory(hub_b).expect("read hub B").is_none());
+    drop(store);
+
+    let restored = AppStateStore::new(storage_dir.to_str()).expect("restored store");
+    let restored_snapshot = restored
+        .get_hub_directory(hub_a)
+        .expect("read hub A")
+        .expect("hub A snapshot");
+    assert_eq!(restored_snapshot.hub_identity_hash.as_deref(), Some(hub_a));
+    assert_eq!(restored_snapshot.items.len(), 1);
+    assert!(restored.get_hub_directory(hub_b).expect("read hub B").is_none());
+
+    std::fs::remove_dir_all(storage_dir).expect("cleanup storage");
 }

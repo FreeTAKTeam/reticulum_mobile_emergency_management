@@ -166,7 +166,7 @@ fn spawn_hub_refresh_command(
                 Ok(())
             }
             Err(error) => {
-                publish_failed_hub_directory_refresh(&state, &bus, &error).await;
+                publish_failed_hub_directory_refresh(&bus, &error).await;
                 Err(error)
             }
         }

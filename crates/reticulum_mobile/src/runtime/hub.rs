@@ -1,6 +1,18 @@
 const HUB_TEAM_DIRECTORY_COMMAND: &str = "rem.registry.team_peers.list";
 const HUB_TEAM_DIRECTORY_SCOPE: &str = "shared_teams";
 
+fn canonical_team_color(team_uid: &str) -> Option<&'static str> {
+    canonical_team_color_for_uid(team_uid)
+}
+
+fn yellow_team_record() -> HubTeamRecord {
+    HubTeamRecord {
+        uid: YELLOW_TEAM_UID.to_string(),
+        color: "YELLOW".to_string(),
+        team_name: "YELLOW".to_string(),
+    }
+}
+
 fn parse_hub_directory_peer_record(
     value: &MsgPackValue,
 ) -> Result<HubDirectoryPeerRecord, NodeError> {
@@ -35,8 +47,8 @@ fn parse_hub_directory_peer_record(
         .ok_or(NodeError::InternalError {})?;
     let status = msgpack_get_named(entries, &["status"])
         .and_then(msgpack_string)
-        .filter(|value| value.eq_ignore_ascii_case("active"))
-        .ok_or(NodeError::InternalError {})?;
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
     Ok(HubDirectoryPeerRecord {
         identity,
         destination_hash,
@@ -45,8 +57,102 @@ fn parse_hub_directory_peer_record(
         client_type: Some(client_type.to_ascii_lowercase()),
         registered_mode: msgpack_get_named(entries, &["registered_mode"]).and_then(msgpack_string),
         last_seen: msgpack_get_named(entries, &["last_seen"]).and_then(msgpack_string),
-        status: Some(status.to_ascii_lowercase()),
+        status,
     })
+}
+
+fn parse_hub_team_record(value: &MsgPackValue) -> Result<Option<HubTeamRecord>, NodeError> {
+    let entries = msgpack_map_entries(value).ok_or(NodeError::InternalError {})?;
+    let uid = msgpack_get_named(entries, &["uid", "team_uid"])
+        .and_then(msgpack_string)
+        .ok_or(NodeError::InternalError {})?;
+    let Some(canonical_color) = canonical_team_color(uid.trim()) else {
+        return Ok(None);
+    };
+    let supplied_color = msgpack_get_named(entries, &["color"])
+        .and_then(msgpack_string)
+        .unwrap_or_else(|| canonical_color.to_string());
+    if supplied_color.trim().to_ascii_uppercase() != canonical_color {
+        return Err(NodeError::InternalError {});
+    }
+    let team_name = msgpack_get_named(entries, &["team_name", "name"])
+        .and_then(msgpack_string)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| canonical_color.to_string());
+    Ok(Some(HubTeamRecord {
+        uid,
+        color: canonical_color.to_string(),
+        team_name,
+    }))
+}
+
+fn parse_hub_caller_membership_record(
+    value: &MsgPackValue,
+) -> Result<Option<HubCallerMembershipRecord>, NodeError> {
+    let entries = msgpack_map_entries(value).ok_or(NodeError::InternalError {})?;
+    let team_uid = msgpack_get_named(entries, &["team_uid"])
+        .and_then(msgpack_string)
+        .ok_or(NodeError::InternalError {})?;
+    if canonical_team_color(team_uid.trim()).is_none() {
+        return Ok(None);
+    }
+    let team_member_uid = msgpack_get_named(entries, &["team_member_uid"])
+        .and_then(msgpack_string)
+        .map(|uid| uid.trim().to_string())
+        .filter(|uid| !uid.is_empty())
+        .ok_or(NodeError::InternalError {})?;
+    Ok(Some(HubCallerMembershipRecord {
+        team_uid,
+        team_member_uid,
+    }))
+}
+
+fn parse_hub_team_member_record(
+    value: &MsgPackValue,
+) -> Result<Option<HubTeamMemberRecord>, NodeError> {
+    let entries = msgpack_map_entries(value).ok_or(NodeError::InternalError {})?;
+    let team_uid = msgpack_get_named(entries, &["team_uid"])
+        .and_then(msgpack_string)
+        .ok_or(NodeError::InternalError {})?;
+    if canonical_team_color(team_uid.trim()).is_none() {
+        return Ok(None);
+    }
+    let team_member_uid = msgpack_get_named(entries, &["team_member_uid"])
+        .and_then(msgpack_string)
+        .map(|uid| uid.trim().to_string())
+        .filter(|uid| !uid.is_empty())
+        .ok_or(NodeError::InternalError {})?;
+    let peer = parse_hub_directory_peer_record(value)?;
+    Ok(Some(HubTeamMemberRecord {
+        team_uid,
+        team_member_uid,
+        identity: peer.identity,
+        destination_hash: peer.destination_hash,
+        display_name: peer.display_name,
+        announce_capabilities: peer.announce_capabilities,
+        client_type: peer.client_type,
+        registered_mode: peer.registered_mode,
+        last_seen: peer.last_seen,
+        status: peer.status,
+    }))
+}
+
+fn parse_optional_array<T>(
+    entries: &[(MsgPackValue, MsgPackValue)],
+    key: &str,
+    parser: impl Fn(&MsgPackValue) -> Result<Option<T>, NodeError>,
+) -> Result<Vec<T>, NodeError> {
+    let Some(value) = msgpack_get_named(entries, &[key]) else {
+        return Ok(Vec::new());
+    };
+    let MsgPackValue::Array(values) = value else {
+        return Err(NodeError::InternalError {});
+    };
+    values
+        .iter()
+        .filter_map(|value| parser(value).transpose())
+        .collect()
 }
 
 fn parse_hub_directory_snapshot_value(
@@ -68,8 +174,47 @@ fn parse_hub_directory_snapshot_value(
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(NodeError::InternalError {}),
     };
+    let schema_version = msgpack_get_named(entries, &["schema_version"])
+        .and_then(MsgPackValue::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    let mut teams = parse_optional_array(entries, "teams", parse_hub_team_record)?;
+    if !teams.iter().any(|team| team.uid == YELLOW_TEAM_UID) {
+        teams.push(yellow_team_record());
+    }
+    teams.sort_by_key(|team| (team.uid != YELLOW_TEAM_UID, team.color.clone()));
+    let caller_memberships = parse_optional_array(
+        entries,
+        "caller_memberships",
+        parse_hub_caller_membership_record,
+    )?;
+    let mut members = parse_optional_array(entries, "members", parse_hub_team_member_record)?;
+    if schema_version < HUB_DIRECTORY_SCHEMA_VERSION {
+        members = items
+            .iter()
+            .map(|peer| HubTeamMemberRecord {
+                team_uid: YELLOW_TEAM_UID.to_string(),
+                team_member_uid: peer.identity.clone(),
+                identity: peer.identity.clone(),
+                destination_hash: peer.destination_hash.clone(),
+                display_name: peer.display_name.clone(),
+                announce_capabilities: peer.announce_capabilities.clone(),
+                client_type: peer.client_type.clone(),
+                registered_mode: peer.registered_mode.clone(),
+                last_seen: peer.last_seen.clone(),
+                status: peer.status.clone(),
+            })
+            .collect();
+    }
     Ok(HubDirectorySnapshot {
+        schema_version,
+        hub_identity_hash: None,
+        active_team_uid: YELLOW_TEAM_UID.to_string(),
         effective_connected_mode,
+        teams,
+        caller_memberships,
+        members,
+        local_teams: Vec::new(),
         items,
         received_at_ms,
     })
@@ -148,8 +293,56 @@ fn hub_team_directory_command_fields(command_id: &str, source_identity: &str) ->
 async fn publish_hub_directory_snapshot(
     state: &NodeRuntimeState,
     bus: &EventBus,
-    snapshot: HubDirectorySnapshot,
+    mut snapshot: HubDirectorySnapshot,
 ) {
+    let mut settings = state.app_state.get_app_settings().ok().flatten();
+    let selected_team_uid = settings
+        .as_ref()
+        .map(|settings| settings.teams.active_team_uid.trim())
+        .filter(|team_uid| canonical_team_color(team_uid).is_some())
+        .unwrap_or(YELLOW_TEAM_UID);
+    let selected_is_available = settings.as_ref().is_some_and(|settings| {
+        settings
+            .teams
+            .local_teams
+            .iter()
+            .any(|team| team.team_uid == selected_team_uid)
+    }) || hub_directory_contains_active_team(&snapshot, selected_team_uid);
+    snapshot.active_team_uid = if selected_is_available {
+        selected_team_uid.to_string()
+    } else {
+        if let Some(settings) = settings.as_mut() {
+            settings.teams.active_team_uid = YELLOW_TEAM_UID.to_string();
+            if let Err(error) = state.app_state.set_app_settings(settings) {
+                bus.emit(NodeEvent::Error {
+                    code: node_error_code(&error).to_string(),
+                    message: format!(
+                        "Active TEAM disappeared and Yellow fallback could not be persisted: {error}"
+                    ),
+                });
+            }
+        }
+        emit_operational_notice(
+            bus,
+            LogLevel::Warn {},
+            "The selected TEAM is no longer assigned by RCH; REM switched to Yellow",
+        );
+        YELLOW_TEAM_UID.to_string()
+    };
+    if let Some(settings) = settings.as_ref() {
+        crate::node::apply_local_team_settings(&mut snapshot, &settings.teams);
+    }
+    if let Some(hub_identity_hash) = snapshot.hub_identity_hash.as_deref() {
+        if let Err(error) = state
+            .app_state
+            .set_hub_directory(hub_identity_hash, &snapshot)
+        {
+            bus.emit(NodeEvent::Error {
+                code: node_error_code(&error).to_string(),
+                message: format!("RCH TEAM directory cache could not be persisted: {error}"),
+            });
+        }
+    }
     if let Ok(mut guard) = state.hub_directory_snapshot.lock() {
         *guard = Some(snapshot.clone());
     }
@@ -158,24 +351,12 @@ async fn publish_hub_directory_snapshot(
     bus.emit(NodeEvent::HubDirectoryUpdated { snapshot });
 }
 
-async fn publish_failed_hub_directory_refresh(
-    state: &NodeRuntimeState,
-    bus: &EventBus,
-    error: &NodeError,
-) {
-    publish_hub_directory_snapshot(
-        state,
-        bus,
-        HubDirectorySnapshot {
-            effective_connected_mode: false,
-            items: Vec::new(),
-            received_at_ms: now_ms(),
-        },
-    )
-    .await;
+async fn publish_failed_hub_directory_refresh(bus: &EventBus, error: &NodeError) {
     bus.emit(NodeEvent::Error {
         code: node_error_code(error).to_string(),
-        message: format!("RCH TEAM peer directory refresh failed: {error}"),
+        message: format!(
+            "RCH TEAM peer directory refresh failed; retaining the last successful directory: {error}"
+        ),
     });
 }
 
@@ -303,7 +484,10 @@ async fn refresh_hub_directory_lxmf(
         if let Some(fields) = reply.fields.as_ref() {
             match parse_hub_directory_result_state(fields, &command_id, now_ms()) {
                 Ok(Some(HubDirectoryResultState::Accepted)) => continue,
-                Ok(Some(HubDirectoryResultState::Snapshot(snapshot))) => return Ok(snapshot),
+                Ok(Some(HubDirectoryResultState::Snapshot(mut snapshot))) => {
+                    snapshot.hub_identity_hash = Some(hub_hex.clone());
+                    return Ok(snapshot);
+                }
                 Ok(None) => {}
                 Err(error) => return Err(error),
             }

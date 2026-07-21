@@ -19,6 +19,8 @@ public class ReticulumBridgeServiceApiTest {
         assertInherited("listSosAlertsJson");
         assertInherited("setAnnounceCapabilities", String.class);
         assertInherited("refreshHubDirectory");
+        assertInherited("getHubDirectorySnapshotJson");
+        assertInherited("setActiveTeamJson", String.class);
     }
 
     private void assertInherited(String name, Class<?>... parameterTypes) throws Exception {

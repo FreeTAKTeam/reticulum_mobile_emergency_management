@@ -118,7 +118,7 @@ impl MessagingStore {
 
     pub fn list_announces(&self) -> Vec<AnnounceRecord> {
         let mut records = self.announce_records.values().cloned().collect::<Vec<_>>();
-        records.sort_by(|left, right| right.received_at_ms.cmp(&left.received_at_ms));
+        records.sort_by_key(|record| std::cmp::Reverse(record.received_at_ms));
         records
     }
 

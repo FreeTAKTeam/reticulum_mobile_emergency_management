@@ -12,13 +12,26 @@ fn connected_telemetry_destinations_route_only_to_current_hub() {
         true,
         true,
     )];
+    let snapshot = HubDirectorySnapshot {
+        items: vec![crate::types::HubDirectoryPeerRecord {
+            identity: "78787878787878787878787878787878".to_string(),
+            destination_hash: "abababababababababababababababab".to_string(),
+            display_name: Some("Pixel".to_string()),
+            announce_capabilities: vec!["r3akt".to_string(), "telemetry".to_string()],
+            client_type: Some("rem".to_string()),
+            registered_mode: Some("connected".to_string()),
+            last_seen: None,
+            status: Some("active".to_string()),
+        }],
+        ..HubDirectorySnapshot::yellow_only(123)
+    };
 
     let destinations = build_runtime_telemetry_destinations(
         &status,
         peers.as_slice(),
         None,
         Some(&config),
-        None,
+        Some(&snapshot),
     )
     .expect("connected telemetry destinations");
 
@@ -31,7 +44,7 @@ fn connected_telemetry_destinations_route_only_to_current_hub() {
 }
 
 #[test]
-fn connected_telemetry_destinations_route_to_selected_hub_without_current_peer() {
+fn connected_telemetry_destinations_fail_closed_without_team_directory() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(
         HubMode::Connected {},
@@ -42,26 +55,18 @@ fn connected_telemetry_destinations_route_to_selected_hub_without_current_peer()
         build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
             .expect("connected telemetry destinations");
 
-    assert_eq!(destinations.len(), 1);
-    assert_eq!(
-        destinations[0].app_destination_hex,
-        "56565656565656565656565656565656"
-    );
-    assert!(matches!(
-        destinations[0].send_mode,
-        SendMode::PropagationOnly {}
-    ));
+    assert!(destinations.is_empty());
 }
 
 #[test]
-fn connected_telemetry_destinations_require_selected_hub() {
+fn connected_telemetry_without_team_directory_does_not_route_to_unselected_hub() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(HubMode::Connected {}, None);
 
-    let err = build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
-        .expect_err("connected telemetry should require a hub");
+    let destinations = build_runtime_telemetry_destinations(&status, &[], None, Some(&config), None)
+        .expect("connected telemetry should fail closed");
 
-    assert!(matches!(err, NodeError::InvalidConfig {}));
+    assert!(destinations.is_empty());
 }
 
 #[test]
@@ -103,6 +108,7 @@ fn semi_autonomous_telemetry_destinations_use_hub_snapshot() {
             },
         ],
         received_at_ms: 123,
+        ..HubDirectorySnapshot::yellow_only(123)
     };
 
     let destinations = build_runtime_telemetry_destinations(
@@ -149,6 +155,7 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
             status: Some("active".to_string()),
         }],
         received_at_ms: 123,
+        ..HubDirectorySnapshot::yellow_only(123)
     };
 
     let destinations = build_runtime_telemetry_destinations(
@@ -165,14 +172,11 @@ fn semi_autonomous_telemetry_destinations_use_propagation_for_unsaved_snapshot_p
         destinations[0].app_destination_hex,
         "abababababababababababababababab"
     );
-    assert!(matches!(
-        destinations[0].send_mode,
-        SendMode::PropagationOnly {}
-    ));
+    assert!(matches!(destinations[0].send_mode, SendMode::Auto {}));
 }
 
 #[test]
-fn semi_autonomous_telemetry_destinations_fail_closed_without_directory() {
+fn semi_autonomous_yellow_telemetry_uses_local_saved_peers_without_directory() {
     let status = build_status_for_tests();
     let config = build_config_fingerprint_for_tests(
         HubMode::SemiAutonomous {},
@@ -204,7 +208,11 @@ fn semi_autonomous_telemetry_destinations_fail_closed_without_directory() {
     )
     .expect("semi-autonomous fail-closed telemetry destinations");
 
-    assert!(destinations.is_empty());
+    assert_eq!(destinations.len(), 1);
+    assert_eq!(
+        destinations[0].app_destination_hex,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
 }
 
 #[test]
