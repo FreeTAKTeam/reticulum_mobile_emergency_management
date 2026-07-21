@@ -919,11 +919,11 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lxmf-reference"
-version = "0.9.6"
+version = "0.9.5"
 
 [[package]]
 name = "lxmf-runtime"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "base64",
  "hex",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-sdk"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "hex",
  "hmac",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "lxmf-wire"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "reticulum-rs-core",
  "reticulum-rs-transport",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-core"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "aes",
  "cbc",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "reticulum-rs-transport"
-version = "0.9.6"
+version = "0.9.5"
 dependencies = [
  "aes",
  "base64",
@@ -1291,7 +1291,6 @@ dependencies = [
  "sha2",
  "shlex",
  "socket2 0.5.10",
- "thiserror 1.0.69",
  "tokio",
  "tokio-serial",
  "tokio-util",
