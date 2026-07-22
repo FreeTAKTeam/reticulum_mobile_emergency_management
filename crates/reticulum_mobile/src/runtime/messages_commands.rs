@@ -232,10 +232,12 @@ fn prune_expired_receipt_tracking(
 ) -> usize {
     let before = receipt_message_ids.len();
     receipt_message_ids.retain(|_, tracking| {
-        now_ms.saturating_sub(tracking.recorded_at_ms)
-            < crate::numeric::u128_to_u64_saturating(
-                DEFAULT_RECEIPT_TRACKING_TTL.as_millis(),
-            )
+        let ttl = match tracking {
+            ReceiptMessageTracking::Pending { .. } => DEFAULT_RECEIPT_TRACKING_TTL,
+            ReceiptMessageTracking::Observed { .. } => RECEIPT_REGISTRATION_RACE_TTL,
+        };
+        now_ms.saturating_sub(tracking.recorded_at_ms())
+            < crate::numeric::u128_to_u64_saturating(ttl.as_millis())
     });
     before.saturating_sub(receipt_message_ids.len())
 }

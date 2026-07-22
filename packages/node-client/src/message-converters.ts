@@ -96,6 +96,7 @@ export function toLxmfDeliveryStatus(raw: unknown): LxmfDeliveryStatus {
   const valid: LxmfDeliveryStatus[] = [
     "Sent",
     "SentToPropagation",
+    "Delivered",
     "Acknowledged",
     "Failed",
     "TimedOut",

@@ -8,7 +8,8 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::announce_metadata::{
-    normalize_rem_display_name, parse_announce_metadata, supports_mission_traffic,
+    normalize_rem_display_name, parse_announce_metadata, requires_legacy_rem_chat_ack,
+    supports_mission_traffic, AnnounceProfile,
 };
 use crate::delivery_policy;
 use crate::delivery_policy::normalize_hex_32;
@@ -39,7 +40,8 @@ use reticulum::runtime::{
 };
 use reticulum::transport::destination::link::{Link, LinkEvent, LinkStatus};
 use reticulum::transport::destination::{
-    DestinationDesc, DestinationName, SingleInputDestination, SingleOutputDestination,
+    DestinationDesc, DestinationName, ProofStrategy, SingleInputDestination,
+    SingleOutputDestination,
 };
 use reticulum::transport::hash::AddressHash;
 use reticulum::transport::identity::PrivateIdentity;
@@ -133,6 +135,8 @@ const DEFAULT_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROPAGATED_LXMF_ACK_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 const DEFAULT_BUFFERED_ACK_TTL: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_RECEIPT_TRACKING_TTL: Duration = Duration::from_secs(10 * 60);
+const RECEIPT_REGISTRATION_RACE_TTL: Duration = Duration::from_secs(30);
+const MAX_OBSERVED_RECEIPT_RACES: usize = 256;
 const PROPAGATION_SYNC_MAX_RELAY_ATTEMPTS: usize = 6;
 #[cfg(not(test))]
 const PROPAGATION_SYNC_RELAY_SELECTION_WAIT: Duration = Duration::from_secs(30);

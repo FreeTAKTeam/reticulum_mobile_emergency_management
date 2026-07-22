@@ -197,10 +197,16 @@ async fn announce_destinations(
     transport: &Arc<Transport>,
     _app_destination: &Arc<TokioMutex<SingleInputDestination>>,
     lxmf_destination: &Arc<TokioMutex<SingleInputDestination>>,
-    announce_capabilities: &Arc<TokioMutex<String>>,
+    announce_capabilities: &Arc<TokioMutex<AnnounceProfile>>,
     reason: &str,
 ) {
-    let caps = announce_capabilities.lock().await.clone();
+    let app_data = match announce_capabilities.lock().await.encode() {
+        Ok(app_data) => app_data,
+        Err(err) => {
+            warn!("[announce] delivery metadata encode failed reason={reason} detail={err}");
+            return;
+        }
+    };
     let lxmf_hex = lxmf_destination
         .lock()
         .await
@@ -211,12 +217,12 @@ async fn announce_destinations(
         "[announce] sending reason={reason} kind={DESTINATION_KIND_LXMF_DELIVERY} destination={lxmf_hex}",
     );
     transport
-        .set_destination_announce_app_data(lxmf_destination, Some(caps.as_bytes().to_vec()))
+        .set_destination_announce_app_data(lxmf_destination, Some(app_data.clone()))
         .await;
     send_announce_with_trace(
         transport,
         lxmf_destination,
-        Some(caps.as_bytes()),
+        Some(app_data.as_slice()),
         reason,
         DESTINATION_KIND_LXMF_DELIVERY,
     )

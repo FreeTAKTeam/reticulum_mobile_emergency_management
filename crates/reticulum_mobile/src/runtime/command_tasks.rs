@@ -4,7 +4,7 @@ fn spawn_manual_announce(
     transport: &Arc<Transport>,
     app_destination: &Arc<TokioMutex<SingleInputDestination>>,
     lxmf_destination: &Arc<TokioMutex<SingleInputDestination>>,
-    announce_capabilities: &Arc<TokioMutex<String>>,
+    announce_capabilities: &Arc<TokioMutex<AnnounceProfile>>,
 ) {
     let transport = transport.clone();
     let app_destination = app_destination.clone();
@@ -30,7 +30,7 @@ fn spawn_announce_capability_update(
         &Arc<TokioMutex<SingleInputDestination>>,
         &Arc<TokioMutex<SingleInputDestination>>,
     ),
-    announce_capabilities: &Arc<TokioMutex<String>>,
+    announce_capabilities: &Arc<TokioMutex<AnnounceProfile>>,
     capability_string: String,
     resp: cb::Sender<Result<(), NodeError>>,
 ) {
@@ -39,7 +39,10 @@ fn spawn_announce_capability_update(
     let lxmf_destination = destinations.1.clone();
     let announce_capabilities = announce_capabilities.clone();
     executor.spawn(lane, RuntimeCommandClass::Control, resp, async move {
-        *announce_capabilities.lock().await = capability_string;
+        announce_capabilities
+            .lock()
+            .await
+            .set_capabilities(capability_string.as_str());
         announce_destinations(
             &transport,
             &app_destination,

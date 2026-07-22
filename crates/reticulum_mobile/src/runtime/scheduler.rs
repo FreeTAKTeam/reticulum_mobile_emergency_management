@@ -58,14 +58,34 @@ pub(crate) struct LxmfSendReport {
 }
 
 struct RuntimeReceiptBridge {
+    tracker: ReceiptTracker,
+}
+
+#[derive(Clone)]
+struct ReceiptTracker {
     receipt_message_ids: Arc<Mutex<HashMap<String, ReceiptMessageTracking>>>,
     tx: mpsc::UnboundedSender<String>,
 }
 
 #[derive(Debug, Clone)]
-struct ReceiptMessageTracking {
-    message_id_hex: String,
-    recorded_at_ms: u64,
+enum ReceiptMessageTracking {
+    Pending {
+        message_id_hex: String,
+        recorded_at_ms: u64,
+    },
+    Observed {
+        recorded_at_ms: u64,
+    },
+}
+
+impl ReceiptMessageTracking {
+    fn recorded_at_ms(&self) -> u64 {
+        match self {
+            Self::Pending { recorded_at_ms, .. } | Self::Observed { recorded_at_ms } => {
+                *recorded_at_ms
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

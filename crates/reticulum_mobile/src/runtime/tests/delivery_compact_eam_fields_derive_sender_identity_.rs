@@ -346,14 +346,14 @@ fn prune_expired_receipt_tracking_removes_only_stale_entries() {
     let mut tracking = HashMap::from([
         (
             "fresh".to_string(),
-            ReceiptMessageTracking {
+            ReceiptMessageTracking::Pending {
                 message_id_hex: "msg-fresh".to_string(),
                 recorded_at_ms: now,
             },
         ),
         (
             "stale".to_string(),
-            ReceiptMessageTracking {
+            ReceiptMessageTracking::Pending {
                 message_id_hex: "msg-stale".to_string(),
                 recorded_at_ms: now
                     .saturating_sub(

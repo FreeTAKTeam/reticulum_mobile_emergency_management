@@ -15,7 +15,6 @@ import type {
 import type { NodeUiPreferences } from "../utils/legacyState";
 import {
   ensureRequiredAnnounceCapabilities,
-  formatAnnounceAppData,
   isValidDestinationHex,
   normalizeDisplayName,
   normalizeDestinationHex,
@@ -381,10 +380,7 @@ export function toNodeConfig(settings: NodeUiSettings): NodeConfig {
     transportNodeEnabled: settings.transportNodeEnabled,
     announceIntervalSeconds: settings.announceIntervalSeconds,
     staleAfterMinutes: settings.telemetry.staleAfterMinutes,
-    announceCapabilities: formatAnnounceAppData(
-      ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
-      displayName,
-    ),
+    announceCapabilities: ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
     hubMode: settings.hub.mode,
     hubIdentityHash: settings.hub.identityHash || undefined,
     hubApiBaseUrl: settings.hub.apiBaseUrl || undefined,

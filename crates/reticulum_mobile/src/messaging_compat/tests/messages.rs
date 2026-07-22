@@ -262,7 +262,7 @@ fn transport_receipt_does_not_mark_application_ack_accepted() {
 }
 
 #[test]
-fn chat_ack_marks_application_ack_accepted() {
+fn legacy_chat_ack_keeps_application_ack_not_required() {
     let mut store = MessagingStore::default();
     store.upsert_message(MessageRecord {
         message_id_hex: "msg".into(),
@@ -291,8 +291,8 @@ fn chat_ack_marks_application_ack_accepted() {
             message_id_hex: "msg",
             state: Some(MessageState::Delivered),
             transport_state: Some(TransportDeliveryState::TransportDelivered),
-            application_ack_state: Some(ApplicationAckState::Accepted),
-            detail: Some("chat delivery ack".to_string()),
+            application_ack_state: Some(ApplicationAckState::NotRequired),
+            detail: Some("legacy REM delivery ack".to_string()),
             last_wire_message_id_hex: None,
             updated_at_ms: 20,
         })
@@ -303,12 +303,25 @@ fn chat_ack_marks_application_ack_accepted() {
         updated.transport_state,
         TransportDeliveryState::TransportDelivered
     );
-    assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
+    assert_eq!(
+        updated.application_ack_state,
+        ApplicationAckState::NotRequired
+    );
 }
 
 #[test]
 fn retry_chat_ack_updates_original_record_by_wire_message_id() {
     let mut store = MessagingStore::default();
+    store.store_outbound(StoredOutboundMessage {
+        request: SendMessageRequest {
+            destination_hex: "peer".into(),
+            body_utf8: "hello".into(),
+            title: None,
+            send_mode: SendMode::Auto,
+            use_propagation_node: false,
+        },
+        message_id_hex: "logical-msg".into(),
+    });
     store.upsert_message(MessageRecord {
         message_id_hex: "logical-msg".into(),
         conversation_id: "peer".into(),
@@ -336,8 +349,8 @@ fn retry_chat_ack_updates_original_record_by_wire_message_id() {
             message_id_hex: "retry-wire-msg",
             state: Some(MessageState::Delivered),
             transport_state: Some(TransportDeliveryState::TransportDelivered),
-            application_ack_state: Some(ApplicationAckState::Accepted),
-            detail: Some("chat delivery ack".to_string()),
+            application_ack_state: Some(ApplicationAckState::NotRequired),
+            detail: Some("legacy REM delivery ack".to_string()),
             last_wire_message_id_hex: None,
             updated_at_ms: 20,
         })
@@ -353,5 +366,15 @@ fn retry_chat_ack_updates_original_record_by_wire_message_id() {
         updated.transport_state,
         TransportDeliveryState::TransportDelivered
     );
-    assert_eq!(updated.application_ack_state, ApplicationAckState::Accepted);
+    assert_eq!(
+        updated.application_ack_state,
+        ApplicationAckState::NotRequired
+    );
+    assert_eq!(
+        store
+            .outbound_for_message_or_wire_id("retry-wire-msg")
+            .expect("outbound resolved by retry wire id")
+            .message_id_hex,
+        "logical-msg"
+    );
 }

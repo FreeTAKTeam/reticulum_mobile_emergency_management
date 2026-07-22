@@ -22,7 +22,7 @@ enum SendOutcome {
   "DroppedNoRoute"
 };
 
-enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Acknowledged", "Failed", "TimedOut" };
+enum LxmfDeliveryStatus { "Sent", "SentToPropagation", "Delivered", "Acknowledged", "Failed", "TimedOut" };
 
 enum TransportDeliveryState {
   "Queued",
@@ -182,7 +182,7 @@ dictionary NodeConfig {
   // Peer route/announce staleness window for UI projections.
   u32 stale_after_minutes;
 
-  // App capabilities emitted as UTF-8 app_data in announces (comma-separated).
+  // App capabilities encoded into standard LXMF delivery announce metadata.
   string announce_capabilities;
 
   // Hub directory settings (optional).
