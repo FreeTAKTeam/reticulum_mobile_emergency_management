@@ -348,6 +348,7 @@ mod tests {
     include!("runtime/tests/command_tasks.rs");
     include!("runtime/tests/core.rs");
     include!("runtime/tests/delivery_compact_eam_fields_derive_sender_identity_.rs");
+    include!("runtime/tests/delivery_receipt_tracking.rs");
     include!("runtime/tests/delivery_mission_recovery_sends_do_not_wait_on_satu.rs");
     include!("runtime/tests/hub_directory.rs");
     include!("runtime/tests/interfaces.rs");
