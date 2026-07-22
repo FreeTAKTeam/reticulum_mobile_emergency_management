@@ -184,11 +184,12 @@ sequenceDiagram
 - Telemetry routes from `telemetryDestinations`; in `Autonomous` that list is announce-driven, in `SemiAutonomous` it is the intersection of the cached TEAM-scoped directory and locally current peers, and in `Connected` it collapses to the selected hub destination.
 - Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
-- Telemetry has no delivery acknowledgement requirement in the app flow; events depend on a result/event reply to transition from `Sent` to `Acknowledged`.
+- Standard LXMF transport proofs transition direct packet deliveries to `Delivered`. Telemetry has no additional application acknowledgement requirement; event and mission commands still depend on a `FIELD_RESULTS (0x0A)` result/event reply to transition from transport-delivered to application `Acknowledged`.
 - Telemetry snapshot sync uses a lightweight `telemetry_snapshot_request` / stream response over canonical LXMF delivery destinations; event sync uses `mission.registry.log_entry.list` / `listed` style command-response semantics.
 - Telemetry and events require the peer's REM-capable `lxmf.delivery` destination to be announced, tracked, routable, and correlation replies to come back correctly. Legacy app destinations are inbound compatibility aliases, not routing targets.
-- REM capability parsing is centralized in the native runtime and accepts the legacy text announce app data (`R3AKT,EMergencyMessages,Telemetry;name=...`) plus the structured msgpack/hex layouts produced by LXMF-compatible peers. The app must not infer an LXMF route from a generic app destination.
-- Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
+- REM capability parsing is centralized in the native runtime. New REM versions emit the standard LXMF delivery announce array (`display_name`, `stamp_cost`) with optional capability metadata in a third extension slot, and accept both that structured form and legacy REM text app data (`R3AKT,EMergencyMessages,Telemetry;name=...`). The app must not infer an LXMF route from a generic app destination.
+- The structured capability metadata advertises `rem.standard_lxmf_receipts.v1`. A new REM sends the old `REM_DELIVERY_ACK:<message-id>` compatibility message only to a peer positively identified by a legacy text REM announce; it always continues to recognize that legacy response from current deployed REM versions.
+- Telemetry failures are mostly silent transport misses unless packet send throws; events now surface explicit `Sent`, `Delivered`, `Acknowledged`, `Failed`, and `TimedOut` lifecycle states in the UI log.
 
 ## Checklist / Excheck Flow
 
@@ -367,8 +368,9 @@ Routing:
 - If the sender starts on a direct-capable route, the runtime still performs up to 3 direct attempts before falling back to propagation.
 
 Acknowledgement:
-- Sender success is tracked from the LXMF response path, not just packet send.
-- The runtime marks delivery `Acknowledged` when it receives a matching response/event on the same `correlation_id` or `command_id`.
+- Direct packet delivery is tracked with the regular Reticulum/LXMF proof lifecycle. A valid proof marks transport state `Delivered`; completed direct resource transfer is also transport-delivered. Handoff to a propagation node remains `SentToPropagation`, since a relay receipt is not proof of final-recipient delivery.
+- The runtime marks application state `Acknowledged` when it receives a matching standard LXMF `FIELD_RESULTS (0x0A)` response/event on the same `correlation_id` or `command_id`.
+- Plain chat does not require an application result. Current deployed REM clients still interoperate through the legacy text announce and `REM_DELIVERY_ACK` compatibility branch described above.
 
 ### LXMF Command Field Compatibility
 

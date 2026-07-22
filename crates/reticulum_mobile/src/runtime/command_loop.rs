@@ -111,6 +111,7 @@
                     &state,
                     &bus,
                     &transport,
+                    &receipt_tracker,
                     SendBytesCommand {
                         destination_hex,
                         bytes,
@@ -127,7 +128,7 @@
             } => {
                 let state = state.clone();
                 let bus = bus.clone();
-                let receipt_message_ids = receipt_message_ids.clone();
+                let receipt_tracker = receipt_tracker.clone();
                 log_send_task(
                     SendTaskClass::General,
                     format!(
@@ -168,6 +169,14 @@
                             ) {
                             MessageState::SentToPropagation {}
                         } else if matches!(
+                            report.representation,
+                            LxmfDeliveryRepresentation::Resource {}
+                        ) && matches!(
+                            report.outcome,
+                            RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
+                        ) {
+                            MessageState::Delivered {}
+                        } else if matches!(
                             report.outcome,
                             RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
                         ) {
@@ -203,7 +212,7 @@
                             {
                                 ApplicationAckState::Failed {}
                             } else {
-                                ApplicationAckState::Waiting {}
+                                ApplicationAckState::NotRequired {}
                             },
                             detail: detail.clone(),
                             sent_at_ms: Some(now_ms()),
@@ -217,16 +226,12 @@
                                 message_id_hex: report.message_id_hex.clone(),
                             },
                         );
-                        if let Some(receipt_hash_hex) = report.receipt_hash_hex.as_ref() {
-                            if let Ok(mut guard) = receipt_message_ids.lock() {
-                                guard.insert(
-                                    receipt_hash_hex.clone(),
-                                    ReceiptMessageTracking {
-                                        message_id_hex: report.message_id_hex.clone(),
-                                        recorded_at_ms: now_ms(),
-                                    },
-                                );
-                            }
+                        if !matches!(report.method, LxmfDeliveryMethod::Propagated {}) {
+                            register_receipt_tracking(
+                                &receipt_tracker,
+                                report.receipt_hash_hex.as_deref(),
+                                report.message_id_hex.as_str(),
+                            );
                         }
                         Ok::<String, NodeError>(report.message_id_hex)
                     }
@@ -249,6 +254,7 @@
             } => {
                 let state = state.clone();
                 let bus = bus.clone();
+                let receipt_tracker = receipt_tracker.clone();
                 log_send_task(
                     SendTaskClass::General,
                     format!(
@@ -285,6 +291,11 @@
                                 RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
                             ) {
                             MessageState::SentToPropagation {}
+                        } else if matches!(
+                            report.representation,
+                            LxmfDeliveryRepresentation::Resource {}
+                        ) {
+                            MessageState::Delivered {}
                         } else {
                             MessageState::SentDirect {}
                         };
@@ -320,7 +331,7 @@
                             },
                             state: retried_state,
                             transport_state: transport_state_for_message_state(retried_state),
-                            application_ack_state: ApplicationAckState::Waiting {},
+                            application_ack_state: ApplicationAckState::NotRequired {},
                             detail: Some(format!("retry of {}", outbound.message_id_hex)),
                             sent_at_ms: Some(now_ms()),
                             received_at_ms: None,
@@ -333,6 +344,13 @@
                                 message_id_hex: outbound.message_id_hex.clone(),
                             },
                         );
+                        if !matches!(report.method, LxmfDeliveryMethod::Propagated {}) {
+                            register_receipt_tracking(
+                                &receipt_tracker,
+                                report.receipt_hash_hex.as_deref(),
+                                outbound.message_id_hex.as_str(),
+                            );
+                        }
                         Ok::<(), NodeError>(())
                     }
                     .await;

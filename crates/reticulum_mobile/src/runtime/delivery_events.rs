@@ -13,16 +13,84 @@ fn log_send_task(class: SendTaskClass, message: String) {
 impl ReceiptHandler for RuntimeReceiptBridge {
     fn on_receipt(&self, receipt: &DeliveryReceipt) {
         let packet_hash_hex = hex::encode(receipt.message_id);
-        let Some(message_id_hex) = self
-            .receipt_message_ids
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.remove(&packet_hash_hex))
-            .map(|tracking| tracking.message_id_hex)
-        else {
+        let Ok(mut guard) = self.tracker.receipt_message_ids.lock() else {
             return;
         };
-        let _ = self.tx.send(message_id_hex);
+        match guard.remove(&packet_hash_hex) {
+            Some(ReceiptMessageTracking::Pending { message_id_hex, .. }) => {
+                drop(guard);
+                let _ = self.tracker.tx.send(message_id_hex);
+            }
+            Some(ReceiptMessageTracking::Observed { recorded_at_ms }) => {
+                guard.insert(
+                    packet_hash_hex,
+                    ReceiptMessageTracking::Observed { recorded_at_ms },
+                );
+            }
+            None => {
+                let observed_count = guard
+                    .values()
+                    .filter(|tracking| matches!(tracking, ReceiptMessageTracking::Observed { .. }))
+                    .count();
+                if observed_count >= MAX_OBSERVED_RECEIPT_RACES {
+                    if let Some(oldest_observed) = guard
+                        .iter()
+                        .filter_map(|(hash, tracking)| match tracking {
+                            ReceiptMessageTracking::Observed { recorded_at_ms } => {
+                                Some((hash.clone(), *recorded_at_ms))
+                            }
+                            ReceiptMessageTracking::Pending { .. } => None,
+                        })
+                        .min_by_key(|(_, recorded_at_ms)| *recorded_at_ms)
+                        .map(|(hash, _)| hash)
+                    {
+                        guard.remove(&oldest_observed);
+                    } else {
+                        return;
+                    }
+                }
+                guard.insert(
+                    packet_hash_hex,
+                    ReceiptMessageTracking::Observed {
+                        recorded_at_ms: now_ms(),
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn register_receipt_tracking(
+    tracker: &ReceiptTracker,
+    receipt_hash_hex: Option<&str>,
+    message_id_hex: &str,
+) {
+    let Some(receipt_hash_hex) = receipt_hash_hex else {
+        return;
+    };
+    let observed_before_registration = if let Ok(mut guard) = tracker.receipt_message_ids.lock() {
+        match guard.remove(receipt_hash_hex) {
+            Some(ReceiptMessageTracking::Observed { .. }) => true,
+            Some(existing @ ReceiptMessageTracking::Pending { .. }) => {
+                guard.insert(receipt_hash_hex.to_string(), existing);
+                false
+            }
+            None => {
+                guard.insert(
+                    receipt_hash_hex.to_string(),
+                    ReceiptMessageTracking::Pending {
+                        message_id_hex: message_id_hex.to_string(),
+                        recorded_at_ms: now_ms(),
+                    },
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
+    if observed_before_registration {
+        let _ = tracker.tx.send(message_id_hex.to_string());
     }
 }
 
@@ -30,7 +98,9 @@ fn transport_state_for_lxmf_status(status: LxmfDeliveryStatus) -> TransportDeliv
     match status {
         LxmfDeliveryStatus::Sent {} => TransportDeliveryState::SentDirect {},
         LxmfDeliveryStatus::SentToPropagation {} => TransportDeliveryState::SentToPropagation {},
-        LxmfDeliveryStatus::Acknowledged {} => TransportDeliveryState::TransportDelivered {},
+        LxmfDeliveryStatus::Delivered {} | LxmfDeliveryStatus::Acknowledged {} => {
+            TransportDeliveryState::TransportDelivered {}
+        }
         LxmfDeliveryStatus::Failed {} => TransportDeliveryState::Failed {},
         LxmfDeliveryStatus::TimedOut {} => TransportDeliveryState::TimedOut {},
     }
@@ -38,6 +108,7 @@ fn transport_state_for_lxmf_status(status: LxmfDeliveryStatus) -> TransportDeliv
 
 fn application_ack_state_for_lxmf_status(status: LxmfDeliveryStatus) -> ApplicationAckState {
     match status {
+        LxmfDeliveryStatus::Delivered {} => ApplicationAckState::Waiting {},
         LxmfDeliveryStatus::Acknowledged {} => ApplicationAckState::Accepted {},
         LxmfDeliveryStatus::Failed {} | LxmfDeliveryStatus::TimedOut {} => {
             ApplicationAckState::Failed {}

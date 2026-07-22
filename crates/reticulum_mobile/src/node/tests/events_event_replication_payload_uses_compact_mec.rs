@@ -449,14 +449,7 @@ async fn upsert_event_replicates_to_native_peer_projection() {
     assert_eq!(received.command_type, "mission.registry.log_entry.upsert");
     assert_eq!(received.mission_uid, record.mission_uid);
     assert_eq!(received.content, record.content);
-    assert_eq!(
-        received.callsign,
-        node_a_status
-            .lxmf_destination_hex
-            .chars()
-            .take(8)
-            .collect::<String>()
-    );
+    assert_eq!(received.callsign, node_a_status.name);
     assert_eq!(received.source_identity, node_a_status.lxmf_destination_hex);
 
     stop_node(node_a).await;

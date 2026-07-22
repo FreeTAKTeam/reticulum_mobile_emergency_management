@@ -86,7 +86,8 @@ function isTerminal(state: MessageState): boolean {
 ```
 
 `Queued`, `PathRequested`, `LinkEstablishing`, `Sending`, `SentDirect`, and
-`SentToPropagation` are intermediate. A transport receipt and an application
-acknowledgement are different signals; do not render an operational command as
-completed until its required application acknowledgement reaches a terminal
-accepted/completed state.
+`SentToPropagation` are intermediate. `Delivered` means a standard LXMF
+transport proof was validated (or a direct resource transfer completed).
+`Acknowledged` means the application returned a correlated LXMF field result.
+Do not render an operational command as completed until its required
+application acknowledgement reaches a terminal accepted/completed state.

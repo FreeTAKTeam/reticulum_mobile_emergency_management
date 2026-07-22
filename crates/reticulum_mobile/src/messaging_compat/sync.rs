@@ -8,6 +8,22 @@ impl MessagingStore {
         self.outbound_messages.get(message_id_hex).cloned()
     }
 
+    pub fn outbound_for_message_or_wire_id(
+        &self,
+        message_id_hex: &str,
+    ) -> Option<StoredOutboundMessage> {
+        self.outbound(message_id_hex).or_else(|| {
+            let stored_message_id = self.message_records.iter().find_map(|(stored_id, record)| {
+                record
+                    .last_wire_message_id_hex
+                    .as_deref()
+                    .is_some_and(|wire_id| wire_id.eq_ignore_ascii_case(message_id_hex))
+                    .then_some(stored_id)
+            })?;
+            self.outbound_messages.get(stored_message_id).cloned()
+        })
+    }
+
     pub fn set_active_propagation_node(&mut self, destination_hex: Option<String>) -> SyncStatus {
         self.sync_status.active_propagation_node_hex =
             destination_hex.map(|value| normalize_hex(value.as_str()));

@@ -119,8 +119,6 @@ async fn send_operational_ack_if_needed(
     if ack.destination_hex == local_lxmf_hex {
         return;
     }
-    const OPERATIONAL_ACK_SEND_ATTEMPTS: usize = 3;
-    const OPERATIONAL_ACK_REDUNDANT_DELAY: Duration = Duration::from_millis(250);
     let fields = match build_compact_operational_ack_fields(&ack) {
         Ok(fields) => fields,
         Err(err) => {
@@ -135,49 +133,34 @@ async fn send_operational_ack_if_needed(
         }
     };
     let ack_metadata = parse_mission_sync_metadata(fields.as_slice());
-    let mut sent = false;
-    let mut last_error: Option<NodeError> = None;
-    for attempt in 1..=OPERATIONAL_ACK_SEND_ATTEMPTS {
-        if attempt > 1 {
-            tokio::time::sleep(OPERATIONAL_ACK_REDUNDANT_DELAY).await;
+    match send_lxmf_with_delivery_policy(
+        state,
+        bus,
+        ack.destination_hex.as_str(),
+        &[],
+        None,
+        Some(fields),
+        ack_metadata,
+        SendMode::Auto {},
+        SendTaskClass::MissionAck,
+    )
+    .await
+    {
+        Ok(report) => {
+            info!(
+                "[lxmf][mission] sent application result destination={} message_id={} command={} correlation={} type={}",
+                report.resolved_destination_hex,
+                report.message_id_hex,
+                ack.command_id,
+                ack.correlation_id.as_deref().unwrap_or("-"),
+                ack.command_type.as_deref().unwrap_or("-"),
+            );
         }
-        match send_lxmf_with_delivery_policy(
-            state,
-            bus,
-            ack.destination_hex.as_str(),
-            &[],
-            None,
-            Some(fields.clone()),
-            ack_metadata.clone(),
-            SendMode::Auto {},
-            SendTaskClass::MissionAck,
-        )
-        .await
-        {
-            Ok(report) => {
-                sent = true;
-                info!(
-                    "[lxmf][mission] sent received acknowledgement destination={} message_id={} command={} correlation={} type={} attempt={}/{}",
-                    report.resolved_destination_hex,
-                    report.message_id_hex,
-                    ack.command_id,
-                    ack.correlation_id.as_deref().unwrap_or("-"),
-                    ack.command_type.as_deref().unwrap_or("-"),
-                    attempt,
-                    OPERATIONAL_ACK_SEND_ATTEMPTS,
-                );
-            }
-            Err(err) => {
-                last_error = Some(err);
-            }
-        }
-    }
-    if !sent {
-        if let Some(err) = last_error {
+        Err(err) => {
             bus.emit(NodeEvent::Error {
                 code: node_error_code(&err).to_string(),
                 message: format!(
-                    "operational acknowledgement send failed destination={} command={} reason={}",
+                    "application result send failed destination={} command={} reason={}",
                     ack.destination_hex, ack.command_id, err
                 ),
             });
@@ -194,6 +177,29 @@ async fn acknowledge_chat_delivery(
     let Some(message_id_hex) = parse_chat_delivery_ack_body(body_utf8) else {
         return false;
     };
+    let Some(source_hex) = source_hex else {
+        return true;
+    };
+    let Some(source_peer) = peer_for_any_destination_hex(state, source_hex).await else {
+        return true;
+    };
+    if !requires_legacy_rem_chat_ack(source_peer.app_data.as_deref()) {
+        return true;
+    }
+    let Some(outbound) = state
+        .messaging
+        .lock()
+        .await
+        .outbound_for_message_or_wire_id(message_id_hex.as_str())
+    else {
+        return true;
+    };
+    let Some(requested_destination) = normalize_hex_32(&outbound.request.destination_hex) else {
+        return true;
+    };
+    if !peer_matches_hex(&source_peer, requested_destination.as_str()) {
+        return true;
+    }
     let maybe_record = state
         .messaging
         .lock()
@@ -202,21 +208,19 @@ async fn acknowledge_chat_delivery(
             message_id_hex: message_id_hex.as_str(),
             state: Some(sdkmsg::MessageState::Delivered),
             transport_state: Some(sdkmsg::TransportDeliveryState::TransportDelivered),
-            application_ack_state: Some(sdkmsg::ApplicationAckState::Accepted),
-            detail: Some("chat delivery ack".to_string()),
+            application_ack_state: Some(sdkmsg::ApplicationAckState::NotRequired),
+            detail: Some("legacy REM delivery ack".to_string()),
             last_wire_message_id_hex: None,
             updated_at_ms: now_ms(),
         })
         .map(from_sdk_message_record);
 
     if let Some(record) = maybe_record {
-        if let Some(source_hex) = source_hex {
-            record_peer_link_state(state, bus, source_hex, true).await;
-        }
+        record_peer_link_state(state, bus, source_hex, true).await;
         state.sdk.record_delivery_acknowledged(
             &record.message_id_hex,
             &record.destination_hex,
-            source_hex,
+            Some(source_hex),
             None,
             None,
             None,
@@ -230,7 +234,7 @@ async fn acknowledge_chat_delivery(
         info!(
             "[lxmf][chat] acknowledged message_id={} source={}",
             record.message_id_hex,
-            source_hex.unwrap_or("-"),
+            source_hex,
         );
     }
     true
@@ -249,6 +253,12 @@ async fn send_chat_delivery_ack_if_needed(
     let Some(source_hex) = source_hex else {
         return;
     };
+    let legacy_rem_peer = peer_for_any_destination_hex(state, source_hex)
+        .await
+        .is_some_and(|peer| requires_legacy_rem_chat_ack(peer.app_data.as_deref()));
+    if !legacy_rem_peer {
+        return;
+    }
     let body = chat_delivery_ack_body(message_id_hex);
     match send_lxmf_with_delivery_policy(
         state,
@@ -265,13 +275,13 @@ async fn send_chat_delivery_ack_if_needed(
     {
         Ok(report) => {
             info!(
-                "[lxmf][chat] sent delivery acknowledgement destination={} message_id={} acked_message_id={}",
+                "[lxmf][chat] sent legacy REM delivery acknowledgement destination={} message_id={} acked_message_id={}",
                 report.resolved_destination_hex, report.message_id_hex, message_id_hex,
             );
         }
         Err(err) => {
             warn!(
-                "[lxmf][chat] delivery acknowledgement send failed destination={source_hex} acked_message_id={message_id_hex} reason={err}",
+                "[lxmf][chat] legacy REM delivery acknowledgement send failed destination={source_hex} acked_message_id={message_id_hex} reason={err}",
             );
         }
     }

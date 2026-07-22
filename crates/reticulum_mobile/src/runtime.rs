@@ -71,10 +71,13 @@ pub async fn run_node(
     let receipt_message_ids =
         Arc::new(Mutex::new(HashMap::<String, ReceiptMessageTracking>::new()));
     let (receipt_tx, receipt_rx) = mpsc::unbounded_channel::<String>();
+    let receipt_tracker = ReceiptTracker {
+        receipt_message_ids: receipt_message_ids.clone(),
+        tx: receipt_tx,
+    };
     transport
         .set_receipt_handler(Box::new(RuntimeReceiptBridge {
-            receipt_message_ids: receipt_message_ids.clone(),
-            tx: receipt_tx,
+            tracker: receipt_tracker.clone(),
         }))
         .await;
 
@@ -90,6 +93,10 @@ pub async fn run_node(
             DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
         )
         .await;
+    lxmf_destination
+        .lock()
+        .await
+        .set_proof_strategy(ProofStrategy::All);
 
     let transport = Arc::new(transport);
     let active_interface_registry: ActiveInterfaceRegistry =
@@ -132,7 +139,10 @@ pub async fn run_node(
         .to_hex_string();
     let app_destination_hex = lxmf_destination_hex.clone();
 
-    let announce_capabilities = Arc::new(TokioMutex::new(config.announce_capabilities.clone()));
+    let announce_capabilities = Arc::new(TokioMutex::new(AnnounceProfile::new(
+        config.name.as_str(),
+        config.announce_capabilities.as_str(),
+    )));
     let known_destinations: Arc<TokioMutex<HashMap<AddressHash, DestinationDesc>>> =
         Arc::new(TokioMutex::new(HashMap::new()));
     let out_links: Arc<TokioMutex<HashMap<AddressHash, Arc<TokioMutex<Link>>>>> =

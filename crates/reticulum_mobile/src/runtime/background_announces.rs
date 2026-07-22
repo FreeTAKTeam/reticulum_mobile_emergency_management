@@ -3,7 +3,7 @@ fn spawn_announce_tasks(
     state: &NodeRuntimeState,
     bus: &EventBus,
     app_destination: &Arc<TokioMutex<SingleInputDestination>>,
-    announce_capabilities: &Arc<TokioMutex<String>>,
+    announce_capabilities: &Arc<TokioMutex<AnnounceProfile>>,
 ) {
     {
         let transport = state.transport.clone();

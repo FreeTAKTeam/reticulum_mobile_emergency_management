@@ -86,6 +86,7 @@ pub enum SendOutcome {
 pub enum LxmfDeliveryStatus {
     Sent {},
     SentToPropagation {},
+    Delivered {},
     Acknowledged {},
     Failed {},
     TimedOut {},

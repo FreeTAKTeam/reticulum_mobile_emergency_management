@@ -7,7 +7,6 @@ import { persistUiSettingsProjection as storeUiSettingsProjection } from "../uti
 import {
   createPeerListV1,
   ensureRequiredAnnounceCapabilities,
-  formatAnnounceAppData,
   isValidDestinationHex,
   normalizeDestinationHex,
   parsePeerListV1,
@@ -150,10 +149,9 @@ export function createNodeActionsController(context: NodeActionsContext) {
     }
     try {
       clearLastError();
-      await client.value.setAnnounceCapabilities(formatAnnounceAppData(
+      await client.value.setAnnounceCapabilities(
         ensureRequiredAnnounceCapabilities(settings.announceCapabilities),
-        settings.displayName,
-      ));
+      );
     } catch (error: unknown) {
       throw captureActionError("Set announce capabilities failed", error);
     }

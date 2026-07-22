@@ -244,6 +244,7 @@ async fn send_chat_message_is_received_by_peer() {
     let node_b_status = node_b.get_status();
     let body = "chat: hello from node a";
     let subscription = node_b.subscribe_events();
+    let sender_subscription = node_a.subscribe_events();
     let message_id = node_a
         .send_lxmf(SendLxmfRequest {
             destination_hex: node_b_status.lxmf_destination_hex.clone(),
@@ -259,6 +260,21 @@ async fn send_chat_message_is_received_by_peer() {
 
     assert_packet_received(event, &node_a_status.lxmf_destination_hex, body, None);
     assert!(!message_id.is_empty());
+    let delivered = wait_for_event(&sender_subscription, TEST_TIMEOUT, |event| {
+        matches!(
+            event,
+            NodeEvent::MessageUpdated { message }
+                if message.message_id_hex == message_id
+                    && matches!(message.state, MessageState::Delivered {})
+        )
+    })
+    .expect("node a validated the standard LXMF transport proof");
+    assert!(matches!(
+        delivered,
+        NodeEvent::MessageUpdated { message }
+            if matches!(message.application_ack_state, ApplicationAckState::NotRequired {})
+                && message.detail.as_deref() == Some("transport receipt")
+    ));
     let persisted_messages = node_b.list_messages(None).expect("persisted messages");
     assert!(
         persisted_messages

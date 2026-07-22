@@ -169,6 +169,10 @@ fn lxmf_send_succeeded(outcome: RnsSendOutcome) -> bool {
 fn lxmf_delivery_status_for(report: &LxmfSendReport) -> LxmfDeliveryStatus {
     if report.used_propagation_node && lxmf_send_succeeded(report.outcome) {
         LxmfDeliveryStatus::SentToPropagation {}
+    } else if matches!(report.representation, LxmfDeliveryRepresentation::Resource {})
+        && lxmf_send_succeeded(report.outcome)
+    {
+        LxmfDeliveryStatus::Delivered {}
     } else {
         LxmfDeliveryStatus::Sent {}
     }

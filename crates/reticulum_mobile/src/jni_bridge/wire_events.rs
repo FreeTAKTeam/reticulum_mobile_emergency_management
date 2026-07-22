@@ -13,6 +13,7 @@ fn lxmf_delivery_status_to_str(status: LxmfDeliveryStatus) -> &'static str {
     match status {
         LxmfDeliveryStatus::Sent {} => "Sent",
         LxmfDeliveryStatus::SentToPropagation {} => "SentToPropagation",
+        LxmfDeliveryStatus::Delivered {} => "Delivered",
         LxmfDeliveryStatus::Acknowledged {} => "Acknowledged",
         LxmfDeliveryStatus::Failed {} => "Failed",
         LxmfDeliveryStatus::TimedOut {} => "TimedOut",

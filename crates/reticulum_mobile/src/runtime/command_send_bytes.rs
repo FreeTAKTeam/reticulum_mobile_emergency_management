@@ -12,6 +12,7 @@ fn spawn_send_bytes_command(
     state: &NodeRuntimeState,
     bus: &EventBus,
     transport: &Arc<Transport>,
+    receipt_tracker: &ReceiptTracker,
     command: SendBytesCommand,
 ) {
     let SendBytesCommand {
@@ -24,6 +25,7 @@ fn spawn_send_bytes_command(
     let state = state.clone();
     let bus = bus.clone();
     let transport = transport.clone();
+    let receipt_tracker = receipt_tracker.clone();
     let metadata = fields_bytes
         .as_deref()
         .and_then(parse_mission_sync_metadata);
@@ -120,6 +122,13 @@ fn spawn_send_bytes_command(
                     register_pending_lxmf_delivery(&state, report, resend, None).await
                 {
                     let pending = &registered.pending;
+                    if !matches!(report.method, LxmfDeliveryMethod::Propagated {}) {
+                        register_receipt_tracking(
+                            &receipt_tracker,
+                            report.receipt_hash_hex.as_deref(),
+                            pending.message_id_hex.as_str(),
+                        );
+                    }
                     if matches!(
                         report.outcome,
                         RnsSendOutcome::SentDirect | RnsSendOutcome::SentBroadcast
@@ -133,12 +142,21 @@ fn spawn_send_bytes_command(
                             pending.event_uid.as_deref(),
                             pending.mission_uid.as_deref(),
                         );
-                        emit_lxmf_delivery(
-                            &bus,
-                            pending,
-                            lxmf_delivery_status_for(report),
-                            None,
-                        );
+                        let delivery_status = lxmf_delivery_status_for(report);
+                        if matches!(delivery_status, LxmfDeliveryStatus::Delivered {}) {
+                            state.sdk.record_delivery_acknowledged(
+                                &pending.message_id_hex,
+                                &pending.destination_hex,
+                                None,
+                                pending.correlation_id.as_deref(),
+                                pending.command_id.as_deref(),
+                                pending.command_type.as_deref(),
+                                pending.event_uid.as_deref(),
+                                pending.mission_uid.as_deref(),
+                                Some("resource transfer completed"),
+                            );
+                        }
+                        emit_lxmf_delivery(&bus, pending, delivery_status, None);
                         info!(
                             "[lxmf][mission] sent message_id={} destination={} command={} correlation={}",
                             pending.message_id_hex,

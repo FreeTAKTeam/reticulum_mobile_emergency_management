@@ -110,7 +110,7 @@ fn spawn_receipt_listener(
                 .await
                 .update_message_delivery_state(sdkmsg::MessageDeliveryUpdate {
                     message_id_hex: message_id_hex.as_str(),
-                    state: None,
+                    state: Some(sdkmsg::MessageState::Delivered),
                     transport_state: Some(sdkmsg::TransportDeliveryState::TransportDelivered),
                     application_ack_state: None,
                     detail: Some("transport receipt".to_string()),
@@ -134,6 +134,35 @@ fn spawn_receipt_listener(
                 bus.emit(NodeEvent::MessageUpdated {
                     message: record.clone(),
                 });
+            }
+
+            let pending = state
+                .pending_lxmf_deliveries
+                .lock()
+                .await
+                .values()
+                .find(|pending| pending.message_id_hex == message_id_hex)
+                .cloned();
+            if let Some(pending) = pending {
+                sdk.record_delivery_acknowledged(
+                    &pending.message_id_hex,
+                    &pending.destination_hex,
+                    None,
+                    pending.correlation_id.as_deref(),
+                    pending.command_id.as_deref(),
+                    pending.command_type.as_deref(),
+                    pending.event_uid.as_deref(),
+                    pending.mission_uid.as_deref(),
+                    Some("transport receipt"),
+                );
+                emit_lxmf_delivery_with_source(
+                    &bus,
+                    &pending,
+                    None,
+                    LxmfDeliveryStatus::Delivered {},
+                    ApplicationAckState::Waiting {},
+                    Some("transport receipt".to_string()),
+                );
             }
         }
     });

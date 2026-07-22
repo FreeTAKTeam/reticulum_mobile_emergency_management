@@ -25,9 +25,10 @@ async fn rem_lxmf_announce_path_response_keeps_capability_app_data() {
         )
         .await;
     let transport = Arc::new(transport);
-    let capabilities = Arc::new(TokioMutex::new(
-        "R3AKT,EMergencyMessages,Telemetry;name=Pixel".to_string(),
-    ));
+    let capabilities = Arc::new(TokioMutex::new(AnnounceProfile::new(
+        "Pixel",
+        "R3AKT,EMergencyMessages,Telemetry",
+    )));
 
     announce_destinations(
         &transport,
@@ -94,8 +95,14 @@ async fn rem_lxmf_announce_path_response_keeps_capability_app_data() {
     assert_eq!(response.packet.context, PacketContext::PathResponse);
 
     let announce = DestinationAnnounce::validate(&response.packet).expect("path announce");
-    let app_data = std::str::from_utf8(announce.app_data).expect("capabilities are text");
-    assert!(app_data_has_rem_peer_capabilities(app_data));
+    let app_data_hex = hex::encode(announce.app_data);
+    assert!(app_data_has_rem_peer_capabilities(app_data_hex.as_str()));
+    let metadata = parse_announce_metadata(app_data_hex.as_str());
+    assert_eq!(metadata.display_name.as_deref(), Some("Pixel"));
+    assert!(metadata
+        .capability_tokens
+        .iter()
+        .any(|token| token == crate::announce_metadata::STANDARD_LXMF_RECEIPTS_CAPABILITY));
 }
 
 #[test]
