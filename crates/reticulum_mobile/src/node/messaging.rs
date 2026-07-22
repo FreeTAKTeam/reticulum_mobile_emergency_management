@@ -32,7 +32,7 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let (tx, active_config, hub_directory_snapshot) = {
+        let (tx, active_config, hub_directory_snapshot, app_state) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let snapshot = inner
                 .hub_directory_snapshot
@@ -43,15 +43,18 @@ impl Node {
                 inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?,
                 inner.active_config.clone(),
                 snapshot,
+                inner.app_state.clone(),
             )
         };
         let requested_destination = normalize_hex_32(request.destination_hex.as_str())
             .ok_or(NodeError::InvalidConfig {})?;
+        let messages = app_state.list_messages(None).unwrap_or_default();
         let request = SendLxmfRequest {
-            destination_hex: routed_destination_hex(
+            destination_hex: routed_chat_destination_hex(
                 requested_destination,
                 active_config.as_ref(),
                 hub_directory_snapshot.as_ref(),
+                &messages,
             )?,
             ..request
         };
