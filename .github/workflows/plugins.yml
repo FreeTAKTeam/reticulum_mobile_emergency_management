@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # LXMF-rs announce metadata interoperability PR #499
-  LXMF_RS_REF: 88c458e3aee90ba464cd5718c57bb83e55d00faf
+  LXMF_RS_REF: 3db141c4cb3f9f8370b9c311b9c573346d082ce5
 
 jobs:
   plugin-system:
