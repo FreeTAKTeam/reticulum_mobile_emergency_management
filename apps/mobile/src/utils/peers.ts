@@ -87,6 +87,75 @@ function parseLxmfAnnounceName(appData: string): string | undefined {
   }
 }
 
+function normalizeStructuredCapabilityTokens(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const capabilities: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const capability = entry.trim().toLowerCase();
+    if (
+      !capability
+      || !/^[a-z0-9_.-]+$/.test(capability)
+      || capabilities.includes(capability)
+    ) {
+      continue;
+    }
+    capabilities.push(capability);
+  }
+  return capabilities;
+}
+
+function capabilityArrayFromMetadata(value: unknown): unknown {
+  if (value instanceof Map) {
+    return value.get("caps") ?? value.get("announce_capabilities");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const metadata = value as Record<string, unknown>;
+  return metadata.caps ?? metadata.announce_capabilities;
+}
+
+function decodeStructuredCapabilityMetadata(value: unknown): unknown {
+  if (value instanceof Uint8Array) {
+    return unpack(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return unpack(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return value;
+}
+
+function parseStructuredLxmfCapabilities(appData: string): string[] | null {
+  const bytes = decodeHexBytes(appData);
+  if (!bytes) {
+    return null;
+  }
+
+  try {
+    const decoded = unpack(bytes);
+    if (!Array.isArray(decoded)) {
+      return [];
+    }
+    for (const entry of decoded.slice(1)) {
+      const capabilities = capabilityArrayFromMetadata(
+        decodeStructuredCapabilityMetadata(entry),
+      );
+      if (capabilities !== undefined) {
+        return normalizeStructuredCapabilityTokens(capabilities);
+      }
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
 export function ensureCapabilityTokens(
   capabilityText: string,
   requiredCapabilities: string[],
@@ -176,6 +245,10 @@ export function formatAnnounceAppData(
 }
 
 export function parseCapabilityTokens(appData: string): string[] {
+  const structuredCapabilities = parseStructuredLxmfCapabilities(appData);
+  if (structuredCapabilities !== null) {
+    return structuredCapabilities;
+  }
   return tokenizeAnnounceAppData(appData)
     .filter((token) => !isDisplayNameToken(token))
     .map((token) => token.toLowerCase())

@@ -1,26 +1,90 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
+import { pack } from "msgpackr";
 import ts from "typescript";
 
-const source = await readFile(new URL("./announceEvidence.ts", import.meta.url), "utf8");
-const transpiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
+const compilerOptions = {
+  module: ts.ModuleKind.ES2022,
+  target: ts.ScriptTarget.ES2022,
+};
+const cacheRoot = new URL("../../../../node_modules/.cache/", import.meta.url);
+await mkdir(cacheRoot, { recursive: true });
+const tempDir = await mkdtemp(new URL("announce-evidence-", cacheRoot));
+
+const peersSource = await readFile(new URL("./peers.ts", import.meta.url), "utf8");
+const peersTranspiled = ts.transpileModule(peersSource, {
+  compilerOptions,
 }).outputText;
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
+const peersPath = `${tempDir}/peers.mjs`;
+await writeFile(peersPath, peersTranspiled, "utf8");
+
+const evidenceSource = await readFile(new URL("./announceEvidence.ts", import.meta.url), "utf8");
+const evidenceTranspiled = ts.transpileModule(evidenceSource, {
+  compilerOptions,
+}).outputText.replace('from "./peers"', 'from "./peers.mjs"');
+const evidencePath = `${tempDir}/announceEvidence.mjs`;
+await writeFile(evidencePath, evidenceTranspiled, "utf8");
+
+const evidenceModule = await import(pathToFileURL(evidencePath).href);
+const peersModule = await import(pathToFileURL(peersPath).href);
+await rm(tempDir, { recursive: true, force: true });
+
 const {
   announceHasEmergencyCapabilities,
   peerHasRemAnnounceEvidence,
-} = await import(moduleUrl);
+} = evidenceModule;
+const { hasCapability } = peersModule;
+
+function structuredAppDataHex(capabilities) {
+  const metadata = pack({
+    app: "rch",
+    schema: 1,
+    caps: capabilities,
+  });
+  return Buffer.from(pack([Buffer.from("Pixel"), null, metadata])).toString("hex");
+}
+
+function legacyStructuredAppDataHex(capabilities) {
+  return Buffer.from(pack([
+    "Legacy REM",
+    { caps: capabilities },
+  ])).toString("hex");
+}
 
 test("REM capability text is recognized", () => {
   assert.equal(
     announceHasEmergencyCapabilities("R3AKT,EMergencyMessages,Telemetry;name=Pixel"),
     true,
   );
+});
+
+test("standard LXMF metadata capabilities are recognized", () => {
+  const appData = structuredAppDataHex([
+    "R3AKT",
+    "EMergencyMessages",
+    "Telemetry",
+    "rem.standard_lxmf_receipts.v1",
+  ]);
+
+  assert.equal(announceHasEmergencyCapabilities(appData), true);
+  assert.equal(hasCapability(appData, "Telemetry"), true);
+});
+
+test("legacy structured REM metadata capabilities remain recognized", () => {
+  const appData = legacyStructuredAppDataHex([
+    "R3AKT",
+    "EMergencyMessages",
+  ]);
+
+  assert.equal(announceHasEmergencyCapabilities(appData), true);
+});
+
+test("standard LXMF metadata without REM capabilities is not REM evidence", () => {
+  const appData = Buffer.from(pack([Buffer.from("Sideband"), null])).toString("hex");
+
+  assert.equal(announceHasEmergencyCapabilities(appData), false);
 });
 
 test("REM LXMF delivery capabilities are visible in discovery", () => {
