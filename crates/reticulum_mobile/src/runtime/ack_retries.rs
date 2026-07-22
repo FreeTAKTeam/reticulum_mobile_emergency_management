@@ -26,6 +26,7 @@ async fn retry_pending_ack_timeout_via_propagation(
             Some(resend.metadata.clone()),
             SendMode::DirectOnly {},
             resend.send_task_class.direct_recovery_equivalent(),
+            false,
         )
         .await
         {
@@ -111,6 +112,7 @@ async fn retry_pending_ack_timeout_via_propagation(
         Some(resend.metadata.clone()),
         SendMode::PropagationOnly {},
         resend.send_task_class.direct_recovery_equivalent(),
+        false,
     )
     .await
     .map_err(|err| err.to_string())?;

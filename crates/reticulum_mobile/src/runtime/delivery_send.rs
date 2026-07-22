@@ -12,6 +12,7 @@ async fn send_lxmf_with_delivery_policy(
     metadata: Option<MissionSyncMetadata>,
     send_mode: SendMode,
     send_task_class: SendTaskClass,
+    allow_inbound_correspondent_route: bool,
 ) -> Result<LxmfSendReport, NodeError> {
     const RETRY_DELAY: Duration = Duration::from_secs(10);
     const ACCEPTED_RESULT_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -39,6 +40,13 @@ async fn send_lxmf_with_delivery_policy(
         canonical_requested_destination.as_str(),
     )
     .await;
+    let is_inbound_correspondent = allow_inbound_correspondent_route
+        && inbound_correspondent_matches_destination(
+            state,
+            normalized_requested_destination.as_str(),
+            canonical_requested_destination.as_str(),
+        )
+        .await;
     let can_try_stored_lxmf_route = matches!(send_mode, SendMode::Auto {})
         && is_saved_peer
         && saved_peer_can_try_stored_lxmf_route(
@@ -60,6 +68,10 @@ async fn send_lxmf_with_delivery_policy(
     };
     let has_current_lxmf_route = if can_try_stored_lxmf_route {
         saved_peer_has_current_lxmf_route(state, canonical_requested_destination.as_str()).await
+    } else if is_inbound_correspondent {
+        resolve_current_lxmf_destination_hex(state, requested_destination_hex)
+            .await
+            .is_ok()
     } else {
         false
     };
@@ -80,14 +92,23 @@ async fn send_lxmf_with_delivery_policy(
     };
     #[cfg(test)]
     let direct_priority_hops = None;
-    let direct_attempts = direct_attempt_budget_for_send(
+    let direct_attempts = if should_skip_direct_for_inbound_correspondent(
         send_mode,
         has_active_relay_transport,
-        can_try_stored_lxmf_route,
+        is_inbound_correspondent,
         has_current_lxmf_route,
-        direct_delivery_ready,
-        direct_priority_hops,
-    );
+    ) {
+        0
+    } else {
+        direct_attempt_budget_for_send(
+            send_mode,
+            has_active_relay_transport,
+            can_try_stored_lxmf_route,
+            has_current_lxmf_route,
+            direct_delivery_ready,
+            direct_priority_hops,
+        )
+    };
     let _destination_send_lock =
         if should_serialize_lxmf_destination_send(is_accepted_result, is_sos_status) {
             Some(
@@ -163,12 +184,25 @@ async fn send_lxmf_with_delivery_policy(
     let mut last_resolved_destination_hex: Option<String> = None;
 
     for attempt in 1..=direct_attempts {
-        let resolved_destination_hex = resolve_lxmf_destination_for_send(
+        let resolved_destination_hex = match resolve_lxmf_destination_for_send(
             state,
             requested_destination_hex,
             require_current_peer,
         )
-        .await?;
+        .await
+        {
+            Ok(destination_hex) => destination_hex,
+            Err(err)
+                if matches!(send_mode, SendMode::Auto {})
+                    && has_active_relay_transport
+                    && is_inbound_correspondent
+                    && is_retriable_lxmf_error(&err) =>
+            {
+                last_error = Some(err);
+                break;
+            }
+            Err(err) => return Err(err),
+        };
         last_resolved_destination_hex = Some(resolved_destination_hex.clone());
         info!(
             "[lxmf][mission] resolved send requested_destination={requested_destination_hex} canonical_destination={canonical_requested_destination} resolved_destination={resolved_destination_hex} mode={send_mode:?} attempt={attempt}/{direct_attempts} require_current_peer={require_current_peer} saved_peer={is_saved_peer} stored_lxmf_route={can_try_stored_lxmf_route} active_relay={has_active_relay} relay_transport={has_active_relay_transport} direct_ready={direct_delivery_ready}",
@@ -304,33 +338,37 @@ async fn send_lxmf_with_delivery_policy(
             send_mode,
             is_accepted_result,
             has_active_relay_transport,
-            is_saved_peer,
+            is_saved_peer || is_inbound_correspondent,
             last_error.as_ref().is_some_and(is_retriable_lxmf_error),
         ) {
             return Err(last_error.unwrap_or(NodeError::NetworkError {}));
         }
-        mark_peer_direct_delivery_unhealthy(
-            state,
-            requested_destination_hex,
-            last_resolved_destination_hex.as_deref(),
-        )
-        .await;
+        if is_saved_peer {
+            mark_peer_direct_delivery_unhealthy(
+                state,
+                requested_destination_hex,
+                last_resolved_destination_hex.as_deref(),
+            )
+            .await;
+        }
         close_output_links_for_direct_delivery_failure(
             state,
             requested_destination_hex,
             last_resolved_destination_hex.as_deref(),
         )
         .await;
-        record_peer_link_state(state, bus, requested_destination_hex, false).await;
-        if let Some(target) =
-            register_desired_managed_peer_link(state, requested_destination_hex).await
-        {
-            if let ManagedPeerReconnectStart::Started(target) = state
-                .managed_peer_links
-                .begin_reconnect(target.destination_hex.as_str())
-                .await
+        if is_saved_peer {
+            record_peer_link_state(state, bus, requested_destination_hex, false).await;
+            if let Some(target) =
+                register_desired_managed_peer_link(state, requested_destination_hex).await
             {
-                spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);
+                if let ManagedPeerReconnectStart::Started(target) = state
+                    .managed_peer_links
+                    .begin_reconnect(target.destination_hex.as_str())
+                    .await
+                {
+                    spawn_managed_peer_link_reconnect(state.clone(), bus.clone(), target);
+                }
             }
         }
         info!(

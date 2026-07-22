@@ -274,6 +274,16 @@ export function createNodeTransportController(context: NodeTransportContext) {
     }
   }
 
+  async function retryLxmf(messageIdHex: string): Promise<void> {
+    try {
+      assertReadyForOutbound("retry LXMF");
+      assertHubRoutingReadyForOutbound("retry LXMF");
+      await requireClient(`LXMF retry failed (${messageIdHex})`).retryLxmf(messageIdHex);
+    } catch (error: unknown) {
+      throw captureActionError(`LXMF retry failed (${messageIdHex})`, error);
+    }
+  }
+
   function requireClient(action: string): ReticulumNodeClient {
     if (!client.value) {
       throw captureActionError(action, new Error("Node client is not initialized."));
@@ -431,6 +441,7 @@ export function createNodeTransportController(context: NodeTransportContext) {
     reinitializeClient,
     requestLxmfSync,
     requestPeerIdentity,
+    retryLxmf,
     sendBytes,
     sendBytesDirect,
     sendBytesViaPropagation,

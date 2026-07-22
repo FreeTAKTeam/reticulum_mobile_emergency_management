@@ -260,6 +260,11 @@
   justify-self: end;
 }
 
+.bubble.outbound.failed {
+  background: linear-gradient(135deg, rgb(100 31 52 / 94%), rgb(125 44 60 / 88%));
+  border-color: rgb(255 155 168 / 58%);
+}
+
 .bubble.inbound .bubble-meta {
   color: #8ea8d1;
 }
@@ -279,6 +284,35 @@
   font-family: var(--font-body);
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.bubble-error {
+  color: #ffd2d8;
+  font-family: var(--font-ui);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.bubble-retry {
+  --btn-bg: rgb(255 224 229 / 12%);
+  --btn-bg-pressed: #ffe4e8;
+  --btn-border: rgb(255 190 200 / 48%);
+  --btn-border-pressed: #fff2f4;
+  --btn-color: #ffe2e7;
+  --btn-color-pressed: #651d31;
+  align-items: center;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 8px;
+  color: var(--btn-color);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-ui);
+  font-size: 0.76rem;
+  font-weight: 700;
+  justify-self: end;
+  padding: 0.36rem 0.68rem;
 }
 
 .bubble-meta {

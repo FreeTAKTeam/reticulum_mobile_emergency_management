@@ -24,6 +24,9 @@ import {
   displayNameForDestination,
   draftConversationId,
   ensureDirectChatPeerConnected,
+  hasInboundReplyHistory,
+  isLocalChatMessageId,
+  isRetryableChatMessage,
   isDraftConversationId,
   knownConversationDestinations,
   mapConversationRecord,
@@ -144,14 +147,116 @@ export const useMessagingStore = defineStore("messaging", () => {
     }
   }
 
-  async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
-    nodeStore.assertReadyForOutbound("send LXMF messages");
-    const normalizedDestination = normalizeDestinationHex(destinationHex);
-    const sendMode = chatSendModeForDestination(normalizedDestination, nodeStore);
-    const messageMethod = sendMode === "DirectOnly" ? "Direct" : "Opportunistic";
-    if (sendMode === "DirectOnly") {
-      await ensureDirectChatPeerConnected(normalizedDestination, nodeStore);
+  function outboundMessageRecord(
+    messageIdHex: string,
+    conversationId: string,
+    destinationHex: string,
+    bodyUtf8: string,
+    title: string | undefined,
+    method: MessageRecord["method"],
+    state: MessageRecord["state"],
+    detail: string | undefined,
+    sentAtMs: number,
+  ): MessageRecord {
+    const failed = state === "Failed" || state === "TimedOut";
+    return {
+      messageIdHex,
+      conversationId,
+      direction: "Outbound",
+      destinationHex,
+      sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
+      title,
+      bodyUtf8,
+      method,
+      state,
+      transportState: failed ? "Failed" : "Queued",
+      applicationAckState: failed ? "Failed" : "Waiting",
+      detail,
+      sentAtMs,
+      receivedAtMs: undefined,
+      updatedAtMs: Date.now(),
+    };
+  }
+
+  function inboundReplyAllowed(destinationHex: string): boolean {
+    return hasInboundReplyHistory(
+      destinationHex,
+      Object.values(byMessageId.value),
+      nodeStore,
+    );
+  }
+
+  async function dispatchLocalMessage(messageIdHex: string): Promise<void> {
+    const message = byMessageId.value[messageIdHex];
+    if (!message || !isLocalChatMessageId(messageIdHex)) {
+      return;
     }
+    const normalizedDestination = normalizeDestinationHex(message.destinationHex);
+    const isInboundReply = inboundReplyAllowed(normalizedDestination);
+    const sendMode = chatSendModeForDestination(
+      normalizedDestination,
+      nodeStore,
+      isInboundReply,
+    );
+    const method = sendMode === "DirectOnly" ? "Direct" : "Opportunistic";
+    const queued = outboundMessageRecord(
+      messageIdHex,
+      message.conversationId,
+      normalizedDestination,
+      message.bodyUtf8,
+      message.title,
+      method,
+      "Queued",
+      undefined,
+      message.sentAtMs ?? Date.now(),
+    );
+    upsertMessage(queued);
+    persistWeb();
+
+    try {
+      nodeStore.assertReadyForOutbound("send LXMF messages");
+      if (sendMode === "DirectOnly" && !isInboundReply) {
+        await ensureDirectChatPeerConnected(normalizedDestination, nodeStore);
+      }
+      const nativeMessageIdHex = await nodeStore.sendLxmf(
+        normalizedDestination,
+        message.bodyUtf8,
+        message.title,
+        { sendMode },
+      );
+      const nextMessages = { ...byMessageId.value };
+      delete nextMessages[messageIdHex];
+      nextMessages[nativeMessageIdHex] = cloneMessage(outboundMessageRecord(
+        nativeMessageIdHex,
+        canonicalConversationIdForDraft(message.conversationId) || message.conversationId,
+        normalizedDestination,
+        message.bodyUtf8,
+        message.title,
+        method,
+        "Queued",
+        undefined,
+        message.sentAtMs ?? Date.now(),
+      ));
+      byMessageId.value = nextMessages;
+      persistWeb();
+    } catch (error) {
+      upsertMessage(outboundMessageRecord(
+        messageIdHex,
+        message.conversationId,
+        normalizedDestination,
+        message.bodyUtf8,
+        message.title,
+        method,
+        "Failed",
+        error instanceof Error ? error.message : "Send failed",
+        message.sentAtMs ?? Date.now(),
+      ));
+      persistWeb();
+    }
+  }
+
+  async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
+    const normalizedDestination = normalizeDestinationHex(destinationHex);
     const existingConversation = findNativeConversationByDestination(normalizedDestination);
     const currentPending = pendingConversationForDestination(normalizedDestination);
     const conversationId = existingConversation?.conversationId
@@ -166,70 +271,58 @@ export const useMessagingStore = defineStore("messaging", () => {
 
     const now = Date.now();
     const optimisticMessageId = `local-${now.toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-    upsertMessage({
-      messageIdHex: optimisticMessageId,
+    upsertMessage(outboundMessageRecord(
+      optimisticMessageId,
       conversationId,
-      direction: "Outbound",
-      destinationHex: normalizedDestination,
-      sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-      title,
+      normalizedDestination,
       bodyUtf8,
-      method: messageMethod,
-      state: "Queued",
-      transportState: "Queued",
-      applicationAckState: "Waiting",
-      detail: undefined,
-      sentAtMs: now,
-      receivedAtMs: undefined,
-      updatedAtMs: now,
-    });
+      title,
+      "Opportunistic",
+      "Queued",
+      undefined,
+      now,
+    ));
     persistWeb();
+    await dispatchLocalMessage(optimisticMessageId);
+  }
 
+  async function retryMessage(messageIdHex: string): Promise<void> {
+    const message = byMessageId.value[messageIdHex];
+    if (!message || !isRetryableChatMessage(message)) {
+      return;
+    }
+    if (isLocalChatMessageId(messageIdHex)) {
+      await dispatchLocalMessage(messageIdHex);
+      return;
+    }
+
+    upsertMessage(outboundMessageRecord(
+      message.messageIdHex,
+      message.conversationId,
+      message.destinationHex,
+      message.bodyUtf8,
+      message.title,
+      message.method,
+      "Queued",
+      undefined,
+      message.sentAtMs ?? Date.now(),
+    ));
+    persistWeb();
     try {
-      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title, {
-        sendMode,
-      });
-      const nextMessages = { ...byMessageId.value };
-      delete nextMessages[optimisticMessageId];
-      nextMessages[messageIdHex] = cloneMessage({
-        messageIdHex,
-        conversationId: canonicalConversationIdForDraft(conversationId) || conversationId,
-        direction: "Outbound",
-        destinationHex: normalizedDestination,
-        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-        title,
-        bodyUtf8,
-        method: messageMethod,
-        state: "Queued",
-        transportState: "Queued",
-        applicationAckState: "Waiting",
-        detail: undefined,
-        sentAtMs: now,
-        receivedAtMs: undefined,
-        updatedAtMs: Date.now(),
-      });
-      byMessageId.value = nextMessages;
-      persistWeb();
+      await nodeStore.retryLxmf(messageIdHex);
     } catch (error) {
-      upsertMessage({
-        messageIdHex: optimisticMessageId,
-        conversationId,
-        direction: "Outbound",
-        destinationHex: normalizedDestination,
-        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-        title,
-        bodyUtf8,
-        method: messageMethod,
-        state: "Failed",
-        transportState: "Failed",
-        applicationAckState: "Failed",
-        detail: error instanceof Error ? error.message : "Send failed",
-        sentAtMs: now,
-        receivedAtMs: undefined,
-        updatedAtMs: Date.now(),
-      });
+      upsertMessage(outboundMessageRecord(
+        message.messageIdHex,
+        message.conversationId,
+        message.destinationHex,
+        message.bodyUtf8,
+        message.title,
+        message.method,
+        "Failed",
+        error instanceof Error ? error.message : "Retry failed",
+        message.sentAtMs ?? Date.now(),
+      ));
       persistWeb();
-      throw error;
     }
   }
 
@@ -480,6 +573,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     applyVisualMockChatData,
     appendVisualMockOutboundMessage,
     sendMessage,
+    retryMessage,
     deleteConversation,
     upsertWebMessage,
   };

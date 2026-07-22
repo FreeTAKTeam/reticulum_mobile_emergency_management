@@ -324,6 +324,79 @@ fn connected_auto_send_keeps_direct_retry_budget_even_with_relay() {
 }
 
 #[test]
+fn inbound_correspondent_without_current_route_uses_relay_without_direct_probe() {
+    assert!(should_skip_direct_for_inbound_correspondent(
+        SendMode::Auto {},
+        true,
+        true,
+        false,
+    ));
+    assert!(!should_skip_direct_for_inbound_correspondent(
+        SendMode::Auto {},
+        true,
+        true,
+        true,
+    ));
+    assert!(!should_skip_direct_for_inbound_correspondent(
+        SendMode::DirectOnly {},
+        true,
+        true,
+        false,
+    ));
+    assert!(!should_skip_direct_for_inbound_correspondent(
+        SendMode::Auto {},
+        true,
+        false,
+        false,
+    ));
+}
+
+#[test]
+fn only_inbound_history_authorizes_correspondent_reply_routing() {
+    let destination = "77777777777777777777777777777777";
+    let mut destinations = HashSet::new();
+    destinations.insert(destination.to_string());
+    let inbound = MessageRecord {
+        message_id_hex: "inbound-message".to_string(),
+        conversation_id: destination.to_string(),
+        direction: MessageDirection::Inbound {},
+        destination_hex: destination.to_string(),
+        source_hex: Some(destination.to_string()),
+        requested_destination_hex: Some(destination.to_string()),
+        delivery_destination_hex: Some(destination.to_string()),
+        recipient_identity_hex: None,
+        last_wire_message_id_hex: Some("inbound-wire-message".to_string()),
+        title: None,
+        body_utf8: "hello".to_string(),
+        method: MessageMethod::Direct {},
+        state: MessageState::Received {},
+        transport_state: TransportDeliveryState::TransportDelivered {},
+        application_ack_state: ApplicationAckState::NotRequired {},
+        detail: None,
+        sent_at_ms: None,
+        received_at_ms: Some(1),
+        updated_at_ms: 1,
+    };
+    let outbound = MessageRecord {
+        direction: MessageDirection::Outbound {},
+        ..inbound.clone()
+    };
+
+    assert!(inbound_message_matches_destinations(
+        &inbound,
+        &destinations
+    ));
+    assert!(!inbound_message_matches_destinations(
+        &outbound,
+        &destinations
+    ));
+    assert!(!inbound_message_matches_destinations(
+        &inbound,
+        &HashSet::from(["88888888888888888888888888888888".to_string()]),
+    ));
+}
+
+#[test]
 fn high_hop_stale_saved_route_prefers_propagation_lane() {
     let mut stale_peer = send_peer(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -381,7 +454,7 @@ fn high_hop_stale_saved_route_prefers_propagation_lane() {
 }
 
 #[test]
-fn auto_saved_peer_direct_failure_uses_propagation_when_relay_exists() {
+fn auto_eligible_recipient_direct_failure_uses_propagation_when_relay_exists() {
     assert!(should_try_propagation_after_direct_failure(
         SendMode::Auto {},
         false,
