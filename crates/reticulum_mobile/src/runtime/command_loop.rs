@@ -150,6 +150,7 @@
                             None,
                             request.send_mode,
                             SendTaskClass::General,
+                            true,
                         )
                         .await?;
                         let method = match (report.method, report.representation) {
@@ -283,6 +284,7 @@
                                 sdkmsg::SendMode::PropagationOnly => SendMode::PropagationOnly {},
                             },
                             SendTaskClass::General,
+                            true,
                         )
                         .await?;
                         let retried_state = if report.used_propagation_node

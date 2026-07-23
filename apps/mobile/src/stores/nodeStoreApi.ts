@@ -106,6 +106,7 @@ export function createNodeStoreApi(
     sendBytesDirect: transport.sendBytesDirect,
     sendBytesViaPropagation: transport.sendBytesViaPropagation,
     sendLxmf: transport.sendLxmf,
+    retryLxmf: transport.retryLxmf,
     onClientEvent: transport.onClientEvent,
     getSosSettings: transport.getSosSettings,
     setSosSettings: transport.setSosSettings,

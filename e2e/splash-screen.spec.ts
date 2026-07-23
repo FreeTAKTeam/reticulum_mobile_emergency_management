@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import mobilePackage from "../apps/mobile/package.json";
 import { defaultSettings, seedAppStorage } from "./support/app";
 
 test("can mock the current REM splash screen", async ({ page }) => {
@@ -12,7 +13,7 @@ test("can mock the current REM splash screen", async ({ page }) => {
   const splash = page.getByTestId("splash-screen");
   await expect(splash).toBeVisible();
   await expect(splash.getByRole("img", { name: "R.E.M. logo" })).toBeVisible();
-  await expect(splash.getByText("Version 1.2.7")).toBeVisible();
+  await expect(splash.getByText(`Version ${mobilePackage.version}`)).toBeVisible();
 });
 
 test("can mock interface loading on the current splash screen", async ({ page }) => {

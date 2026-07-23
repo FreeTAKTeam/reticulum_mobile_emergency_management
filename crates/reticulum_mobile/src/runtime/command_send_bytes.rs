@@ -58,6 +58,7 @@ fn spawn_send_bytes_command(
                         metadata.clone(),
                         send_mode,
                         send_task_class,
+                        false,
                     )
                     .await?,
                 )

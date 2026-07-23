@@ -143,6 +143,7 @@ async fn send_operational_ack_if_needed(
         ack_metadata,
         SendMode::Auto {},
         SendTaskClass::MissionAck,
+        false,
     )
     .await
     {
@@ -270,6 +271,7 @@ async fn send_chat_delivery_ack_if_needed(
         None,
         SendMode::Auto {},
         SendTaskClass::General,
+        false,
     )
     .await
     {

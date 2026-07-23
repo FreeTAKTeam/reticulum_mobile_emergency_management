@@ -9,6 +9,7 @@ Markdown is the authoritative documentation format for the current REM source.
 - [Android development and release builds](../apps/mobile/README.md)
 - [1.2.7-rc.1 stabilization audit](stabilization/1.2.7-rc.1-audit.md)
 - [1.2.7-rc.1 scenario results dashboard](stabilization/1.2.7-rc.1-results.html)
+- [1.2.8 release notes](releases/1.2.8.md)
 - [1.2.7 release notes](releases/1.2.7.md)
 - [1.2.7-rc.1 prerelease notes](releases/1.2.7-rc.1.md)
 - [Manual release gate](rem-1.2-manual-release-gate.md)
@@ -25,4 +26,4 @@ maintained, are not release evidence, and can contain obsolete instructions:
 - `userManual.docx`
 
 Do not regenerate or distribute these snapshots as the current manual. Use
-`userManual.md` for REM `1.2.7`.
+`userManual.md` for REM `1.2.8`.

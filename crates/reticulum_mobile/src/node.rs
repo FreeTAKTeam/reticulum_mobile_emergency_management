@@ -241,6 +241,7 @@ fn fields_with_active_team(
 
 include!("node/local_team_routing.rs");
 include!("node/replication_targets.rs");
+include!("node/chat_routing.rs");
 include!("node/replication_planning.rs");
 include!("node/replication_routing.rs");
 include!("node/wire_fields.rs");
@@ -283,6 +284,7 @@ mod tests {
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
     include!("node/tests/peers_routes.rs");
+    include!("node/tests/chat_routing.rs");
     include!("node/tests/team_switch.rs");
     include!("node/tests/local_team_routing.rs");
     include!("node/tests/propagation.rs");

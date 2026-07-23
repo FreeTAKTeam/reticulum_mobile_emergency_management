@@ -316,6 +316,10 @@ async function send(bodyUtf8: string): Promise<void> {
   }
 }
 
+async function retryMessage(messageIdHex: string): Promise<void> {
+  await messagingStore.retryMessage(messageIdHex);
+}
+
 async function handleViewSosOnMap(target: SosMessageMapTarget): Promise<void> {
   await router.push({
     path: "/telemetry",
@@ -482,6 +486,7 @@ onUnmounted(() => {
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
           @back="showConversationList"
+          @retry="retryMessage"
           @send="send"
           @view-sos-on-map="handleViewSosOnMap"
         />

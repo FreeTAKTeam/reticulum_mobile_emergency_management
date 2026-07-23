@@ -274,7 +274,7 @@ impl ConversationPeerResolver {
             .get(&normalize_message_peer_key(canonical_id))
     }
 
-    fn aliases_for_canonical(&self, canonical_id: &str) -> Vec<String> {
+    pub(crate) fn aliases_for_canonical(&self, canonical_id: &str) -> Vec<String> {
         let canonical_id = self.canonical_for(canonical_id);
         let mut aliases = self
             .by_alias

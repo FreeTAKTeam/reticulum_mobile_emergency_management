@@ -35,6 +35,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   back: [];
+  retry: [messageIdHex: string];
   send: [bodyUtf8: string];
   viewSosOnMap: [target: SosMessageMapTarget];
 }>();
@@ -137,6 +138,15 @@ function messageStateLabel(state: string): string {
     return "Timed out";
   }
   return state;
+}
+
+function isRetryableMessage(message: MessageRecord): boolean {
+  return message.direction === "Outbound"
+    && (message.state === "Failed" || message.state === "TimedOut");
+}
+
+function messageFailureDetail(message: MessageRecord): string {
+  return safeTrim(message.detail) || "Message could not be sent.";
 }
 
 function sosMapTarget(message: MessageRecord): SosMessageMapTarget | undefined {
@@ -295,6 +305,7 @@ watch(
           :class="{
             inbound: message.direction !== 'Outbound',
             outbound: message.direction === 'Outbound',
+            failed: isRetryableMessage(message),
             sos: isSosMessage(message),
             targeted: message.messageIdHex === targetMessageId,
           }"
@@ -330,6 +341,18 @@ watch(
             <span>{{ messageStateLabel(message.state) }}</span>
             <span>{{ new Date(message.receivedAtMs ?? message.sentAtMs ?? message.updatedAtMs).toLocaleTimeString() }}</span>
           </div>
+          <p v-if="isRetryableMessage(message)" class="bubble-error">
+            {{ messageFailureDetail(message) }}
+          </p>
+          <button
+            v-if="isRetryableMessage(message)"
+            type="button"
+            class="bubble-retry"
+            :aria-label="`Retry message: ${visibleMessageBody(message)}`"
+            @click="emit('retry', message.messageIdHex)"
+          >
+            Retry
+          </button>
         </article>
         <p v-if="messages.length === 0" class="thread-empty">
           No messages yet for this conversation.

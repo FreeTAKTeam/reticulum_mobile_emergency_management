@@ -161,8 +161,9 @@ export function canUseRelayChat(
 export function chatSendModeForDestination(
   destinationHex: string,
   nodeStore: ReturnType<typeof useNodeStore>,
+  isInboundReply = false,
 ): SendMode {
-  return canUseRelayChat(destinationHex, nodeStore) ? "Auto" : "DirectOnly";
+  return isInboundReply || canUseRelayChat(destinationHex, nodeStore) ? "Auto" : "DirectOnly";
 }
 
 export function peerConnectionDestination(
@@ -239,6 +240,44 @@ export function knownConversationDestinations(
     known.add(normalizeDestinationHex(peer.identityHex));
   }
   return known;
+}
+
+export function hasInboundReplyHistory(
+  destinationHex: string,
+  messages: Iterable<MessageRecord>,
+  nodeStore: ReturnType<typeof useNodeStore>,
+): boolean {
+  const targetDestinations = knownConversationDestinations(destinationHex, nodeStore);
+  if (targetDestinations.size === 0) {
+    return false;
+  }
+
+  for (const message of messages) {
+    if (message.direction !== "Inbound") {
+      continue;
+    }
+    const messageDestinations = knownConversationDestinations(
+      remoteDestinationForMessage(message),
+      nodeStore,
+    );
+    const conversationId = normalizeDestinationHex(message.conversationId);
+    if (conversationId) {
+      messageDestinations.add(conversationId);
+    }
+    if ([...messageDestinations].some((candidate) => targetDestinations.has(candidate))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isLocalChatMessageId(messageIdHex: string): boolean {
+  return messageIdHex.startsWith("local-");
+}
+
+export function isRetryableChatMessage(message: MessageRecord): boolean {
+  return message.direction === "Outbound"
+    && (message.state === "Failed" || message.state === "TimedOut");
 }
 
 export function conversationAliasKey(

@@ -15,15 +15,12 @@ import { supportsNativeNodeRuntime } from "../utils/runtimeProfile";
 import {
   type ConversationListItem,
   type StoredMessages,
-  canonicalConversationIdForDraft,
   chatNotificationKey,
-  chatSendModeForDestination,
   cloneMessage,
   collapseConversationItems,
   conversationMatchesDestination,
   displayNameForDestination,
   draftConversationId,
-  ensureDirectChatPeerConnected,
   isDraftConversationId,
   knownConversationDestinations,
   mapConversationRecord,
@@ -34,6 +31,7 @@ import {
   saveWebMessages,
 } from "./messagingModel";
 import { createMessagingProjectionController } from "./messagingProjection";
+import { createMessagingSendController } from "./messagingSendController";
 import { createMessagingVisualMock } from "./messagingVisualMock";
 import { useNodeStore } from "./nodeStore";
 
@@ -144,94 +142,16 @@ export const useMessagingStore = defineStore("messaging", () => {
     }
   }
 
-  async function sendMessage(destinationHex: string, bodyUtf8: string, title?: string): Promise<void> {
-    nodeStore.assertReadyForOutbound("send LXMF messages");
-    const normalizedDestination = normalizeDestinationHex(destinationHex);
-    const sendMode = chatSendModeForDestination(normalizedDestination, nodeStore);
-    const messageMethod = sendMode === "DirectOnly" ? "Direct" : "Opportunistic";
-    if (sendMode === "DirectOnly") {
-      await ensureDirectChatPeerConnected(normalizedDestination, nodeStore);
-    }
-    const existingConversation = findNativeConversationByDestination(normalizedDestination);
-    const currentPending = pendingConversationForDestination(normalizedDestination);
-    const conversationId = existingConversation?.conversationId
-      ?? currentPending?.conversationId
-      ?? draftConversationId(normalizedDestination);
-
-    if (!existingConversation && !currentPending) {
-      ensureConversationForDestination(normalizedDestination);
-    } else if (selectedConversationId.value !== conversationId) {
-      selectedConversationId.value = conversationId;
-    }
-
-    const now = Date.now();
-    const optimisticMessageId = `local-${now.toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-    upsertMessage({
-      messageIdHex: optimisticMessageId,
-      conversationId,
-      direction: "Outbound",
-      destinationHex: normalizedDestination,
-      sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-      title,
-      bodyUtf8,
-      method: messageMethod,
-      state: "Queued",
-      transportState: "Queued",
-      applicationAckState: "Waiting",
-      detail: undefined,
-      sentAtMs: now,
-      receivedAtMs: undefined,
-      updatedAtMs: now,
-    });
-    persistWeb();
-
-    try {
-      const messageIdHex = await nodeStore.sendLxmf(normalizedDestination, bodyUtf8, title, {
-        sendMode,
-      });
-      const nextMessages = { ...byMessageId.value };
-      delete nextMessages[optimisticMessageId];
-      nextMessages[messageIdHex] = cloneMessage({
-        messageIdHex,
-        conversationId: canonicalConversationIdForDraft(conversationId) || conversationId,
-        direction: "Outbound",
-        destinationHex: normalizedDestination,
-        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-        title,
-        bodyUtf8,
-        method: messageMethod,
-        state: "Queued",
-        transportState: "Queued",
-        applicationAckState: "Waiting",
-        detail: undefined,
-        sentAtMs: now,
-        receivedAtMs: undefined,
-        updatedAtMs: Date.now(),
-      });
-      byMessageId.value = nextMessages;
-      persistWeb();
-    } catch (error) {
-      upsertMessage({
-        messageIdHex: optimisticMessageId,
-        conversationId,
-        direction: "Outbound",
-        destinationHex: normalizedDestination,
-        sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
-        title,
-        bodyUtf8,
-        method: messageMethod,
-        state: "Failed",
-        transportState: "Failed",
-        applicationAckState: "Failed",
-        detail: error instanceof Error ? error.message : "Send failed",
-        sentAtMs: now,
-        receivedAtMs: undefined,
-        updatedAtMs: Date.now(),
-      });
-      persistWeb();
-      throw error;
-    }
-  }
+  const { retryMessage, sendMessage } = createMessagingSendController({
+    byMessageId,
+    ensureConversationForDestination,
+    findNativeConversationByDestination,
+    nodeStore,
+    pendingConversationForDestination,
+    persistWeb,
+    selectedConversationId,
+    upsertMessage,
+  });
 
   async function deleteConversation(conversationId: string): Promise<void> {
     const normalizedConversationId = conversationId.trim();
@@ -480,6 +400,7 @@ export const useMessagingStore = defineStore("messaging", () => {
     applyVisualMockChatData,
     appendVisualMockOutboundMessage,
     sendMessage,
+    retryMessage,
     deleteConversation,
     upsertWebMessage,
   };

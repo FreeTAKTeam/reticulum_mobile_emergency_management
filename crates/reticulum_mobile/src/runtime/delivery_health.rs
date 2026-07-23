@@ -122,6 +122,33 @@ async fn saved_peer_matches_destination(
     })
 }
 
+async fn inbound_correspondent_matches_destination(
+    state: &NodeRuntimeState,
+    requested_destination_hex: &str,
+    canonical_destination_hex: &str,
+) -> bool {
+    let mut destinations = HashSet::<String>::new();
+    add_normalized_destination_candidate(&mut destinations, requested_destination_hex);
+    add_normalized_destination_candidate(&mut destinations, canonical_destination_hex);
+
+    if let Some(peer) = peer_for_any_destination_hex(state, canonical_destination_hex).await {
+        for destination in equivalent_peer_destinations(&peer) {
+            add_normalized_destination_candidate(&mut destinations, destination);
+        }
+    }
+    if destinations.is_empty() {
+        return false;
+    }
+
+    state.app_state.list_messages(None).is_ok_and(|messages| {
+        messages
+            .iter()
+            .any(|message| {
+                delivery_policy::inbound_message_matches_destinations(message, &destinations)
+            })
+    })
+}
+
 fn mission_direct_priority_delay_for_hops(hops: Option<u8>) -> Duration {
     let Some(hops) = hops else {
         return Duration::ZERO;
@@ -134,7 +161,6 @@ fn mission_direct_priority_delay_for_hops(hops: Option<u8>) -> Duration {
     (MISSION_DIRECT_PRIORITY_DELAY_PER_HOP * delay_units).min(MISSION_DIRECT_PRIORITY_MAX_DELAY)
 }
 
-#[cfg(not(test))]
 fn add_normalized_destination_candidate(candidates: &mut HashSet<String>, destination_hex: &str) {
     if let Some(normalized) = normalize_hex_32(destination_hex) {
         candidates.insert(normalized);
@@ -196,6 +222,18 @@ fn direct_attempt_budget_for_send(
     )
 }
 
+fn should_skip_direct_for_inbound_correspondent(
+    send_mode: SendMode,
+    has_active_relay: bool,
+    is_inbound_correspondent: bool,
+    has_current_lxmf_route: bool,
+) -> bool {
+    matches!(send_mode, SendMode::Auto {})
+        && has_active_relay
+        && is_inbound_correspondent
+        && !has_current_lxmf_route
+}
+
 fn direct_attempt_send_mode(send_mode: SendMode) -> SendMode {
     match send_mode {
         SendMode::Auto {} | SendMode::DirectOnly {} => SendMode::DirectOnly {},
@@ -207,13 +245,13 @@ fn should_try_propagation_after_direct_failure(
     send_mode: SendMode,
     is_accepted_result: bool,
     has_active_relay: bool,
-    saved_peer: bool,
+    propagation_fallback_allowed: bool,
     retriable: bool,
 ) -> bool {
     matches!(send_mode, SendMode::Auto {})
         && !is_accepted_result
         && has_active_relay
-        && saved_peer
+        && propagation_fallback_allowed
         && retriable
 }
 
