@@ -23,6 +23,18 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
         last_seen: None,
         status: Some("active".to_string()),
     }];
+
+    assert_eq!(
+        routed_chat_destination_hex(
+            "abababababababababababababababab".to_string(),
+            Some(&config),
+            Some(&snapshot),
+            || panic!("normal connected routing must not load message history"),
+        )
+        .expect("active-team peer routes through the hub"),
+        "56565656565656565656565656565656"
+    );
+
     let inbound = MessageRecord {
         message_id_hex: "inbound-message".to_string(),
         conversation_id: "66666666666666666666666666666666".to_string(),
@@ -50,7 +62,7 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
             requested_destination.to_string(),
             Some(&config),
             Some(&snapshot),
-            std::slice::from_ref(&inbound),
+            || vec![inbound.clone()],
         )
         .expect("persisted inbound correspondent keeps its direct LXMF destination"),
         requested_destination
@@ -64,7 +76,7 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
         requested_destination.to_string(),
         Some(&config),
         Some(&snapshot),
-        &[outbound],
+        || vec![outbound],
     )
     .is_err());
 }

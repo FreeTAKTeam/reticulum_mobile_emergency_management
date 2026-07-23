@@ -48,13 +48,12 @@ impl Node {
         };
         let requested_destination = normalize_hex_32(request.destination_hex.as_str())
             .ok_or(NodeError::InvalidConfig {})?;
-        let messages = app_state.list_messages(None).unwrap_or_default();
         let request = SendLxmfRequest {
             destination_hex: routed_chat_destination_hex(
                 requested_destination,
                 active_config.as_ref(),
                 hub_directory_snapshot.as_ref(),
-                &messages,
+                || app_state.list_messages(None).unwrap_or_default(),
             )?,
             ..request
         };
