@@ -32,7 +32,7 @@ impl Node {
     }
 
     pub fn send_lxmf(&self, request: SendLxmfRequest) -> Result<String, NodeError> {
-        let (tx, active_config, hub_directory_snapshot, app_state) = {
+        let (tx, active_config, hub_directory_snapshot, app_state, peers_snapshot) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let snapshot = inner
                 .hub_directory_snapshot
@@ -44,6 +44,7 @@ impl Node {
                 inner.active_config.clone(),
                 snapshot,
                 inner.app_state.clone(),
+                inner.peers_snapshot.clone(),
             )
         };
         let requested_destination = normalize_hex_32(request.destination_hex.as_str())
@@ -53,7 +54,19 @@ impl Node {
                 requested_destination,
                 active_config.as_ref(),
                 hub_directory_snapshot.as_ref(),
-                || app_state.list_messages(None).unwrap_or_default(),
+                || {
+                    let messages = app_state.list_messages(None)?;
+                    let peers = peers_snapshot
+                        .lock()
+                        .map(|guard| guard.clone())
+                        .map_err(|error| {
+                            crate::error_context::contextual_node_error(
+                                NodeError::InternalError {},
+                                error,
+                            )
+                        })?;
+                    Ok((messages, peers))
+                },
             )?,
             ..request
         };

@@ -29,7 +29,7 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
             "abababababababababababababababab".to_string(),
             Some(&config),
             Some(&snapshot),
-            || panic!("normal connected routing must not load message history"),
+            || panic!("normal connected routing must not load fallback context"),
         )
         .expect("active-team peer routes through the hub"),
         "56565656565656565656565656565656"
@@ -62,7 +62,7 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
             requested_destination.to_string(),
             Some(&config),
             Some(&snapshot),
-            || vec![inbound.clone()],
+            || Ok((vec![inbound.clone()], Vec::new())),
         )
         .expect("persisted inbound correspondent keeps its direct LXMF destination"),
         requested_destination
@@ -76,7 +76,61 @@ fn connected_chat_routing_allows_only_confirmed_inbound_correspondents() {
         requested_destination.to_string(),
         Some(&config),
         Some(&snapshot),
-        || vec![outbound],
+        || Ok((vec![outbound], Vec::new())),
+    )
+    .is_err());
+}
+
+#[test]
+fn connected_chat_routing_authorizes_inbound_correspondent_aliases() {
+    let app_destination = "88888888888888888888888888888888";
+    let lxmf_destination = "77777777777777777777777777777777";
+    let config = build_config_fingerprint_for_tests(
+        HubMode::Connected {},
+        Some("56565656565656565656565656565656"),
+    );
+    let peer = build_peer_record(app_destination, lxmf_destination, false, false, false);
+    let inbound = MessageRecord {
+        message_id_hex: "inbound-alias-message".to_string(),
+        conversation_id: lxmf_destination.to_string(),
+        direction: MessageDirection::Inbound {},
+        destination_hex: lxmf_destination.to_string(),
+        source_hex: Some(lxmf_destination.to_string()),
+        requested_destination_hex: Some(lxmf_destination.to_string()),
+        delivery_destination_hex: Some(lxmf_destination.to_string()),
+        recipient_identity_hex: None,
+        last_wire_message_id_hex: Some("inbound-alias-wire-message".to_string()),
+        title: None,
+        body_utf8: "hello from an aliased LXMF correspondent".to_string(),
+        method: MessageMethod::Direct {},
+        state: MessageState::Received {},
+        transport_state: TransportDeliveryState::TransportDelivered {},
+        application_ack_state: ApplicationAckState::NotRequired {},
+        detail: None,
+        sent_at_ms: None,
+        received_at_ms: Some(1),
+        updated_at_ms: 1,
+    };
+    let outbound = MessageRecord {
+        direction: MessageDirection::Outbound {},
+        ..inbound.clone()
+    };
+
+    assert_eq!(
+        routed_chat_destination_hex(
+            app_destination.to_string(),
+            Some(&config),
+            None,
+            || Ok((vec![inbound], vec![peer.clone()])),
+        )
+        .expect("the app alias resolves to the confirmed inbound LXMF correspondent"),
+        app_destination
+    );
+    assert!(routed_chat_destination_hex(
+        app_destination.to_string(),
+        Some(&config),
+        None,
+        || Ok((vec![outbound], vec![peer])),
     )
     .is_err());
 }
