@@ -1,5 +1,6 @@
 use crate::messaging_compat as sdkmsg;
 use crate::types;
+use std::collections::HashSet;
 
 pub(crate) fn normalize_hex_32(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -8,6 +9,27 @@ pub(crate) fn normalize_hex_32(value: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+pub(crate) fn inbound_message_matches_destinations(
+    message: &types::MessageRecord,
+    destinations: &HashSet<String>,
+) -> bool {
+    if !matches!(message.direction, types::MessageDirection::Inbound {}) {
+        return false;
+    }
+
+    [
+        Some(message.conversation_id.as_str()),
+        Some(message.destination_hex.as_str()),
+        message.source_hex.as_deref(),
+        message.requested_destination_hex.as_deref(),
+        message.delivery_destination_hex.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(normalize_hex_32)
+    .any(|destination| destinations.contains(destination.as_str()))
 }
 
 pub(crate) trait PeerDeliveryState {

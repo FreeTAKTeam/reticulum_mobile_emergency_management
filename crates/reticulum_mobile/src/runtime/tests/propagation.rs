@@ -382,15 +382,15 @@ fn only_inbound_history_authorizes_correspondent_reply_routing() {
         ..inbound.clone()
     };
 
-    assert!(inbound_message_matches_destinations(
+    assert!(delivery_policy::inbound_message_matches_destinations(
         &inbound,
         &destinations
     ));
-    assert!(!inbound_message_matches_destinations(
+    assert!(!delivery_policy::inbound_message_matches_destinations(
         &outbound,
         &destinations
     ));
-    assert!(!inbound_message_matches_destinations(
+    assert!(!delivery_policy::inbound_message_matches_destinations(
         &inbound,
         &HashSet::from(["88888888888888888888888888888888".to_string()]),
     ));

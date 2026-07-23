@@ -122,27 +122,6 @@ async fn saved_peer_matches_destination(
     })
 }
 
-fn inbound_message_matches_destinations(
-    message: &MessageRecord,
-    destinations: &HashSet<String>,
-) -> bool {
-    if !matches!(message.direction, MessageDirection::Inbound {}) {
-        return false;
-    }
-
-    [
-        Some(message.conversation_id.as_str()),
-        Some(message.destination_hex.as_str()),
-        message.source_hex.as_deref(),
-        message.requested_destination_hex.as_deref(),
-        message.delivery_destination_hex.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(normalize_hex_32)
-    .any(|destination| destinations.contains(destination.as_str()))
-}
-
 async fn inbound_correspondent_matches_destination(
     state: &NodeRuntimeState,
     requested_destination_hex: &str,
@@ -164,7 +143,9 @@ async fn inbound_correspondent_matches_destination(
     state.app_state.list_messages(None).is_ok_and(|messages| {
         messages
             .iter()
-            .any(|message| inbound_message_matches_destinations(message, &destinations))
+            .any(|message| {
+                delivery_policy::inbound_message_matches_destinations(message, &destinations)
+            })
     })
 }
 
