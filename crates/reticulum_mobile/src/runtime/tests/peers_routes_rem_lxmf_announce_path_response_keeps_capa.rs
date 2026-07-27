@@ -10,6 +10,8 @@ async fn rem_lxmf_announce_path_response_keeps_capability_app_data() {
 
     let identity = PrivateIdentity::new_from_rand(OsRng);
     let config = TransportConfig::new("test", &identity, true);
+    // The pinned LXMF revision needs mutable access; current main accepts shared access.
+    #[allow(unused_mut)]
     let mut transport = Transport::new(config);
     let mut iface_channel = transport.iface_manager().lock().await.new_channel(16);
     let app_destination = transport
