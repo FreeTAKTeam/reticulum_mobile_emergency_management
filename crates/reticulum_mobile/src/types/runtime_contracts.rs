@@ -55,6 +55,8 @@ pub struct RnodeSettingsRecord {
     pub display_name: String,
     pub region: String,
     pub profile: String,
+    #[serde(default)]
+    pub frequency_hz: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -309,6 +311,7 @@ impl Default for RnodeSettingsRecord {
             display_name: String::new(),
             region: "US915".to_string(),
             profile: "REM-LF-RURAL-v1".to_string(),
+            frequency_hz: 915_000_000,
         }
     }
 }

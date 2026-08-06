@@ -1,6 +1,6 @@
 export type LogLevel = "Trace" | "Debug" | "Info" | "Warn" | "Error";
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
-export type RnodeRegion = "US915" | "EU868";
+export type RnodeRegion = "US915" | "EU868" | "AU915" | "AS923" | "IN865" | "KR920" | "RU864";
 export type RnodeProfileId = "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1";
 export type RnodeConnectionMode = "ble" | "bluetooth_classic" | "usb" | "tcp";
 export type RuntimeReadinessState = "Pending" | "Ready" | "Failed" | "Unsupported" | "Disabled";
@@ -152,6 +152,7 @@ export interface RnodeSettingsRecord {
   displayName: string;
   region: RnodeRegion;
   profile: RnodeProfileId;
+  frequencyHz: number;
 }
 
 export interface RnodeBleDeviceRecord {

@@ -429,7 +429,8 @@ fn rnode_settings_json(settings: &RnodeSettingsRecord) -> serde_json::Value {
         "peripheralId": settings.peripheral_id,
         "displayName": settings.display_name,
         "region": settings.region,
-        "profile": settings.profile
+        "profile": settings.profile,
+        "frequencyHz": settings.frequency_hz
     })
 }
 

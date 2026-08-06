@@ -50,6 +50,7 @@ export const DEFAULT_NODE_CONFIG: NodeConfig = {
     displayName: "",
     region: "US915",
     profile: "REM-LF-RURAL-v1",
+    frequencyHz: 915_000_000,
   },
 };
 

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
 import { useRouter } from "vue-router";
 
@@ -35,6 +35,7 @@ const form = reactive({
   rnodeDisplayName: nodeStore.settings.rnode.displayName,
   rnodeRegion: nodeStore.settings.rnode.region,
   rnodeProfile: nodeStore.settings.rnode.profile,
+  rnodeFrequencyHz: nodeStore.settings.rnode.frequencyHz,
   telemetryEnabled: nodeStore.settings.telemetry.enabled,
   telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
   telemetryAccuracyThresholdMeters: nodeStore.settings.telemetry.accuracyThresholdMeters,
@@ -68,6 +69,7 @@ const normalizedRnodeSettings = computed(() =>
       displayName: form.rnodeDisplayName,
       region: form.rnodeRegion,
       profile: form.rnodeProfile,
+      frequencyHz: form.rnodeFrequencyHz,
     },
     nodeStore.settings.rnode,
   ),
@@ -141,6 +143,7 @@ function syncSettingsForm(): void {
   form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
   form.rnodeRegion = nodeStore.settings.rnode.region;
   form.rnodeProfile = nodeStore.settings.rnode.profile;
+  form.rnodeFrequencyHz = nodeStore.settings.rnode.frequencyHz;
   form.telemetryEnabled = nodeStore.settings.telemetry.enabled;
   form.telemetryPublishIntervalSeconds = nodeStore.settings.telemetry.publishIntervalSeconds;
   form.telemetryAccuracyThresholdMeters = nodeStore.settings.telemetry.accuracyThresholdMeters;

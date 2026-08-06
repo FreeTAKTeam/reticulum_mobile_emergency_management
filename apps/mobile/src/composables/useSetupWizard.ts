@@ -10,9 +10,11 @@ import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   DEFAULT_RNODE_SETTINGS,
   RNODE_PROFILE_SPECS,
+  RNODE_REGION_SPECS,
   inferRnodeRegionFromCoordinates,
   inferRnodeRegionFromTimezone,
   normalizeRnodeSettings,
+  resolveRnodeFrequencyForRegionChange,
   rnodeProfileSummary,
 } from "../utils/rnodeProfiles";
 import { selectUsbBondedRnodeCandidate } from "../utils/rnodeUsbPairing";
@@ -164,12 +166,20 @@ export function useSetupWizard() {
   }
 
   async function inferRnodeRegion(): Promise<void> {
+    const previousRegion = draft.rnode.region;
+    let nextRegion = previousRegion;
     try {
       const fix = await telemetryService.getCurrentPosition();
-      draft.rnode.region = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
+      nextRegion = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
     } catch {
-      draft.rnode.region = inferRnodeRegionFromTimezone();
+      nextRegion = inferRnodeRegionFromTimezone();
     }
+    draft.rnode.region = nextRegion;
+    draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
+      previousRegion,
+      nextRegion,
+      draft.rnode.frequencyHz,
+    );
   }
 
   function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
@@ -450,6 +460,7 @@ export function useSetupWizard() {
     rnodeUsbDevices,
     rnodeUsbPairing,
     rnodeProfiles: RNODE_PROFILE_SPECS,
+    rnodeRegions: RNODE_REGION_SPECS,
     rnodeScanning,
     saving,
     selectedRnodeUsbDeviceId,

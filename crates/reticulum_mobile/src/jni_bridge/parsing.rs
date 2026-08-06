@@ -134,7 +134,24 @@ fn normalize_rnode_region(value: Option<String>) -> String {
         .as_str()
     {
         "EU868" => "EU868".to_string(),
+        "AU915" => "AU915".to_string(),
+        "AS923" => "AS923".to_string(),
+        "IN865" => "IN865".to_string(),
+        "KR920" => "KR920".to_string(),
+        "RU864" => "RU864".to_string(),
         _ => "US915".to_string(),
+    }
+}
+
+pub(crate) fn rnode_region_default_frequency_hz(region: &str) -> u64 {
+    match region.trim().to_ascii_uppercase().as_str() {
+        "EU868" => 868_000_000,
+        "AU915" => 915_000_000,
+        "AS923" => 923_000_000,
+        "IN865" => 865_000_000,
+        "KR920" => 920_000_000,
+        "RU864" => 864_000_000,
+        _ => 915_000_000,
     }
 }
 
@@ -154,13 +171,19 @@ fn to_rnode_settings_record(
     input: Option<RnodeSettingsInput>,
 ) -> Result<RnodeSettingsRecord, NodeError> {
     let input = input.unwrap_or_default();
+    let region = normalize_rnode_region(input.region);
+    let frequency_hz = match input.frequency_hz {
+        Some(value) if value > 0 => value,
+        _ => rnode_region_default_frequency_hz(&region),
+    };
     Ok(RnodeSettingsRecord {
         enabled: input.enabled.unwrap_or(false),
         connection_mode: normalize_rnode_connection_mode(input.connection_mode)?,
         peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
         display_name: input.display_name.unwrap_or_default().trim().to_string(),
-        region: normalize_rnode_region(input.region),
+        region,
         profile: normalize_rnode_profile(input.profile),
+        frequency_hz,
     })
 }
 

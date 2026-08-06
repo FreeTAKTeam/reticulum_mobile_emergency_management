@@ -430,6 +430,7 @@ dictionary RnodeSettingsRecord {
   string display_name;
   string region;
   string profile;
+  u64 frequency_hz;
 };
 
 dictionary AppSettingsRecord {
