@@ -233,12 +233,8 @@ onMounted(() => {
           </div>
           <label class="field-block">
             <span>Region</span>
-            <select v-model="wizard.draft.rnode.region">
-              <option
-                v-for="region in wizard.rnodeRegions"
-                :key="region.id"
-                :value="region.id"
-              >
+            <select :value="wizard.draft.rnode.region" @change="wizard.selectRnodeRegion">
+              <option v-for="region in wizard.rnodeRegions" :key="region.id" :value="region.id">
                 {{ region.id }} - {{ region.label }}
               </option>
             </select>
@@ -253,11 +249,7 @@ onMounted(() => {
           <label class="field-block">
             <span>REM LoRa profile</span>
             <select v-model="wizard.draft.rnode.profile">
-              <option
-                v-for="profile in wizard.rnodeProfiles"
-                :key="profile.id"
-                :value="profile.id"
-              >
+              <option v-for="profile in wizard.rnodeProfiles" :key="profile.id" :value="profile.id">
                 {{ profile.id }} - {{ profile.label }}
               </option>
             </select>

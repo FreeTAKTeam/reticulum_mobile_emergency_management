@@ -13,6 +13,7 @@ import {
   RNODE_REGION_SPECS,
   inferRnodeRegionFromCoordinates,
   inferRnodeRegionFromTimezone,
+  normalizeRnodeRegion,
   normalizeRnodeSettings,
   resolveRnodeFrequencyForRegionChange,
   rnodeProfileSummary,
@@ -174,6 +175,18 @@ export function useSetupWizard() {
     } catch {
       nextRegion = inferRnodeRegionFromTimezone();
     }
+    draft.rnode.region = nextRegion;
+    draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
+      previousRegion,
+      nextRegion,
+      draft.rnode.frequencyHz,
+    );
+  }
+  function selectRnodeRegion(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof HTMLSelectElement)) return;
+    const previousRegion = draft.rnode.region;
+    const nextRegion = normalizeRnodeRegion(target.value);
     draft.rnode.region = nextRegion;
     draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
       previousRegion,
@@ -476,6 +489,7 @@ export function useSetupWizard() {
     requestNotifications,
     requestBluetooth,
     inferRnodeRegion,
+    selectRnodeRegion,
     loadPairedRnodeDevices,
     scanRnodeDevices,
     selectRnodeDevice,

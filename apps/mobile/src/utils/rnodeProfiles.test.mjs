@@ -11,7 +11,11 @@ const transpiled = ts.transpileModule(source, {
   },
 }).outputText;
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
-const { normalizeRnodeConnectionMode, normalizeRnodeSettings } = await import(moduleUrl);
+const {
+  normalizeRnodeConnectionMode,
+  normalizeRnodeSettings,
+  resolveRnodeFrequencyForRegionChange,
+} = await import(moduleUrl);
 
 test("normalizes legacy RNode settings to BLE connection mode", () => {
   assert.deepEqual(
@@ -29,6 +33,7 @@ test("normalizes legacy RNode settings to BLE connection mode", () => {
       displayName: "Field RNode",
       region: "EU868",
       profile: "REM-MF-URBAN-v1",
+      frequencyHz: 868_000_000,
     },
   );
 });
@@ -77,6 +82,18 @@ test("preserves fallback RNode connection mode when normalizing partial settings
       displayName: "Field RNode",
       region: "EU868",
       profile: "REM-MF-URBAN-v1",
+      frequencyHz: 868_000_000,
     },
+  );
+});
+
+test("updates regional defaults without overwriting explicit frequencies", () => {
+  assert.equal(
+    resolveRnodeFrequencyForRegionChange("US915", "EU868", 915_000_000),
+    868_000_000,
+  );
+  assert.equal(
+    resolveRnodeFrequencyForRegionChange("US915", "EU868", 433_000_000),
+    433_000_000,
   );
 });

@@ -139,6 +139,7 @@ export function normalizeRnodeSettings(
 ): RnodeSettings {
   const raw = (value ?? {}) as Partial<RnodeSettings> & Record<string, unknown>;
   const region = normalizeRnodeRegion(raw.region ?? defaults.region);
+  const frequencyValue = raw.frequencyHz ?? raw.frequency_hz ?? rnodeRegionDefaultFrequencyHz(region);
   return {
     enabled: Boolean(raw.enabled ?? defaults.enabled),
     connectionMode: normalizeRnodeConnectionMode(
@@ -148,7 +149,7 @@ export function normalizeRnodeSettings(
     displayName: String(raw.displayName ?? raw.display_name ?? defaults.displayName ?? "").trim(),
     region,
     profile: normalizeRnodeProfile(raw.profile ?? defaults.profile),
-    frequencyHz: normalizeRnodeFrequencyHz(raw.frequencyHz ?? raw.frequency_hz ?? defaults.frequencyHz, region),
+    frequencyHz: normalizeRnodeFrequencyHz(frequencyValue, region),
   };
 }
 

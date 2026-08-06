@@ -21,6 +21,7 @@ describe("RNode settings conversion", () => {
       displayName: "Field RNode",
       region: "EU868",
       profile: "REM-MF-URBAN-v1",
+      frequencyHz: 868_000_000,
     });
   });
 

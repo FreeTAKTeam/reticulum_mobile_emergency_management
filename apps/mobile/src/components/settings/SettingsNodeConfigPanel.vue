@@ -5,7 +5,12 @@ import { useNodeStore } from "../../stores/nodeStore";
 import { useTelemetryStore } from "../../stores/telemetryStore";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../../utils/tcpCommunityServers";
 import { useSettingsRnode } from "./useSettingsRnode";
-import { RNODE_REGION_SPECS, normalizeRnodeRegion, rnodeRegionDefaultFrequencyHz } from "../../utils/rnodeProfiles";
+import {
+  RNODE_REGION_SPECS,
+  normalizeRnodeRegion,
+  resolveRnodeFrequencyForRegionChange,
+  rnodeRegionDefaultFrequencyHz,
+} from "../../utils/rnodeProfiles";
 
 interface NodeSettingsForm {
   displayName: string;
@@ -35,6 +40,19 @@ const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 const panel = useTemplateRef<HTMLDetailsElement>("panel");
 const customTcpEndpoint = ref("");
+
+function handleRnodeRegionChange(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  const previousRegion = normalizeRnodeRegion(props.form.rnodeRegion);
+  const nextRegion = normalizeRnodeRegion(target.value);
+  props.form.rnodeRegion = nextRegion;
+  props.form.rnodeFrequencyHz = resolveRnodeFrequencyForRegionChange(
+    previousRegion,
+    nextRegion,
+    props.form.rnodeFrequencyHz,
+  );
+}
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
@@ -274,7 +292,7 @@ defineExpose({ openPanel });
             </label>
             <label>
               Region
-              <select v-model="form.rnodeRegion">
+              <select :value="form.rnodeRegion" @change="handleRnodeRegionChange">
                 <option v-for="region in RNODE_REGION_SPECS" :key="region.id" :value="region.id">
                   {{ region.id }} - {{ region.label }}
                 </option>
