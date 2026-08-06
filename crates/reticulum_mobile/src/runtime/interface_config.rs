@@ -47,19 +47,28 @@ fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
 }
 
 #[cfg(target_os = "android")]
-fn normalize_rnode_region(region: &str) -> &'static str {
-    if region.trim().eq_ignore_ascii_case("EU868") {
-        "EU868"
-    } else {
-        "US915"
+fn normalized_rnode_region(region: &str) -> Result<&'static str, String> {
+    match region.trim().to_ascii_uppercase().as_str() {
+        "US915" => Ok("US915"),
+        "EU868" => Ok("EU868"),
+        "AU915" => Ok("AU915"),
+        "AS923" => Ok("AS923"),
+        "IN865" => Ok("IN865"),
+        "KR920" => Ok("KR920"),
+        "RU864" => Ok("RU864"),
+        value => Err(format!("unsupported RNode LoRa region: {value}")),
     }
 }
 
 #[cfg(target_os = "android")]
 fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
-    let mut config = LoraConfig::for_region(normalize_rnode_region(&settings.region))
+    let region = normalized_rnode_region(&settings.region)?;
+    let mut config = LoraConfig::for_region(region)
         .into_lora_config_option()
-        .unwrap_or_else(LoraConfig::us915_default);
+        .ok_or_else(|| format!("unsupported RNode LoRa region: {region}"))?;
+    if settings.frequency_hz > 0 {
+        config.frequency_hz = settings.frequency_hz;
+    }
     match settings.profile.trim() {
         "REM-MF-URBAN-v1" => {
             config.bandwidth_hz = 250_000;
@@ -71,11 +80,12 @@ fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, Strin
             config.spreading_factor = 11;
             config.coding_rate = 8;
         }
-        "REM-LF-RURAL-v1" | _ => {
+        "REM-LF-RURAL-v1" => {
             config.bandwidth_hz = 250_000;
             config.spreading_factor = 11;
             config.coding_rate = 5;
         }
+        value => return Err(format!("unsupported RNode LoRa profile: {value}")),
     }
     config.validate()?;
     Ok(config)

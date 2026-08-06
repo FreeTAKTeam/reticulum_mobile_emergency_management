@@ -176,6 +176,7 @@ test("operators can save manual RNode LoRa configuration", async ({ page }) => {
     displayName: "Field RNode",
     region: "EU868",
     profile: "REM-LM-EXTREME-v1",
+    frequencyHz: 868_000_000,
   });
 });
 

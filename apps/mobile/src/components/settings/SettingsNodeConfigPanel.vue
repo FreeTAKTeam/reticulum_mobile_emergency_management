@@ -5,6 +5,12 @@ import { useNodeStore } from "../../stores/nodeStore";
 import { useTelemetryStore } from "../../stores/telemetryStore";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../../utils/tcpCommunityServers";
 import { useSettingsRnode } from "./useSettingsRnode";
+import {
+  RNODE_REGION_SPECS,
+  normalizeRnodeRegion,
+  resolveRnodeFrequencyForRegionChange,
+  rnodeRegionDefaultFrequencyHz,
+} from "../../utils/rnodeProfiles";
 
 interface NodeSettingsForm {
   displayName: string;
@@ -19,6 +25,7 @@ interface NodeSettingsForm {
   rnodeDisplayName: string;
   rnodeRegion: string;
   rnodeProfile: string;
+  rnodeFrequencyHz: number;
 }
 
 interface KnownTcpServerOption {
@@ -33,6 +40,19 @@ const nodeStore = useNodeStore();
 const telemetryStore = useTelemetryStore();
 const panel = useTemplateRef<HTMLDetailsElement>("panel");
 const customTcpEndpoint = ref("");
+
+function handleRnodeRegionChange(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  const previousRegion = normalizeRnodeRegion(props.form.rnodeRegion);
+  const nextRegion = normalizeRnodeRegion(target.value);
+  props.form.rnodeRegion = nextRegion;
+  props.form.rnodeFrequencyHz = resolveRnodeFrequencyForRegionChange(
+    previousRegion,
+    nextRegion,
+    props.form.rnodeFrequencyHz,
+  );
+}
 
 const ownAppHash = computed(() => nodeStore.status.appDestinationHex || "Start node to populate");
 const knownTcpServers = computed<KnownTcpServerOption[]>(() =>
@@ -272,10 +292,21 @@ defineExpose({ openPanel });
             </label>
             <label>
               Region
-              <select v-model="form.rnodeRegion">
-                <option value="US915">US915</option>
-                <option value="EU868">EU868</option>
+              <select :value="form.rnodeRegion" @change="handleRnodeRegionChange">
+                <option v-for="region in RNODE_REGION_SPECS" :key="region.id" :value="region.id">
+                  {{ region.id }} - {{ region.label }}
+                </option>
               </select>
+            </label>
+            <label>
+              Frequency (Hz)
+              <input
+                v-model.number="form.rnodeFrequencyHz"
+                type="number"
+                min="1"
+                step="1000"
+                :placeholder="String(rnodeRegionDefaultFrequencyHz(normalizeRnodeRegion(form.rnodeRegion)))"
+              />
             </label>
             <label>
               REM LoRa profile

@@ -251,6 +251,7 @@ fn rnode_ble_wiring_derives_kiss_and_native_settings_from_rem_settings() {
         display_name: "Field RNode".to_string(),
         region: "EU868".to_string(),
         profile: "REM-MF-URBAN-v1".to_string(),
+        frequency_hz: 868_000_000,
     };
 
     let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
@@ -280,6 +281,7 @@ fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
         display_name: " ".to_string(),
         region: "US915".to_string(),
         profile: "REM-LF-RURAL-v1".to_string(),
+        frequency_hz: 915_000_000,
     };
 
     let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
@@ -289,4 +291,56 @@ fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn rnode_lora_config_accepts_supported_regions_and_exact_frequency_override() {
+    for (region, frequency_hz) in [
+        ("US915", 915_000_000),
+        ("EU868", 868_000_000),
+        ("AU915", 915_000_000),
+        ("AS923", 923_000_000),
+        ("IN865", 865_000_000),
+        ("KR920", 920_000_000),
+        ("RU864", 864_000_000),
+    ] {
+        let settings = RnodeSettingsRecord {
+            region: region.to_string(),
+            profile: "REM-LF-RURAL-v1".to_string(),
+            frequency_hz,
+            ..RnodeSettingsRecord::default()
+        };
+        let config = rnode_lora_config(&settings).expect("supported region");
+        assert_eq!(config.frequency_hz, frequency_hz);
+    }
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn rnode_lora_config_uses_region_default_frequency_when_unset() {
+    let settings = RnodeSettingsRecord {
+        region: "EU868".to_string(),
+        profile: "REM-LF-RURAL-v1".to_string(),
+        frequency_hz: 0,
+        ..RnodeSettingsRecord::default()
+    };
+    let config = rnode_lora_config(&settings).expect("valid config");
+    assert_eq!(config.frequency_hz, 868_000_000);
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn rnode_lora_config_rejects_unknown_region_and_profile() {
+    let bad_region = RnodeSettingsRecord {
+        region: "XX000".to_string(),
+        ..RnodeSettingsRecord::default()
+    };
+    assert!(rnode_lora_config(&bad_region).is_err());
+
+    let bad_profile = RnodeSettingsRecord {
+        profile: "REM-TYPO-v1".to_string(),
+        ..RnodeSettingsRecord::default()
+    };
+    assert!(rnode_lora_config(&bad_profile).is_err());
 }

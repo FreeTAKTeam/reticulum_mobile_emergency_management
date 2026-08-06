@@ -94,8 +94,41 @@ function normalizeHubMode(value: unknown): HubMode {
   }
 }
 
+const RNODE_REGION_DEFAULT_FREQUENCY_HZ: Record<RnodeRegion, number> = {
+  US915: 915_000_000,
+  EU868: 868_000_000,
+  AU915: 915_000_000,
+  AS923: 923_000_000,
+  IN865: 865_000_000,
+  KR920: 920_000_000,
+  RU864: 864_000_000,
+};
+
+export function rnodeRegionDefaultFrequencyHz(region: RnodeRegion): number {
+  return RNODE_REGION_DEFAULT_FREQUENCY_HZ[region] ?? 915_000_000;
+}
+
 function normalizeRnodeRegion(value: unknown): RnodeRegion {
-  return stringValue(value).trim().toUpperCase() === "EU868" ? "EU868" : "US915";
+  const normalized = stringValue(value).trim().toUpperCase();
+  switch (normalized) {
+    case "EU868":
+    case "AU915":
+    case "AS923":
+    case "IN865":
+    case "KR920":
+    case "RU864":
+      return normalized;
+    default:
+      return "US915";
+  }
+}
+
+function normalizeRnodeFrequencyHz(value: unknown, region: RnodeRegion): number {
+  const frequencyHz = Number(value);
+  if (Number.isFinite(frequencyHz) && frequencyHz > 0) {
+    return Math.round(frequencyHz);
+  }
+  return rnodeRegionDefaultFrequencyHz(region);
 }
 
 function normalizeRnodeProfile(value: unknown): RnodeProfileId {
@@ -143,13 +176,15 @@ export function parseRnodeConnectionMode(value: unknown): RnodeConnectionMode {
 
 export function normalizeRnodeSettings(value: unknown): RnodeSettingsRecord {
   const raw = asRecord(value) ?? {};
+  const region = normalizeRnodeRegion(raw.region);
   return {
     enabled: strictBoolean(raw.enabled, false),
     connectionMode: parseRnodeConnectionMode(raw.connectionMode ?? raw.connection_mode ?? raw.mode),
     peripheralId: stringValue(raw.peripheralId ?? raw.peripheral_id).trim(),
     displayName: stringValue(raw.displayName ?? raw.display_name).trim(),
-    region: normalizeRnodeRegion(raw.region),
+    region,
     profile: normalizeRnodeProfile(raw.profile),
+    frequencyHz: normalizeRnodeFrequencyHz(raw.frequencyHz ?? raw.frequency_hz, region),
   };
 }
 

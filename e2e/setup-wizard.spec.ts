@@ -105,6 +105,7 @@ test("operators complete first-run setup and persist core choices", async ({ pag
     displayName: "",
     region: "EU868",
     profile: "REM-MF-URBAN-v1",
+    frequencyHz: 868_000_000,
   });
   expect(storedSettings.telemetry.enabled).toBe(true);
   expect(storedSettings.telemetry.publishIntervalSeconds).toBe(420);

@@ -193,6 +193,7 @@ struct RnodeSettingsInput {
     display_name: Option<String>,
     region: Option<String>,
     profile: Option<String>,
+    frequency_hz: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

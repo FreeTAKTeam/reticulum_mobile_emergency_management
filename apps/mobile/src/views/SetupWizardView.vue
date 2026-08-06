@@ -233,10 +233,15 @@ onMounted(() => {
           </div>
           <label class="field-block">
             <span>Region</span>
-            <select v-model="wizard.draft.rnode.region">
-              <option value="US915">US915</option>
-              <option value="EU868">EU868</option>
+            <select :value="wizard.draft.rnode.region" @change="wizard.selectRnodeRegion">
+              <option v-for="region in wizard.rnodeRegions" :key="region.id" :value="region.id">
+                {{ region.id }} - {{ region.label }}
+              </option>
             </select>
+          </label>
+          <label class="field-block">
+            <span>Frequency (Hz)</span>
+            <input v-model.number="wizard.draft.rnode.frequencyHz" type="number" min="1" step="1000" />
           </label>
           <button type="button" class="secondary-action inline-action" @click="wizard.inferRnodeRegion">
             Infer region
@@ -244,11 +249,7 @@ onMounted(() => {
           <label class="field-block">
             <span>REM LoRa profile</span>
             <select v-model="wizard.draft.rnode.profile">
-              <option
-                v-for="profile in wizard.rnodeProfiles"
-                :key="profile.id"
-                :value="profile.id"
-              >
+              <option v-for="profile in wizard.rnodeProfiles" :key="profile.id" :value="profile.id">
                 {{ profile.id }} - {{ profile.label }}
               </option>
             </select>
