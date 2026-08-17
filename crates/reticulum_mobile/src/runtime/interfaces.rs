@@ -51,7 +51,11 @@ type ActiveInterfaceRegistry = Arc<TokioMutex<HashMap<AddressHash, InterfaceStat
 
 fn interface_status_kind(label: &str) -> &'static str {
     if interface_label_is_rnode_ble(label) {
-        "rnode_ble"
+        if label.starts_with("rnode-bluetooth-classic:") {
+            "rnode_bluetooth_classic"
+        } else {
+            "rnode_ble"
+        }
     } else {
         "tcp_client"
     }

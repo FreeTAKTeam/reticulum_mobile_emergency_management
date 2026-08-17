@@ -94,10 +94,13 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
     private ServiceNotificationController notificationController;
     private ServiceEventCoordinator eventCoordinator;
     private NodeRuntimeLifecycleController runtimeController;
+    private RNodeAndroidTransportManager rnodeTransportManager;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        rnodeTransportManager = new RNodeAndroidTransportManager(this);
+        RNodeAndroidTransportManager.install(rnodeTransportManager);
         preferences = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         final RuntimeConfigResolver configResolver = new RuntimeConfigResolver(this);
         NodeRuntimeLifecycleController.initializeStorage(
@@ -171,6 +174,10 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     @Override
     public void onDestroy() {
+        if (rnodeTransportManager != null) {
+            RNodeAndroidTransportManager.uninstall(rnodeTransportManager);
+            rnodeTransportManager = null;
+        }
         if (eventCoordinator != null) {
             eventCoordinator.close();
         }

@@ -1,14 +1,10 @@
 package network.reticulum.emergency;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.le.BluetoothLeScanner;
-import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanFilter;
-import android.bluetooth.le.ScanResult;
-import android.bluetooth.le.ScanSettings;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -17,7 +13,6 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.ParcelUuid;
 import android.util.Log;
 
 import androidx.core.content.ContextCompat;
@@ -28,29 +23,29 @@ import com.getcapacitor.PermissionState;
 import com.getcapacitor.PluginCall;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+// Every public Bluetooth operation is gated by hasPermission/requirePermission
+// and also maps SecurityException to a rejected Capacitor call.
+@SuppressLint("MissingPermission")
 final class RNodeBluetoothController {
     interface EventSink {
         void publish(String eventName, JSObject payload);
     }
 
     private static final String TAG = "ReticulumNode";
-    private static final String RNODE_UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    private static final long DEFAULT_SCAN_TIMEOUT_MS = 8_000L;
     private static final long PAIRING_TIMEOUT_MS = 45_000L;
 
     private final Context context;
     private final EventSink eventSink;
+    private final RNodeBluetoothDiscovery discovery;
 
     RNodeBluetoothController(Context context, EventSink eventSink) {
         this.context = context;
         this.eventSink = eventSink;
+        this.discovery = new RNodeBluetoothDiscovery(context);
     }
 
     boolean hasPermission() {
@@ -65,7 +60,7 @@ final class RNodeBluetoothController {
 
     void resolvePermission(PluginCall call, PermissionState permissionState) {
         final JSObject payload = new JSObject();
-        payload.put("bluetooth", permissionState.toString().toLowerCase());
+        payload.put("bluetooth", permissionState.toString().toLowerCase(Locale.ROOT));
         call.resolve(payload);
     }
 
@@ -82,7 +77,7 @@ final class RNodeBluetoothController {
             final Set<BluetoothDevice> bondedDevices = adapter.getBondedDevices();
             final JSArray items = new JSArray();
             for (BluetoothDevice device : bondedDevices) {
-                items.put(devicePayload(device, null, null));
+                items.put(RNodeBluetoothDevicePayload.from(device, null, null));
             }
             final JSObject payload = new JSObject();
             payload.put("items", items);
@@ -92,45 +87,15 @@ final class RNodeBluetoothController {
         }
     }
 
-    void scanDevices(PluginCall call) {
+    void scanDevices(PluginCall call, String mode) {
         if (!requirePermission(call)) {
             return;
         }
         final BluetoothAdapter adapter = bluetoothAdapter();
-        if (adapter == null || !adapter.isEnabled()) {
-            call.reject("Bluetooth is not enabled.");
-            return;
-        }
-        final BluetoothLeScanner scanner = adapter.getBluetoothLeScanner();
-        if (scanner == null) {
-            call.reject("Bluetooth LE scanning is unavailable.");
-            return;
-        }
-
-        final long timeoutMs = Math.max(1_000L, call.getLong("timeoutMs", DEFAULT_SCAN_TIMEOUT_MS));
-        final Map<String, JSObject> discovered = new LinkedHashMap<>();
-        final Handler handler = new Handler(Looper.getMainLooper());
-        final AtomicBoolean finished = new AtomicBoolean(false);
-        final ScanCallback callback = scanCallback(call, discovered, finished);
-        final List<ScanFilter> filters = new ArrayList<>();
-        filters.add(
-            new ScanFilter.Builder()
-                .setServiceUuid(ParcelUuid.fromString(RNODE_UART_SERVICE_UUID))
-                .build()
-        );
-        final ScanSettings settings = new ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build();
-        try {
-            scanner.startScan(filters, settings, callback);
-        } catch (SecurityException ex) {
-            call.reject("Bluetooth permission denied.", ex);
-            return;
-        }
-        handler.postDelayed(() -> finishScan(call, scanner, callback, discovered, finished), timeoutMs);
+        discovery.scan(call, adapter, mode);
     }
 
-    void pairDevice(PluginCall call) {
+    void pairDevice(PluginCall call, String mode) {
         if (!requirePermission(call)) {
             return;
         }
@@ -155,12 +120,12 @@ final class RNodeBluetoothController {
                 call.resolve(payload);
                 return;
             }
-            if (!device.createBond()) {
+            if (!createBond(device, mode)) {
                 call.reject("Android did not start Bluetooth pairing for this RNode.");
                 return;
             }
             payload.put("bondingStarted", true);
-            payload.put("bondState", bondStateLabel(device.getBondState()));
+            payload.put("bondState", RNodeBluetoothDevicePayload.bondStateLabel(device.getBondState()));
             call.resolve(payload);
         } catch (IllegalArgumentException ex) {
             call.reject("Invalid Bluetooth device id.", ex);
@@ -194,58 +159,6 @@ final class RNodeBluetoothController {
         }
     }
 
-    private ScanCallback scanCallback(
-        PluginCall call,
-        Map<String, JSObject> discovered,
-        AtomicBoolean finished
-    ) {
-        return new ScanCallback() {
-            @Override
-            public void onScanResult(int callbackType, ScanResult result) {
-                addScanResult(discovered, result);
-            }
-
-            @Override
-            public void onBatchScanResults(List<ScanResult> results) {
-                for (ScanResult result : results) {
-                    addScanResult(discovered, result);
-                }
-            }
-
-            @Override
-            public void onScanFailed(int errorCode) {
-                if (finished.compareAndSet(false, true)) {
-                    call.reject("RNode Bluetooth scan failed: " + errorCode);
-                }
-            }
-        };
-    }
-
-    private void finishScan(
-        PluginCall call,
-        BluetoothLeScanner scanner,
-        ScanCallback callback,
-        Map<String, JSObject> discovered,
-        AtomicBoolean finished
-    ) {
-        if (!finished.compareAndSet(false, true)) {
-            return;
-        }
-        try {
-            scanner.stopScan(callback);
-        } catch (SecurityException ex) {
-            call.reject("Bluetooth permission denied.", ex);
-            return;
-        }
-        final JSArray items = new JSArray();
-        for (JSObject item : discovered.values()) {
-            items.put(item);
-        }
-        final JSObject payload = new JSObject();
-        payload.put("items", items);
-        call.resolve(payload);
-    }
-
     private void pairDeviceWithPin(PluginCall call, BluetoothDevice device, Integer rssi, String pin) {
         if (device == null) {
             call.reject("RNode Bluetooth scan returned no device.");
@@ -256,7 +169,7 @@ final class RNodeBluetoothController {
         final Handler handler = new Handler(Looper.getMainLooper());
         publishStatus("Pairing with discovered RNode");
         if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
-            final JSObject payload = devicePayload(device, rssi, null);
+            final JSObject payload = RNodeBluetoothDevicePayload.from(device, rssi, null);
             payload.put("pairingModeStarted", true);
             payload.put("pin", pin);
             payload.put("paired", true);
@@ -314,7 +227,7 @@ final class RNodeBluetoothController {
                 final int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE);
                 if (state == BluetoothDevice.BOND_BONDED && finished.compareAndSet(false, true)) {
                     unregisterReceiverQuietly(this);
-                    final JSObject payload = devicePayload(eventDevice, rssi, null);
+                    final JSObject payload = RNodeBluetoothDevicePayload.from(eventDevice, rssi, null);
                     payload.put("pairingModeStarted", true);
                     payload.put("pin", pin);
                     payload.put("paired", true);
@@ -349,7 +262,10 @@ final class RNodeBluetoothController {
         payload.put("pin", pin);
         payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
         payload.put("manualPinRequired", device.getBondState() != BluetoothDevice.BOND_BONDED);
-        payload.put("bondState", bondStateLabel(device.getBondState()));
+        payload.put(
+            "bondState",
+            RNodeBluetoothDevicePayload.bondStateLabel(device.getBondState())
+        );
         payload.put("message", "Timed out waiting for Android to complete RNode Bluetooth pairing.");
         call.resolve(payload);
     }
@@ -399,6 +315,20 @@ final class RNodeBluetoothController {
         }
     }
 
+    private boolean createBond(BluetoothDevice device, String mode) {
+        if (!"ble".equals(mode) && !"bluetooth_classic".equals(mode)) {
+            throw new IllegalArgumentException("Unsupported RNode Bluetooth mode: " + mode);
+        }
+        try {
+            final java.lang.reflect.Method createBond = BluetoothDevice.class.getMethod("createBond", int.class);
+            final int transport = "bluetooth_classic".equals(mode) ? 1 : 2;
+            return Boolean.TRUE.equals(createBond.invoke(device, transport));
+        } catch (Exception error) {
+            Log.w(TAG, "createBond(transport) failed, falling back to createBond()", error);
+            return device.createBond();
+        }
+    }
+
     private void unregisterReceiverQuietly(BroadcastReceiver receiver) {
         try {
             context.unregisterReceiver(receiver);
@@ -419,49 +349,6 @@ final class RNodeBluetoothController {
     private BluetoothAdapter bluetoothAdapter() {
         final BluetoothManager manager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         return manager == null ? null : manager.getAdapter();
-    }
-
-    private void addScanResult(Map<String, JSObject> discovered, ScanResult result) {
-        if (result == null || result.getDevice() == null) {
-            return;
-        }
-        final BluetoothDevice device = result.getDevice();
-        final String address = device.getAddress();
-        if (address == null || address.isEmpty()) {
-            return;
-        }
-        final String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
-        discovered.put(address, devicePayload(device, result.getRssi(), name));
-    }
-
-    private JSObject devicePayload(BluetoothDevice device, Integer rssi, String scannedName) {
-        final JSObject item = new JSObject();
-        final String address = device.getAddress();
-        item.put("id", address);
-        item.put("address", address);
-        if (rssi != null) {
-            item.put("rssi", rssi);
-        }
-        item.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
-        item.put("bondState", bondStateLabel(device.getBondState()));
-        String name = scannedName;
-        if (name == null || name.trim().isEmpty()) {
-            name = device.getName();
-        }
-        item.put("name", name == null ? "" : name);
-        return item;
-    }
-
-    private String bondStateLabel(int state) {
-        switch (state) {
-            case BluetoothDevice.BOND_BONDED:
-                return "bonded";
-            case BluetoothDevice.BOND_BONDING:
-                return "bonding";
-            case BluetoothDevice.BOND_NONE:
-            default:
-                return "none";
-        }
     }
 
     private void publishStatus(String status) {

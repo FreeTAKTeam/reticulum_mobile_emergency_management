@@ -155,14 +155,20 @@ export interface RnodeSettingsRecord {
   frequencyHz: number;
 }
 
-export interface RnodeBleDeviceRecord {
+export type RnodeBluetoothMode = "ble" | "bluetooth_classic";
+
+export interface RnodeBluetoothDeviceRecord {
   id: string;
   address: string;
   name: string;
   rssi?: number;
   paired: boolean;
   bondState?: string;
+  supportedModes: RnodeBluetoothMode[];
 }
+
+/** @deprecated Use RnodeBluetoothDeviceRecord. */
+export type RnodeBleDeviceRecord = RnodeBluetoothDeviceRecord;
 
 export interface RnodeBlePairResult {
   id: string;

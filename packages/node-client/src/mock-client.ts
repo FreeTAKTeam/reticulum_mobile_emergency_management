@@ -1,4 +1,4 @@
-import type { AnnounceClass, AnnounceDestinationKind, AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectoryUpdatedEvent, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
+import type { AnnounceClass, AnnounceDestinationKind, AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectoryPeerRecord, HubDirectoryUpdatedEvent, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_NODE_CONFIG, browserRuntimeReadiness, countConnectedSavedPeers, randomHex32 } from "./client-defaults";
 import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
@@ -231,13 +231,11 @@ export class MockReticulumNodeClient extends InMemoryProjectionClient implements
     };
   }
 
-  async listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> {
-    return [];
-  }
+  async scanRnodeBluetoothDevices(_mode: RnodeBluetoothMode, _timeoutMs?: number): Promise<RnodeBluetoothDeviceRecord[]> { return []; }
+  async pairRnodeBluetoothDevice(id: string, _mode: RnodeBluetoothMode): Promise<RnodeBlePairResult> { return this.pairRnodeBleDevice(id); }
 
-  async requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }> {
-    return { deviceId, granted: false };
-  }
+  async listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> { return []; }
+  async requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }> { return { deviceId, granted: false }; }
 
   async startRnodeUsbBluetoothPairing(deviceId: number, _bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
     return {

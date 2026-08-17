@@ -20,7 +20,7 @@ fn active_interfaces_are_rnode_ble_only(
 }
 
 fn interface_label_is_rnode_ble(interface: &str) -> bool {
-    interface.starts_with("rnode-ble:")
+    interface.starts_with("rnode-ble:") || interface.starts_with("rnode-bluetooth-classic:")
 }
 
 fn active_interface_is_rnode_ble(

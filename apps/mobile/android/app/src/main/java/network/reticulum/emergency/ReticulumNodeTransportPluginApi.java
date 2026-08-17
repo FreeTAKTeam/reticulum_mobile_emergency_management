@@ -91,12 +91,22 @@ public abstract class ReticulumNodeTransportPluginApi extends ReticulumNodePlugi
 
     @PluginMethod
     public void scanRnodeBleDevices(PluginCall call) {
-        rnodeBluetoothController().scanDevices(call);
+        rnodeBluetoothController().scanDevices(call, "ble");
     }
 
     @PluginMethod
     public void pairRnodeBleDevice(PluginCall call) {
-        rnodeBluetoothController().pairDevice(call);
+        rnodeBluetoothController().pairDevice(call, "ble");
+    }
+
+    @PluginMethod
+    public void scanRnodeBluetoothDevices(PluginCall call) {
+        rnodeBluetoothController().scanDevices(call, call.getString("mode", "ble"));
+    }
+
+    @PluginMethod
+    public void pairRnodeBluetoothDevice(PluginCall call) {
+        rnodeBluetoothController().pairDevice(call, call.getString("mode", "ble"));
     }
 
     @PluginMethod

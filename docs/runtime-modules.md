@@ -21,6 +21,9 @@ instead of rebuilding protocol behavior in another layer.
 - RNode interface creation publishes `connecting`; only a validated startup
   probe with an online radio promotes the interface to `connected`. Failed or
   powered-off paired radios cannot make LoRa readiness green.
+- REM Rust owns Bluetooth bearer selection and retry. Android performs one
+  generation-scoped BLE GATT or Classic RFCOMM attempt, while LXMF-rs owns the
+  shared KISS/RNode protocol session and radio validation.
 - Potentially slow Reticulum and LXMF work runs outside the central command
   consumer and uses explicit retry budgets or timeouts.
 - `error_context.rs` retains the causal value at category-preserving error

@@ -1,4 +1,4 @@
-import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
+import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, LogLevel, MessageRecord, NodeClientEvents, NodeConfig, NodeStatus, OperationalSummary, PacketSendOptions, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, ReticulumNodeClient, RnodeBleDeviceRecord, RnodeBlePairResult, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, RnodeUsbPairResult, SavedPeerRecord, SendLxmfRequest, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { ReticulumNodePluginInstance, type PluginListenerHandle } from "./capacitor-plugin";
 import { configToPlugin, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
 import { toChecklistRecord, toChecklistTemplateRecord } from "./checklist-converters";
@@ -152,6 +152,24 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
   async pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult> {
     await this.ready();
     const result = await this.plugin.pairRnodeBleDevice({ id });
+    return {
+      id: String(result.id ?? id),
+      address: String(result.address ?? result.id ?? id),
+      paired: Boolean(result.paired),
+      bondingStarted: Boolean(result.bondingStarted ?? result.bonding_started),
+      bondState: String(result.bondState ?? result.bond_state ?? "none"),
+    };
+  }
+
+  async scanRnodeBluetoothDevices(mode: RnodeBluetoothMode, timeoutMs?: number): Promise<RnodeBluetoothDeviceRecord[]> {
+    await this.ready();
+    const result = await this.plugin.scanRnodeBluetoothDevices({ mode, timeoutMs });
+    return Array.isArray(result.items) ? result.items : [];
+  }
+
+  async pairRnodeBluetoothDevice(id: string, mode: RnodeBluetoothMode): Promise<RnodeBlePairResult> {
+    await this.ready();
+    const result = await this.plugin.pairRnodeBluetoothDevice({ id, mode });
     return {
       id: String(result.id ?? id),
       address: String(result.address ?? result.id ?? id),

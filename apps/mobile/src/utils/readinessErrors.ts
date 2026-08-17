@@ -64,12 +64,15 @@ export function hasConfiguredNonTcpInterface(
   return rnode?.enabled === true && String(rnode?.peripheralId ?? "").trim().length > 0;
 }
 
-function interfaceIsRnodeBle(
+function interfaceIsRnodeBluetooth(
   record: Partial<Pick<InterfaceStatusRecord, "kind" | "label">> | null | undefined,
 ): boolean {
   const kind = typeof record?.kind === "string" ? record.kind.trim().toLowerCase() : "";
   const label = typeof record?.label === "string" ? record.label.trim().toLowerCase() : "";
-  return kind === "rnode_ble" || label.startsWith("rnode-ble:");
+  return kind === "rnode_ble"
+    || kind === "rnode_bluetooth_classic"
+    || label.startsWith("rnode-ble:")
+    || label.startsWith("rnode-bluetooth-classic:");
 }
 
 function interfaceIsAvailable(
@@ -84,8 +87,8 @@ export function summarizeRnodeInterfaceState(
   settings: { rnode?: { enabled?: unknown; connectionMode?: unknown; peripheralId?: unknown } | null } | null | undefined,
 ): RnodeInterfaceSummary {
   const interfaces = Array.isArray(status?.interfaces) ? status.interfaces : [];
-  const rnodeAvailable = interfaces.some((entry) => interfaceIsRnodeBle(entry) && interfaceIsAvailable(entry));
-  const otherAvailableCount = interfaces.filter((entry) => !interfaceIsRnodeBle(entry) && interfaceIsAvailable(entry)).length;
+  const rnodeAvailable = interfaces.some((entry) => interfaceIsRnodeBluetooth(entry) && interfaceIsAvailable(entry));
+  const otherAvailableCount = interfaces.filter((entry) => !interfaceIsRnodeBluetooth(entry) && interfaceIsAvailable(entry)).length;
   const anyInterfaceAvailable = rnodeAvailable || otherAvailableCount > 0;
   const rnodeConfigured = hasConfiguredNonTcpInterface(settings);
 
