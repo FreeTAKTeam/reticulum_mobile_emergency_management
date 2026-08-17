@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef } from "vue";
+import type { RnodeConnectionMode } from "@reticulum/node-client";
 
 import { useNodeStore } from "../../stores/nodeStore";
 import { useTelemetryStore } from "../../stores/telemetryStore";
@@ -21,7 +22,7 @@ interface NodeSettingsForm {
   broadcast: boolean;
   transportNodeEnabled: boolean;
   rnodeEnabled: boolean;
-  rnodeConnectionMode: "ble" | "bluetooth_classic";
+  rnodeConnectionMode: RnodeConnectionMode;
   rnodePeripheralId: string;
   rnodeDisplayName: string;
   rnodeRegion: string;

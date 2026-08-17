@@ -231,21 +231,11 @@ export class MockReticulumNodeClient extends InMemoryProjectionClient implements
     };
   }
 
-  async scanRnodeBluetoothDevices(_mode: RnodeBluetoothMode, _timeoutMs?: number): Promise<RnodeBluetoothDeviceRecord[]> {
-    return [];
-  }
+  async scanRnodeBluetoothDevices(_mode: RnodeBluetoothMode, _timeoutMs?: number): Promise<RnodeBluetoothDeviceRecord[]> { return []; }
+  async pairRnodeBluetoothDevice(id: string, _mode: RnodeBluetoothMode): Promise<RnodeBlePairResult> { return this.pairRnodeBleDevice(id); }
 
-  async pairRnodeBluetoothDevice(id: string, _mode: RnodeBluetoothMode): Promise<RnodeBlePairResult> {
-    return this.pairRnodeBleDevice(id);
-  }
-
-  async listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> {
-    return [];
-  }
-
-  async requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }> {
-    return { deviceId, granted: false };
-  }
+  async listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> { return []; }
+  async requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }> { return { deviceId, granted: false }; }
 
   async startRnodeUsbBluetoothPairing(deviceId: number, _bluetoothDeviceId?: string): Promise<RnodeUsbPairResult> {
     return {

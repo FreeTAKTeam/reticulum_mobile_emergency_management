@@ -21,13 +21,16 @@ import {
 import { selectUsbBondedRnodeCandidate } from "../utils/rnodeUsbPairing";
 import {
   listPairedRnodeBluetoothDevices,
+  normalizeRnodeBluetoothMode,
+  rnodeBluetoothDeviceDetail,
+  rnodeBluetoothModeLabel,
+  rnodeUsbDeviceDetail,
   scanRnodeBluetoothDevices,
   pairRnodeBluetoothDevice,
   listRnodeUsbDevices,
   requestRnodeUsbPermission,
   startRnodeUsbBluetoothPairing,
   type RnodeBluetoothDeviceRecord,
-  type RnodeBluetoothMode,
   type RnodeUsbDeviceRecord,
 } from "../services/rnodeBluetooth";
 import { telemetryService } from "../services/telemetry";
@@ -196,31 +199,6 @@ export function useSetupWizard() {
     );
   }
 
-  function rnodeDeviceDetail(device: RnodeBluetoothDeviceRecord): string {
-    const parts = [device.address];
-    if (typeof device.rssi === "number") {
-      parts.push(`RSSI ${device.rssi}`);
-    }
-    parts.push(device.paired ? "Paired" : "Not paired");
-    parts.push((device.supportedModes ?? ["ble"]).map(rnodeModeLabel).join(" + "));
-    return parts.join(" | ");
-  }
-
-  function rnodeModeLabel(mode: RnodeBluetoothMode): string {
-    return mode === "bluetooth_classic" ? "Bluetooth Classic" : "BLE";
-  }
-
-  function rnodeUsbDeviceDetail(device: RnodeUsbDeviceRecord): string {
-    const parts = [
-      device.productName || device.manufacturerName || device.deviceName,
-      device.serialNumber ? `S/N ${device.serialNumber}` : "",
-      `VID ${device.vendorId.toString(16).padStart(4, "0")}`,
-      `PID ${device.productId.toString(16).padStart(4, "0")}`,
-      device.hasPermission ? "USB allowed" : "USB permission needed",
-    ].filter(Boolean);
-    return parts.join(" | ");
-  }
-
   async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
     if (permissions.bluetooth !== "granted") {
       permissions.bluetooth = await requestRnodeBluetoothPermission();
@@ -263,9 +241,10 @@ export function useSetupWizard() {
     rnodeScanning.value = true;
     feedback.value = "";
     try {
-      rnodeDevices.value = await scanRnodeBluetoothDevices(draft.rnode.connectionMode);
+      const mode = normalizeRnodeBluetoothMode(draft.rnode.connectionMode);
+      rnodeDevices.value = await scanRnodeBluetoothDevices(mode);
       if (rnodeDevices.value.length === 0) {
-        feedback.value = `No RNode ${rnodeModeLabel(draft.rnode.connectionMode)} devices found. Pair the RNode in Android Bluetooth settings or enter its device ID manually.`;
+        feedback.value = `No RNode ${rnodeBluetoothModeLabel(mode)} devices found. Pair the RNode in Android Bluetooth settings or enter its device ID manually.`;
       }
     } catch (error: unknown) {
       feedback.value = error instanceof Error ? error.message : String(error);
@@ -277,8 +256,9 @@ export function useSetupWizard() {
   async function selectRnodeDevice(device: RnodeBluetoothDeviceRecord): Promise<void> {
     const deviceId = device.id || device.address;
     const supportedModes = device.supportedModes ?? ["ble"];
-    const mode = supportedModes.includes(draft.rnode.connectionMode)
-      ? draft.rnode.connectionMode
+    const selectedMode = normalizeRnodeBluetoothMode(draft.rnode.connectionMode);
+    const mode = supportedModes.includes(selectedMode)
+      ? selectedMode
       : supportedModes[0] ?? "ble";
     if (!device.paired) {
       try {
@@ -320,7 +300,7 @@ export function useSetupWizard() {
     draft.rnode.peripheralId = deviceId;
     draft.rnode.displayName = device.name || device.address || deviceId;
     const supportedModes = device.supportedModes ?? ["ble"];
-    if (!supportedModes.includes(draft.rnode.connectionMode)) {
+    if (!supportedModes.includes(normalizeRnodeBluetoothMode(draft.rnode.connectionMode))) {
       draft.rnode.connectionMode = supportedModes[0] ?? "ble";
     }
   }
@@ -481,7 +461,7 @@ export function useSetupWizard() {
     permissionLabel,
     profileSummary,
     refreshPermissions,
-    rnodeDeviceDetail,
+    rnodeDeviceDetail: rnodeBluetoothDeviceDetail,
     rnodePairedDevices,
     rnodePairedLoading,
     rnodeDevices,

@@ -159,16 +159,9 @@ onMounted(() => {
             </select>
           </label>
           <div class="custom-row">
-            <input
-              v-model="wizard.draft.rnode.peripheralId"
-              type="text"
-              placeholder="RNode Bluetooth device id"
-            />
-            <button
-              type="button"
-              class="icon-action"
-              :disabled="wizard.rnodePairedLoading.value"
-              aria-label="Show paired Bluetooth devices"
+            <input v-model="wizard.draft.rnode.peripheralId" type="text" placeholder="RNode Bluetooth device id" />
+            <button type="button" class="icon-action"
+              :disabled="wizard.rnodePairedLoading.value" aria-label="Show paired Bluetooth devices"
               @click="wizard.loadPairedRnodeDevices"
             >
               {{ wizard.rnodePairedLoading.value ? "..." : "BT" }}
