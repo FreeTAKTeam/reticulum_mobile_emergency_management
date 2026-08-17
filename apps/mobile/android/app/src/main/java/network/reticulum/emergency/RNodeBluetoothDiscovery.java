@@ -102,17 +102,22 @@ final class RNodeBluetoothDiscovery {
             call.reject("Bluetooth permission denied.", error);
             return;
         }
+        try {
+            adapter.cancelDiscovery();
+        } catch (SecurityException error) {
+            call.reject("Bluetooth permission denied.", error);
+            return;
+        }
         final BroadcastReceiver receiver = classicReceiver(call, adapter, discovered, finished);
         final IntentFilter filter = new IntentFilter();
         filter.addAction(BluetoothDevice.ACTION_FOUND);
         filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            context.registerReceiver(receiver, filter);
-        }
         try {
-            adapter.cancelDiscovery();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                context.registerReceiver(receiver, filter);
+            }
             if (!adapter.startDiscovery()) {
                 unregisterReceiverQuietly(receiver);
                 call.reject("Android did not start Bluetooth Classic discovery.");

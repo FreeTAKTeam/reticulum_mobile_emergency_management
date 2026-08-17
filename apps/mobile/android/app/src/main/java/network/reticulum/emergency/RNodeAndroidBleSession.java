@@ -74,8 +74,6 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
         enableNotifications();
         await(subscribed, deadline, "BLE notification subscription");
         throwSetupError();
-        // Data flow is ready at the default MTU. MTU negotiation is best effort.
-        gatt.requestMtu(512);
     }
 
     @Override

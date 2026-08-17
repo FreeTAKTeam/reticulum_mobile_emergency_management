@@ -341,6 +341,40 @@ test("a connected RNode is available before traffic is observed", () => {
   assert.equal(summary.otherAvailableCount, 0);
 });
 
+test("connected Bluetooth Classic RNodes are classified by kind or label", () => {
+  const records = [
+    {
+      interfaceHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      label: "Field RNode",
+      kind: "rnode_bluetooth_classic",
+      state: "connected",
+    },
+    {
+      interfaceHex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      label: "rnode-bluetooth-classic:Field RNode",
+      kind: "unknown",
+      state: "connected",
+    },
+  ];
+
+  for (const record of records) {
+    const summary = summarizeRnodeInterfaceState(
+      { running: true, interfaces: [record] },
+      {
+        rnode: {
+          enabled: true,
+          connectionMode: "bluetooth_classic",
+          peripheralId: "48:CA:43:38:BC:E1",
+        },
+      },
+    );
+
+    assert.equal(summary.severity, "ready");
+    assert.equal(summary.rnodeAvailable, true);
+    assert.equal(summary.otherAvailableCount, 0);
+  }
+});
+
 test("an unavailable configured RNode degrades but does not block REM startup", () => {
   const summary = summarizeRnodeInterfaceState(
     {
