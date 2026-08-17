@@ -196,7 +196,7 @@ fn rnode_runtime_readiness_requires_detected_online_radio() {
         (
             "failed",
             Some(
-                "RNode BLE/KISS startup did not report a detected online radio within 30 seconds"
+                "RNode Bluetooth/KISS startup did not report a detected online radio within 30 seconds"
                     .to_string()
             )
         )
@@ -243,7 +243,7 @@ fn direct_delivery_readiness_requires_active_link() {
 
 #[cfg(target_os = "android")]
 #[test]
-fn rnode_ble_wiring_derives_kiss_and_native_settings_from_rem_settings() {
+fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     let settings = RnodeSettingsRecord {
         enabled: true,
         connection_mode: RnodeConnectionMode::Ble.as_str().to_string(),
@@ -257,12 +257,9 @@ fn rnode_ble_wiring_derives_kiss_and_native_settings_from_rem_settings() {
     let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
 
     assert_eq!(wiring.label, "rnode-ble:Field RNode");
-    assert_eq!(wiring.native.peripheral_id, "AA:BB:CC:DD:EE:FF");
-    assert!(wiring
-        .native
-        .peripheral_aliases
-        .iter()
-        .any(|alias| alias == "Field RNode"));
+    assert_eq!(wiring.device_id, "AA:BB:CC:DD:EE:FF");
+    assert_eq!(wiring.endpoint, "ble://AA:BB:CC:DD:EE:FF");
+    assert_eq!(wiring.mode, AndroidRnodeMode::Ble);
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert_eq!(wiring.kiss.max_write_len, 20);
     assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
@@ -287,10 +284,31 @@ fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
     let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid RNode wiring");
 
     assert_eq!(wiring.label, "rnode-ble:AA:BB:CC:DD:EE:FF");
-    assert!(wiring.native.peripheral_aliases.is_empty());
+    assert_eq!(wiring.device_id, "AA:BB:CC:DD:EE:FF");
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn rnode_classic_wiring_uses_spp_bearer_and_stream_write_limit() {
+    let settings = RnodeSettingsRecord {
+        enabled: true,
+        connection_mode: RnodeConnectionMode::BluetoothClassic.as_str().to_string(),
+        peripheral_id: "AA:BB:CC:DD:EE:FF".to_string(),
+        display_name: "Field RNode".to_string(),
+        region: "US915".to_string(),
+        profile: "REM-LF-RURAL-v1".to_string(),
+        frequency_hz: 915_000_000,
+    };
+
+    let wiring = rnode_ble_wiring_from_settings(&settings).expect("valid Classic wiring");
+
+    assert_eq!(wiring.label, "rnode-bluetooth-classic:Field RNode");
+    assert_eq!(wiring.endpoint, "bluetooth-classic://AA:BB:CC:DD:EE:FF");
+    assert_eq!(wiring.mode, AndroidRnodeMode::BluetoothClassic);
+    assert_eq!(wiring.kiss.max_write_len, 4 * 1024);
 }
 
 #[cfg(target_os = "android")]

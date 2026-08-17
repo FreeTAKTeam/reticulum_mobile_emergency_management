@@ -1,6 +1,7 @@
 package network.reticulum.emergency;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
@@ -31,10 +32,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+// Every public Bluetooth operation is gated by hasPermission/requirePermission
+// and also maps SecurityException to a rejected Capacitor call.
+@SuppressLint("MissingPermission")
 final class RNodeBluetoothController {
     interface EventSink {
         void publish(String eventName, JSObject payload);
@@ -65,7 +70,7 @@ final class RNodeBluetoothController {
 
     void resolvePermission(PluginCall call, PermissionState permissionState) {
         final JSObject payload = new JSObject();
-        payload.put("bluetooth", permissionState.toString().toLowerCase());
+        payload.put("bluetooth", permissionState.toString().toLowerCase(Locale.ROOT));
         call.resolve(payload);
     }
 
@@ -92,7 +97,19 @@ final class RNodeBluetoothController {
         }
     }
 
-    void scanDevices(PluginCall call) {
+    void scanDevices(PluginCall call, String mode) {
+        if ("bluetooth_classic".equals(mode)) {
+            scanClassicDevices(call);
+            return;
+        }
+        if (!"ble".equals(mode)) {
+            call.reject("Unsupported RNode Bluetooth mode: " + mode);
+            return;
+        }
+        scanBleDevices(call);
+    }
+
+    private void scanBleDevices(PluginCall call) {
         if (!requirePermission(call)) {
             return;
         }
@@ -130,7 +147,7 @@ final class RNodeBluetoothController {
         handler.postDelayed(() -> finishScan(call, scanner, callback, discovered, finished), timeoutMs);
     }
 
-    void pairDevice(PluginCall call) {
+    void pairDevice(PluginCall call, String mode) {
         if (!requirePermission(call)) {
             return;
         }
@@ -155,7 +172,7 @@ final class RNodeBluetoothController {
                 call.resolve(payload);
                 return;
             }
-            if (!device.createBond()) {
+            if (!createBond(device, mode)) {
                 call.reject("Android did not start Bluetooth pairing for this RNode.");
                 return;
             }
@@ -167,6 +184,96 @@ final class RNodeBluetoothController {
         } catch (SecurityException ex) {
             call.reject("Bluetooth permission denied.", ex);
         }
+    }
+
+    private void scanClassicDevices(PluginCall call) {
+        if (!requirePermission(call)) {
+            return;
+        }
+        final BluetoothAdapter adapter = bluetoothAdapter();
+        if (adapter == null || !adapter.isEnabled()) {
+            call.reject("Bluetooth is not enabled.");
+            return;
+        }
+        final long timeoutMs = Math.max(1_000L, call.getLong("timeoutMs", DEFAULT_SCAN_TIMEOUT_MS));
+        final Map<String, JSObject> discovered = new LinkedHashMap<>();
+        final AtomicBoolean finished = new AtomicBoolean(false);
+        final Handler handler = new Handler(Looper.getMainLooper());
+        try {
+            for (BluetoothDevice device : adapter.getBondedDevices()) {
+                discovered.put(device.getAddress(), devicePayload(device, null, null));
+            }
+        } catch (SecurityException error) {
+            call.reject("Bluetooth permission denied.", error);
+            return;
+        }
+        final BroadcastReceiver receiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context receiverContext, Intent intent) {
+                if (BluetoothDevice.ACTION_FOUND.equals(intent.getAction())) {
+                    final BluetoothDevice device = intentDevice(intent);
+                    if (device != null && device.getAddress() != null) {
+                        final int rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE);
+                        discovered.put(
+                            device.getAddress(),
+                            devicePayload(device, rssi, null, "bluetooth_classic")
+                        );
+                    }
+                } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(intent.getAction())) {
+                    finishClassicScan(call, adapter, this, discovered, finished);
+                }
+            }
+        };
+        final IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_FOUND);
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(receiver, filter);
+        }
+        try {
+            adapter.cancelDiscovery();
+            if (!adapter.startDiscovery()) {
+                unregisterReceiverQuietly(receiver);
+                call.reject("Android did not start Bluetooth Classic discovery.");
+                return;
+            }
+        } catch (SecurityException error) {
+            unregisterReceiverQuietly(receiver);
+            call.reject("Bluetooth permission denied.", error);
+            return;
+        }
+        handler.postDelayed(
+            () -> finishClassicScan(call, adapter, receiver, discovered, finished),
+            timeoutMs
+        );
+    }
+
+    private void finishClassicScan(
+        PluginCall call,
+        BluetoothAdapter adapter,
+        BroadcastReceiver receiver,
+        Map<String, JSObject> discovered,
+        AtomicBoolean finished
+    ) {
+        if (!finished.compareAndSet(false, true)) {
+            return;
+        }
+        unregisterReceiverQuietly(receiver);
+        try {
+            adapter.cancelDiscovery();
+        } catch (SecurityException error) {
+            call.reject("Bluetooth permission denied.", error);
+            return;
+        }
+        final JSArray items = new JSArray();
+        for (JSObject item : discovered.values()) {
+            items.put(item);
+        }
+        final JSObject payload = new JSObject();
+        payload.put("items", items);
+        call.resolve(payload);
     }
 
     void pairSelectedDeviceWithPin(PluginCall call, String bluetoothDeviceId, String pin) {
@@ -399,6 +506,20 @@ final class RNodeBluetoothController {
         }
     }
 
+    private boolean createBond(BluetoothDevice device, String mode) {
+        if (!"ble".equals(mode) && !"bluetooth_classic".equals(mode)) {
+            throw new IllegalArgumentException("Unsupported RNode Bluetooth mode: " + mode);
+        }
+        try {
+            final java.lang.reflect.Method createBond = BluetoothDevice.class.getMethod("createBond", int.class);
+            final int transport = "bluetooth_classic".equals(mode) ? 1 : 2;
+            return Boolean.TRUE.equals(createBond.invoke(device, transport));
+        } catch (Exception error) {
+            Log.w(TAG, "createBond(transport) failed, falling back to createBond()", error);
+            return device.createBond();
+        }
+    }
+
     private void unregisterReceiverQuietly(BroadcastReceiver receiver) {
         try {
             context.unregisterReceiver(receiver);
@@ -431,10 +552,19 @@ final class RNodeBluetoothController {
             return;
         }
         final String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
-        discovered.put(address, devicePayload(device, result.getRssi(), name));
+        discovered.put(address, devicePayload(device, result.getRssi(), name, "ble"));
     }
 
     private JSObject devicePayload(BluetoothDevice device, Integer rssi, String scannedName) {
+        return devicePayload(device, rssi, scannedName, null);
+    }
+
+    private JSObject devicePayload(
+        BluetoothDevice device,
+        Integer rssi,
+        String scannedName,
+        String discoveredMode
+    ) {
         final JSObject item = new JSObject();
         final String address = device.getAddress();
         item.put("id", address);
@@ -449,6 +579,19 @@ final class RNodeBluetoothController {
             name = device.getName();
         }
         item.put("name", name == null ? "" : name);
+        final JSArray supportedModes = new JSArray();
+        if ("ble".equals(discoveredMode)
+            || device.getType() == BluetoothDevice.DEVICE_TYPE_LE
+            || device.getType() == BluetoothDevice.DEVICE_TYPE_DUAL
+            || device.getType() == BluetoothDevice.DEVICE_TYPE_UNKNOWN) {
+            supportedModes.put("ble");
+        }
+        if ("bluetooth_classic".equals(discoveredMode)
+            || device.getType() == BluetoothDevice.DEVICE_TYPE_CLASSIC
+            || device.getType() == BluetoothDevice.DEVICE_TYPE_DUAL) {
+            supportedModes.put("bluetooth_classic");
+        }
+        item.put("supportedModes", supportedModes);
         return item;
     }
 

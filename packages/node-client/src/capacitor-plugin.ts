@@ -1,5 +1,5 @@
 import { registerPlugin } from "@capacitor/core";
-import type { ChecklistUserTaskStatus, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
+import type { ChecklistUserTaskStatus, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
 
 export type PluginListenerHandle = {
   remove: () => Promise<void>;
@@ -15,6 +15,8 @@ export interface ReticulumNodePlugin {
   listPairedRnodeBluetoothDevices(): Promise<{ items?: RnodeBleDeviceRecord[] }>;
   scanRnodeBleDevices(options?: { timeoutMs?: number }): Promise<{ items?: RnodeBleDeviceRecord[] }>;
   pairRnodeBleDevice(options: { id: string }): Promise<Record<string, unknown>>;
+  scanRnodeBluetoothDevices(options: { mode: RnodeBluetoothMode; timeoutMs?: number }): Promise<{ items?: RnodeBluetoothDeviceRecord[] }>;
+  pairRnodeBluetoothDevice(options: { id: string; mode: RnodeBluetoothMode }): Promise<Record<string, unknown>>;
   listRnodeUsbDevices(): Promise<{ items?: RnodeUsbDeviceRecord[] }>;
   requestRnodeUsbPermission(options: { deviceId: number }): Promise<Record<string, unknown>>;
   startRnodeUsbBluetoothPairing(options: { deviceId: number; bluetoothDeviceId?: string }): Promise<Record<string, unknown>>;

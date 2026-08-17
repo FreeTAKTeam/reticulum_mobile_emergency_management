@@ -3,11 +3,14 @@ import {
   createReticulumNodeClient,
   type RnodeBleDeviceRecord,
   type RnodeBlePairResult,
+  type RnodeBluetoothDeviceRecord,
+  type RnodeBluetoothMode,
   type RnodeUsbDeviceRecord,
   type RnodeUsbPairResult,
 } from "@reticulum/node-client";
 
 export type { RnodeBleDeviceRecord, RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult };
+export type { RnodeBluetoothDeviceRecord, RnodeBluetoothMode };
 
 export async function scanRnodeBleDevices(timeoutMs = 8000): Promise<RnodeBleDeviceRecord[]> {
   if (!Capacitor.isNativePlatform()) {
@@ -34,6 +37,26 @@ export async function pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult
     };
   }
   return createReticulumNodeClient().pairRnodeBleDevice(id);
+}
+
+export async function scanRnodeBluetoothDevices(
+  mode: RnodeBluetoothMode,
+  timeoutMs = 8000,
+): Promise<RnodeBluetoothDeviceRecord[]> {
+  if (!Capacitor.isNativePlatform()) {
+    return [];
+  }
+  return createReticulumNodeClient().scanRnodeBluetoothDevices(mode, timeoutMs);
+}
+
+export async function pairRnodeBluetoothDevice(
+  id: string,
+  mode: RnodeBluetoothMode,
+): Promise<RnodeBlePairResult> {
+  if (!Capacitor.isNativePlatform()) {
+    return { id, address: id, paired: false, bondingStarted: false, bondState: "unavailable" };
+  }
+  return createReticulumNodeClient().pairRnodeBluetoothDevice(id, mode);
 }
 
 export async function listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]> {

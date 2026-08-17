@@ -14,6 +14,10 @@
 // Generated UniFFI and JNI exports require unsafe attributes such as `no_mangle`.
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "android")]
+#[deny(unsafe_code)]
+mod android_rnode_backend;
+
 #[deny(unsafe_code)]
 mod announce_metadata;
 #[deny(unsafe_code)]

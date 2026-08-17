@@ -41,17 +41,11 @@ const RESULT_ERR: jint = 1;
 
 #[cfg(target_os = "android")]
 #[no_mangle]
-pub extern "system" fn JNI_OnLoad(vm: jni19::JavaVM, _reserved: *mut c_void) -> jint {
-    match vm.get_env() {
-        Ok(env) => match btleplug::platform::init(&env) {
-            Ok(()) => log::info!("btleplug Android BLE backend initialized"),
-            Err(error) => {
-                log::error!("btleplug Android BLE backend initialization failed: {error}")
-            }
-        },
-        Err(error) => log::error!("btleplug Android BLE backend missing JNI env: {error}"),
+pub extern "system" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut c_void) -> jint {
+    if let Err(error) = crate::android_rnode_backend::install_java_vm(vm) {
+        log::error!("RNode Android transport JNI initialization failed: {error}");
     }
-    jni19::sys::JNI_VERSION_1_6
+    jni::sys::JNI_VERSION_1_6
 }
 
 #[derive(Default)]

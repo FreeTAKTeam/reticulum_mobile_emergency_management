@@ -3,11 +3,12 @@ import { ref } from "vue";
 import {
   listPairedRnodeBluetoothDevices,
   listRnodeUsbDevices,
-  pairRnodeBleDevice,
+  pairRnodeBluetoothDevice,
   requestRnodeUsbPermission,
-  scanRnodeBleDevices,
+  scanRnodeBluetoothDevices,
   startRnodeUsbBluetoothPairing,
-  type RnodeBleDeviceRecord,
+  type RnodeBluetoothDeviceRecord,
+  type RnodeBluetoothMode,
   type RnodeUsbDeviceRecord,
 } from "../../services/rnodeBluetooth";
 import { requestRnodeBluetoothPermission } from "../../services/setupPermissions";
@@ -19,6 +20,7 @@ import { selectUsbBondedRnodeCandidate } from "../../utils/rnodeUsbPairing";
 
 export interface SettingsRnodeForm {
   rnodeEnabled: boolean;
+  rnodeConnectionMode: RnodeBluetoothMode;
   rnodePeripheralId: string;
   rnodeDisplayName: string;
   rnodeRegion: string;
@@ -28,21 +30,22 @@ export interface SettingsRnodeForm {
 export function useSettingsRnode(form: SettingsRnodeForm) {
   const scanFeedback = ref("");
   const pairedLoading = ref(false);
-  const pairedDevices = ref<RnodeBleDeviceRecord[]>([]);
+  const pairedDevices = ref<RnodeBluetoothDeviceRecord[]>([]);
   const scanning = ref(false);
-  const devices = ref<RnodeBleDeviceRecord[]>([]);
+  const devices = ref<RnodeBluetoothDeviceRecord[]>([]);
   const usbPairing = ref(false);
   const usbDevices = ref<RnodeUsbDeviceRecord[]>([]);
   const selectedUsbDeviceId = ref<number | null>(null);
   const USB_BOND_POLL_ATTEMPTS = 15;
   const USB_BOND_POLL_DELAY_MS = 2_000;
 
-  function rnodeDeviceDetail(device: RnodeBleDeviceRecord): string {
+  function rnodeDeviceDetail(device: RnodeBluetoothDeviceRecord): string {
     const parts = [device.address];
     if (typeof device.rssi === "number") {
       parts.push(`RSSI ${device.rssi}`);
     }
     parts.push(device.paired ? "Paired" : "Not paired");
+    parts.push((device.supportedModes ?? ["ble"]).map(modeLabel).join(" + "));
     return parts.join(" | ");
   }
 
@@ -88,9 +91,9 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     scanning.value = true;
     scanFeedback.value = "";
     try {
-      devices.value = await scanRnodeBleDevices();
+      devices.value = await scanRnodeBluetoothDevices(form.rnodeConnectionMode);
       if (devices.value.length === 0) {
-        scanFeedback.value = "No RNode BLE devices found.";
+        scanFeedback.value = `No RNode ${modeLabel(form.rnodeConnectionMode)} devices found.`;
       }
     } catch (error: unknown) {
       scanFeedback.value = error instanceof Error ? error.message : String(error);
@@ -108,11 +111,15 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     return false;
   }
 
-  async function selectRnodeDevice(device: RnodeBleDeviceRecord): Promise<void> {
+  async function selectRnodeDevice(device: RnodeBluetoothDeviceRecord): Promise<void> {
     const deviceId = device.id || device.address;
+    const supportedModes = device.supportedModes ?? ["ble"];
+    const mode = supportedModes.includes(form.rnodeConnectionMode)
+      ? form.rnodeConnectionMode
+      : supportedModes[0] ?? "ble";
     if (!device.paired) {
       try {
-        const pairResult = await pairRnodeBleDevice(deviceId);
+        const pairResult = await pairRnodeBluetoothDevice(deviceId, mode);
         if (!pairResult.paired && !pairResult.bondingStarted) {
           scanFeedback.value = "Android did not start Bluetooth pairing for this RNode.";
           return;
@@ -135,6 +142,7 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
       form.rnodePeripheralId = deviceId;
     }
     form.rnodeEnabled = true;
+    form.rnodeConnectionMode = mode;
     form.rnodeDisplayName = device.name || device.address;
   }
 
@@ -143,18 +151,22 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     scanFeedback.value = `Selected USB RNode ${device.productName || device.deviceName || device.deviceId}.`;
   }
 
-  function selectPairedRnodeForSettings(device: RnodeBleDeviceRecord): void {
+  function selectPairedRnodeForSettings(device: RnodeBluetoothDeviceRecord): void {
     const deviceId = device.id || device.address;
     form.rnodeEnabled = true;
     form.rnodePeripheralId = deviceId;
     form.rnodeDisplayName = device.name || device.address || deviceId;
+    const supportedModes = device.supportedModes ?? ["ble"];
+    if (!supportedModes.includes(form.rnodeConnectionMode)) {
+      form.rnodeConnectionMode = supportedModes[0] ?? "ble";
+    }
   }
 
   function delay(ms: number): Promise<void> {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
-  async function waitForUsbBondedRnodeCandidate(beforePairing: RnodeBleDeviceRecord[]): Promise<RnodeBleDeviceRecord | undefined> {
+  async function waitForUsbBondedRnodeCandidate(beforePairing: RnodeBluetoothDeviceRecord[]): Promise<RnodeBluetoothDeviceRecord | undefined> {
     for (let attempt = 0; attempt < USB_BOND_POLL_ATTEMPTS; attempt += 1) {
       const currentPairedDevices = await listPairedRnodeBluetoothDevices().catch(() => []);
       pairedDevices.value = currentPairedDevices;
@@ -212,6 +224,7 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
           address: result.address || result.id,
           name: result.id || result.address || "RNode",
           paired: true,
+          supportedModes: ["ble"],
         });
         pairedDevices.value = await listPairedRnodeBluetoothDevices().catch(() => []);
         scanFeedback.value = "RNode paired over USB-assisted Bluetooth. Save settings to connect.";
@@ -256,4 +269,8 @@ export function useSettingsRnode(form: SettingsRnodeForm) {
     usbDevices,
     usbPairing,
   };
+}
+
+function modeLabel(mode: RnodeBluetoothMode): string {
+  return mode === "bluetooth_classic" ? "Bluetooth Classic" : "BLE";
 }

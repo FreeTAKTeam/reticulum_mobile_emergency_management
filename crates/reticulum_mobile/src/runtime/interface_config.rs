@@ -113,8 +113,10 @@ impl<E> IntoLoraConfigOption for Result<Option<LoraConfig>, E> {
 #[cfg(target_os = "android")]
 struct RnodeBleWiring {
     label: String,
+    endpoint: String,
+    mode: AndroidRnodeMode,
+    device_id: String,
     lora: LoraConfig,
-    native: NativeRnodeBleSettings,
     kiss: RnodeBleKissConfig,
 }
 
@@ -128,16 +130,29 @@ fn rnode_ble_wiring_from_settings(
     }
 
     let lora = rnode_lora_config(settings)?;
-    let label = if settings.display_name.trim().is_empty() {
-        format!("rnode-ble:{peripheral_id}")
-    } else {
-        format!("rnode-ble:{}", settings.display_name.trim())
+    let connection_mode = RnodeConnectionMode::parse(Some(&settings.connection_mode))
+        .map_err(|error| error.to_string())?;
+    let (mode, scheme, max_write_len) = match connection_mode {
+        RnodeConnectionMode::Ble => (AndroidRnodeMode::Ble, "ble", 20),
+        RnodeConnectionMode::BluetoothClassic => {
+            (AndroidRnodeMode::BluetoothClassic, "bluetooth-classic", 4 * 1024)
+        }
+        RnodeConnectionMode::Usb | RnodeConnectionMode::Tcp => {
+            return Err(format!(
+                "RNode {} is not an Android Bluetooth bearer",
+                connection_mode.as_str()
+            ));
+        }
     };
-    let native = NativeRnodeBleSettings::for_peripheral(peripheral_id)
-        .with_peripheral_alias(settings.display_name.trim());
+    let label = if settings.display_name.trim().is_empty() {
+        format!("rnode-{scheme}:{peripheral_id}")
+    } else {
+        format!("rnode-{scheme}:{}", settings.display_name.trim())
+    };
+    let endpoint = format!("{scheme}://{peripheral_id}");
     let kiss = RnodeBleKissConfig {
         mtu: usize::from(lora.max_payload_bytes),
-        max_write_len: 20,
+        max_write_len,
         read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
         initial_frames: lora.probe_frames(),
         deferred_frames: lora.radio_config_frames(),
@@ -147,8 +162,10 @@ fn rnode_ble_wiring_from_settings(
 
     Ok(RnodeBleWiring {
         label,
+        endpoint,
+        mode,
+        device_id: peripheral_id,
         lora,
-        native,
         kiss,
     })
 }
@@ -181,7 +198,7 @@ fn rnode_runtime_interface_state(
         (
             "failed",
             Some(
-                "RNode BLE/KISS startup did not report a detected online radio within 30 seconds"
+                "RNode Bluetooth/KISS startup did not report a detected online radio within 30 seconds"
                     .to_string(),
             ),
         )
@@ -192,7 +209,7 @@ fn rnode_runtime_interface_state(
 
 #[cfg(target_os = "android")]
 async fn monitor_rnode_runtime_status(
-    runtime_status: rns_transport::iface::rnode_ble::RnodeBleRuntimeStatusHandle,
+    runtime_status: RnodeBearerRuntimeStatusHandle,
     iface: AddressHash,
     label: String,
     active_interface_registry: ActiveInterfaceRegistry,
@@ -264,14 +281,7 @@ fn spawn_rnode_ble_interface(
         }
     };
     match connection_mode {
-        RnodeConnectionMode::Ble => {}
-        RnodeConnectionMode::BluetoothClassic => {
-            bus.emit(NodeEvent::Error {
-                code: "InvalidConfig".to_string(),
-                message: "RNode Bluetooth Classic/SPP is selected, but the Android SPP backend is not wired into REM yet.".to_string(),
-            });
-            return;
-        }
+        RnodeConnectionMode::Ble | RnodeConnectionMode::BluetoothClassic => {}
         RnodeConnectionMode::Usb => {
             bus.emit(NodeEvent::Error {
                 code: "InvalidConfig".to_string(),
@@ -336,27 +346,18 @@ fn spawn_rnode_ble_interface(
                 }
             };
             let label = wiring.label;
-            let adapter =
-                NativeRnodeBleKissInterface::new(label.clone(), wiring.native, wiring.kiss)
-                    .with_rnode_validation(wiring.lora, Duration::from_millis(15_000))
-                    .with_detection_fallback_timeout(Duration::from_millis(5_000));
-            let Some(runtime_status) = adapter.runtime_status_handle() else {
-                let error = "RNode runtime status monitor was not initialized".to_string();
-                set_runtime_interface_readiness(
-                    &status,
-                    &bus,
-                    "rnode",
-                    RuntimeReadinessState::Failed,
-                    "RNode interface startup failed".to_string(),
-                    Some(error.clone()),
-                );
-                bus.emit(NodeEvent::Error {
-                    code: "Internal".to_string(),
-                    message: error,
-                });
-                tokio::time::sleep(RNODE_BLE_INTERFACE_RETRY_INTERVAL).await;
-                continue;
-            };
+            let mode = wiring.mode;
+            let endpoint = wiring.endpoint;
+            let backend = AndroidRnodeBackend::new(mode, wiring.device_id);
+            let generation = backend.generation();
+            let adapter = RnodeBearerKissInterface::new(
+                label.clone(),
+                endpoint,
+                backend,
+                wiring.kiss,
+                wiring.lora,
+            );
+            let runtime_status = adapter.runtime_status_handle();
 
             active.store(true, Ordering::Release);
             let context = transport
@@ -380,8 +381,14 @@ fn spawn_rnode_ble_interface(
             )
             .await;
             info!(
-                "rnode_ble: configured label={} peripheral={} region={} profile={} iface={}",
-                label, peripheral_id, settings.region, settings.profile, iface
+                "rnode_bluetooth: configured label={} peripheral={} mode={} generation={} region={} profile={} iface={}",
+                label,
+                peripheral_id,
+                settings.connection_mode,
+                generation,
+                settings.region,
+                settings.profile,
+                iface
             );
             emit_operational_notice(
                 &bus,
@@ -406,7 +413,7 @@ fn spawn_rnode_ble_interface(
                     status_for_task.clone(),
                     bus_for_task.clone(),
                 ));
-                NativeRnodeBleKissInterface::spawn(context).await;
+                RnodeBearerKissInterface::spawn(context).await;
                 runtime_monitor.abort();
                 if let Err(error) = runtime_monitor.await {
                     if !error.is_cancelled() {

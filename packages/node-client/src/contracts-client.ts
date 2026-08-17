@@ -2,7 +2,7 @@ import type {
   LogLevel, HubMode, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
   AnnounceClass, SendOutcome, LxmfDeliveryStatus, TransportDeliveryState, ApplicationAckState, SendMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
   LxmfFallbackStage, MessageMethod, MessageState, MessageDirection, ClientMode, ProjectionScope, PluginState, PluginCapabilityRecord,
-  PluginMessageDescriptorRecord, InstalledPluginRecord, PluginSensorRecord, SosState, SosTriggerSource, SosMessageKind, RnodeSettingsRecord, RnodeBleDeviceRecord,
+  PluginMessageDescriptorRecord, InstalledPluginRecord, PluginSensorRecord, SosState, SosTriggerSource, SosMessageKind, RnodeSettingsRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode,
   RnodeBlePairResult, RnodeUsbDeviceRecord, RnodeUsbPairResult, NodeConfig, NodeStatus, RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot, InterfaceStatusRecord,
   PeerChange, StatusChangedEvent, InterfaceStatusChangedEvent, AnnounceReceivedEvent, AnnounceRecord, PeerChangedEvent, PacketReceivedEvent, PacketSendOptions,
   PacketSentEvent, LxmfDeliveryEvent, MessageRecord, PeerRecord, ConversationRecord, SyncPhase, SyncStatus, SendLxmfRequest,
@@ -32,6 +32,8 @@ export interface ReticulumNodeClient {
   listPairedRnodeBluetoothDevices(): Promise<RnodeBleDeviceRecord[]>;
   scanRnodeBleDevices(timeoutMs?: number): Promise<RnodeBleDeviceRecord[]>;
   pairRnodeBleDevice(id: string): Promise<RnodeBlePairResult>;
+  scanRnodeBluetoothDevices(mode: RnodeBluetoothMode, timeoutMs?: number): Promise<RnodeBluetoothDeviceRecord[]>;
+  pairRnodeBluetoothDevice(id: string, mode: RnodeBluetoothMode): Promise<RnodeBlePairResult>;
   listRnodeUsbDevices(): Promise<RnodeUsbDeviceRecord[]>;
   requestRnodeUsbPermission(deviceId: number): Promise<{ deviceId: number; granted: boolean }>;
   startRnodeUsbBluetoothPairing(deviceId: number, bluetoothDeviceId?: string): Promise<RnodeUsbPairResult>;

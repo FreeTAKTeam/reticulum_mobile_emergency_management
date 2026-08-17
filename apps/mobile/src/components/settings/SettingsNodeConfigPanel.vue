@@ -21,6 +21,7 @@ interface NodeSettingsForm {
   broadcast: boolean;
   transportNodeEnabled: boolean;
   rnodeEnabled: boolean;
+  rnodeConnectionMode: "ble" | "bluetooth_classic";
   rnodePeripheralId: string;
   rnodeDisplayName: string;
   rnodeRegion: string;
@@ -283,6 +284,13 @@ defineExpose({ openPanel });
               Enable RNode Bluetooth LoRa
             </label>
             <label>
+              Bluetooth bearer
+              <select v-model="form.rnodeConnectionMode">
+                <option value="ble">Bluetooth Low Energy (BLE)</option>
+                <option value="bluetooth_classic">Bluetooth Classic (SPP)</option>
+              </select>
+            </label>
+            <label>
               RNode device id
               <input v-model="form.rnodePeripheralId" type="text" placeholder="Bluetooth address or peripheral id" />
             </label>
@@ -327,7 +335,7 @@ defineExpose({ openPanel });
               {{ rnodePairedLoading ? "Loading paired" : "Show paired Bluetooth" }}
             </button>
             <button type="button" :disabled="rnodeScanning" @click="scanRnodeDevices">
-              {{ rnodeScanning ? "Scanning" : "Scan RNode BLE" }}
+              {{ rnodeScanning ? "Scanning" : form.rnodeConnectionMode === "bluetooth_classic" ? "Scan RNode Classic" : "Scan RNode BLE" }}
             </button>
             <button type="button" :disabled="rnodeUsbPairing" @click="pairRnodeViaUsb">
               {{ rnodeUsbPairing ? "Pairing via USB" : "Pair via USB" }}

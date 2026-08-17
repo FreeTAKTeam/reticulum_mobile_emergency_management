@@ -52,10 +52,11 @@ use rmpv::Value as MsgPackValue;
 #[cfg(target_os = "android")]
 use rns_transport::iface::lora::LoraConfig;
 #[cfg(target_os = "android")]
-use rns_transport::iface::rnode_ble::{
-    NativeRnodeBleKissInterface, NativeRnodeBleSettings, RnodeBleKissConfig,
-    RNODE_BLE_READ_FRAME_TIMEOUT,
+use rns_transport::iface::rnode_bearer::{
+    RnodeBearerKissInterface, RnodeBearerRuntimeStatusHandle,
 };
+#[cfg(target_os = "android")]
+use rns_transport::iface::rnode_ble::{RnodeBleKissConfig, RNODE_BLE_READ_FRAME_TIMEOUT};
 #[cfg(target_os = "android")]
 use rns_transport::iface::{IfaceRole, InterfaceMode};
 use serde::de::DeserializeOwned;
@@ -90,6 +91,9 @@ use crate::types::{
 };
 
 use self::runtime_projection::RuntimeProjectionJournal;
+
+#[cfg(target_os = "android")]
+use crate::android_rnode_backend::{AndroidRnodeBackend, AndroidRnodeMode};
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
 const LXMF_DELIVERY_NAME: (&str, &str) = ("lxmf", "delivery");

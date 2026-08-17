@@ -31,6 +31,7 @@ const form = reactive({
   broadcast: nodeStore.settings.broadcast,
   transportNodeEnabled: nodeStore.settings.transportNodeEnabled,
   rnodeEnabled: nodeStore.settings.rnode.enabled,
+  rnodeConnectionMode: nodeStore.settings.rnode.connectionMode,
   rnodePeripheralId: nodeStore.settings.rnode.peripheralId,
   rnodeDisplayName: nodeStore.settings.rnode.displayName,
   rnodeRegion: nodeStore.settings.rnode.region,
@@ -65,6 +66,7 @@ const normalizedRnodeSettings = computed(() =>
   normalizeRnodeSettings(
     {
       enabled: form.rnodeEnabled,
+      connectionMode: form.rnodeConnectionMode,
       peripheralId: form.rnodePeripheralId,
       displayName: form.rnodeDisplayName,
       region: form.rnodeRegion,
@@ -139,6 +141,7 @@ function syncSettingsForm(): void {
   form.broadcast = nodeStore.settings.broadcast;
   form.transportNodeEnabled = nodeStore.settings.transportNodeEnabled;
   form.rnodeEnabled = nodeStore.settings.rnode.enabled;
+  form.rnodeConnectionMode = nodeStore.settings.rnode.connectionMode;
   form.rnodePeripheralId = nodeStore.settings.rnode.peripheralId;
   form.rnodeDisplayName = nodeStore.settings.rnode.displayName;
   form.rnodeRegion = nodeStore.settings.rnode.region;

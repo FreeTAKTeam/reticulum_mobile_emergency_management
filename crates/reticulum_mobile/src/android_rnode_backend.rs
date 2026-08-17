@@ -1,0 +1,264 @@
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use jni::objects::{JByteArray, JObject, JString, JValue};
+use jni::{JNIEnv, JavaVM};
+use rns_transport::iface::rnode_bearer::{RnodeBearerBackend, RnodeBearerInfo, RnodeBearerKind};
+use serde::Deserialize;
+
+const MANAGER_CLASS: &str = "network/reticulum/emergency/RNodeAndroidTransportManager";
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+static NEXT_GENERATION: AtomicI64 = AtomicI64::new(1);
+
+pub fn install_java_vm(vm: JavaVM) -> Result<(), String> {
+    JAVA_VM
+        .set(vm)
+        .map_err(|_| "Android Java VM is already installed".to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndroidRnodeMode {
+    Ble,
+    BluetoothClassic,
+}
+
+impl AndroidRnodeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ble => "ble",
+            Self::BluetoothClassic => "bluetooth_classic",
+        }
+    }
+}
+
+pub struct AndroidRnodeBackend {
+    generation: i64,
+    mode: AndroidRnodeMode,
+    device_id: String,
+    open_timeout: Duration,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    negotiated_mtu: Option<u16>,
+    opened: bool,
+}
+
+impl AndroidRnodeBackend {
+    #[must_use]
+    pub fn new(mode: AndroidRnodeMode, device_id: impl Into<String>) -> Self {
+        Self {
+            generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
+            mode,
+            device_id: device_id.into(),
+            open_timeout: Duration::from_secs(15),
+            read_timeout: Duration::from_millis(250),
+            write_timeout: Duration::from_secs(5),
+            negotiated_mtu: None,
+            opened: false,
+        }
+    }
+
+    #[must_use]
+    pub fn generation(&self) -> i64 {
+        self.generation
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidOpenResult {
+    generation: i64,
+    kind: String,
+    negotiated_mtu: Option<u16>,
+}
+
+impl RnodeBearerBackend for AndroidRnodeBackend {
+    async fn open(&mut self) -> Result<RnodeBearerInfo, String> {
+        let generation = self.generation;
+        let mode = self.mode;
+        let device_id = self.device_id.clone();
+        let timeout = self.open_timeout;
+        let result = tokio::task::spawn_blocking(move || {
+            jni_open(generation, mode.as_str(), &device_id, timeout)
+        })
+        .await
+        .map_err(|error| format!("join Android RNode open operation: {error}"))??;
+        if result.generation != generation {
+            return Err(format!(
+                "Android RNode generation mismatch: expected {generation}, got {}",
+                result.generation
+            ));
+        }
+        let kind = match result.kind.as_str() {
+            "ble" => RnodeBearerKind::Ble,
+            "bluetooth_classic" => RnodeBearerKind::BluetoothClassic,
+            value => {
+                return Err(format!(
+                    "Android returned unsupported RNode bearer kind: {value}"
+                ))
+            }
+        };
+        self.negotiated_mtu = result.negotiated_mtu;
+        self.opened = true;
+        Ok(RnodeBearerInfo {
+            kind,
+            negotiated_mtu: result.negotiated_mtu,
+        })
+    }
+
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
+        let generation = self.generation;
+        let timeout = self.read_timeout;
+        tokio::task::spawn_blocking(move || jni_read(generation, timeout))
+            .await
+            .map_err(|error| format!("join Android RNode read operation: {error}"))?
+    }
+
+    async fn write(&mut self, payload: Vec<u8>) -> Result<(), String> {
+        let generation = self.generation;
+        let timeout = self.write_timeout;
+        tokio::task::spawn_blocking(move || jni_write(generation, &payload, timeout))
+            .await
+            .map_err(|error| format!("join Android RNode write operation: {error}"))?
+    }
+
+    async fn close(&mut self) -> Result<(), String> {
+        let generation = self.generation;
+        self.opened = false;
+        self.negotiated_mtu = None;
+        tokio::task::spawn_blocking(move || jni_close(generation))
+            .await
+            .map_err(|error| format!("join Android RNode close operation: {error}"))?
+    }
+}
+
+fn jni_open(
+    generation: i64,
+    mode: &str,
+    device_id: &str,
+    timeout: Duration,
+) -> Result<AndroidOpenResult, String> {
+    with_env(|env| {
+        let java_mode = env
+            .new_string(mode)
+            .map_err(|error| jni_error(env, error))?;
+        let java_device = env
+            .new_string(device_id)
+            .map_err(|error| jni_error(env, error))?;
+        let mode_object = JObject::from(java_mode);
+        let device_object = JObject::from(java_device);
+        let value = env
+            .call_static_method(
+                MANAGER_CLASS,
+                "open",
+                "(JLjava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+                &[
+                    JValue::Long(generation),
+                    JValue::Object(&mode_object),
+                    JValue::Object(&device_object),
+                    JValue::Long(duration_millis(timeout)),
+                ],
+            )
+            .map_err(|error| jni_error(env, error))?;
+        let object = value.l().map_err(|error| jni_error(env, error))?;
+        if object.is_null() {
+            return Err("Android RNode open returned no result".to_string());
+        }
+        let json: String = env
+            .get_string(&JString::from(object))
+            .map_err(|error| jni_error(env, error))?
+            .into();
+        serde_json::from_str(&json)
+            .map_err(|error| format!("parse Android RNode open result: {error}"))
+    })
+}
+
+fn jni_read(generation: i64, timeout: Duration) -> Result<Option<Vec<u8>>, String> {
+    with_env(|env| {
+        let value = env
+            .call_static_method(
+                MANAGER_CLASS,
+                "read",
+                "(JJ)[B",
+                &[
+                    JValue::Long(generation),
+                    JValue::Long(duration_millis(timeout)),
+                ],
+            )
+            .map_err(|error| jni_error(env, error))?;
+        let object = value.l().map_err(|error| jni_error(env, error))?;
+        if object.is_null() {
+            return Ok(None);
+        }
+        env.convert_byte_array(JByteArray::from(object))
+            .map(Some)
+            .map_err(|error| jni_error(env, error))
+    })
+}
+
+fn jni_write(generation: i64, payload: &[u8], timeout: Duration) -> Result<(), String> {
+    with_env(|env| {
+        let bytes = env
+            .byte_array_from_slice(payload)
+            .map_err(|error| jni_error(env, error))?;
+        let bytes_object = JObject::from(bytes);
+        env.call_static_method(
+            MANAGER_CLASS,
+            "write",
+            "(J[BJ)V",
+            &[
+                JValue::Long(generation),
+                JValue::Object(&bytes_object),
+                JValue::Long(duration_millis(timeout)),
+            ],
+        )
+        .map_err(|error| jni_error(env, error))?;
+        Ok(())
+    })
+}
+
+fn jni_close(generation: i64) -> Result<(), String> {
+    with_env(|env| {
+        env.call_static_method(MANAGER_CLASS, "close", "(J)V", &[JValue::Long(generation)])
+            .map_err(|error| jni_error(env, error))?;
+        Ok(())
+    })
+}
+
+fn with_env<T>(operation: impl FnOnce(&mut JNIEnv<'_>) -> Result<T, String>) -> Result<T, String> {
+    let vm = JAVA_VM
+        .get()
+        .ok_or_else(|| "Android Java VM is not initialized".to_string())?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| format!("attach Android RNode JNI thread: {error}"))?;
+    operation(&mut env)
+}
+
+fn jni_error(env: &mut JNIEnv<'_>, error: jni::errors::Error) -> String {
+    let fallback = format!("Android RNode JNI call failed: {error}");
+    let Ok(true) = env.exception_check() else {
+        return fallback;
+    };
+    let Ok(throwable) = env.exception_occurred() else {
+        return fallback;
+    };
+    if env.exception_clear().is_err() {
+        return fallback;
+    }
+    let Ok(value) = env.call_method(throwable, "toString", "()Ljava/lang/String;", &[]) else {
+        return fallback;
+    };
+    let Ok(object) = value.l() else {
+        return fallback;
+    };
+    let java_message = JString::from(object);
+    let Ok(message) = env.get_string(&java_message) else {
+        return fallback;
+    };
+    message.into()
+}
+
+fn duration_millis(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+}

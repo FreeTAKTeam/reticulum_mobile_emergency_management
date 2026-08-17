@@ -141,7 +141,7 @@ onMounted(() => {
           <div class="section-heading">
             <p class="eyebrow">RNode Bluetooth LoRa</p>
             <h1>LoRa Interface</h1>
-            <p>Pair an RNode over Bluetooth LE and choose the shared REM radio profile.</p>
+            <p>Pair an RNode over BLE or Bluetooth Classic and choose the shared REM radio profile.</p>
           </div>
           <label class="toggle-card">
             <input v-model="wizard.draft.rnode.enabled" type="checkbox" />
@@ -150,6 +150,13 @@ onMounted(() => {
               <strong>Enable RNode LoRa</strong>
               <small>Runs alongside configured TCP interfaces.</small>
             </span>
+          </label>
+          <label class="field-block">
+            <span>Bluetooth bearer</span>
+            <select v-model="wizard.draft.rnode.connectionMode">
+              <option value="ble">Bluetooth Low Energy (BLE)</option>
+              <option value="bluetooth_classic">Bluetooth Classic (SPP)</option>
+            </select>
           </label>
           <div class="custom-row">
             <input
@@ -173,7 +180,7 @@ onMounted(() => {
             :disabled="wizard.rnodeScanning.value"
             @click="wizard.scanRnodeDevices"
           >
-            {{ wizard.rnodeScanning.value ? "Scanning" : "Scan RNode BLE" }}
+            {{ wizard.rnodeScanning.value ? "Scanning" : wizard.draft.rnode.connectionMode === "bluetooth_classic" ? "Scan RNode Classic" : "Scan RNode BLE" }}
           </button>
           <button
             type="button"
