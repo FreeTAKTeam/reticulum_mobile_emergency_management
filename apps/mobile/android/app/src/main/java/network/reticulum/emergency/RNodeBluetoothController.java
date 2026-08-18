@@ -37,6 +37,9 @@ final class RNodeBluetoothController {
 
     private static final String TAG = "ReticulumNode";
     private static final long PAIRING_TIMEOUT_MS = 45_000L;
+    // Android's public SDK omits the platform pairing-variant constants on some
+    // compile SDKs. The framework value for consent pairing is stable at 3.
+    private static final int PAIRING_VARIANT_CONSENT = 3;
 
     private final Context context;
     private final EventSink eventSink;
@@ -111,22 +114,7 @@ final class RNodeBluetoothController {
         }
         try {
             final BluetoothDevice device = adapter.getRemoteDevice(id.trim());
-            final JSObject payload = new JSObject();
-            payload.put("id", device.getAddress());
-            payload.put("address", device.getAddress());
-            payload.put("paired", device.getBondState() == BluetoothDevice.BOND_BONDED);
-            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
-                payload.put("bondState", "bonded");
-                call.resolve(payload);
-                return;
-            }
-            if (!createBond(device, mode)) {
-                call.reject("Android did not start Bluetooth pairing for this RNode.");
-                return;
-            }
-            payload.put("bondingStarted", true);
-            payload.put("bondState", RNodeBluetoothDevicePayload.bondStateLabel(device.getBondState()));
-            call.resolve(payload);
+            pairDeviceWithPin(call, device, null, call.getString("pin", null), mode);
         } catch (IllegalArgumentException ex) {
             call.reject("Invalid Bluetooth device id.", ex);
         } catch (SecurityException ex) {
@@ -146,7 +134,7 @@ final class RNodeBluetoothController {
             return;
         }
         try {
-            pairDeviceWithPin(call, adapter.getRemoteDevice(bluetoothDeviceId.trim()), null, pin);
+            pairDeviceWithPin(call, adapter.getRemoteDevice(bluetoothDeviceId.trim()), null, pin, "ble");
         } catch (IllegalArgumentException ex) {
             resolveManualPairing(
                 call,
@@ -159,7 +147,13 @@ final class RNodeBluetoothController {
         }
     }
 
-    private void pairDeviceWithPin(PluginCall call, BluetoothDevice device, Integer rssi, String pin) {
+    private void pairDeviceWithPin(
+        PluginCall call,
+        BluetoothDevice device,
+        Integer rssi,
+        String pin,
+        String mode
+    ) {
         if (device == null) {
             call.reject("RNode Bluetooth scan returned no device.");
             return;
@@ -190,7 +184,7 @@ final class RNodeBluetoothController {
         }
 
         try {
-            if (!createBondWithPreferredTransport(device) && finished.compareAndSet(false, true)) {
+            if (!createBond(device, mode) && finished.compareAndSet(false, true)) {
                 unregisterReceiverQuietly(receiver);
                 resolveManualPairing(call, pin, "Android did not start Bluetooth pairing for this RNode.", false);
                 return;
@@ -218,7 +212,11 @@ final class RNodeBluetoothController {
                     return;
                 }
                 if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(intent.getAction())) {
-                    handlePairingRequest(this, eventDevice, pin);
+                    final int pairingVariant = intent.getIntExtra(
+                        BluetoothDevice.EXTRA_PAIRING_VARIANT,
+                        BluetoothDevice.PAIRING_VARIANT_PIN
+                    );
+                    handlePairingRequest(this, eventDevice, pin, pairingVariant);
                     return;
                 }
                 if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) {
@@ -290,28 +288,33 @@ final class RNodeBluetoothController {
         return intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
     }
 
-    private void handlePairingRequest(BroadcastReceiver receiver, BluetoothDevice device, String pin) {
+    private void handlePairingRequest(
+        BroadcastReceiver receiver,
+        BluetoothDevice device,
+        String pin,
+        int pairingVariant
+    ) {
         try {
             if (pin != null && !pin.isEmpty()) {
                 device.setPin(pin.getBytes(StandardCharsets.UTF_8));
                 receiver.abortBroadcast();
                 publishStatus("Submitted RNode Bluetooth PIN to Android");
+                return;
+            }
+            if (pairingVariant != PAIRING_VARIANT_CONSENT) {
+                publishStatus("Waiting for the RNode Bluetooth PIN in Android");
+                return;
+            }
+            final java.lang.reflect.Method confirmPairing =
+                BluetoothDevice.class.getMethod("setPairingConfirmation", boolean.class);
+            if (Boolean.TRUE.equals(confirmPairing.invoke(device, true))) {
+                receiver.abortBroadcast();
+                publishStatus("Confirmed RNode Bluetooth pairing request");
             }
         } catch (SecurityException ex) {
             Log.w(TAG, "Bluetooth permission denied while setting RNode PIN", ex);
         } catch (Exception ex) {
             Log.w(TAG, "Failed to set RNode Bluetooth PIN", ex);
-        }
-    }
-
-    private boolean createBondWithPreferredTransport(BluetoothDevice device) {
-        try {
-            final java.lang.reflect.Method createBond = BluetoothDevice.class.getMethod("createBond", int.class);
-            final int transport = device.getType() == BluetoothDevice.DEVICE_TYPE_CLASSIC ? 1 : 2;
-            return Boolean.TRUE.equals(createBond.invoke(device, transport));
-        } catch (Exception ex) {
-            Log.w(TAG, "createBond(transport) failed, falling back to createBond()", ex);
-            return device.createBond();
         }
     }
 

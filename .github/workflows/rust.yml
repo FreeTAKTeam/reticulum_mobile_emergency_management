@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Immutable LXMF-rs commit providing the shared RNode bearer contract.
-  LXMF_RS_REF: 44060f9f43ff3895ce701c3a08fc1ef1b2b92f41
+  LXMF_RS_REF: b7e4018b06f1ef5cb4e226a2b353e1609ccf06f7
 
 jobs:
   web:

@@ -3,10 +3,12 @@
 Markdown is the authoritative documentation format for the current REM source.
 
 - [User manual](userManual.md)
+- [RNode Bluetooth connectivity on Android](rnode-bluetooth-connectivity.md)
 - [Architecture and transport contracts](architecture.md)
 - [Runtime ownership](runtime-modules.md)
 - [Android plugin system](plugins/android-plugin-system.md)
 - [Android development and release builds](../apps/mobile/README.md)
+- [1.3.0 release notes](releases/1.3.0.md)
 - [1.2.7-rc.1 stabilization audit](stabilization/1.2.7-rc.1-audit.md)
 - [1.2.7-rc.1 scenario results dashboard](stabilization/1.2.7-rc.1-results.html)
 - [1.2.9 release notes](releases/1.2.9.md)
@@ -27,4 +29,4 @@ maintained, are not release evidence, and can contain obsolete instructions:
 - `userManual.docx`
 
 Do not regenerate or distribute these snapshots as the current manual. Use
-`userManual.md` for REM `1.2.9`.
+`userManual.md` for REM `1.3.0`.

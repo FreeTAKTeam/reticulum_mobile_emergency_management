@@ -1,6 +1,6 @@
 # R.E.M. User Manual
 
-> This Markdown manual is authoritative for REM `1.2.9`. PDF and DOCX
+> This Markdown manual is authoritative for REM `1.3.0`. PDF and DOCX
 > files in `docs/` are archived snapshots and may describe older screens or
 > behavior.
 
@@ -323,17 +323,39 @@ different on narrow screens, but the sequence and recovery rules are the same.
 2. For normal internet or LAN access, keep **TCP** enabled and select a
    community server or enter `host:port`. For an isolated team, remove TCP
    endpoints and choose **Autonomous** mode.
-3. Enable an RNode only after its BLE, USB, or TCP connection has been selected
-   and tested. Save the settings.
+3. For LoRa, follow the
+   [RNode Bluetooth connectivity guide](rnode-bluetooth-connectivity.md).
+   The live Android bearers are BLE and Bluetooth Classic/SPP. USB can assist
+   Bluetooth pairing, but USB serial is not yet a live REM RNode bearer.
 4. Start or restart REM. The splash closes when the local Rust runtime is
    ready. A configured interface can still say **Pending**, **Failed**, or
    **Unsupported**; this is degraded network access, not a blocked app.
-5. Open **Settings > Node** to inspect each interface. Correct the endpoint,
-   radio selection, Android permission, or cable, then restart REM if needed.
+5. Open **More > Settings > Node Control** to inspect each interface. Correct
+   the endpoint, radio selection, Android permission, or cable, then restart
+   REM if needed.
 
 If RCH is disabled, misconfigured, or temporarily unreachable, Autonomous and
 local TCP operation still start. RCH directory refresh retries separately and
 must not keep the splash screen open.
+
+### Connect an RNode Over Bluetooth
+
+1. Update the RNode firmware, enable Bluetooth, and put the radio into pairing
+   mode. Stop any other program that is using the RNode.
+2. Open **More > Settings > Node Config > LoRa / RNode**.
+3. Select **Bluetooth Low Energy (BLE)** or **Bluetooth Classic (SPP)**.
+4. Tap **Show paired Bluetooth** for an existing bond, or use the matching
+   **Scan RNode** button. On Android 15/16, prefer REM's in-app BLE scan.
+5. Select the RNode, accept the Android pairing prompt if shown, and turn on
+   **Enable RNode Bluetooth LoRa**.
+6. Confirm the legal region, frequency, and shared REM LoRa profile, then tap
+   **Save**. REM restarts the running node when RNode settings change.
+7. Open **Node Control** and wait up to 30 seconds for the RNode interface to
+   report `connected`. The local app saying **Ready** is not enough; verify the
+   RNode row and packet counters.
+
+See [Connect an RNode to REM on Android](rnode-bluetooth-connectivity.md) for
+USB-assisted pairing, firmware guidance, verification, and troubleshooting.
 
 ### Discover, Save, Connect, And Chat
 
