@@ -130,6 +130,12 @@ it does not turn USB into the live REM transport.
    save and connect the peer, send a chat message, and confirm delivery on the
    other phone.
 
+REM 1.3 keeps one owner for the Android notification read at a time. A quiet
+radio may therefore remain in a bounded read wait for a short period during
+shutdown or reconnect; that is expected. A successful `connected` state alone
+is not a traffic proof—confirm a complete announce, link activation, and an
+acknowledged message.
+
 An app-level **Ready** badge with an RNode interface still marked `connecting`
 or `failed` is degraded operation, not proof of LoRa connectivity. TCP can keep
 the local app usable while the RNode retries independently.

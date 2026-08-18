@@ -513,9 +513,11 @@ Ownership split:
 - Android owns platform permissions, adapter state, discovery, bonding, BLE GATT, Classic RFCOMM, operation deadlines, and deterministic resource closure. `RNodeAndroidTransportManager` is service-owned and rejects callbacks from superseded generations.
 - TypeScript owns only setup/settings drafts and persists the selected RNode connection mode, identifier, display name, region, and profile.
 - LXMF-rs owns KISS framing, RNode probe/configuration, radio state, flow control, MTU validation, and packet validation through `RnodeBearerBackend` and the shared bearer KISS runtime. Daemon-native btleplug BLE remains behind `rnode-ble`; REM does not compile or invoke it.
+- A bearer read owns its complete bounded wait. The REM Android backend waits on the generation-scoped Java notification queue, and the LXMF-rs interface does not wrap that wait in a shorter timeout that could leave a second native reader competing for the next notification.
 
 Mode behavior:
 - `ble` is the legacy-compatible default. Android opens Nordic UART GATT, enables notifications with bounded deadlines, and treats MTU negotiation as best effort after the default data path is ready.
+- BLE KISS chunks use Nordic UART write-without-response semantics, matching the native bearer and keeping outbound chunk writes from serializing on write callbacks that are unrelated to inbound notifications.
 - A missing legacy connection-mode field migrates to `ble`; an explicitly unknown value is rejected as `InvalidConfig` at the node-client/JNI/Rust boundary instead of being silently converted to BLE.
 - `bluetooth_classic` uses bonded devices plus active Classic discovery and the standard SPP RFCOMM UUID. Closing the socket unblocks reads; Java never reconnects autonomously.
 - `usb` is carried through settings and rejected with an explicit backend-not-wired error until the Android USB serial backend is connected.

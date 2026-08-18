@@ -118,15 +118,20 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
             final CountDownLatch completion = new CountDownLatch(1);
             pendingWrite.set(completion);
             writeError.set(null);
+            final int writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
             final int result;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 result = activeGatt.writeCharacteristic(
                     characteristic,
                     payload,
-                    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    writeType
                 );
             } else {
-                characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                // Nordic UART RX is the RNode command/data ingress. Match the
+                // native btleplug bearer and use write-without-response so a
+                // burst of KISS chunks does not serialize on callbacks that
+                // are unrelated to the notification stream.
+                characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
                 characteristic.setValue(payload);
                 result = activeGatt.writeCharacteristic(characteristic)
                     ? BluetoothGatt.GATT_SUCCESS
@@ -134,6 +139,12 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
             }
             if (result != BluetoothGatt.GATT_SUCCESS) {
                 throw new IOException("Android rejected RNode BLE write: " + result);
+            }
+            if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
+                // Do not make the notification reader wait for a write
+                // callback in this mode. The immediate GATT result is the
+                // acknowledgement available for this RNode ingress path.
+                return;
             }
             if (!completion.await(Math.max(1L, timeoutMs), TimeUnit.MILLISECONDS)) {
                 close();
