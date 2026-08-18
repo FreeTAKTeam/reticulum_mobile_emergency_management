@@ -70,8 +70,8 @@ fn spawn_propagation_maintenance_task(state: &NodeRuntimeState, bus: &EventBus) 
             interval.tick().await;
             // Automatic relay polling can fan out across several candidates.
             // Do not put that background workload on an RNode-only LoRa link;
-            // explicit direct sends remain available and a relay-capable
-            // interface will resume polling as soon as it becomes active.
+            // explicit propagation sync and direct sends remain available; a
+            // relay-capable interface resumes polling as soon as it is active.
             if !has_active_relay_transport_interface(&state).await {
                 continue;
             }
