@@ -140,12 +140,11 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
             if (result != BluetoothGatt.GATT_SUCCESS) {
                 throw new IOException("Android rejected RNode BLE write: " + result);
             }
-            if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
-                // Do not make the notification reader wait for a write
-                // callback in this mode. The immediate GATT result is the
-                // acknowledgement available for this RNode ingress path.
-                return;
-            }
+            // WRITE_TYPE_NO_RESPONSE controls the remote ATT acknowledgement;
+            // Android still serializes GATT operations and reports completion
+            // through onCharacteristicWrite. Waiting for that callback keeps
+            // the next KISS chunk from being rejected with
+            // ERROR_GATT_WRITE_REQUEST_BUSY (201).
             if (!completion.await(Math.max(1L, timeoutMs), TimeUnit.MILLISECONDS)) {
                 close();
                 throw new TimeoutException("RNode BLE write timed out");
