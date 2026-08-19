@@ -9,9 +9,9 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current Android source version is `1.2.9`, built against the immutable
-LXMF-rs `v0.9.9` release at
-`51fd3beebdace78d6c7f38748c6bcfe452032559`.
+The current Android source version is `1.3.0`, built against LXMF-rs `v0.9.9`
+at the immutable bearer-neutral RNode transport revision
+`b7e4018b06f1ef5cb4e226a2b353e1609ccf06f7`.
 Automated validation and the two-phone TCP matrix are release gates; the
 remaining physical LoRa and mixed-interface rows are documented preview scope
 in the [manual release matrix](docs/rem-1.2-manual-release-gate.md).
@@ -40,6 +40,11 @@ These screenshots were captured from the current app UI.
 - Discover, save, and connect to trusted peers.
 - Create local color teams, exchange them by JSON or QR code, or use RCH-owned teams to scope every outbound recipient set while keeping shared timelines intact.
 - Configure SOS emergency behavior, telemetry, peer lists, and Reticulum settings.
+
+## Connect an RNode
+
+For Android BLE, Bluetooth Classic/SPP, USB-assisted pairing, verification, and
+recovery steps, use the [RNode Bluetooth connectivity guide](docs/rnode-bluetooth-connectivity.md).
 
 ## Events And MECP
 

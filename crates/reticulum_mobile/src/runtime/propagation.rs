@@ -203,6 +203,9 @@ async fn sync_auto_propagation_node(state: &NodeRuntimeState, bus: &EventBus) {
         messaging.list_announces()
     };
     let current_destination = state.active_propagation_node_hex.lock().await.clone();
+    // This helper only selects the relay. Automatic polling remains gated in
+    // `spawn_propagation_maintenance_task`; explicit sync must still select a
+    // relay when an RNode is the only active transport.
     let desired_destination = announces
         .iter()
         .filter(|record| record.destination_kind == "lxmf_propagation")

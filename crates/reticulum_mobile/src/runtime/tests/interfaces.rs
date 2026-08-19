@@ -260,6 +260,7 @@ fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     assert_eq!(wiring.device_id, "AA:BB:CC:DD:EE:FF");
     assert_eq!(wiring.endpoint, "ble://AA:BB:CC:DD:EE:FF");
     assert_eq!(wiring.mode, AndroidRnodeMode::Ble);
+    assert_eq!(wiring.lora.max_payload_bytes, 508);
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert_eq!(wiring.kiss.max_write_len, 20);
     assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
@@ -285,6 +286,7 @@ fn rnode_ble_wiring_falls_back_to_peripheral_label_without_display_name() {
 
     assert_eq!(wiring.label, "rnode-ble:AA:BB:CC:DD:EE:FF");
     assert_eq!(wiring.device_id, "AA:BB:CC:DD:EE:FF");
+    assert_eq!(wiring.lora.max_payload_bytes, 508);
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
@@ -331,6 +333,7 @@ fn rnode_lora_config_accepts_supported_regions_and_exact_frequency_override() {
         };
         let config = rnode_lora_config(&settings).expect("supported region");
         assert_eq!(config.frequency_hz, frequency_hz);
+        assert_eq!(config.max_payload_bytes, 508);
     }
 }
 

@@ -23,6 +23,7 @@ include!("runtime/receive.rs");
 include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");
 include!("runtime/hub.rs");
+include!("runtime/rnode_status.rs");
 include!("runtime/interface_config.rs");
 include!("runtime/network_interfaces.rs");
 include!("runtime/background_maintenance.rs");

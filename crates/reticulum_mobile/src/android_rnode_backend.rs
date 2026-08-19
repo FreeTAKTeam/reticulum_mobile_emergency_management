@@ -2,19 +2,34 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use jni::objects::{JByteArray, JObject, JString, JValue};
+use jni::objects::{GlobalRef, JByteArray, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
 use rns_transport::iface::rnode_bearer::{RnodeBearerBackend, RnodeBearerInfo, RnodeBearerKind};
 use serde::Deserialize;
 
 const MANAGER_CLASS: &str = "network/reticulum/emergency/RNodeAndroidTransportManager";
-static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+static ANDROID_JNI: OnceLock<AndroidJniRuntime> = OnceLock::new();
 static NEXT_GENERATION: AtomicI64 = AtomicI64::new(1);
 
+struct AndroidJniRuntime {
+    vm: JavaVM,
+    manager_class: GlobalRef,
+}
+
 pub fn install_java_vm(vm: JavaVM) -> Result<(), String> {
-    JAVA_VM
-        .set(vm)
-        .map_err(|_| "Android Java VM is already installed".to_string())
+    let manager_class = {
+        let mut env = vm
+            .get_env()
+            .map_err(|error| format!("get Android JNI environment: {error}"))?;
+        let local_class = env
+            .find_class(MANAGER_CLASS)
+            .map_err(|error| jni_error(&mut env, error))?;
+        env.new_global_ref(local_class)
+            .map_err(|error| jni_error(&mut env, error))?
+    };
+    ANDROID_JNI
+        .set(AndroidJniRuntime { vm, manager_class })
+        .map_err(|_| "Android JNI runtime is already installed".to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,7 +153,7 @@ fn jni_open(
     device_id: &str,
     timeout: Duration,
 ) -> Result<AndroidOpenResult, String> {
-    with_env(|env| {
+    with_env(|env, manager_class| {
         let java_mode = env
             .new_string(mode)
             .map_err(|error| jni_error(env, error))?;
@@ -149,7 +164,7 @@ fn jni_open(
         let device_object = JObject::from(java_device);
         let value = env
             .call_static_method(
-                MANAGER_CLASS,
+                manager_class,
                 "open",
                 "(JLjava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
                 &[
@@ -174,10 +189,10 @@ fn jni_open(
 }
 
 fn jni_read(generation: i64, timeout: Duration) -> Result<Option<Vec<u8>>, String> {
-    with_env(|env| {
+    with_env(|env, manager_class| {
         let value = env
             .call_static_method(
-                MANAGER_CLASS,
+                manager_class,
                 "read",
                 "(JJ)[B",
                 &[
@@ -197,13 +212,13 @@ fn jni_read(generation: i64, timeout: Duration) -> Result<Option<Vec<u8>>, Strin
 }
 
 fn jni_write(generation: i64, payload: &[u8], timeout: Duration) -> Result<(), String> {
-    with_env(|env| {
+    with_env(|env, manager_class| {
         let bytes = env
             .byte_array_from_slice(payload)
             .map_err(|error| jni_error(env, error))?;
         let bytes_object = JObject::from(bytes);
         env.call_static_method(
-            MANAGER_CLASS,
+            manager_class,
             "write",
             "(J[BJ)V",
             &[
@@ -218,21 +233,24 @@ fn jni_write(generation: i64, payload: &[u8], timeout: Duration) -> Result<(), S
 }
 
 fn jni_close(generation: i64) -> Result<(), String> {
-    with_env(|env| {
-        env.call_static_method(MANAGER_CLASS, "close", "(J)V", &[JValue::Long(generation)])
+    with_env(|env, manager_class| {
+        env.call_static_method(manager_class, "close", "(J)V", &[JValue::Long(generation)])
             .map_err(|error| jni_error(env, error))?;
         Ok(())
     })
 }
 
-fn with_env<T>(operation: impl FnOnce(&mut JNIEnv<'_>) -> Result<T, String>) -> Result<T, String> {
-    let vm = JAVA_VM
+fn with_env<T>(
+    operation: impl FnOnce(&mut JNIEnv<'_>, &GlobalRef) -> Result<T, String>,
+) -> Result<T, String> {
+    let runtime = ANDROID_JNI
         .get()
-        .ok_or_else(|| "Android Java VM is not initialized".to_string())?;
-    let mut env = vm
+        .ok_or_else(|| "Android JNI runtime is not initialized".to_string())?;
+    let mut env = runtime
+        .vm
         .attach_current_thread()
         .map_err(|error| format!("attach Android RNode JNI thread: {error}"))?;
-    operation(&mut env)
+    operation(&mut env, &runtime.manager_class)
 }
 
 fn jni_error(env: &mut JNIEnv<'_>, error: jni::errors::Error) -> String {

@@ -87,7 +87,11 @@ fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, Strin
         }
         value => return Err(format!("unsupported RNode LoRa profile: {value}")),
     }
-    config.validate()?;
+    // RNode interfaces use the hardware transport MTU. Keeping the generic
+    // LoRa default (220) rejects normal signed LXMF announces before they ever
+    // reach the radio.
+    config.max_payload_bytes = 508;
+    config.validate_rnode()?;
     Ok(config)
 }
 
@@ -218,35 +222,16 @@ async fn monitor_rnode_runtime_status(
 ) {
     let startup_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let snapshot = runtime_status.to_json();
-        let (next_state, next_error) = rnode_runtime_interface_state(
-            &snapshot,
+        publish_rnode_runtime_status(
+            &runtime_status,
+            iface,
+            &label,
+            &active_interface_registry,
+            &status,
+            &bus,
             tokio::time::Instant::now() >= startup_deadline,
-        );
-        let update = {
-            let mut registry = active_interface_registry.lock().await;
-            registry.get_mut(&iface).and_then(|record| {
-                if record.state == next_state && record.last_error == next_error {
-                    return None;
-                }
-                record.state = next_state.to_string();
-                record.last_error = next_error.clone();
-                Some(record.clone())
-            })
-        };
-        if let Some(update) = update {
-            info!(
-                "rnode_ble: runtime state changed label={} iface={} state={}",
-                label, iface, next_state
-            );
-            publish_interface_registry_snapshot(
-                &active_interface_registry,
-                &status,
-                &bus,
-                Some(update),
-            )
-            .await;
-        }
+        )
+        .await;
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
@@ -369,10 +354,11 @@ fn spawn_rnode_ble_interface(
             // Creating the context does not mean that Bluetooth or the KISS session is
             // usable. Keep readiness pending until the RNode is detected and online.
             let status_update = new_interface_status(iface, label.clone(), "connecting");
-            active_interface_registry
-                .lock()
-                .await
-                .insert(iface, status_update.clone());
+            {
+                let mut registry = active_interface_registry.lock().await;
+                registry.retain(|_, record| record.label != label);
+                registry.insert(iface, status_update.clone());
+            }
             publish_interface_registry_snapshot(
                 &active_interface_registry,
                 &status,
@@ -405,8 +391,9 @@ fn spawn_rnode_ble_interface(
             let bus_for_task = bus.clone();
             let label_for_task = label.clone();
             tokio::spawn(async move {
+                let runtime_status_for_monitor = runtime_status.clone();
                 let runtime_monitor = tokio::spawn(monitor_rnode_runtime_status(
-                    runtime_status,
+                    runtime_status_for_monitor,
                     iface,
                     label_for_task.clone(),
                     registry_for_task.clone(),
@@ -423,17 +410,19 @@ fn spawn_rnode_ble_interface(
                         );
                     }
                 }
-                let removed = registry_for_task.lock().await.remove(&iface);
-                if let Some(mut removed) = removed {
-                    removed.state = "disconnected".to_string();
-                    publish_interface_registry_snapshot(
-                        &registry_for_task,
-                        &status_for_task,
-                        &bus_for_task,
-                        Some(removed),
-                    )
-                    .await;
-                }
+                // The interface can fail between monitor polls. Publish one final sample and
+                // retain it until the next retry starts so the actionable startup error is not
+                // replaced by a generic disconnected/pending state.
+                publish_rnode_runtime_status(
+                    &runtime_status,
+                    iface,
+                    &label_for_task,
+                    &registry_for_task,
+                    &status_for_task,
+                    &bus_for_task,
+                    true,
+                )
+                .await;
                 active_for_task.store(false, Ordering::Release);
                 warn!(
                     "rnode_ble: stopped interface label={} iface={}; retrying",

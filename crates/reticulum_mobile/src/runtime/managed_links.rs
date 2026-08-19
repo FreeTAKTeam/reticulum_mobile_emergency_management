@@ -183,9 +183,9 @@ async fn add_desired_managed_peer_link_and_schedule(
     reason: &str,
 ) {
     state.managed_peer_links.add_desired(target.clone()).await;
-    if !has_active_reticulum_interface(state).await {
+    if !has_active_relay_transport_interface(state).await {
         info!(
-            "[link][maintain] destination={} status=deferred reason={} detail=no-active-reticulum-interface",
+            "[link][maintain] destination={} status=deferred reason={} detail=no-proactive-session-transport",
             target.destination_hex, reason,
         );
         return;
@@ -314,7 +314,13 @@ async fn ensure_managed_peer_link(
 }
 
 async fn maintain_managed_peer_links_once(state: &NodeRuntimeState, bus: &EventBus) {
-    if !has_active_reticulum_interface(state).await {
+    // A LoRa RNode is a constrained, half-duplex bearer. Proactively opening a
+    // link to every saved peer causes repeated link requests to occupy the
+    // airtime queue and can delay a valid proof beyond the link activation
+    // deadline. RNode-only operation still establishes links through explicit
+    // connect and send paths; warm-link maintenance is reserved for transports
+    // that can sustain background sessions.
+    if !has_active_relay_transport_interface(state).await {
         return;
     }
     let targets = state.managed_peer_links.desired_targets().await;

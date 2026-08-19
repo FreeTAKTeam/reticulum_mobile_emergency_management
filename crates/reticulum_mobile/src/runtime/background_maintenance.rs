@@ -68,6 +68,13 @@ fn spawn_propagation_maintenance_task(state: &NodeRuntimeState, bus: &EventBus) 
         let mut interval = tokio::time::interval(AUTO_PROPAGATION_SYNC_INTERVAL);
         loop {
             interval.tick().await;
+            // Automatic relay polling can fan out across several candidates.
+            // Do not put that background workload on an RNode-only LoRa link;
+            // explicit propagation sync and direct sends remain available; a
+            // relay-capable interface resumes polling as soon as it is active.
+            if !has_active_relay_transport_interface(&state).await {
+                continue;
+            }
             sync_auto_propagation_node(&state, &bus).await;
             let Some(relay_hex) = state.active_propagation_node_hex.lock().await.clone() else {
                 continue;
