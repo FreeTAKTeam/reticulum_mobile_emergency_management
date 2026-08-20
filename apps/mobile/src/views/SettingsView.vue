@@ -12,7 +12,12 @@ import SettingsTeamsPanel from "../components/settings/SettingsTeamsPanel.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { useNodeStore } from "../stores/nodeStore";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
-import { normalizeRnodeSettings } from "../utils/rnodeProfiles";
+import {
+  RNODE_FREQUENCY_MAX_HZ,
+  RNODE_FREQUENCY_MIN_HZ,
+  isRnodeFrequencyHz,
+  normalizeRnodeSettings,
+} from "../utils/rnodeProfiles";
 
 const nodeStore = useNodeStore();
 const router = useRouter();
@@ -100,6 +105,7 @@ const hasMainSettingsChanges = computed(() =>
   || form.broadcast !== nodeStore.settings.broadcast
   || form.transportNodeEnabled !== nodeStore.settings.transportNodeEnabled
   || JSON.stringify(normalizedTcpClients.value) !== JSON.stringify(persistedTcpClients.value)
+  || !isRnodeFrequencyHz(form.rnodeFrequencyHz)
   || JSON.stringify(normalizedRnodeSettings.value) !== JSON.stringify(normalizeRnodeSettings(nodeStore.settings.rnode))
   || form.telemetryEnabled !== nodeStore.settings.telemetry.enabled
   || normalizeTelemetryPublishIntervalSeconds(form.telemetryPublishIntervalSeconds)
@@ -171,6 +177,10 @@ onMounted(() => {
 
 async function applySettings(): Promise<void> {
   if (!hasUnsavedSettings.value || savingSettings.value) {
+    return;
+  }
+  if (!isRnodeFrequencyHz(form.rnodeFrequencyHz)) {
+    runtimeFeedback.value = `RNode LoRa frequency must be between ${RNODE_FREQUENCY_MIN_HZ} and ${RNODE_FREQUENCY_MAX_HZ} Hz.`;
     return;
   }
   const previousDisplayName = nodeStore.settings.displayName;
@@ -341,6 +351,10 @@ function openNodeControlPanel(): void {
       </div>
     </header>
 
+    <p v-if="runtimeFeedback" class="feedback settings-feedback" role="status">
+      {{ runtimeFeedback }}
+    </p>
+
     <SettingsNodeConfigPanel
       ref="nodeControlPanel"
       :form="form"
@@ -357,7 +371,7 @@ function openNodeControlPanel(): void {
 
     <SosEmergencyCard ref="sosCard" />
 
-    <SettingsNodeControlPanel :external-feedback="runtimeFeedback" />
+    <SettingsNodeControlPanel />
 
     <SettingsAboutPanel />
   </section>

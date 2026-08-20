@@ -9,10 +9,13 @@ import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupW
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   DEFAULT_RNODE_SETTINGS,
+  RNODE_FREQUENCY_MAX_HZ,
+  RNODE_FREQUENCY_MIN_HZ,
   RNODE_PROFILE_SPECS,
   RNODE_REGION_SPECS,
   inferRnodeRegionFromCoordinates,
   inferRnodeRegionFromTimezone,
+  isRnodeFrequencyHz,
   normalizeRnodeRegion,
   normalizeRnodeSettings,
   resolveRnodeFrequencyForRegionChange,
@@ -109,7 +112,6 @@ export function useSetupWizard() {
     markSetupWizardOpened();
     runDetachedStoreTask(nodeStore, "setup", "permission refresh", refreshPermissions);
   }
-
   async function refreshPermissions(): Promise<void> {
     const snapshot = await checkSetupPermissions();
     permissions.location = snapshot.location;
@@ -126,7 +128,6 @@ export function useSetupWizard() {
     }
     draft.tcpClients = [...next];
   }
-
   function addCustomTcpEndpoint(): void {
     const normalized = normalizeWizardTcpEndpoint(customTcpEndpoint.value);
     if (!normalized) {
@@ -139,7 +140,6 @@ export function useSetupWizard() {
     customTcpEndpoint.value = "";
     feedback.value = "";
   }
-
   function removeTcpEndpoint(endpoint: string): void {
     draft.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
   }
@@ -161,7 +161,6 @@ export function useSetupWizard() {
   async function requestLocation(): Promise<void> {
     permissions.location = await requestLocationPermission();
   }
-
   async function requestNotifications(): Promise<void> {
     permissions.notifications = await requestNotificationPermission();
   }
@@ -169,15 +168,16 @@ export function useSetupWizard() {
   async function requestBluetooth(): Promise<void> {
     permissions.bluetooth = await requestRnodeBluetoothPermission();
   }
-
   async function inferRnodeRegion(): Promise<void> {
     const previousRegion = draft.rnode.region;
-    let nextRegion = previousRegion;
-    try {
-      const fix = await telemetryService.getCurrentPosition();
-      nextRegion = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
-    } catch {
-      nextRegion = inferRnodeRegionFromTimezone();
+    const locationRegion = await telemetryService.getCurrentPosition()
+      .then((fix) => inferRnodeRegionFromCoordinates(fix.lat, fix.lon))
+      .catch(() => undefined);
+    const nextRegion = locationRegion ?? inferRnodeRegionFromTimezone();
+    const source = locationRegion ? "device location" : "device time zone";
+    if (!nextRegion) {
+      feedback.value = "REM could not safely infer a LoRa region. Select the legal region and frequency manually.";
+      return;
     }
     draft.rnode.region = nextRegion;
     draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
@@ -185,6 +185,7 @@ export function useSetupWizard() {
       nextRegion,
       draft.rnode.frequencyHz,
     );
+    feedback.value = `Inferred ${nextRegion} from ${source}. Confirm the legal frequency before saving.`;
   }
   function selectRnodeRegion(event: Event): void {
     const target = event.target;
@@ -198,7 +199,6 @@ export function useSetupWizard() {
       draft.rnode.frequencyHz,
     );
   }
-
   async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
     if (permissions.bluetooth !== "granted") {
       permissions.bluetooth = await requestRnodeBluetoothPermission();
@@ -413,6 +413,10 @@ export function useSetupWizard() {
   async function finish(): Promise<void> {
     if (!normalizedDisplayName.value || saving.value) {
       feedback.value = "Set a call sign before finishing setup.";
+      return;
+    }
+    if (!isRnodeFrequencyHz(draft.rnode.frequencyHz)) {
+      feedback.value = `RNode LoRa frequency must be between ${RNODE_FREQUENCY_MIN_HZ} and ${RNODE_FREQUENCY_MAX_HZ} Hz.`;
       return;
     }
     saving.value = true;

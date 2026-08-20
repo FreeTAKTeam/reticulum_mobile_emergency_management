@@ -33,6 +33,24 @@ describe("RNode settings conversion", () => {
       /Unsupported RNode connection mode/,
     );
   });
+
+  it("rejects explicit unknown LoRa regions and profiles", () => {
+    expect(() => normalizeRnodeSettings({ region: "XX000" })).toThrow(
+      /Unsupported RNode LoRa region/,
+    );
+    expect(() => normalizeRnodeSettings({ profile: "REM-TYPO-v1" })).toThrow(
+      /Unsupported RNode LoRa profile/,
+    );
+  });
+
+  it("replaces out-of-range LoRa frequencies with the selected regional default", () => {
+    expect(normalizeRnodeSettings({ region: "EU868", frequencyHz: 1 }).frequencyHz)
+      .toBe(868_000_000);
+    expect(normalizeRnodeSettings({ region: "US915", frequencyHz: 3_000_000_001 }).frequencyHz)
+      .toBe(915_000_000);
+    expect(normalizeRnodeSettings({ region: "US915", frequencyHz: 433_000_000 }).frequencyHz)
+      .toBe(433_000_000);
+  });
 });
 
 describe("app settings conversion", () => {

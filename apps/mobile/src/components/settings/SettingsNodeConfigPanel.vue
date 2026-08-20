@@ -7,6 +7,8 @@ import { useTelemetryStore } from "../../stores/telemetryStore";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../../utils/tcpCommunityServers";
 import { useSettingsRnode } from "./useSettingsRnode";
 import {
+  RNODE_FREQUENCY_MAX_HZ,
+  RNODE_FREQUENCY_MIN_HZ,
   RNODE_REGION_SPECS,
   normalizeRnodeRegion,
   resolveRnodeFrequencyForRegionChange,
@@ -312,7 +314,8 @@ defineExpose({ openPanel });
               <input
                 v-model.number="form.rnodeFrequencyHz"
                 type="number"
-                min="1"
+                :min="RNODE_FREQUENCY_MIN_HZ"
+                :max="RNODE_FREQUENCY_MAX_HZ"
                 step="1000"
                 :placeholder="String(rnodeRegionDefaultFrequencyHz(normalizeRnodeRegion(form.rnodeRegion)))"
               />

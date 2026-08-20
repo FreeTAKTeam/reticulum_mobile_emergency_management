@@ -180,6 +180,32 @@ test("operators can save manual RNode LoRa configuration", async ({ page }) => {
   });
 });
 
+test("out-of-range RNode LoRa frequency is not persisted", async ({ page }) => {
+  await seedAppStorage(page, {
+    settings: defaultSettings,
+  });
+
+  await gotoApp(page, "/settings");
+
+  const runtimePanel = page.locator("details").filter({
+    has: page.getByRole("heading", { name: "Node Config" }),
+  });
+  const settingsBefore = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+  await runtimePanel.locator("summary").click();
+  await runtimePanel.getByLabel("Frequency (Hz)").fill("1");
+  await page.getByRole("button", { name: "Save" }).click();
+
+  await expect(page.getByText(
+    "RNode LoRa frequency must be between 137000000 and 3000000000 Hz.",
+  )).toBeVisible();
+  const storedSettings = await page.evaluate(() =>
+    JSON.parse(window.localStorage.getItem("reticulum.mobile.settings.v1") ?? "{}"),
+  );
+  expect(storedSettings).toEqual(settingsBefore);
+});
+
 test("telemetry publish interval above 60 seconds activates save and persists", async ({ page }) => {
   await seedAppStorage(page, {
     settings: {
