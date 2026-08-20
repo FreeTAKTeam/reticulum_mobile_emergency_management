@@ -32,20 +32,16 @@ fn clear_last_error() {
 fn take_last_error() -> Option<LastError> {
     LAST_JNI_ERROR.with(|slot| slot.borrow_mut().take())
 }
-
 #[cfg(test)]
 fn current_last_error() -> Option<LastError> {
     LAST_JNI_ERROR.with(|slot| slot.borrow().clone())
 }
-
 fn set_last_node_error(err: NodeError) {
     set_last_node_error_with_operation(None, err);
 }
-
 fn set_last_node_error_for(operation: &'static str, err: NodeError) {
     set_last_node_error_with_operation(Some(operation), err);
 }
-
 fn set_last_node_error_with_operation(operation: Option<&str>, err: NodeError) {
     let code = crate::error_context::node_error_code(&err);
     if let Some(context) = crate::error_context::take_internal_failure(code) {
@@ -64,7 +60,6 @@ fn set_last_node_error_with_operation(operation: Option<&str>, err: NodeError) {
 fn node_error_code_is_retryable(code: &str) -> bool {
     crate::error_context::node_error_code_is_retryable(code)
 }
-
 fn contain_jni_panic<T>(operation: &'static str, action: impl FnOnce() -> T) -> T
 where
     T: JniNodeFailure,
@@ -88,13 +83,11 @@ where
         }
     }
 }
-
 fn jstring_to_rust(env: &mut JNIEnv, value: JString) -> Result<String, String> {
     env.get_string(&value)
         .map_err(|e| format!("jni string conversion failed: {e}"))
         .map(|s| s.into())
 }
-
 fn make_jstring_or_null(env: &mut JNIEnv, value: String) -> jstring {
     match env.new_string(value) {
         Ok(output) => output.into_raw(),
@@ -115,7 +108,6 @@ fn parse_hub_mode(value: Option<&str>) -> HubMode {
         _ => HubMode::Autonomous {},
     }
 }
-
 fn parse_log_level(value: Option<&str>) -> LogLevel {
     match value.unwrap_or("Info").trim().to_ascii_lowercase().as_str() {
         "trace" => LogLevel::Trace {},
@@ -125,7 +117,6 @@ fn parse_log_level(value: Option<&str>) -> LogLevel {
         _ => LogLevel::Info {},
     }
 }
-
 const RNODE_FREQUENCY_MIN_HZ: u64 = 137_000_000;
 const RNODE_FREQUENCY_MAX_HZ: u64 = 3_000_000_000;
 
@@ -315,7 +306,6 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_initiali
         }
     }
 }
-
 fn parse_message_direction(value: &str) -> Result<MessageDirection, NodeError> {
     match value.trim() {
         "Inbound" => Ok(MessageDirection::Inbound {}),
@@ -323,7 +313,6 @@ fn parse_message_direction(value: &str) -> Result<MessageDirection, NodeError> {
         _ => Err(NodeError::InvalidConfig {}),
     }
 }
-
 fn parse_message_method(value: &str) -> Result<MessageMethod, NodeError> {
     match value.trim() {
         "Direct" => Ok(MessageMethod::Direct {}),

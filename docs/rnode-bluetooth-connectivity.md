@@ -166,9 +166,10 @@ that frequency outside a region where it is permitted. REM accepts RNode
 hardware frequencies from 137 MHz through 3 GHz and rejects unknown region or
 profile identifiers instead of silently falling back to US915. The operator
 remains responsible for selecting a frequency permitted at the deployment
-location. **Infer region** uses only recognized device time zones or confident
-location matches; ambiguous locations keep the current selection and require
-manual confirmation.
+location. **Infer region** tries a current location fix first, then falls back
+to a recognized device time zone. It uses only high-confidence interior
+matches; ambiguous or border-spanning locations keep the current selection and
+require manual confirmation.
 
 | Profile | Bandwidth | Spreading factor | Coding rate |
 | --- | ---: | ---: | ---: |

@@ -133,8 +133,12 @@ test("infers only supported LoRa regions with a confident time zone match", () =
 
 test("coordinate inference leaves ambiguous locations for manual selection", () => {
   assert.equal(inferRnodeRegionFromCoordinates(-33.87, 151.21), "AU915");
-  assert.equal(inferRnodeRegionFromCoordinates(28.61, 77.21), "IN865");
+  assert.equal(inferRnodeRegionFromCoordinates(21.15, 79.09), "IN865");
   assert.equal(inferRnodeRegionFromCoordinates(37.56, 126.97), "KR920");
+  assert.equal(inferRnodeRegionFromCoordinates(28.61, 77.21), undefined);
+  assert.equal(inferRnodeRegionFromCoordinates(23.81, 90.41), undefined);
+  assert.equal(inferRnodeRegionFromCoordinates(27.72, 85.32), undefined);
+  assert.equal(inferRnodeRegionFromCoordinates(23.5, 74), undefined);
   assert.equal(inferRnodeRegionFromCoordinates(48.86, 2.35), undefined);
   assert.equal(inferRnodeRegionFromCoordinates(-23.55, -46.63), undefined);
   assert.equal(inferRnodeRegionFromCoordinates(Number.NaN, 0), undefined);

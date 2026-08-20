@@ -250,13 +250,14 @@ export function inferRnodeRegionFromCoordinates(lat: number, lon: number): Rnode
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
     return undefined;
   }
-  if (lat >= -45 && lat <= -9 && lon >= 110 && lon <= 155) {
+  // Keep coordinate inference inside high-confidence interior bands. Border areas fall back to the time zone or manual selection.
+  if (lat >= -39 && lat <= -12 && lon >= 113 && lon <= 154) {
     return "AU915";
   }
-  if (lat >= 6 && lat <= 38 && lon >= 68 && lon <= 98) {
+  if (lat >= 10 && lat <= 22 && lon >= 73 && lon <= 86) {
     return "IN865";
   }
-  if (lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132) {
+  if (lat >= 33.2 && lat <= 37.7 && lon >= 126 && lon <= 129.6) {
     return "KR920";
   }
   return undefined;

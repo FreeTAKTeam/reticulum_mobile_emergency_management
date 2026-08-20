@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-
 import WizardProgress from "../components/setup/WizardProgress.vue";
 import SetupWelcomeStep from "../components/setup/SetupWelcomeStep.vue";
 import { useSetupWizard } from "../composables/useSetupWizard";
 import logoUrl from "../assets/rem-logo.png";
 import { RNODE_FREQUENCY_MAX_HZ, RNODE_FREQUENCY_MIN_HZ } from "../utils/rnodeProfiles";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
-
 const wizard = useSetupWizard();
-
 const tcpServerOptions = TCP_COMMUNITY_SERVERS.map((server) => ({
   name: server.name,
   endpoint: toTcpEndpoint(server),
@@ -20,7 +17,6 @@ onMounted(() => {
   wizard.open();
 });
 </script>
-
 <template>
   <section class="setup-view" data-testid="setup-wizard">
     <div class="setup-console">
@@ -37,7 +33,6 @@ onMounted(() => {
           <span>Node<br /><strong>Ready</strong></span>
         </div>
       </header>
-
       <div class="step-band">
         <div>
           <p class="band-label">Setup Wizard</p>
@@ -45,7 +40,6 @@ onMounted(() => {
         </div>
         <span class="band-step">Step {{ wizard.activeIndex.value + 1 }} of {{ wizard.steps.length }}</span>
       </div>
-
       <WizardProgress :steps="wizard.steps" :active-index="wizard.activeIndex.value" />
 
       <article class="wizard-panel" :class="`step-${wizard.activeStep.value.id}`">

@@ -112,7 +112,6 @@ export function useSetupWizard() {
     markSetupWizardOpened();
     runDetachedStoreTask(nodeStore, "setup", "permission refresh", refreshPermissions);
   }
-
   async function refreshPermissions(): Promise<void> {
     const snapshot = await checkSetupPermissions();
     permissions.location = snapshot.location;
@@ -129,7 +128,6 @@ export function useSetupWizard() {
     }
     draft.tcpClients = [...next];
   }
-
   function addCustomTcpEndpoint(): void {
     const normalized = normalizeWizardTcpEndpoint(customTcpEndpoint.value);
     if (!normalized) {
@@ -142,7 +140,6 @@ export function useSetupWizard() {
     customTcpEndpoint.value = "";
     feedback.value = "";
   }
-
   function removeTcpEndpoint(endpoint: string): void {
     draft.tcpClients = normalizedTcpClients.value.filter((entry) => entry !== endpoint);
   }
@@ -164,7 +161,6 @@ export function useSetupWizard() {
   async function requestLocation(): Promise<void> {
     permissions.location = await requestLocationPermission();
   }
-
   async function requestNotifications(): Promise<void> {
     permissions.notifications = await requestNotificationPermission();
   }
@@ -172,20 +168,13 @@ export function useSetupWizard() {
   async function requestBluetooth(): Promise<void> {
     permissions.bluetooth = await requestRnodeBluetoothPermission();
   }
-
   async function inferRnodeRegion(): Promise<void> {
     const previousRegion = draft.rnode.region;
-    let source = "device time zone";
-    let nextRegion = inferRnodeRegionFromTimezone();
-    if (!nextRegion) {
-      source = "device location";
-      try {
-        const fix = await telemetryService.getCurrentPosition();
-        nextRegion = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
-      } catch {
-        nextRegion = undefined;
-      }
-    }
+    const locationRegion = await telemetryService.getCurrentPosition()
+      .then((fix) => inferRnodeRegionFromCoordinates(fix.lat, fix.lon))
+      .catch(() => undefined);
+    const nextRegion = locationRegion ?? inferRnodeRegionFromTimezone();
+    const source = locationRegion ? "device location" : "device time zone";
     if (!nextRegion) {
       feedback.value = "REM could not safely infer a LoRa region. Select the legal region and frequency manually.";
       return;
@@ -210,7 +199,6 @@ export function useSetupWizard() {
       draft.rnode.frequencyHz,
     );
   }
-
   async function ensureBluetoothPermissionForRnode(): Promise<boolean> {
     if (permissions.bluetooth !== "granted") {
       permissions.bluetooth = await requestRnodeBluetoothPermission();
