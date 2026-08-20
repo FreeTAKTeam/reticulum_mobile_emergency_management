@@ -5,6 +5,7 @@ import WizardProgress from "../components/setup/WizardProgress.vue";
 import SetupWelcomeStep from "../components/setup/SetupWelcomeStep.vue";
 import { useSetupWizard } from "../composables/useSetupWizard";
 import logoUrl from "../assets/rem-logo.png";
+import { RNODE_FREQUENCY_MAX_HZ, RNODE_FREQUENCY_MIN_HZ } from "../utils/rnodeProfiles";
 import { TCP_COMMUNITY_SERVERS, toTcpEndpoint } from "../utils/tcpCommunityServers";
 
 const wizard = useSetupWizard();
@@ -241,7 +242,13 @@ onMounted(() => {
           </label>
           <label class="field-block">
             <span>Frequency (Hz)</span>
-            <input v-model.number="wizard.draft.rnode.frequencyHz" type="number" min="1" step="1000" />
+            <input
+              v-model.number="wizard.draft.rnode.frequencyHz"
+              type="number"
+              :min="RNODE_FREQUENCY_MIN_HZ"
+              :max="RNODE_FREQUENCY_MAX_HZ"
+              step="1000"
+            />
           </label>
           <button type="button" class="secondary-action inline-action" @click="wizard.inferRnodeRegion">
             Infer region

@@ -162,7 +162,13 @@ the local app usable while the RNode retries independently.
 ## REM Radio Defaults
 
 REM defaults to `US915`, `915000000` Hz, and `REM-LF-RURAL-v1`. Do not use
-that frequency outside a region where it is permitted.
+that frequency outside a region where it is permitted. REM accepts RNode
+hardware frequencies from 137 MHz through 3 GHz and rejects unknown region or
+profile identifiers instead of silently falling back to US915. The operator
+remains responsible for selecting a frequency permitted at the deployment
+location. **Infer region** uses only recognized device time zones or confident
+location matches; ambiguous locations keep the current selection and require
+manual confirmation.
 
 | Profile | Bandwidth | Spreading factor | Coding rate |
 | --- | ---: | ---: | ---: |

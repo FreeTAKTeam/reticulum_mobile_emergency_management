@@ -103,6 +103,8 @@ const RNODE_REGION_DEFAULT_FREQUENCY_HZ: Record<RnodeRegion, number> = {
   KR920: 920_000_000,
   RU864: 864_000_000,
 };
+const RNODE_FREQUENCY_MIN_HZ = 137_000_000;
+const RNODE_FREQUENCY_MAX_HZ = 3_000_000_000;
 
 export function rnodeRegionDefaultFrequencyHz(region: RnodeRegion): number {
   return RNODE_REGION_DEFAULT_FREQUENCY_HZ[region] ?? 915_000_000;
@@ -111,6 +113,9 @@ export function rnodeRegionDefaultFrequencyHz(region: RnodeRegion): number {
 function normalizeRnodeRegion(value: unknown): RnodeRegion {
   const normalized = stringValue(value).trim().toUpperCase();
   switch (normalized) {
+    case "":
+    case "US915":
+      return "US915";
     case "EU868":
     case "AU915":
     case "AS923":
@@ -119,13 +124,17 @@ function normalizeRnodeRegion(value: unknown): RnodeRegion {
     case "RU864":
       return normalized;
     default:
-      return "US915";
+      throw new TypeError(`Unsupported RNode LoRa region: ${stringValue(value)}`);
   }
 }
 
 function normalizeRnodeFrequencyHz(value: unknown, region: RnodeRegion): number {
   const frequencyHz = Number(value);
-  if (Number.isFinite(frequencyHz) && frequencyHz > 0) {
+  if (
+    Number.isFinite(frequencyHz)
+    && frequencyHz >= RNODE_FREQUENCY_MIN_HZ
+    && frequencyHz <= RNODE_FREQUENCY_MAX_HZ
+  ) {
     return Math.round(frequencyHz);
   }
   return rnodeRegionDefaultFrequencyHz(region);
@@ -138,8 +147,10 @@ function normalizeRnodeProfile(value: unknown): RnodeProfileId {
     case "REM-LM-EXTREME-v1":
       return "REM-LM-EXTREME-v1";
     case "REM-LF-RURAL-v1":
-    default:
+    case "":
       return "REM-LF-RURAL-v1";
+    default:
+      throw new TypeError(`Unsupported RNode LoRa profile: ${stringValue(value)}`);
   }
 }
 

@@ -48,6 +48,9 @@ export const RNODE_REGION_SPECS: RnodeRegionSpec[] = [
   { id: "RU864", label: "RU 864 MHz", defaultFrequencyHz: 864_000_000 },
 ];
 
+export const RNODE_FREQUENCY_MIN_HZ = 137_000_000;
+export const RNODE_FREQUENCY_MAX_HZ = 3_000_000_000;
+
 export const DEFAULT_RNODE_SETTINGS: RnodeSettings = {
   enabled: false,
   connectionMode: "ble",
@@ -95,8 +98,14 @@ export function isRnodeRegion(value: unknown): value is RnodeRegion {
 
 export function normalizeRnodeRegion(value: unknown): RnodeRegion {
   const normalized = String(value ?? "").trim().toUpperCase();
+  if (!normalized) {
+    return "US915";
+  }
   const match = RNODE_REGION_SPECS.find((region) => region.id === normalized);
-  return match?.id ?? "US915";
+  if (!match) {
+    throw new TypeError(`Unsupported RNode LoRa region: ${String(value)}`);
+  }
+  return match.id;
 }
 
 export function normalizeRnodeProfile(value: unknown): RnodeProfileId {
@@ -106,8 +115,10 @@ export function normalizeRnodeProfile(value: unknown): RnodeProfileId {
     case "REM-LM-EXTREME-v1":
       return "REM-LM-EXTREME-v1";
     case "REM-LF-RURAL-v1":
-    default:
+    case "":
       return "REM-LF-RURAL-v1";
+    default:
+      throw new TypeError(`Unsupported RNode LoRa profile: ${String(value)}`);
   }
 }
 
@@ -115,9 +126,16 @@ export function rnodeRegionDefaultFrequencyHz(region: RnodeRegion): number {
   return RNODE_REGION_SPECS.find((candidate) => candidate.id === region)?.defaultFrequencyHz ?? 915_000_000;
 }
 
+export function isRnodeFrequencyHz(value: unknown): boolean {
+  const frequencyHz = Number(value);
+  return Number.isFinite(frequencyHz)
+    && frequencyHz >= RNODE_FREQUENCY_MIN_HZ
+    && frequencyHz <= RNODE_FREQUENCY_MAX_HZ;
+}
+
 export function normalizeRnodeFrequencyHz(value: unknown, region: RnodeRegion): number {
   const frequencyHz = Number(value);
-  if (Number.isFinite(frequencyHz) && frequencyHz > 0) {
+  if (isRnodeFrequencyHz(value)) {
     return Math.round(frequencyHz);
   }
   return rnodeRegionDefaultFrequencyHz(region);
@@ -159,13 +177,122 @@ export function rnodeProfileSummary(profile: unknown): string {
   return `bandwidth = ${spec.bandwidth}, spreadingfactor = ${spec.spreadingFactor}, codingrate = ${spec.codingRate}`;
 }
 
-export function inferRnodeRegionFromCoordinates(lat: number, lon: number): RnodeRegion {
-  if (lat >= 34 && lat <= 72 && lon >= -25 && lon <= 45) {
-    return "EU868";
+const RNODE_RU864_TIME_ZONES = new Set([
+  "asia/anadyr",
+  "asia/barnaul",
+  "asia/chita",
+  "asia/irkutsk",
+  "asia/kamchatka",
+  "asia/khandyga",
+  "asia/krasnoyarsk",
+  "asia/magadan",
+  "asia/novokuznetsk",
+  "asia/novosibirsk",
+  "asia/omsk",
+  "asia/sakhalin",
+  "asia/srednekolymsk",
+  "asia/tomsk",
+  "asia/ust-nera",
+  "asia/vladivostok",
+  "asia/yakutsk",
+  "asia/yekaterinburg",
+  "europe/astrakhan",
+  "europe/kaliningrad",
+  "europe/kirov",
+  "europe/moscow",
+  "europe/samara",
+  "europe/saratov",
+  "europe/ulyanovsk",
+  "europe/volgograd",
+]);
+const RNODE_AS923_TIME_ZONES = new Set([
+  "asia/bangkok",
+  "asia/brunei",
+  "asia/ho_chi_minh",
+  "asia/hong_kong",
+  "asia/jakarta",
+  "asia/kuala_lumpur",
+  "asia/kuching",
+  "asia/manila",
+  "asia/phnom_penh",
+  "asia/singapore",
+  "asia/taipei",
+  "asia/tokyo",
+  "asia/vientiane",
+  "asia/yangon",
+]);
+const RNODE_US915_TIME_ZONES = new Set([
+  "america/adak",
+  "america/anchorage",
+  "america/boise",
+  "america/chicago",
+  "america/denver",
+  "america/detroit",
+  "america/edmonton",
+  "america/halifax",
+  "america/iqaluit",
+  "america/juneau",
+  "america/los_angeles",
+  "america/moncton",
+  "america/new_york",
+  "america/nome",
+  "america/phoenix",
+  "america/regina",
+  "america/st_johns",
+  "america/toronto",
+  "america/vancouver",
+  "america/whitehorse",
+  "america/winnipeg",
+  "america/yellowknife",
+]);
+
+export function inferRnodeRegionFromCoordinates(lat: number, lon: number): RnodeRegion | undefined {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return undefined;
   }
-  return "US915";
+  if (lat >= -45 && lat <= -9 && lon >= 110 && lon <= 155) {
+    return "AU915";
+  }
+  if (lat >= 6 && lat <= 38 && lon >= 68 && lon <= 98) {
+    return "IN865";
+  }
+  if (lat >= 33 && lat <= 39.5 && lon >= 124 && lon <= 132) {
+    return "KR920";
+  }
+  return undefined;
 }
 
-export function inferRnodeRegionFromTimezone(timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone): RnodeRegion {
-  return timeZone.toLowerCase().startsWith("europe/") ? "EU868" : "US915";
+export function inferRnodeRegionFromTimezone(
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): RnodeRegion | undefined {
+  const normalized = timeZone.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (RNODE_RU864_TIME_ZONES.has(normalized) || normalized.startsWith("russia/")) {
+    return "RU864";
+  }
+  if (normalized.startsWith("australia/") || normalized === "antarctica/macquarie") {
+    return "AU915";
+  }
+  if (normalized === "asia/kolkata" || normalized === "asia/calcutta") {
+    return "IN865";
+  }
+  if (normalized === "asia/seoul") {
+    return "KR920";
+  }
+  if (RNODE_AS923_TIME_ZONES.has(normalized)) {
+    return "AS923";
+  }
+  if (normalized.startsWith("europe/")) {
+    return "EU868";
+  }
+  if (
+    RNODE_US915_TIME_ZONES.has(normalized)
+    || normalized.startsWith("us/")
+    || normalized.startsWith("canada/")
+  ) {
+    return "US915";
+  }
+  return undefined;
 }

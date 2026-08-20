@@ -4,7 +4,6 @@ import { computed, ref } from "vue";
 import { useNodeStore } from "../../stores/nodeStore";
 
 const nodeStore = useNodeStore();
-defineProps<{ externalFeedback?: string }>();
 const runtimeFeedback = ref("");
 const summary = computed(() => nodeStore.status.running ? "Node is running" : "Node is stopped");
 
@@ -72,7 +71,6 @@ async function runNodeAction(action: () => Promise<void>, success: string): Prom
         <button type="button" @click="runNodeAction(() => nodeStore.reinitializeClient(), 'Node client recreated.')">Restart UI</button>
         <button type="button" @click="runNodeAction(() => nodeStore.restartNode(), 'Node restarted.')">Restart</button>
       </div>
-      <p v-if="externalFeedback" class="feedback">{{ externalFeedback }}</p>
       <p v-if="runtimeFeedback" class="feedback">{{ runtimeFeedback }}</p>
       <p v-if="nodeStore.lastError" class="feedback">{{ nodeStore.lastError }}</p>
       <div v-if="nodeStore.status.interfaces.length > 0" class="active-endpoints">

@@ -126,20 +126,23 @@ fn parse_log_level(value: Option<&str>) -> LogLevel {
     }
 }
 
-fn normalize_rnode_region(value: Option<String>) -> String {
-    match value
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_uppercase()
-        .as_str()
-    {
-        "EU868" => "EU868".to_string(),
-        "AU915" => "AU915".to_string(),
-        "AS923" => "AS923".to_string(),
-        "IN865" => "IN865".to_string(),
-        "KR920" => "KR920".to_string(),
-        "RU864" => "RU864".to_string(),
-        _ => "US915".to_string(),
+const RNODE_FREQUENCY_MIN_HZ: u64 = 137_000_000;
+const RNODE_FREQUENCY_MAX_HZ: u64 = 3_000_000_000;
+
+fn normalize_rnode_region(value: Option<String>) -> Result<String, NodeError> {
+    let normalized = value.unwrap_or_default().trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "" | "US915" => Ok("US915".to_string()),
+        "EU868" => Ok("EU868".to_string()),
+        "AU915" => Ok("AU915".to_string()),
+        "AS923" => Ok("AS923".to_string()),
+        "IN865" => Ok("IN865".to_string()),
+        "KR920" => Ok("KR920".to_string()),
+        "RU864" => Ok("RU864".to_string()),
+        _ => Err(crate::error_context::contextual_node_error(
+            NodeError::InvalidConfig {},
+            format!("unsupported RNode LoRa region: {normalized}"),
+        )),
     }
 }
 
@@ -155,11 +158,16 @@ pub(crate) fn rnode_region_default_frequency_hz(region: &str) -> u64 {
     }
 }
 
-fn normalize_rnode_profile(value: Option<String>) -> String {
-    match value.unwrap_or_default().trim() {
-        "REM-MF-URBAN-v1" => "REM-MF-URBAN-v1".to_string(),
-        "REM-LM-EXTREME-v1" => "REM-LM-EXTREME-v1".to_string(),
-        _ => "REM-LF-RURAL-v1".to_string(),
+fn normalize_rnode_profile(value: Option<String>) -> Result<String, NodeError> {
+    let normalized = value.unwrap_or_default().trim().to_string();
+    match normalized.as_str() {
+        "" | "REM-LF-RURAL-v1" => Ok("REM-LF-RURAL-v1".to_string()),
+        "REM-MF-URBAN-v1" => Ok("REM-MF-URBAN-v1".to_string()),
+        "REM-LM-EXTREME-v1" => Ok("REM-LM-EXTREME-v1".to_string()),
+        _ => Err(crate::error_context::contextual_node_error(
+            NodeError::InvalidConfig {},
+            format!("unsupported RNode LoRa profile: {normalized}"),
+        )),
     }
 }
 
@@ -171,10 +179,20 @@ fn to_rnode_settings_record(
     input: Option<RnodeSettingsInput>,
 ) -> Result<RnodeSettingsRecord, NodeError> {
     let input = input.unwrap_or_default();
-    let region = normalize_rnode_region(input.region);
+    let region = normalize_rnode_region(input.region)?;
     let frequency_hz = match input.frequency_hz {
-        Some(value) if value > 0 => value,
-        _ => rnode_region_default_frequency_hz(&region),
+        Some(value) if (RNODE_FREQUENCY_MIN_HZ..=RNODE_FREQUENCY_MAX_HZ).contains(&value) => {
+            value
+        }
+        Some(0) | None => rnode_region_default_frequency_hz(&region),
+        Some(value) => {
+            return Err(crate::error_context::contextual_node_error(
+                NodeError::InvalidConfig {},
+                format!(
+                    "RNode LoRa frequency must be between {RNODE_FREQUENCY_MIN_HZ} and {RNODE_FREQUENCY_MAX_HZ} Hz; got {value}"
+                ),
+            ));
+        }
     };
     Ok(RnodeSettingsRecord {
         enabled: input.enabled.unwrap_or(false),
@@ -182,7 +200,7 @@ fn to_rnode_settings_record(
         peripheral_id: input.peripheral_id.unwrap_or_default().trim().to_string(),
         display_name: input.display_name.unwrap_or_default().trim().to_string(),
         region,
-        profile: normalize_rnode_profile(input.profile),
+        profile: normalize_rnode_profile(input.profile)?,
         frequency_hz,
     })
 }

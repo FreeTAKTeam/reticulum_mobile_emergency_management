@@ -9,10 +9,13 @@ import { markSetupWizardCompleted, markSetupWizardOpened } from "../utils/setupW
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
   DEFAULT_RNODE_SETTINGS,
+  RNODE_FREQUENCY_MAX_HZ,
+  RNODE_FREQUENCY_MIN_HZ,
   RNODE_PROFILE_SPECS,
   RNODE_REGION_SPECS,
   inferRnodeRegionFromCoordinates,
   inferRnodeRegionFromTimezone,
+  isRnodeFrequencyHz,
   normalizeRnodeRegion,
   normalizeRnodeSettings,
   resolveRnodeFrequencyForRegionChange,
@@ -172,12 +175,20 @@ export function useSetupWizard() {
 
   async function inferRnodeRegion(): Promise<void> {
     const previousRegion = draft.rnode.region;
-    let nextRegion = previousRegion;
-    try {
-      const fix = await telemetryService.getCurrentPosition();
-      nextRegion = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
-    } catch {
-      nextRegion = inferRnodeRegionFromTimezone();
+    let source = "device time zone";
+    let nextRegion = inferRnodeRegionFromTimezone();
+    if (!nextRegion) {
+      source = "device location";
+      try {
+        const fix = await telemetryService.getCurrentPosition();
+        nextRegion = inferRnodeRegionFromCoordinates(fix.lat, fix.lon);
+      } catch {
+        nextRegion = undefined;
+      }
+    }
+    if (!nextRegion) {
+      feedback.value = "REM could not safely infer a LoRa region. Select the legal region and frequency manually.";
+      return;
     }
     draft.rnode.region = nextRegion;
     draft.rnode.frequencyHz = resolveRnodeFrequencyForRegionChange(
@@ -185,6 +196,7 @@ export function useSetupWizard() {
       nextRegion,
       draft.rnode.frequencyHz,
     );
+    feedback.value = `Inferred ${nextRegion} from ${source}. Confirm the legal frequency before saving.`;
   }
   function selectRnodeRegion(event: Event): void {
     const target = event.target;
@@ -413,6 +425,10 @@ export function useSetupWizard() {
   async function finish(): Promise<void> {
     if (!normalizedDisplayName.value || saving.value) {
       feedback.value = "Set a call sign before finishing setup.";
+      return;
+    }
+    if (!isRnodeFrequencyHz(draft.rnode.frequencyHz)) {
+      feedback.value = `RNode LoRa frequency must be between ${RNODE_FREQUENCY_MIN_HZ} and ${RNODE_FREQUENCY_MAX_HZ} Hz.`;
       return;
     }
     saving.value = true;
