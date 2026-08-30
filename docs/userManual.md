@@ -1,6 +1,6 @@
 # R.E.M. User Manual
 
-> This Markdown manual is authoritative for REM `1.3.0`. PDF and DOCX
+> This Markdown manual is authoritative for REM `1.3.1`. PDF and DOCX
 > files in `docs/` are archived snapshots and may describe older screens or
 > behavior.
 
