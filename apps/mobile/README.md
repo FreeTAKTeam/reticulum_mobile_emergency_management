@@ -82,13 +82,13 @@ Open the Android project:
 
 - Android: `npm --workspace apps/mobile run android`
 
-iOS compilation and CocoaPods are not release gates for `1.3.0`.
+iOS compilation and CocoaPods are not release gates for `1.3.1`.
 
 ## Android production build (signed)
 
 1. From the repository root, run `npm run mobile:build`.
 2. From `apps/mobile`, run `npx cap sync android`.
-3. Set release-time metadata. `appVersionName` is `1.3.0` and
+3. Set release-time metadata. `appVersionName` is `1.3.1` and
    `appVersionCode` is the UTC `yyDDDHHmm` value.
 4. Build signed Android release artifacts:
    - Linux/macOS, from `apps/mobile/android`: `bash ./gradlew assembleRelease bundleRelease`
@@ -104,7 +104,7 @@ When no Gradle property override is present, release builds generate:
 
 - `versionCode` from UTC timestamp (`yyDDDHHmm`)
 - `versionName` as `1.0.<yyyyMMddHHmmss>`. Official builds override this with
-  the release name, such as `1.3.0`.
+  the release name, such as `1.3.1`.
 - artifact file names containing the application name and version
 
 ## Local signing config
@@ -123,9 +123,9 @@ Never commit the keystore, passwords, or `keystore.properties`.
 Verify a release before publishing:
 
 ```bash
-apksigner verify --verbose --print-certs path/to/rem-v1.3.0-release.apk
-sha256sum path/to/rem-v1.3.0-release.apk path/to/rem-v1.3.0-release.aab
-adb install -r path/to/rem-v1.3.0-release.apk
+apksigner verify --verbose --print-certs path/to/rem-v1.3.1-release.apk
+sha256sum path/to/rem-v1.3.1-release.apk path/to/rem-v1.3.1-release.aab
+adb install -r path/to/rem-v1.3.1-release.apk
 adb shell dumpsys package network.reticulum.emergency | grep -E 'versionCode|versionName'
 ```
 

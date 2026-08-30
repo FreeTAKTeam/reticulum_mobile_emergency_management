@@ -8,8 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Immutable LXMF-rs commit providing the shared RNode bearer contract.
-  LXMF_RS_REF: b7e4018b06f1ef5cb4e226a2b353e1609ccf06f7
+  # Immutable LXMF-rs v0.10.1 release commit, aligned with RNS 1.5.2.
+  LXMF_RS_REF: 25a976945cb335dff3be692981151c8741a5fdeb
 
 jobs:
   plugin-system:
