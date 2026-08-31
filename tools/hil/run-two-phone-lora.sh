@@ -223,7 +223,8 @@ send_lxmf() {
 }
 
 event_payload() {
-  local direction="$1" uid="lora-regression-$direction-$TIMESTAMP"
+  local direction="$1" uid
+  uid="lora-regression-$direction-$TIMESTAMP"
   jq -cn --arg uid "$uid" --arg timestamp "$RFC3339_TIMESTAMP" \
     '{uid:$uid,commandId:("cmd-"+$uid),sourceIdentity:"hil",sourceDisplayName:"LoRa HIL",timestamp:$timestamp,commandType:"event-upsert",missionUid:"lora-regression",content:("LORA_REGRESSION_"+$uid),callsign:"HIL",serverTime:null,clientTime:$timestamp,keywords:["lora","hil"],contentHashes:[],updatedAt:(now*1000|floor),deletedAt:null,correlationId:("corr-"+$uid),topics:["lora-regression"]}'
 }
