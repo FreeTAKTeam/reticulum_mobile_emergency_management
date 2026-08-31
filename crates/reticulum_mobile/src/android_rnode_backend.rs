@@ -56,6 +56,10 @@ pub struct AndroidRnodeBackend {
     write_timeout: Duration,
     negotiated_mtu: Option<u16>,
     opened: bool,
+    read_chunks: u64,
+    read_bytes: u64,
+    write_chunks: u64,
+    write_bytes: u64,
 }
 
 impl AndroidRnodeBackend {
@@ -70,6 +74,10 @@ impl AndroidRnodeBackend {
             write_timeout: Duration::from_secs(5),
             negotiated_mtu: None,
             opened: false,
+            read_chunks: 0,
+            read_bytes: 0,
+            write_chunks: 0,
+            write_bytes: 0,
         }
     }
 
@@ -115,6 +123,12 @@ impl RnodeBearerBackend for AndroidRnodeBackend {
         };
         self.negotiated_mtu = result.negotiated_mtu;
         self.opened = true;
+        log::info!(
+            "Android RNode JNI opened generation={} mode={} negotiated_mtu={:?}",
+            generation,
+            mode.as_str(),
+            result.negotiated_mtu
+        );
         Ok(RnodeBearerInfo {
             kind,
             negotiated_mtu: result.negotiated_mtu,
@@ -124,17 +138,44 @@ impl RnodeBearerBackend for AndroidRnodeBackend {
     async fn read(&mut self) -> Result<Option<Vec<u8>>, String> {
         let generation = self.generation;
         let timeout = self.read_timeout;
-        tokio::task::spawn_blocking(move || jni_read(generation, timeout))
+        let result = tokio::task::spawn_blocking(move || jni_read(generation, timeout))
             .await
-            .map_err(|error| format!("join Android RNode read operation: {error}"))?
+            .map_err(|error| format!("join Android RNode read operation: {error}"))??;
+        if let Some(payload) = result.as_ref() {
+            self.read_chunks = self.read_chunks.saturating_add(1);
+            self.read_bytes = self
+                .read_bytes
+                .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
+            log::debug!(
+                "Android RNode JNI read generation={} chunk_bytes={} read_chunks={} read_bytes={}",
+                generation,
+                payload.len(),
+                self.read_chunks,
+                self.read_bytes
+            );
+        }
+        Ok(result)
     }
 
     async fn write(&mut self, payload: Vec<u8>) -> Result<(), String> {
         let generation = self.generation;
         let timeout = self.write_timeout;
+        let payload_len = payload.len();
         tokio::task::spawn_blocking(move || jni_write(generation, &payload, timeout))
             .await
-            .map_err(|error| format!("join Android RNode write operation: {error}"))?
+            .map_err(|error| format!("join Android RNode write operation: {error}"))??;
+        self.write_chunks = self.write_chunks.saturating_add(1);
+        self.write_bytes = self
+            .write_bytes
+            .saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX));
+        log::debug!(
+            "Android RNode JNI wrote generation={} chunk_bytes={} write_chunks={} write_bytes={}",
+            generation,
+            payload_len,
+            self.write_chunks,
+            self.write_bytes
+        );
+        Ok(())
     }
 
     async fn close(&mut self) -> Result<(), String> {

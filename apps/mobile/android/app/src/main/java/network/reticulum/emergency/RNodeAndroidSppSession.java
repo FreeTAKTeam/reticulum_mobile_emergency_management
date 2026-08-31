@@ -92,6 +92,7 @@ final class RNodeAndroidSppSession extends RNodeAndroidSession {
             });
             try {
                 write.get(Math.max(1L, timeoutMs), TimeUnit.MILLISECONDS);
+                recordWrite(payload);
             } catch (TimeoutException error) {
                 close();
                 write.cancel(true);

@@ -23,6 +23,9 @@ import java.util.concurrent.locks.ReentrantLock;
 @SuppressLint("MissingPermission")
 final class RNodeAndroidBleSession extends RNodeAndroidSession {
     private static final int REQUESTED_ATT_MTU = 517;
+    // LXMF/RNode notifications can carry 170 bytes. ATT reserves 3 bytes for
+    // its header, so a smaller negotiated MTU cannot carry a complete frame.
+    static final int MIN_LXMF_ATT_MTU = 173;
     private static final UUID NUS_SERVICE =
         UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID NUS_RX =
@@ -78,8 +81,14 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
         }
         await(mtuReady, deadline, "BLE MTU negotiation");
         throwSetupError();
-        if (mtu <= 23) {
-            throw new IOException("RNode BLE negotiated ATT MTU is too small: " + mtu);
+        if (!isUsableAttMtu(mtu)) {
+            throw new IOException(
+                "RNode BLE negotiated ATT MTU is too small for LXMF: "
+                    + mtu
+                    + " (minimum "
+                    + MIN_LXMF_ATT_MTU
+                    + ")"
+            );
         }
         if (!gatt.discoverServices()) {
             throw new IOException("Android did not start RNode GATT service discovery");
@@ -99,6 +108,10 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
     @Override
     Integer negotiatedMtu() {
         return mtu;
+    }
+
+    static boolean isUsableAttMtu(int negotiatedMtu) {
+        return negotiatedMtu >= MIN_LXMF_ATT_MTU;
     }
 
     @Override
@@ -153,6 +166,10 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
             if (error != null) {
                 throw new IOException(error);
             }
+            if (closed.get()) {
+                throw new IOException("RNode BLE connection closed during write");
+            }
+            recordWrite(payload);
         } finally {
             pendingWrite.set(null);
             writeLock.unlock();
@@ -328,6 +345,7 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
         subscribed.countDown();
         final CountDownLatch completion = pendingWrite.get();
         if (completion != null) {
+            writeError.compareAndSet(null, "RNode BLE connection closed during write");
             completion.countDown();
         }
         inbound.clear();

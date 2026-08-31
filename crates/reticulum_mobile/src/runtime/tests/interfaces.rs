@@ -166,16 +166,25 @@ fn rnode_runtime_readiness_requires_detected_online_radio() {
     let connecting = serde_json::json!({
         "probe_status": { "detected": false },
         "online": false,
+        "startup_validated": false,
         "last_command_error": null,
     });
     let detected_but_offline = serde_json::json!({
         "probe_status": { "detected": true },
         "online": false,
+        "startup_validated": false,
+        "last_command_error": null,
+    });
+    let online_but_unvalidated = serde_json::json!({
+        "probe_status": { "detected": true },
+        "online": true,
+        "startup_validated": false,
         "last_command_error": null,
     });
     let ready = serde_json::json!({
         "probe_status": { "detected": true },
         "online": true,
+        "startup_validated": true,
         "last_command_error": null,
     });
 
@@ -185,6 +194,10 @@ fn rnode_runtime_readiness_requires_detected_online_radio() {
     );
     assert_eq!(
         rnode_runtime_interface_state(&detected_but_offline, false),
+        ("connecting", None)
+    );
+    assert_eq!(
+        rnode_runtime_interface_state(&online_but_unvalidated, false),
         ("connecting", None)
     );
     assert_eq!(
@@ -208,6 +221,7 @@ fn rnode_runtime_readiness_preserves_command_failure() {
     let failed = serde_json::json!({
         "probe_status": { "detected": true },
         "online": true,
+        "startup_validated": true,
         "last_command_error": "radio configuration rejected",
     });
 

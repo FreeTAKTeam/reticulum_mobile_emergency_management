@@ -187,6 +187,10 @@ fn rnode_runtime_interface_state(
         .get("online")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let startup_validated = snapshot
+        .get("startup_validated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let last_error = snapshot
         .get("last_command_error")
         .and_then(serde_json::Value::as_str)
@@ -194,7 +198,7 @@ fn rnode_runtime_interface_state(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    if detected && online && last_error.is_none() {
+    if detected && online && startup_validated && last_error.is_none() {
         ("connected", None)
     } else if let Some(error) = last_error {
         ("failed", Some(error))
