@@ -84,7 +84,7 @@ impl OutboundTrafficClass {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CommunitySettingsRecord {
     #[serde(default)]
     pub household_id: String,
@@ -116,21 +116,6 @@ pub struct CommunityStatusProjectionRecord {
     pub saver_active: bool,
     pub updated_at_ms: u64,
     pub source_identity: String,
-}
-
-impl Default for CommunitySettingsRecord {
-    fn default() -> Self {
-        Self {
-            household_id: String::new(),
-            household_name: String::new(),
-            adults: 0,
-            children: 0,
-            pets: 0,
-            role_badges: Vec::new(),
-            status: HouseholdStatus::default(),
-            preferred_map_layer: PreferredMapLayer::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
