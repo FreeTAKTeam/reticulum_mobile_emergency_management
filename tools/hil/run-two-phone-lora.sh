@@ -224,9 +224,9 @@ send_lxmf() {
 
 event_payload() {
   local direction="$1" uid
-  uid="lora-regression-$direction-$TIMESTAMP"
+  uid="lr-$direction-$TIMESTAMP"
   jq -cn --arg uid "$uid" --arg timestamp "$RFC3339_TIMESTAMP" \
-    '{uid:$uid,commandId:("cmd-"+$uid),sourceIdentity:"hil",sourceDisplayName:"LoRa HIL",timestamp:$timestamp,commandType:"event-upsert",missionUid:"lora-regression",content:("LORA_REGRESSION_"+$uid),callsign:"HIL",serverTime:null,clientTime:$timestamp,keywords:["lora","hil"],contentHashes:[],updatedAt:(now*1000|floor),deletedAt:null,correlationId:("corr-"+$uid),topics:["lora-regression"]}'
+    '{uid:$uid,commandId:$uid,sourceIdentity:"hil",sourceDisplayName:null,timestamp:$timestamp,commandType:"event-upsert",missionUid:"lora-regression",content:"HIL",callsign:"HIL",serverTime:null,clientTime:$timestamp,keywords:[],contentHashes:[],updatedAt:(now*1000|floor),deletedAt:null,correlationId:null,topics:[]}'
 }
 
 cat >"$OUTPUT/metadata.txt" <<EOF
@@ -308,15 +308,17 @@ wait_for_assertion "$PHONE_A" ADB_ASSERT_MESSAGE "assertMessage id=resource-b-to
   "$(jq -cn --arg id resource-b-to-a --arg body "$RESOURCE_TOKEN_B" \
     '{assertionId:$id,expectedBody:$body,prefix:true}')"
 
-EVENT_A="lora-regression-A_TO_B-$TIMESTAMP"
-EVENT_B="lora-regression-B_TO_A-$TIMESTAMP"
-run_result_action "$PHONE_A" ADB_UPSERT_EVENT upsertEvent \
+EVENT_A="lr-A_TO_B-$TIMESTAMP"
+EVENT_B="lr-B_TO_A-$TIMESTAMP"
+run_result_action "$PHONE_A" ADB_UPSERT_EVENT_TO_DESTINATION upsertEventToDestination \
+  --es destinationHex "$APP_DESTINATION_B" \
   --es payloadBase64 "$(event_payload A_TO_B | b64)"
 sleep "$RADIO_WAIT_SECONDS"
 wait_for_assertion "$PHONE_B" ADB_ASSERT_EVENT "assertEvent id=event-a-to-b" \
   "$(jq -cn --arg id event-a-to-b --arg uid "$EVENT_A" \
     '{assertionId:$id,eventUid:$uid}')"
-run_result_action "$PHONE_B" ADB_UPSERT_EVENT upsertEvent \
+run_result_action "$PHONE_B" ADB_UPSERT_EVENT_TO_DESTINATION upsertEventToDestination \
+  --es destinationHex "$APP_DESTINATION_A" \
   --es payloadBase64 "$(event_payload B_TO_A | b64)"
 sleep "$RADIO_WAIT_SECONDS"
 wait_for_assertion "$PHONE_A" ADB_ASSERT_EVENT "assertEvent id=event-b-to-a" \

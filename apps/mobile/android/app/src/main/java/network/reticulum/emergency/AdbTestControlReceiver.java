@@ -21,6 +21,8 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
     public static final String ACTION_SEND_LXMF = "network.reticulum.emergency.action.ADB_SEND_LXMF";
     public static final String ACTION_UPSERT_EVENT = "network.reticulum.emergency.action.ADB_UPSERT_EVENT";
+    public static final String ACTION_UPSERT_EVENT_TO_DESTINATION =
+        "network.reticulum.emergency.action.ADB_UPSERT_EVENT_TO_DESTINATION";
     public static final String ACTION_ANNOUNCES = "network.reticulum.emergency.action.ADB_ANNOUNCES";
     public static final String ACTION_MESSAGES = "network.reticulum.emergency.action.ADB_MESSAGES";
     public static final String ACTION_ASSERT_ANNOUNCE = "network.reticulum.emergency.action.ADB_ASSERT_ANNOUNCE";
@@ -71,6 +73,14 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
                 logJsonResult("sendLxmf", ReticulumBridge.sendLxmfJson(requirePayload(intent)));
             } else if (ACTION_UPSERT_EVENT.equals(action)) {
                 logResult("upsertEvent", ReticulumBridge.upsertEventJson(requirePayload(intent)));
+            } else if (ACTION_UPSERT_EVENT_TO_DESTINATION.equals(action)) {
+                logResult(
+                    "upsertEventToDestination",
+                    ReticulumBridge.upsertEventToDestinationJson(
+                        requirePayload(intent),
+                        requireDestination(intent)
+                    )
+                );
             } else if (ACTION_ANNOUNCES.equals(action)) {
                 Log.i(TAG, "announces " + ReticulumBridge.listAnnouncesJson());
             } else if (ACTION_MESSAGES.equals(action)) {

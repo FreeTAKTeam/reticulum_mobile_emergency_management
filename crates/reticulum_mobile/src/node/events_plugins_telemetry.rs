@@ -5,6 +5,24 @@ impl Node {
     }
 
     pub fn upsert_event(&self, record: EventProjectionRecord) -> Result<(), NodeError> {
+        self.upsert_event_with_destination(record, None)
+    }
+
+    pub(crate) fn upsert_event_to_destination(
+        &self,
+        record: EventProjectionRecord,
+        destination_hex: String,
+    ) -> Result<(), NodeError> {
+        let destination_hex = normalize_hex_32(destination_hex.as_str())
+            .ok_or(NodeError::InvalidConfig {})?;
+        self.upsert_event_with_destination(record, Some(destination_hex))
+    }
+
+    fn upsert_event_with_destination(
+        &self,
+        record: EventProjectionRecord,
+        requested_destination_hex: Option<String>,
+    ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
@@ -67,6 +85,12 @@ impl Node {
                     &route_hops,
                 );
                 for target in replication_targets {
+                    if requested_destination_hex
+                        .as_deref()
+                        .is_some_and(|requested| requested != target.app_destination_hex)
+                    {
+                        continue;
+                    }
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
                             scheduled_sends.push((
@@ -87,6 +111,10 @@ impl Node {
                         }
                     }
                 }
+            }
+
+            if requested_destination_hex.is_some() && scheduled_sends.is_empty() {
+                return Err(NodeError::InvalidConfig {});
             }
 
             inner.bus.clone()
