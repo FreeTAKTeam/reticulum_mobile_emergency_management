@@ -260,6 +260,7 @@ include!("node/checklist_mutations.rs");
 include!("node/checklist_task_status.rs");
 include!("node/checklist_task_edits.rs");
 include!("node/eam.rs");
+include!("node/events_api.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");
