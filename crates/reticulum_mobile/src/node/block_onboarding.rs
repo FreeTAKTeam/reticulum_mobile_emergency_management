@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+
 const BLOCK_ENVELOPE_PREFIX: &str = "REMBC1:";
 const BLOCK_ENVELOPE_KIND: &str = "rem.block-onboarding";
 const BLOCK_ENVELOPE_VERSION: u8 = 1;
@@ -189,7 +191,7 @@ fn decode_and_verify_block_envelope(
     encoded_text: &str,
     now_ms: u64,
 ) -> Result<BlockOnboardingInspection, NodeError> {
-    if encoded_text.as_bytes().len() > BLOCK_ENVELOPE_MAX_BYTES {
+    if encoded_text.len() > BLOCK_ENVELOPE_MAX_BYTES {
         return Err(NodeError::InvalidConfig {});
     }
     let encoded = encoded_text
@@ -308,7 +310,7 @@ impl Node {
             "{BLOCK_ENVELOPE_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&wire).map_err(|_| NodeError::InternalError {})?)
         );
-        if encoded_text.as_bytes().len() > BLOCK_ENVELOPE_MAX_BYTES {
+        if encoded_text.len() > BLOCK_ENVELOPE_MAX_BYTES {
             return Err(NodeError::InvalidConfig {});
         }
         Ok(SignedBlockOnboardingEnvelope { encoded_text })
