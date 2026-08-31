@@ -14,7 +14,7 @@ all = "warn"
 cast_possible_truncation = "warn"
 cast_possible_wrap = "warn"
 cast_sign_loss = "warn"
-unchecked_time_subtraction = "warn"
+unchecked_duration_subtraction = "warn"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
