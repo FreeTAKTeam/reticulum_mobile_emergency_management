@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Immutable LXMF-rs single-owner RNode repair revision, based on v0.10.1.
-  LXMF_RS_REF: 1952f50278aa49618f4c7df4b821b57afaee5d3c
+  LXMF_RS_REF: 74dfb5d0b9ea7652056bb518f3319987997b856f
 
 jobs:
   plugin-system:
