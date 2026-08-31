@@ -24,6 +24,14 @@ public class RNodeUsbKissControlTest {
     }
 
     @Test
+    public void encodesHardResetFrame() {
+        assertArrayEquals(
+            new byte[] { (byte) 0xC0, 0x55, (byte) 0xF8, (byte) 0xC0 },
+            RNodeUsbKissControl.hardResetFrame()
+        );
+    }
+
+    @Test
     public void decodesBluetoothPinFrame() {
         assertEquals("123456", RNodeUsbKissControl.decodeBluetoothPin(new byte[] { 0x00, 0x01, (byte) 0xE2, 0x40 }));
         assertEquals("000042", RNodeUsbKissControl.decodeBluetoothPin(new byte[] { 0x00, 0x00, 0x00, 0x2A }));

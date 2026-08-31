@@ -22,9 +22,11 @@ tools/hil/run-two-phone-lora.sh \
   --lxmf-destination-a LXMF_HEX_A --lxmf-destination-b LXMF_HEX_B
 ```
 
-The run takes several minutes because SF11 radio operations are serialized. The script verifies
-strict RNode readiness and a negotiated ATT connection, the exact controlled radio profile,
-TCP-disabled state, peer announces,
+The run takes several minutes because SF11 radio operations are serialized. After an initial
+readiness check, the script sends the standard RNode hard-reset command to both radios and waits
+for them to reconnect. This clears firmware transmit queues left by an interrupted earlier run;
+it does not change pairing or the persisted radio profile. The script then verifies strict RNode
+readiness and a negotiated ATT connection, the exact controlled radio profile, TCP-disabled state, peer announces,
 successful connections, bidirectional small and Resource-sized direct LXMF messages, and
 bidirectional event replication. It exits nonzero on the first failed boundary. A passing run
 writes `result.txt`, source commit/tree identities, installed package versions, and filtered

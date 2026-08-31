@@ -6,6 +6,7 @@ RECEIVER="$PACKAGE/.AdbTestControlReceiver"
 ACTION_PREFIX="$PACKAGE.action"
 RADIO_WAIT_SECONDS="${RADIO_WAIT_SECONDS:-45}"
 STARTUP_ATTEMPTS="${STARTUP_ATTEMPTS:-18}"
+RNODE_RESET_WAIT_SECONDS="${RNODE_RESET_WAIT_SECONDS:-8}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LXMF_ROOT="$(cd "$REPO_ROOT/../LXMF-rs" && pwd)"
@@ -95,6 +96,23 @@ run_result_action() {
     fi
   done
   echo "timed out waiting for $label result on $serial" >&2
+  return 1
+}
+
+reset_rnode() {
+  local serial="$1" before after latest attempt
+  before="$(logcat_raw "$serial" | grep -c '^rnodeReset outcome=' || true)"
+  broadcast "$serial" ADB_RESET_RNODE
+  for ((attempt = 1; attempt <= 15; attempt++)); do
+    sleep 1
+    after="$(logcat_raw "$serial" | grep -c '^rnodeReset outcome=' || true)"
+    if ((after > before)); then
+      latest="$(logcat_raw "$serial" | grep '^rnodeReset outcome=' | tail -n 1)"
+      [[ "$latest" == *"outcome=ok"* ]] || { echo "$latest" >&2; return 1; }
+      return 0
+    fi
+  done
+  echo "timed out resetting RNode on $serial" >&2
   return 1
 }
 
@@ -253,6 +271,21 @@ for serial in "$PHONE_A" "$PHONE_B"; do
   adb_for "$serial" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null
 done
 
+wait_for_ready "$PHONE_A" "$APP_DESTINATION_A" "$LXMF_DESTINATION_A"
+wait_for_ready "$PHONE_B" "$APP_DESTINATION_B" "$LXMF_DESTINATION_B"
+
+# A firmware transmit queue survives BLE disconnects. Reset both RNodes before
+# collecting acceptance evidence so a previous failed run cannot inject stale
+# link proofs or consume this run's half-duplex airtime budget.
+reset_rnode "$PHONE_A"
+reset_rnode "$PHONE_B"
+sleep "$RNODE_RESET_WAIT_SECONDS"
+for serial in "$PHONE_A" "$PHONE_B"; do
+  adb_for "$serial" shell am force-stop "$PACKAGE"
+  adb_for "$serial" logcat -c
+  adb_for "$serial" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null
+done
+RUN_START_MS="$(( $(date +%s) * 1000 ))"
 wait_for_ready "$PHONE_A" "$APP_DESTINATION_A" "$LXMF_DESTINATION_A"
 wait_for_ready "$PHONE_B" "$APP_DESTINATION_B" "$LXMF_DESTINATION_B"
 assert_matching_radio_profiles
