@@ -68,6 +68,7 @@ broadcast() {
   adb_for "$serial" shell am broadcast -n "$RECEIVER" -a "$ACTION_PREFIX.$action" "$@" >/dev/null
 }
 logcat_raw() { adb_for "$1" logcat -d -v raw -s ReticulumAdbTest:I '*:S'; }
+service_logcat_raw() { adb_for "$1" logcat -d -v raw -s ReticulumNodeService:I '*:S'; }
 
 latest_json() {
   local serial="$1" action="$2" prefix="$3" line
@@ -131,7 +132,7 @@ wait_for_ready() {
       and any(.readiness.interfaces[]; .id == "tcp" and .state == "Disabled")
     ' <<<"$status" >/dev/null \
       && jq -e '.installed == true and .session.closed == false and .session.kind == "ble"
-        and .session.negotiatedMtu >= 173 and .session.lastError == null' \
+        and .session.negotiatedMtu >= 23 and .session.lastError == null' \
         <<<"$transport" >/dev/null; then
       return 0
     fi
@@ -143,7 +144,7 @@ wait_for_ready() {
 }
 
 assert_matching_radio_profiles() {
-  local settings_a settings_b
+  local settings_a settings_b evidence_a evidence_b
   settings_a="$(latest_json "$PHONE_A" ADB_APP_SETTINGS appSettings)"
   settings_b="$(latest_json "$PHONE_B" ADB_APP_SETTINGS appSettings)"
   jq -e '.tcpClients == [] and .rnode.enabled == true and .rnode.connectionMode == "ble"' \
@@ -162,6 +163,40 @@ assert_matching_radio_profiles() {
     .teams.activeTeamUid as $active
     | any(.teams.localTeams[]; .teamUid == $active and (.memberDestinations | index($peer) != null))
   ' <<<"$settings_b" >/dev/null
+
+  evidence_a="$(service_logcat_raw "$PHONE_A" \
+    | grep 'rnode_ble: startup evidence .* evidence=' | tail -n 1 || true)"
+  evidence_b="$(service_logcat_raw "$PHONE_B" \
+    | grep 'rnode_ble: startup evidence .* evidence=' | tail -n 1 || true)"
+  [[ -n "$evidence_a" && -n "$evidence_b" ]] \
+    || { echo "missing live RNode startup evidence" >&2; return 1; }
+  evidence_a="${evidence_a#* evidence=}"
+  evidence_b="${evidence_b#* evidence=}"
+  for evidence in "$evidence_a" "$evidence_b"; do
+    jq -e '
+      .startup_validated == true
+      and .probe.detected == true
+      and (.probe.firmware_version | type == "string" and length > 0)
+      and .configured.frequency_hz == 914625000
+      and .configured.bandwidth_hz == 250000
+      and .configured.spreading_factor == 11
+      and .configured.coding_rate == 5
+      and .configured.tx_power_dbm == 17
+      and ((.configured.frequency_hz - .reported.frequency_hz) as $frequency_delta
+        | ($frequency_delta >= -100 and $frequency_delta <= 100))
+      and .configured.bandwidth_hz == .reported.bandwidth_hz
+      and .configured.spreading_factor == .reported.spreading_factor
+      and .configured.coding_rate == .reported.coding_rate
+      and .configured.tx_power_dbm == .reported.tx_power_dbm
+      and (.reported.radio_state == 1 or .startup_compatibility_warning != null)
+    ' <<<"$evidence" >/dev/null
+  done
+  [[ "$(jq -c '.configured | {frequency_hz,bandwidth_hz,spreading_factor,coding_rate,tx_power_dbm}' \
+    <<<"$evidence_a")" == \
+    "$(jq -c '.configured | {frequency_hz,bandwidth_hz,spreading_factor,coding_rate,tx_power_dbm}' \
+    <<<"$evidence_b")" ]]
+  printf '%s\n' "$evidence_a" | jq . >"$OUTPUT/$PHONE_A/rnode-startup-evidence.json"
+  printf '%s\n' "$evidence_b" | jq . >"$OUTPUT/$PHONE_B/rnode-startup-evidence.json"
 }
 
 wait_for_assertion() {

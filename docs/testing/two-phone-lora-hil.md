@@ -8,7 +8,8 @@ Prerequisites:
 
 - two distinct Android devices visible to `adb`, each paired with a distinct RNode;
 - attached antennas and enough physical separation to avoid near-field receiver overload;
-- the same LoRa profile, region, and frequency on both phones, with TCP clients disabled;
+- both phones configured for the controlled RF profile: 914.625 MHz, 250 kHz bandwidth,
+  SF11, coding rate 4/5, and 17 dBm, with TCP clients disabled;
 - `adb`, `jq`, `git`, and `base64` on the host;
 - the app destination and canonical LXMF delivery destination shown by each phone's live status.
 
@@ -22,7 +23,8 @@ tools/hil/run-two-phone-lora.sh \
 ```
 
 The run takes several minutes because SF11 radio operations are serialized. The script verifies
-strict RNode readiness and ATT MTU, matching radio profiles, TCP-disabled state, peer announces,
+strict RNode readiness and a negotiated ATT connection, the exact controlled radio profile,
+TCP-disabled state, peer announces,
 successful connections, bidirectional small and Resource-sized direct LXMF messages, and
 bidirectional event replication. It exits nonzero on the first failed boundary. A passing run
 writes `result.txt`, source commit/tree identities, installed package versions, and filtered

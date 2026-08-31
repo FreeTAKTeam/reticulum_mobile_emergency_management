@@ -12,6 +12,47 @@ fn tcp_endpoint_connect_addr_accepts_plain_and_tcp_urls() {
 }
 
 #[test]
+fn rnode_startup_evidence_contains_radio_invariants_without_endpoint() {
+    let snapshot = serde_json::json!({
+        "endpoint": "ble://AA:BB:CC:DD:EE:FF",
+        "startup_validated": true,
+        "startup_compatibility_warning": null,
+        "probe_status": {
+            "detected": true,
+            "firmware_version": { "label": "1.83" },
+            "platform": 128,
+            "mcu": 1,
+        },
+        "configured": {
+            "frequency_hz": 915_000_000,
+            "bandwidth_hz": 250_000,
+            "spreading_factor": 11,
+            "coding_rate": 5,
+            "tx_power_dbm": 17,
+            "max_payload_bytes": 508,
+        },
+        "radio_status": {
+            "frequency_hz": 915_000_000,
+            "bandwidth_hz": 250_000,
+            "spreading_factor": 11,
+            "coding_rate": 5,
+            "tx_power_dbm": 17,
+            "radio_state": 1,
+        },
+        "reported_bitrate_bps": 2148.4375,
+    });
+
+    let evidence = rnode_startup_evidence(&snapshot);
+
+    assert_eq!(evidence["startup_validated"], true);
+    assert_eq!(evidence["probe"]["firmware_version"], "1.83");
+    assert_eq!(evidence["configured"]["frequency_hz"], 915_000_000);
+    assert_eq!(evidence["reported"]["frequency_hz"], 915_000_000);
+    assert!(evidence.get("endpoint").is_none());
+    assert!(!evidence.to_string().contains("AA:BB:CC:DD:EE:FF"));
+}
+
+#[test]
 fn configured_tcp_client_endpoints_trim_strip_and_deduplicate() {
     let endpoints = configured_tcp_client_endpoints(&[
         " tcp://rns.beleth.net:4242 ".to_string(),
