@@ -1,5 +1,3 @@
-use sha2::{Digest, Sha256};
-
 const BLOCK_ENVELOPE_PREFIX: &str = "REMBC1:";
 const BLOCK_ENVELOPE_KIND: &str = "rem.block-onboarding";
 const BLOCK_ENVELOPE_VERSION: u8 = 1;
