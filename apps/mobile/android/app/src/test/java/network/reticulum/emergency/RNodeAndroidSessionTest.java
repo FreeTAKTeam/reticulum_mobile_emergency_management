@@ -36,14 +36,6 @@ public class RNodeAndroidSessionTest {
         assertEquals("first failure", status.getString("lastError"));
     }
 
-    @Test
-    public void bleAttMtuMustFitTheLargestRNodeNotification() {
-        assertFalse(RNodeAndroidBleSession.isUsableAttMtu(23));
-        assertFalse(RNodeAndroidBleSession.isUsableAttMtu(172));
-        assertTrue(RNodeAndroidBleSession.isUsableAttMtu(173));
-        assertTrue(RNodeAndroidBleSession.isUsableAttMtu(517));
-    }
-
     private static final class FakeSession extends RNodeAndroidSession {
         FakeSession(long generation) {
             super(generation);

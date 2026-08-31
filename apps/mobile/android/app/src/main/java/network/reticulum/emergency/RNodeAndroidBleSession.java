@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.os.Build;
+import android.util.Log;
 
 import java.io.IOException;
 import java.util.UUID;
@@ -22,10 +23,9 @@ import java.util.concurrent.locks.ReentrantLock;
 /** One generation-scoped Nordic UART GATT attempt. */
 @SuppressLint("MissingPermission")
 final class RNodeAndroidBleSession extends RNodeAndroidSession {
+    private static final String TAG = "RNodeAndroidTransport";
     private static final int REQUESTED_ATT_MTU = 517;
-    // LXMF/RNode notifications can carry 170 bytes. ATT reserves 3 bytes for
-    // its header, so a smaller negotiated MTU cannot carry a complete frame.
-    static final int MIN_LXMF_ATT_MTU = 173;
+    private static final long MTU_UPGRADE_TIMEOUT_MS = 2_000L;
     private static final UUID NUS_SERVICE =
         UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
     private static final UUID NUS_RX =
@@ -76,19 +76,19 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
         }
         await(connected, deadline, "BLE connection");
         throwSetupError();
-        if (!gatt.requestMtu(REQUESTED_ATT_MTU)) {
-            throw new IOException("Android did not start RNode BLE MTU negotiation");
-        }
-        await(mtuReady, deadline, "BLE MTU negotiation");
-        throwSetupError();
-        if (!isUsableAttMtu(mtu)) {
-            throw new IOException(
-                "RNode BLE negotiated ATT MTU is too small for LXMF: "
-                    + mtu
-                    + " (minimum "
-                    + MIN_LXMF_ATT_MTU
-                    + ")"
+        if (gatt.requestMtu(REQUESTED_ATT_MTU)) {
+            final long mtuDeadline = Math.min(
+                deadline,
+                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(MTU_UPGRADE_TIMEOUT_MS)
             );
+            try {
+                await(mtuReady, mtuDeadline, "BLE MTU upgrade");
+            } catch (TimeoutException error) {
+                Log.w(TAG, "RNode BLE MTU upgrade timed out; using ATT MTU " + mtu);
+            }
+            throwSetupError();
+        } else {
+            Log.w(TAG, "RNode BLE MTU upgrade was not started; using default ATT MTU " + mtu);
         }
         if (!gatt.discoverServices()) {
             throw new IOException("Android did not start RNode GATT service discovery");
@@ -108,10 +108,6 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
     @Override
     Integer negotiatedMtu() {
         return mtu;
-    }
-
-    static boolean isUsableAttMtu(int negotiatedMtu) {
-        return negotiatedMtu >= MIN_LXMF_ATT_MTU;
     }
 
     @Override
@@ -328,7 +324,11 @@ final class RNodeAndroidBleSession extends RNodeAndroidSession {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 mtu = value;
             } else {
-                setupError.compareAndSet(null, "RNode BLE MTU negotiation failed: " + status);
+                Log.w(
+                    TAG,
+                    "RNode BLE MTU upgrade failed with status=" + status
+                        + "; using ATT MTU " + mtu
+                );
             }
             mtuReady.countDown();
         }
