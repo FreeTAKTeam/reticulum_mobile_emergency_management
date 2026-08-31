@@ -110,6 +110,16 @@ public final class RNodeAndroidTransportManager implements AutoCloseable {
         session.write(RNodeUsbKissControl.hardResetFrame(), 5_000L);
     }
 
+    static void queryRNodeStatsForTest() throws Exception {
+        final RNodeAndroidTransportManager manager = requireInstalled();
+        final RNodeAndroidSession session = manager.current;
+        if (session == null || session.closed.get()) {
+            throw new IOException("RNode Android transport session is unavailable");
+        }
+        session.write(RNodeUsbKissControl.statRxFrame(), 5_000L);
+        session.write(RNodeUsbKissControl.statTxFrame(), 5_000L);
+    }
+
     private static RNodeAndroidTransportManager requireInstalled() {
         final RNodeAndroidTransportManager manager = INSTALLED.get();
         if (manager == null) {

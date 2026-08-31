@@ -21,6 +21,7 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
     public static final String ACTION_STATUS = "network.reticulum.emergency.action.ADB_STATUS";
     public static final String ACTION_SEND_LXMF = "network.reticulum.emergency.action.ADB_SEND_LXMF";
     public static final String ACTION_RESET_RNODE = "network.reticulum.emergency.action.ADB_RESET_RNODE";
+    public static final String ACTION_RNODE_STATS = "network.reticulum.emergency.action.ADB_RNODE_STATS";
     public static final String ACTION_UPSERT_EVENT = "network.reticulum.emergency.action.ADB_UPSERT_EVENT";
     public static final String ACTION_UPSERT_EVENT_TO_DESTINATION =
         "network.reticulum.emergency.action.ADB_UPSERT_EVENT_TO_DESTINATION";
@@ -75,6 +76,9 @@ public final class AdbTestControlReceiver extends BroadcastReceiver {
             } else if (ACTION_RESET_RNODE.equals(action)) {
                 RNodeAndroidTransportManager.resetRNodeForTest();
                 Log.i(TAG, "rnodeReset outcome=ok");
+            } else if (ACTION_RNODE_STATS.equals(action)) {
+                RNodeAndroidTransportManager.queryRNodeStatsForTest();
+                Log.i(TAG, "rnodeStats outcome=ok");
             } else if (ACTION_UPSERT_EVENT.equals(action)) {
                 logResult("upsertEvent", ReticulumBridge.upsertEventJson(requirePayload(intent)));
             } else if (ACTION_UPSERT_EVENT_TO_DESTINATION.equals(action)) {

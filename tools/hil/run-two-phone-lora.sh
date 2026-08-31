@@ -128,6 +128,9 @@ capture_failure() {
   local exit_code=$?
   if ((exit_code != 0)); then
     set +e
+    broadcast "$PHONE_A" ADB_RNODE_STATS
+    broadcast "$PHONE_B" ADB_RNODE_STATS
+    sleep 2
     snapshot "$PHONE_A" failure
     snapshot "$PHONE_B" failure
     echo "FAIL: acceptance stopped with exit code $exit_code" >"$RESULT_FILE"
@@ -358,6 +361,9 @@ wait_for_assertion "$PHONE_A" ADB_ASSERT_EVENT "assertEvent id=event-b-to-a" \
   "$(jq -cn --arg id event-b-to-a --arg uid "$EVENT_B" \
     '{assertionId:$id,eventUid:$uid}')"
 
+broadcast "$PHONE_A" ADB_RNODE_STATS
+broadcast "$PHONE_B" ADB_RNODE_STATS
+sleep 2
 snapshot "$PHONE_A" final
 snapshot "$PHONE_B" final
 cat >>"$OUTPUT/metadata.txt" <<EOF

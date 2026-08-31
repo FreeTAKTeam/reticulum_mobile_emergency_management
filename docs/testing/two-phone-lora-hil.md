@@ -31,3 +31,5 @@ successful connections, bidirectional small and Resource-sized direct LXMF messa
 bidirectional event replication. It exits nonzero on the first failed boundary. A passing run
 writes `result.txt`, source commit/tree identities, installed package versions, and filtered
 privacy-safe logcat snapshots under ignored `target/lora-regression/<UTC timestamp>/`.
+Failure and final snapshots include the RNode firmware `stat_rx` and `stat_tx` counters so a
+host-to-radio enqueue can be distinguished from an over-the-air transmit or receive.
