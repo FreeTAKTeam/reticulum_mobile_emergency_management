@@ -125,6 +125,25 @@ struct RnodeBleWiring {
 }
 
 #[cfg(target_os = "android")]
+fn rnode_kiss_config(lora: LoraConfig, max_write_len: usize) -> RnodeBleKissConfig {
+    let mut kiss = RnodeBleKissConfig {
+        mtu: usize::from(lora.max_payload_bytes),
+        max_write_len,
+        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
+        initial_frames: lora.probe_frames(),
+        deferred_frames: lora.radio_config_frames(),
+        shutdown_frames: lora.shutdown_frames(),
+        ..RnodeBleKissConfig::default()
+    };
+    // A successful Bluetooth write only hands bytes to the RNode; it does not
+    // mean the low-bitrate radio has accepted the next packet. Honour the
+    // firmware READY handshake so Resource advertisements and retries cannot
+    // overrun its transmit queue while another LoRa frame is on air.
+    kiss.kiss.flow_control = true;
+    kiss
+}
+
+#[cfg(target_os = "android")]
 fn rnode_ble_wiring_from_settings(
     settings: &RnodeSettingsRecord,
 ) -> Result<RnodeBleWiring, String> {
@@ -154,15 +173,7 @@ fn rnode_ble_wiring_from_settings(
         format!("rnode-{scheme}:{}", settings.display_name.trim())
     };
     let endpoint = format!("{scheme}://{peripheral_id}");
-    let kiss = RnodeBleKissConfig {
-        mtu: usize::from(lora.max_payload_bytes),
-        max_write_len,
-        read_frame_timeout: RNODE_BLE_READ_FRAME_TIMEOUT,
-        initial_frames: lora.probe_frames(),
-        deferred_frames: lora.radio_config_frames(),
-        shutdown_frames: lora.shutdown_frames(),
-        ..RnodeBleKissConfig::default()
-    };
+    let kiss = rnode_kiss_config(lora, max_write_len);
 
     Ok(RnodeBleWiring {
         label,
