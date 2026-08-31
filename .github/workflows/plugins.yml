@@ -8,8 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Immutable LXMF-rs v0.10.1 release commit, aligned with RNS 1.5.2.
-  LXMF_RS_REF: 25a976945cb335dff3be692981151c8741a5fdeb
+  # Immutable LXMF-rs single-owner RNode repair revision, based on v0.10.1.
+  LXMF_RS_REF: 5c38f00e2e40552fc62787f49ea5cde60e27e7e4
 
 jobs:
   plugin-system:
