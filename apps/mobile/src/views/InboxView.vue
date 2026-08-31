@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, shallowRef, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-
 import ConversationList from "../components/messaging/ConversationList.vue";
 import ConversationThread from "../components/messaging/ConversationThread.vue";
 import ListWindowControls from "../components/ListWindowControls.vue";
@@ -16,11 +15,11 @@ import type { DiscoveredPeer } from "../types/domain";
 import { registerBackNavigationHandler } from "../utils/androidBackNavigation";
 import { runDetachedStoreTask } from "../utils/detachedStoreTask";
 import {
-  connectedPeerOptionsFor,
   filterPeerOptions,
   withSelectedPeerOption,
   type ConnectedPeerOption,
 } from "../utils/inboxPeerOptions";
+import { chatPolicyReason, innerCirclePeerOptions } from "../utils/circleChatPolicy";
 import { formatR3aktTeamColor } from "../utils/r3akt";
 import {
   normalizedValuesMatch as destinationsMatch,
@@ -28,7 +27,6 @@ import {
   safeLower,
   safeTrim,
 } from "../utils/stringValues";
-
 const messagingStore = useMessagingStore();
 const messagesStore = useMessagesStore();
 const nodeStore = useNodeStore();
@@ -42,13 +40,11 @@ const isPeerPickerVisible = shallowRef(false);
 const peerPickerQuery = shallowRef("");
 let visualMockRefreshInterval: number | undefined;
 let unregisterBackNavigationHandler: (() => void) | undefined;
-
 interface SosMessageMapTarget {
   incidentId: string;
   sourceHex: string;
   messageIdHex?: string;
 }
-
 function isVisualMockMode(): boolean {
   return import.meta.env.DEV && route.query.mockChat === "1";
 }
@@ -58,17 +54,11 @@ const activeConversationId = computed(() =>
   selectedConversation.value?.conversationId ?? messagingStore.selectedConversationId,
 );
 const connectedPeerOptions = computed(() =>
-  connectedPeerOptionsFor(nodeStore.reachablePeers, nodeStore.savedDestinations),
+  innerCirclePeerOptions(nodeStore.reachablePeers, nodeStore.savedPeers, nodeStore.savedDestinations),
 );
 const selectedConversationOption = computed<ConnectedPeerOption | null>(() => {
   const value = safeTrim(selectedConversation.value?.destinationHex);
-  if (!safeTrim(value)) {
-    return null;
-  }
-  return {
-    value,
-    displayName: safeTrim(selectedConversation.value?.displayName) || value,
-  };
+  return value ? { value, displayName: safeTrim(selectedConversation.value?.displayName) || value } : null;
 });
 const threadDestinationOptions = computed<ConnectedPeerOption[]>(() => {
   return withSelectedPeerOption(connectedPeerOptions.value, selectedConversationOption.value);
@@ -85,9 +75,7 @@ const explicitDestinationHex = computed(() =>
 const conversationCount = computed(() => messagingStore.conversations.length);
 const selectedPeer = computed(() => {
   const destinationHex = safeLower(explicitDestinationHex.value);
-  if (!destinationHex) {
-    return null;
-  }
+  if (!destinationHex) return null;
   return nodeStore.discoveredByDestination[destinationHex]
     ?? Object.values(nodeStore.discoveredByDestination).find((peer) =>
       safeLower(peer.destination) === destinationHex
@@ -116,7 +104,6 @@ function findConversationForSelection(
     ?? matches[0]
     ?? null;
 }
-
 const activeThreadConversation = computed(() =>
   findConversationForSelection(explicitDestinationHex.value, selectedPeer.value),
 );
@@ -125,6 +112,14 @@ const selectedDestinationHex = computed(() =>
   || safeTrim(activeThreadConversation.value?.destinationHex)
   || safeTrim(explicitDestinationHex.value),
 );
+const selectedSavedPeer = computed(() => Object.values(nodeStore.savedByDestination).find((peer) =>
+  destinationsMatch(peer.destination, selectedDestinationHex.value)
+  || destinationsMatch(peer.destination, selectedPeer.value?.destination ?? "")
+  || destinationsMatch(peer.destination, selectedPeer.value?.lxmfDestinationHex ?? ""),
+));
+const chatDisabledReason = computed(() => chatPolicyReason(
+  nodeStore.powerState.saverActive, selectedDestinationHex.value, selectedSavedPeer.value,
+));
 const activeThreadMessages = computed(() => {
   const selectedConversationRecord = selectedConversation.value ?? activeThreadConversation.value;
   const destinationHex = selectedDestinationHex.value;
@@ -300,6 +295,7 @@ function handleThreadDestinationSelected(event: Event): void {
 }
 
 async function send(bodyUtf8: string): Promise<void> {
+  if (chatDisabledReason.value) return;
   const destinationHex = selectedDestinationHex.value;
   if (!destinationHex) {
     return;
@@ -317,6 +313,10 @@ async function send(bodyUtf8: string): Promise<void> {
 }
 
 async function retryMessage(messageIdHex: string): Promise<void> {
+  const message = activeThreadMessages.value.find(
+    (candidate) => candidate.messageIdHex === messageIdHex,
+  );
+  if (chatDisabledReason.value && message?.trafficClass !== "sos") return;
   await messagingStore.retryMessage(messageIdHex);
 }
 
@@ -485,6 +485,8 @@ onUnmounted(() => {
           :target-message-id="messagingStore.selectedTargetMessageId"
           :sos-map-targets="sosMapTargetsByMessageId"
           :messages="activeThreadMessages"
+          :chat-disabled="Boolean(chatDisabledReason)"
+          :chat-disabled-reason="chatDisabledReason"
           @back="showConversationList"
           @retry="retryMessage"
           @send="send"

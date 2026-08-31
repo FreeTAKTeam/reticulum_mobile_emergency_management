@@ -1,4 +1,4 @@
-import type { EamProjectionRecord, EamReadinessMessageRecord, EamReadinessStatusMetricRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, LegacyImportPayload, SavedPeerRecord, TelemetryPositionRecord } from "./contracts";
+import type { CommunityStatusProjectionRecord, EamProjectionRecord, EamReadinessMessageRecord, EamReadinessStatusMetricRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord, EventProjectionRecord, HouseholdStatus, LegacyImportPayload, SavedPeerRecord, TelemetryPositionRecord } from "./contracts";
 import { toOptionalNumber } from "./converters";
 import { hasValue, normalizeHex, pluginRecord, toOptionalHex } from "./runtime-converters";
 
@@ -21,6 +21,9 @@ export function toSavedPeerRecord(raw: Record<string, unknown>): SavedPeerRecord
         : undefined,
     lastRouteSeenAtMs: toOptionalNumber(raw.lastRouteSeenAtMs ?? raw.last_route_seen_at_ms),
     lastHops: toOptionalNumber(raw.lastHops ?? raw.last_hops),
+    circleTier: String(raw.circleTier ?? raw.circle_tier ?? "").trim().toLowerCase() === "outer"
+      ? "outer"
+      : "inner",
   };
 }
 
@@ -344,3 +347,21 @@ export function toTelemetryPositionRecord(raw: Record<string, unknown>): Telemet
   };
 }
 
+export function toCommunityStatusProjectionRecord(
+  raw: Record<string, unknown>,
+): CommunityStatusProjectionRecord {
+  return {
+    householdId: String(raw.householdId ?? raw.household_id ?? ""),
+    householdName: String(raw.householdName ?? raw.household_name ?? ""),
+    adults: Number(raw.adults ?? 0),
+    children: Number(raw.children ?? 0),
+    pets: Number(raw.pets ?? 0),
+    roleBadges: Array.isArray(raw.roleBadges ?? raw.role_badges)
+      ? (raw.roleBadges ?? raw.role_badges) as string[]
+      : [],
+    status: String(raw.status ?? "all_home") as HouseholdStatus,
+    saverActive: Boolean(raw.saverActive ?? raw.saver_active),
+    updatedAtMs: Number(raw.updatedAtMs ?? raw.updated_at_ms ?? 0),
+    sourceIdentity: String(raw.sourceIdentity ?? raw.source_identity ?? ""),
+  };
+}

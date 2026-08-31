@@ -31,6 +31,8 @@ const props = defineProps<{
   targetMessageId?: string;
   sosMapTargets?: Record<string, SosMessageMapTarget>;
   messages: MessageRecord[];
+  chatDisabled?: boolean;
+  chatDisabledReason?: string;
 }>();
 
 const emit = defineEmits<{
@@ -44,7 +46,9 @@ const draft = ref("");
 const threadBody = ref<HTMLElement | null>(null);
 let lastTargetScrolled = "";
 
-const canSend = computed(() => draft.value.trim().length > 0 && Boolean(props.destinationHex));
+const canSend = computed(() =>
+  !props.chatDisabled && draft.value.trim().length > 0 && Boolean(props.destinationHex),
+);
 const hasTargetPosition = computed(() =>
   Boolean(safeTrim(props.targetLatitude) || safeTrim(props.targetLongitude)),
 );
@@ -59,6 +63,7 @@ function submit(): void {
   if (!bodyUtf8) {
     return;
   }
+  if (props.chatDisabled) return;
   emit("send", bodyUtf8);
   draft.value = "";
 }
@@ -143,6 +148,18 @@ function messageStateLabel(state: string): string {
 function isRetryableMessage(message: MessageRecord): boolean {
   return message.direction === "Outbound"
     && (message.state === "Failed" || message.state === "TimedOut");
+}
+
+function retryDisabled(message: MessageRecord): boolean {
+  return Boolean(props.chatDisabled) && message.trafficClass !== "sos";
+}
+
+function retryTitle(message: MessageRecord): string {
+  return retryDisabled(message)
+    ? props.chatDisabledReason || "Retry is unavailable while chat is disabled."
+    : message.trafficClass === "sos"
+      ? "Retry SOS emergency message"
+      : "Retry message";
 }
 
 function messageFailureDetail(message: MessageRecord): string {
@@ -349,6 +366,8 @@ watch(
             type="button"
             class="bubble-retry"
             :aria-label="`Retry message: ${visibleMessageBody(message)}`"
+            :disabled="retryDisabled(message)"
+            :title="retryTitle(message)"
             @click="emit('retry', message.messageIdHex)"
           >
             Retry
@@ -360,18 +379,20 @@ watch(
       </div>
 
       <form class="composer" @submit.prevent="submit">
+        <p v-if="chatDisabledReason" class="chat-policy-notice" role="status">{{ chatDisabledReason }}</p>
         <textarea
           v-model="draft"
           class="composer-input"
           rows="3"
           placeholder="Write an LXMF message"
+          :disabled="chatDisabled"
         />
         <button
           type="submit"
           class="composer-send"
           :aria-label="'Send message'"
           :disabled="!canSend"
-          title="Send message"
+          :title="chatDisabled ? chatDisabledReason : 'Send message'"
         >
           <svg class="composer-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 12 20 4l-4 16-4.5-5.5z" />

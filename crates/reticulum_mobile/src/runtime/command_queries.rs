@@ -22,7 +22,7 @@ fn spawn_cancel_lxmf_command(
                 last_wire_message_id_hex: None,
                 updated_at_ms: now_ms(),
             })
-            .map(from_sdk_message_record)
+            .map(|record| from_sdk_message_record_with_persisted(&state, record))
             .ok_or(NodeError::InvalidConfig {})?;
         upsert_message_record(&state, &bus, updated, false).await;
         Ok(())
@@ -109,7 +109,7 @@ fn spawn_list_messages_command(
 ) {
     let state = state.clone();
     executor.spawn(lane, RuntimeCommandClass::Local, resp, async move {
-        Ok(message_records_snapshot(&state, conversation_id.as_deref()).await)
+        message_records_snapshot(&state, conversation_id.as_deref()).await
     });
 }
 

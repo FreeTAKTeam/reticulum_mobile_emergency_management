@@ -2,7 +2,7 @@ import { YELLOW_TEAM_UID, type NodeStatus, type ReticulumNodeClient } from "@ret
 import type { Ref, ShallowRef } from "vue";
 
 import { clearHubRegistryLinkage } from "../services/hubRegistryBootstrap";
-import type { DiscoveredPeer, NodeUiSettings, PeerListV1, SavedPeer } from "../types/domain";
+import type { CircleTier, DiscoveredPeer, NodeUiSettings, PeerListV1, SavedPeer } from "../types/domain";
 import { persistUiSettingsProjection as storeUiSettingsProjection } from "../utils/legacyState";
 import {
   createPeerListV1,
@@ -289,6 +289,19 @@ export function createNodeActionsController(context: NodeActionsContext) {
     }
   }
 
+  async function setPeerTier(destinationRaw: string, circleTier: CircleTier): Promise<void> {
+    await init();
+    const destination = normalizeDestinationHex(destinationRaw);
+    const savedPeer = savedByDestination[destination];
+    if (!savedPeer) {
+      throw new Error("Save this peer before assigning a circle.");
+    }
+    await persistSavedPeersProjection({
+      ...savedByDestination,
+      [destination]: { ...savedPeer, circleTier },
+    }, `circle tier update ${destination}`);
+  }
+
   async function updateSettings(next: Partial<NodeUiSettings>): Promise<void> {
     let uiSettingsChanged = false;
     let hubRoutingChanged = false;
@@ -354,6 +367,21 @@ export function createNodeActionsController(context: NodeActionsContext) {
     }
     if (next.rnode) {
       settings.rnode = normalizeRnodeSettings({ ...settings.rnode, ...next.rnode });
+    }
+    if (next.community) {
+      settings.community = {
+        ...settings.community,
+        ...next.community,
+        adults: Math.min(20, Math.max(0, Math.trunc(Number(next.community.adults)))),
+        children: Math.min(20, Math.max(0, Math.trunc(Number(next.community.children)))),
+        pets: Math.min(20, Math.max(0, Math.trunc(Number(next.community.pets)))),
+        householdName: next.community.householdName.trim().slice(0, 64),
+        roleBadges: [...new Set(next.community.roleBadges.map((role) => role.trim()).filter(Boolean))]
+          .slice(0, 5),
+      };
+    }
+    if (next.power) {
+      settings.power = { ...settings.power, ...next.power };
     }
     const nextSettings = normalizeAppSettingsRecord(
       toAppSettingsRecord(settings),
@@ -444,6 +472,7 @@ export function createNodeActionsController(context: NodeActionsContext) {
     savePeer,
     setAnnounceCapabilities,
     setPeerLabel,
+    setPeerTier,
     unsavePeer,
     updateSettings,
   };

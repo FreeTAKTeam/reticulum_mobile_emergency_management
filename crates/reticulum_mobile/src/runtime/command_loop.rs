@@ -7,13 +7,7 @@
         };
         match cmd {
             Command::Stop { resp } => {
-                if let Ok(mut guard) = status.lock() {
-                    guard.running = false;
-                    guard.refresh_readiness();
-                    bus.emit(NodeEvent::StatusChanged {
-                        status: guard.clone(),
-                    });
-                }
+                mark_runtime_stopped(&status, &bus);
                 let _ = resp.send(Ok(()));
                 break;
             }
@@ -103,6 +97,7 @@
                 bytes,
                 fields_bytes,
                 send_mode,
+                traffic_class,
                 resp,
             } => {
                 spawn_send_bytes_command(
@@ -117,12 +112,14 @@
                         bytes,
                         fields_bytes,
                         send_mode,
+                        traffic_class,
                         resp,
                     },
                 );
             }
             Command::SendLxmf {
                 request,
+                requested_destination_hex,
                 fields_bytes,
                 resp,
             } => {
@@ -200,12 +197,13 @@
                             source_hex: Some(address_hash_to_hex(
                                 &state.lxmf_destination.lock().await.desc.address_hash,
                             )),
-                            requested_destination_hex: Some(request.destination_hex.clone()),
+                            requested_destination_hex: Some(requested_destination_hex),
                             delivery_destination_hex: Some(report.resolved_destination_hex.clone()),
                             recipient_identity_hex: None,
                             last_wire_message_id_hex: Some(report.message_id_hex.clone()),
                             title: request.title.clone(),
                             body_utf8: request.body_utf8.clone(),
+                            traffic_class: OutboundTrafficClass::Chat {},
                             method,
                             state: state_value,
                             transport_state: transport_state_for_message_state(state_value),
@@ -251,6 +249,7 @@
             }
             Command::RetryLxmf {
                 message_id_hex,
+                delivery_destination_hex,
                 resp,
             } => {
                 let state = state.clone();
@@ -264,12 +263,54 @@
                 );
                 command_executor.spawn(command_lane, RuntimeCommandClass::Work, resp, async move {
                     let result = async {
-                        let outbound = state
+                        let persisted = state
+                            .app_state
+                            .list_messages(None)?
+                            .into_iter()
+                            .find(|message| message.message_id_hex == message_id_hex);
+                        let mut outbound = state
                             .messaging
                             .lock()
                             .await
                             .outbound(message_id_hex.as_str())
+                            .or_else(|| {
+                                persisted.as_ref().map(|message| {
+                                    sdkmsg::StoredOutboundMessage {
+                                        request: sdkmsg::SendMessageRequest {
+                                            destination_hex: message
+                                                .requested_destination_hex
+                                                .clone()
+                                                .unwrap_or_else(|| message.destination_hex.clone()),
+                                            body_utf8: message.body_utf8.clone(),
+                                            title: message.title.clone(),
+                                            send_mode: match message.method {
+                                                MessageMethod::Propagated {} => {
+                                                    sdkmsg::SendMode::PropagationOnly
+                                                }
+                                                MessageMethod::Direct {} => {
+                                                    sdkmsg::SendMode::DirectOnly
+                                                }
+                                                MessageMethod::Opportunistic {}
+                                                | MessageMethod::Resource {} => {
+                                                    sdkmsg::SendMode::Auto
+                                                }
+                                            },
+                                            use_propagation_node: false,
+                                        },
+                                        message_id_hex: message.message_id_hex.clone(),
+                                    }
+                                })
+                            })
                             .ok_or(NodeError::InvalidConfig {})?;
+                        let logical_destination_hex = persisted
+                            .as_ref()
+                            .and_then(|message| message.requested_destination_hex.clone())
+                            .unwrap_or_else(|| outbound.request.destination_hex.clone());
+                        outbound.request.destination_hex = delivery_destination_hex;
+                        let persisted_class = persisted.as_ref().map_or(
+                            OutboundTrafficClass::Chat {},
+                            |message| message.traffic_class,
+                        );
                         let report = send_lxmf_with_delivery_policy(
                             &state,
                             &bus,
@@ -311,14 +352,13 @@
                             source_hex: Some(address_hash_to_hex(
                                 &state.lxmf_destination.lock().await.desc.address_hash,
                             )),
-                            requested_destination_hex: Some(
-                                outbound.request.destination_hex.clone(),
-                            ),
+                            requested_destination_hex: Some(logical_destination_hex.clone()),
                             delivery_destination_hex: Some(report.resolved_destination_hex.clone()),
                             recipient_identity_hex: None,
                             last_wire_message_id_hex: Some(report.message_id_hex.clone()),
                             title: outbound.request.title.clone(),
                             body_utf8: outbound.request.body_utf8.clone(),
+                            traffic_class: persisted_class,
                             method: match (report.method, report.representation) {
                                 (LxmfDeliveryMethod::Propagated {}, _) => {
                                     MessageMethod::Propagated {}
@@ -340,6 +380,7 @@
                             updated_at_ms: now_ms(),
                         };
                         upsert_message_record(&state, &bus, retried, false).await;
+                        outbound.request.destination_hex = logical_destination_hex;
                         state.messaging.lock().await.store_outbound(
                             sdkmsg::StoredOutboundMessage {
                                 request: outbound.request,

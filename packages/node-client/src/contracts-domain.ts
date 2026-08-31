@@ -1,5 +1,5 @@
 import type {
-  LogLevel, HubMode, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
+  LogLevel, RnodeRegion, RnodeProfileId, RnodeConnectionMode, RuntimeReadinessState, PeerState, AnnounceDestinationKind,
   AnnounceClass, SendOutcome, LxmfDeliveryStatus, TransportDeliveryState, ApplicationAckState, SendMode, LxmfDeliveryMethod, LxmfDeliveryRepresentation,
   LxmfFallbackStage, MessageMethod, MessageState, MessageDirection, ClientMode, ProjectionScope, PluginState, PluginCapabilityRecord,
   PluginMessageDescriptorRecord, InstalledPluginRecord, PluginSensorRecord, SosState, SosTriggerSource, SosMessageKind, RnodeSettingsRecord, RnodeBleDeviceRecord,
@@ -8,6 +8,8 @@ import type {
   PacketSentEvent, LxmfDeliveryEvent, MessageRecord, PeerRecord, ConversationRecord, SyncPhase, SyncStatus, SendLxmfRequest,
   HubSettingsRecord,
 } from "./contracts-core";
+import type { CircleTier, CommunitySettingsRecord, PowerPolicyRecord, PowerStateRecord } from "./contracts-community";
+export * from "./contracts-community";
 
 export type ChecklistMode = "ONLINE" | "OFFLINE";
 export type ChecklistSyncState = "LOCAL_ONLY" | "UPLOAD_PENDING" | "SYNCED";
@@ -205,6 +207,8 @@ export interface AppSettingsRecord {
   teams: TeamSettingsRecord;
   checklists: ChecklistSettingsRecord;
   rnode: RnodeSettingsRecord;
+  community: CommunitySettingsRecord;
+  power: PowerPolicyRecord;
 }
 
 export interface SavedPeerRecord {
@@ -217,6 +221,7 @@ export interface SavedPeerRecord {
   displayName?: string;
   lastRouteSeenAtMs?: number;
   lastHops?: number;
+  circleTier: CircleTier;
 }
 
 export interface EamSourceRecord {
@@ -467,6 +472,7 @@ export interface NodeErrorEvent {
 }
 
 export interface NodeClientEvents {
+  powerStateChanged: PowerStateRecord;
   statusChanged: StatusChangedEvent;
   interfaceStatusChanged: InterfaceStatusChangedEvent;
   announceReceived: AnnounceReceivedEvent;

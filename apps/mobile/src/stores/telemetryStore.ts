@@ -93,6 +93,10 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         nodeStore.settings.telemetry.expireAfterMinutes,
       ) * 60 * 1000,
   );
+  const effectivePublishIntervalSeconds = computed(() => {
+    const configured = Math.max(1, nodeStore.settings.telemetry.publishIntervalSeconds);
+    return nodeStore.powerState.saverActive ? Math.max(configured, 300) : configured;
+  });
 
   function replaceTelemetryProjection(records: TelemetryPosition[]): void {
     const nextByCallsign: Record<string, TelemetryPosition> = {};
@@ -231,7 +235,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     telemetryError.value = "";
 
     await publishOnce();
-    const intervalMs = Math.max(1, nodeStore.settings.telemetry.publishIntervalSeconds) * 1000;
+    const intervalMs = effectivePublishIntervalSeconds.value * 1000;
     loopTimer.value = window.setInterval(() => {
       void publishOnce();
     }, intervalMs);
@@ -305,6 +309,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
         () => nodeStore.settings.telemetry.publishIntervalSeconds,
         () => nodeStore.settings.displayName,
         () => nodeStore.status.running,
+        () => nodeStore.powerState.saverActive,
       ],
       () => {
         syncPublishLoopFromSettings();
@@ -392,6 +397,7 @@ export const useTelemetryStore = defineStore("telemetry", () => {
     expiredPositions,
     staleThresholdMs,
     expireThresholdMs,
+    effectivePublishIntervalSeconds,
     permissionState,
     loopStatus,
     telemetryError,

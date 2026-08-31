@@ -5,7 +5,6 @@ fn checklist_snapshot_msgpack_entry(
         .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
     Ok(("snapshot", json_value_to_msgpack(&snapshot_value)?))
 }
-
 fn checklist_snapshot_content_bytes(
     checklist_uid: &str,
     snapshot_json: &str,
@@ -26,7 +25,6 @@ fn checklist_snapshot_content_bytes(
     ]);
     rmp_serde::to_vec(&content).map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))
 }
-
 fn build_checklist_replication_payload(
     status: &NodeStatus,
     target: &MissionReplicationTarget,
@@ -318,7 +316,9 @@ fn build_initial_checklist_task_payloads(
 fn dispatch_scheduled_mission_send(
     tx: &mpsc::Sender<Command>,
     send: ScheduledMissionSend,
+    saver_active: bool,
 ) -> Result<(), NodeError> {
+    ensure_outbound_admitted(saver_active, OutboundTrafficClass::Checklist {})?;
     let (destination_hex, body, fields_bytes, send_mode) = send;
     let (resp_tx, _resp_rx) = cb::bounded(1);
     dispatch_command(
@@ -328,6 +328,7 @@ fn dispatch_scheduled_mission_send(
             bytes: body,
             fields_bytes: Some(fields_bytes),
             send_mode,
+            traffic_class: OutboundTrafficClass::Checklist {},
             resp: resp_tx,
         },
     )
@@ -463,37 +464,6 @@ fn checklist_task_row_style_args_json(
         args.insert(
             "line_break_enabled".to_string(),
             JsonValue::from(line_break_enabled),
-        );
-    }
-    args
-}
-
-fn checklist_task_cell_args_json(
-    request: &ChecklistTaskCellSetRequest,
-) -> JsonMap<String, JsonValue> {
-    let mut args = JsonMap::new();
-    args.insert(
-        "checklist_uid".to_string(),
-        JsonValue::from(request.checklist_uid.trim()),
-    );
-    args.insert(
-        "task_uid".to_string(),
-        JsonValue::from(request.task_uid.trim()),
-    );
-    args.insert(
-        "column_uid".to_string(),
-        JsonValue::from(request.column_uid.trim()),
-    );
-    args.insert("value".to_string(), JsonValue::from(request.value.clone()));
-    if let Some(identity) = request
-        .updated_by_team_member_rns_identity
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        args.insert(
-            "updated_by_team_member_rns_identity".to_string(),
-            JsonValue::from(identity),
         );
     }
     args

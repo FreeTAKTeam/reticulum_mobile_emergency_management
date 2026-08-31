@@ -315,6 +315,7 @@ fn from_sdk_message_record(record: sdkmsg::MessageRecord) -> MessageRecord {
         last_wire_message_id_hex: record.last_wire_message_id_hex,
         title: record.title,
         body_utf8: record.body_utf8,
+        traffic_class: OutboundTrafficClass::Chat {},
         method: from_sdk_message_method(record.method),
         state: from_sdk_message_state(record.state),
         transport_state: from_sdk_transport_delivery_state(record.transport_state),
@@ -324,6 +325,28 @@ fn from_sdk_message_record(record: sdkmsg::MessageRecord) -> MessageRecord {
         received_at_ms: record.received_at_ms,
         updated_at_ms: record.updated_at_ms,
     }
+}
+
+fn from_sdk_message_record_with_persisted(
+    state: &NodeRuntimeState,
+    record: sdkmsg::MessageRecord,
+) -> MessageRecord {
+    let mut converted = from_sdk_message_record(record);
+    let persisted = state.app_state.list_messages(None).ok().and_then(|items| {
+        items.into_iter().find(|item| {
+            item.message_id_hex == converted.message_id_hex
+                || item.last_wire_message_id_hex.as_deref()
+                    == Some(converted.message_id_hex.as_str())
+        })
+    });
+    if let Some(persisted) = persisted {
+        converted.traffic_class = persisted.traffic_class;
+        converted.requested_destination_hex = persisted.requested_destination_hex;
+        converted.delivery_destination_hex = persisted.delivery_destination_hex;
+        converted.recipient_identity_hex = persisted.recipient_identity_hex;
+        converted.last_wire_message_id_hex = persisted.last_wire_message_id_hex;
+    }
+    converted
 }
 
 fn from_sdk_peer_record(record: sdkmsg::PeerRecord) -> PeerRecord {

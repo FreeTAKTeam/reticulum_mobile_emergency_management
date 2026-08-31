@@ -1,4 +1,4 @@
-import type { ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, NodeClientEvents, NodeStatus, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, TelemetryPositionRecord } from "./contracts";
+import type { BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, CommunityStatusProjectionRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, NodeClientEvents, NodeStatus, PowerStateRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, TelemetryPositionRecord } from "./contracts";
 import { DEFAULT_SOS_SETTINGS, DEFAULT_SOS_STATUS } from "./client-config-converters";
 import { cloneChecklistRecord, cloneChecklistTemplateRecord, createDefaultChecklistTemplates, createInMemoryChecklistTemplateFromCsv, type ChecklistCellInput, type ChecklistCreateInput, type ChecklistRowAddInput, type ChecklistRowDeleteInput, type ChecklistRowStyleInput, type ChecklistStatusInput, type ChecklistTemplateCsvInput, type ChecklistUpdateInput } from "./checklist-memory-templates";
 import { addInMemoryTaskRow, createInMemoryChecklistFromTemplate, deleteInMemoryTaskRow, emitChecklistInvalidations, findInMemoryChecklist, setInMemoryTaskCell, setInMemoryTaskRowStyle, setInMemoryTaskStatus, updateInMemoryChecklist } from "./checklist-memory-runtime";
@@ -17,6 +17,30 @@ export abstract class InMemoryProjectionClient {
   private readonly sosLocations: SosLocationRecord[] = [];
   private readonly sosAudio: SosAudioRecord[] = [];
 
+  async getPowerState(): Promise<PowerStateRecord> {
+    return { charging: false, saverActive: false, updatedAtMs: 0 };
+  }
+
+  async publishCommunityStatus(): Promise<EventProjectionRecord> {
+    throw new Error("Native community publishing is unavailable in this client mode.");
+  }
+
+  async createBlockOnboardingCode(
+    _draft: BlockOnboardingDraft,
+  ): Promise<SignedBlockOnboardingEnvelope> {
+    throw new Error("Native Block Code signing is unavailable in this client mode.");
+  }
+
+  async inspectBlockOnboardingCode(_encodedText: string): Promise<BlockOnboardingInspection> {
+    throw new Error("Native Block Code verification is unavailable in this client mode.");
+  }
+
+  async importBlockOnboardingCode(
+    _request: BlockOnboardingImportRequest,
+  ): Promise<BlockOnboardingImportResult> {
+    throw new Error("Native Block Code import is unavailable in this client mode.");
+  }
+
   async getEams(): Promise<EamProjectionRecord[]> { return []; }
   async upsertEam(_eam: EamProjectionRecord): Promise<void> {}
   async deleteEam(_callsign: string, _deletedAtMs?: number): Promise<void> {}
@@ -24,6 +48,7 @@ export abstract class InMemoryProjectionClient {
   async getEamTeamSummary(_teamUid: string): Promise<EamTeamSummaryRecord | null> { return null; }
   async getEamReadinessSummary(): Promise<EamReadinessSummaryRecord> { return emptyEamReadinessSummary(); }
   async getEvents(): Promise<EventProjectionRecord[]> { return []; }
+  async getCommunityStatuses(): Promise<CommunityStatusProjectionRecord[]> { return []; }
   async upsertEvent(_event: EventProjectionRecord): Promise<void> {}
   async deleteEvent(_uid: string, _deletedAtMs?: number): Promise<void> {}
   async getTelemetryPositions(): Promise<TelemetryPositionRecord[]> { return []; }

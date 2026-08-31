@@ -7,13 +7,16 @@ import {
 import { useRouter } from "vue-router";
 
 import { useTeamDirectory } from "../composables/useTeamDirectory";
+import { useEventsStore } from "../stores/eventsStore";
 import { notifyOperationalUpdate } from "../services/notifications";
 import { useNodeStore } from "../stores/nodeStore";
+import CommunityPeerSummary from "./CommunityPeerSummary.vue";
 
 const props = defineProps<{ searchText: string }>();
 const emit = defineEmits<{ "update:searchText": [value: string] }>();
 const router = useRouter();
 const nodeStore = useNodeStore();
+const eventsStore = useEventsStore();
 const {
   activeSection,
   connectedDestinations,
@@ -51,6 +54,14 @@ function routeLabel(destination: string): string {
   return `${destination.slice(0, 8)}… · ${hops}`;
 }
 
+function communityFor(peer: { destination: string; member?: { identity: string } }) {
+  const discovered = nodeStore.discoveredByDestination[peer.destination];
+  const identities = new Set([
+    peer.destination, peer.member?.identity ?? "", discovered?.identityHex ?? "",
+  ].map((value) => value.toLowerCase()).filter(Boolean));
+  return eventsStore.communityRecords.find((record) => identities.has(record.sourceIdentity.toLowerCase()));
+}
+
 async function runAction(
   action: () => Promise<void>,
   successMessage: string,
@@ -78,6 +89,15 @@ async function toggleConnection(destination: string): Promise<void> {
       : nodeStore.connectPeer(destination),
     disconnecting ? "Disconnect requested." : "Connect requested.",
     disconnecting ? "disconnect peer" : "connect peer",
+  );
+}
+
+async function updateTier(destination: string, event: Event): Promise<void> {
+  const tier = (event.target as HTMLSelectElement).value as "inner" | "outer";
+  await runAction(
+    () => nodeStore.setPeerTier(destination, tier),
+    `${tier === "inner" ? "Inner" : "Outer"} Circle access saved.`,
+    "change Circle access",
   );
 }
 
@@ -131,6 +151,13 @@ async function openManageTeams(): Promise<void> {
             {{ connectionStatus(peer.destination) }}
           </span>
         </div>
+        <label class="tier-control">
+          <span class="sr-only">Circle access for {{ peer.displayName }}</span>
+          <select :value="peer.circleTier" @change="updateTier(peer.destination, $event)">
+            <option value="inner">Inner Circle</option>
+            <option value="outer">Outer Circle</option>
+          </select>
+        </label>
         <button
           type="button"
           class="connection-button"
@@ -139,6 +166,12 @@ async function openManageTeams(): Promise<void> {
         >
           {{ connectedDestinations.has(peer.destination.toLowerCase()) ? "Disconnect" : "Connect" }}
         </button>
+        <CommunityPeerSummary
+          v-if="communityFor(peer)"
+          class="peer-community"
+          v-bind="communityFor(peer)"
+          :tier="peer.circleTier"
+        />
       </article>
     </div>
     <p v-else class="empty-copy">

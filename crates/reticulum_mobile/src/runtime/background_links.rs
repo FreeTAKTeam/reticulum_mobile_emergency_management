@@ -1,4 +1,8 @@
-fn spawn_link_event_listener(state: &NodeRuntimeState, bus: &EventBus) {
+fn spawn_link_event_listener(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    power_saver_rx: watch::Receiver<bool>,
+) {
     let transport = state.transport.clone();
     let bus = bus.clone();
     let connected_peers = state.connected_peers.clone();
@@ -34,6 +38,9 @@ fn spawn_link_event_listener(state: &NodeRuntimeState, bus: &EventBus) {
                                 None,
                             )
                             .await;
+                            if *power_saver_rx.borrow() {
+                                continue;
+                            }
                             match state
                                 .managed_peer_links
                                 .begin_reconnect(destination_hex.as_str())
@@ -79,7 +86,12 @@ fn spawn_link_event_listener(state: &NodeRuntimeState, bus: &EventBus) {
     });
 }
 
-fn spawn_periodic_hub_refresh(config: &NodeConfig, state: &NodeRuntimeState, bus: &EventBus) {
+fn spawn_periodic_hub_refresh(
+    config: &NodeConfig,
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    power_saver_rx: watch::Receiver<bool>,
+) {
     if matches!(
         config.hub_mode,
         HubMode::SemiAutonomous {} | HubMode::Connected {}
@@ -94,6 +106,9 @@ fn spawn_periodic_hub_refresh(config: &NodeConfig, state: &NodeRuntimeState, bus
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
+                if *power_saver_rx.borrow() {
+                    continue;
+                }
                 match refresh_hub_directory_lxmf(&config, &state).await {
                     Ok(snapshot) => publish_hub_directory_snapshot(&state, &bus, snapshot).await,
                     Err(error) => {

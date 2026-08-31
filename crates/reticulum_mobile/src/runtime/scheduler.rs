@@ -6,6 +6,7 @@ struct PendingLxmfResend {
     fields_bytes: Option<Vec<u8>>,
     metadata: MissionSyncMetadata,
     send_task_class: SendTaskClass,
+    traffic_class: OutboundTrafficClass,
     original_send_mode: SendMode,
     direct_ack_retry_attempted: bool,
     propagation_fallback_attempted: bool,

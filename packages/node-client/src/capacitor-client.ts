@@ -2,7 +2,7 @@ import type { AnnounceRecord, AppSettingsRecord, ChecklistDeleteOptions, Checkli
 import { ReticulumNodePluginInstance, type PluginListenerHandle } from "./capacitor-plugin";
 import { configToPlugin, sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
 import { toChecklistRecord, toChecklistTemplateRecord } from "./checklist-converters";
-import { toAppSettingsRecord } from "./converters";
+import { toAppSettingsRecord, toPowerStateRecord } from "./converters";
 import { toConversationRecord, toErrorEvent, toHubDirectoryUpdatedEvent, toLogEvent, toLxmfDeliveryEvent, toMessageRecord, toOperationalNoticeEvent, toPacketReceivedEvent, toPacketSentEvent, toPeerRecord, toProjectionInvalidationEvent, toSyncStatus } from "./message-converters";
 import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImportPayloadToPlugin, toEamProjectionRecord, toEamReadinessSummaryRecord, toEamTeamSummaryRecord, toEventProjectionRecord, toSavedPeerRecord, toTelemetryPositionRecord } from "./projection-converters";
 import { decodeBase64ToBytes, encodeBytesToBase64, normalizeHex, pluginRecord, toAnnounceReceivedEvent, toAnnounceRecord, toInstalledPlugin, toInterfaceStatusChangedEvent, toNodeStatus, toPeerChangedEvent, toPluginSensor, toStatusChangedEvent } from "./runtime-converters";
@@ -63,6 +63,7 @@ export class CapacitorReticulumNodeClient extends CapacitorProjectionClient impl
       };
 
       await register("statusChanged", toStatusChangedEvent);
+      await register("powerStateChanged", toPowerStateRecord);
       await register("interfaceStatusChanged", toInterfaceStatusChangedEvent);
       await register("announceReceived", toAnnounceReceivedEvent);
       await register("peerChanged", toPeerChangedEvent);

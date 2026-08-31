@@ -82,6 +82,7 @@ fn build_pending_lxmf_resend(
     metadata: Option<MissionSyncMetadata>,
     send_mode: SendMode,
     send_task_class: SendTaskClass,
+    traffic_class: OutboundTrafficClass,
 ) -> Option<PendingLxmfResend> {
     if !report.track_delivery_timeout
         || !matches!(send_mode, SendMode::Auto {})
@@ -104,6 +105,7 @@ fn build_pending_lxmf_resend(
         fields_bytes,
         metadata,
         send_task_class,
+        traffic_class,
         original_send_mode: send_mode,
         direct_ack_retry_attempted: matches!(
             report.fallback_stage,

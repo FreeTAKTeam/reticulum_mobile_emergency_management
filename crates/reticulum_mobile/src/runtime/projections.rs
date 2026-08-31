@@ -73,6 +73,7 @@ async fn selected_saved_peer_record(
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     });
     record.destination_hex = destination_hex;
     record.saved_at_ms = now;

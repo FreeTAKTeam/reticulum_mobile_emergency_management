@@ -164,6 +164,7 @@ fn message_record_json(message: &MessageRecord) -> Value {
         "lastWireMessageIdHex": message.last_wire_message_id_hex,
         "title": message.title,
         "bodyUtf8": message.body_utf8,
+        "trafficClass": message.traffic_class.as_str(),
         "method": message_method_to_str(message.method),
         "state": message_state_to_str(message.state),
         "transportState": transport_delivery_state_to_str(message.transport_state),
@@ -307,6 +308,15 @@ fn event_to_wire_json(event: NodeEvent) -> String {
         NodeEvent::HubDirectoryUpdated { snapshot } => (
             "hubDirectoryUpdated",
             hub_directory_snapshot_json(&snapshot),
+        ),
+        NodeEvent::PowerStateChanged { state } => (
+            "powerStateChanged",
+            json!({
+                "batteryPercent": state.battery_percent,
+                "charging": state.charging,
+                "saverActive": state.saver_active,
+                "updatedAtMs": state.updated_at_ms
+            }),
         ),
         NodeEvent::OperationalNotice { notice } => {
             ("operationalNotice", operational_notice_json(&notice))

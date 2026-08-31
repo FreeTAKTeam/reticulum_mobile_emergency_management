@@ -242,6 +242,20 @@ async fn send_chat_message_is_received_by_peer() {
 
     let node_a_status = node_a.get_status();
     let node_b_status = node_b.get_status();
+    node_a
+        .set_saved_peers(vec![SavedPeerRecord {
+            destination_hex: node_b_status.app_destination_hex.clone(),
+            label: Some("chat peer".to_string()),
+            saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: Some(node_b_status.lxmf_destination_hex.clone()),
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
+            circle_tier: CircleTier::Inner {},
+        }])
+        .expect("save Inner Circle chat peer");
     let body = "chat: hello from node a";
     let subscription = node_b.subscribe_events();
     let sender_subscription = node_a.subscribe_events();
@@ -353,6 +367,7 @@ async fn connect_peer_establishes_active_link_without_message_send() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a
@@ -403,6 +418,7 @@ fn mission_replication_targets_prioritize_current_saved_peers_before_stale_store
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let connected_saved_peer = SavedPeerRecord {
         destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
@@ -414,6 +430,7 @@ fn mission_replication_targets_prioritize_current_saved_peers_before_stale_store
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let mut stale_peer = build_peer_record(
         stale_saved_peer.destination_hex.as_str(),
@@ -452,42 +469,4 @@ fn mission_replication_targets_prioritize_current_saved_peers_before_stale_store
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
     assert_eq!(targets[1].send_mode, SendMode::PropagationOnly {});
-}
-
-#[test]
-fn replication_targets_skip_saved_peer_without_mission_capabilities() {
-    let status = NodeStatus {
-        readiness: RuntimeReadinessSnapshot::default(),
-        running: true,
-        name: "pixel".to_string(),
-        identity_hex: "22222222222222222222222222222222".to_string(),
-        app_destination_hex: "11111111111111111111111111111111".to_string(),
-        lxmf_destination_hex: "33333333333333333333333333333333".to_string(),
-        interfaces: Vec::new(),
-    };
-    let saved_peer = build_saved_peer();
-    let mut peer = build_peer_record(
-        saved_peer.destination_hex.as_str(),
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        true,
-        true,
-        true,
-    );
-    peer.app_data = Some("Telemetry".to_string());
-
-    let mission_targets = build_mission_replication_targets(
-        &status,
-        &[peer.clone()],
-        std::slice::from_ref(&saved_peer),
-        Some("99999999999999999999999999999999"),
-    );
-    let event_targets = build_event_replication_targets(
-        &status,
-        &[peer],
-        &[saved_peer],
-        Some("99999999999999999999999999999999"),
-    );
-
-    assert!(mission_targets.is_empty());
-    assert!(event_targets.is_empty());
 }

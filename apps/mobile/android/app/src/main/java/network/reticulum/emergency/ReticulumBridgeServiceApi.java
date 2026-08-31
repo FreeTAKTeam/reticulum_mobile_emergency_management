@@ -95,6 +95,30 @@ public abstract class ReticulumBridgeServiceApi extends Service {
         return ReticulumBridge.setAppSettingsJson(payloadJson);
     }
 
+    public int updateBatteryState(int percent, boolean charging) {
+        return ReticulumBridge.updateBatteryState(percent, charging);
+    }
+
+    public String getPowerStateJson() {
+        return ReticulumBridge.getPowerStateJson();
+    }
+
+    public String publishCommunityStatusJson() {
+        return ReticulumBridge.publishCommunityStatusJson();
+    }
+
+    public String createBlockOnboardingCodeJson(String payloadJson) {
+        return ReticulumBridge.createBlockOnboardingCodeJson(payloadJson);
+    }
+
+    public String inspectBlockOnboardingCodeJson(String payloadJson) {
+        return ReticulumBridge.inspectBlockOnboardingCodeJson(payloadJson);
+    }
+
+    public String importBlockOnboardingCodeJson(String payloadJson) {
+        return ReticulumBridge.importBlockOnboardingCodeJson(payloadJson);
+    }
+
     public String getSavedPeersJson() {
         return ReticulumBridge.getSavedPeersJson();
     }
@@ -193,6 +217,10 @@ public abstract class ReticulumBridgeServiceApi extends Service {
 
     public String getEventsJson() {
         return ReticulumBridge.getEventsJson();
+    }
+
+    public String getCommunityStatusesJson() {
+        return ReticulumBridge.getCommunityStatusesJson();
     }
 
     public int upsertEventJson(String payloadJson) {

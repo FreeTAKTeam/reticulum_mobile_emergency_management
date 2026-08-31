@@ -140,13 +140,7 @@ test("creates a local color team and assigns a saved peer without removing Yello
   await expect(redDialog).toContainText(TEST_PEER_DESTINATION);
   await expect(redDialog).toContainText("LOCAL");
 
-  await redDialog.getByRole("button", { name: "Share QR" }).click();
-  const qrDialog = page.getByRole("dialog", { name: "Friends team QR code" });
-  await expect(qrDialog.getByRole("img", { name: "Friends local team QR code" }))
-    .toHaveAttribute("src", /^data:image\/png;base64,/);
-  await expect(qrDialog).toContainText("Local aliases and peer labels are not included.");
-  await qrDialog.getByRole("button", { name: "Close QR" }).click();
-  await expect(qrDialog).toBeHidden();
+  await expect(redDialog.getByRole("button", { name: /Share QR|Export/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Close team details" }).click();
   await page.getByRole("button", { name: "Back to peers" }).click();
   const activeTeamMenu = page.locator("summary[aria-label='Active team']");

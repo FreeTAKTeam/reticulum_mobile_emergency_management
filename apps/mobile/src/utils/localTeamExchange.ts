@@ -10,57 +10,10 @@ export interface LocalTeamExchangeRecord {
   members: LocalTeamExchangeMember[];
 }
 
-export const MAX_LOCAL_TEAM_QR_MEMBERS = 40;
-
 function objectValue(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-export function encodeLocalTeamExchange(
-  teamUid: string,
-  color: string,
-  members: LocalTeamExchangeMember[],
-): string {
-  return JSON.stringify({
-    schemaVersion: 1,
-    type: "rem.local-team",
-    team: {
-      uid: teamUid,
-      color,
-      members: members.map(({ destination, label }) => ({
-        destination: destination.toLowerCase(),
-        ...(label?.trim() ? { label: label.trim().slice(0, 80) } : {}),
-      })),
-    },
-  }, null, 2);
-}
-
-export function encodeLocalTeamQrExchange(
-  teamUid: string,
-  memberDestinations: string[],
-): string {
-  if (!CANONICAL_TEAM_UIDS.has(teamUid)) {
-    throw new Error("Only canonical color teams can be exported as QR codes.");
-  }
-  if (memberDestinations.length > MAX_LOCAL_TEAM_QR_MEMBERS) {
-    throw new Error(
-      `One QR code supports at most ${MAX_LOCAL_TEAM_QR_MEMBERS} team members; use JSON export instead.`,
-    );
-  }
-  const members = memberDestinations.map((destination) => {
-    const normalized = destination.trim().toLowerCase();
-    if (!/^[0-9a-f]{32}$/.test(normalized)) {
-      throw new Error("The local team contains an invalid REM destination.");
-    }
-    return { destination: normalized };
-  });
-  return JSON.stringify({
-    schemaVersion: 1,
-    type: "rem.local-team",
-    team: { uid: teamUid, members },
-  });
 }
 
 export function parseLocalTeamExchange(text: string): LocalTeamExchangeRecord {

@@ -43,6 +43,32 @@ fn delivery_route_unavailable_error() -> NodeError {
     NodeError::NetworkError {}
 }
 
+async fn known_lxmf_route_for_app_destination(
+    state: &NodeRuntimeState,
+    destination_hex: &str,
+) -> Option<String> {
+    let destination_hex = normalize_hex_32(destination_hex)?;
+    let known_destinations = state.known_destinations.lock().await;
+    known_destinations.values().find_map(|desc| {
+        let app_destination_hex = SingleOutputDestination::new(
+            desc.identity,
+            DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+        )
+        .desc
+        .address_hash
+        .to_hex_string();
+        (app_destination_hex == destination_hex).then(|| {
+            SingleOutputDestination::new(
+                desc.identity,
+                DestinationName::new(LXMF_DELIVERY_NAME.0, LXMF_DELIVERY_NAME.1),
+            )
+            .desc
+            .address_hash
+            .to_hex_string()
+        })
+    })
+}
+
 fn resolve_current_lxmf_destination_from_peers(
     peers: &[sdkmsg::PeerRecord],
     destination_hex: &str,
@@ -140,6 +166,12 @@ async fn resolve_current_lxmf_destination_hex(
                     return Ok(destination);
                 }
             }
+            drop(messaging);
+            if let Some(destination) =
+                known_lxmf_route_for_app_destination(state, destination_hex).await
+            {
+                return Ok(destination);
+            }
             Err(err)
         }
     }
@@ -165,7 +197,9 @@ async fn resolve_lxmf_destination_hex(state: &NodeRuntimeState, destination_hex:
         }
     }
     let Some(peer) = peer_for_any_destination_hex(state, &normalized_destination).await else {
-        return normalized_destination;
+        return known_lxmf_route_for_app_destination(state, &normalized_destination)
+            .await
+            .unwrap_or(normalized_destination);
     };
     if peer
         .lxmf_destination_hex
@@ -197,11 +231,25 @@ async fn canonical_app_destination_hex(state: &NodeRuntimeState, destination_hex
     let Some(identity_hex) = peer.identity_hex.clone() else {
         return peer.destination_hex;
     };
-    state
+    if let Some(destination_hex) = state
         .messaging
         .lock()
         .await
         .app_destination_for_identity(identity_hex.as_str())
+    {
+        return destination_hex;
+    }
+    reticulum::transport::identity::Identity::new_from_hex_string(identity_hex.as_str())
+        .ok()
+        .map(|identity| {
+            SingleOutputDestination::new(
+                identity,
+                DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+            )
+            .desc
+            .address_hash
+            .to_hex_string()
+        })
         .unwrap_or(peer.destination_hex)
 }
 

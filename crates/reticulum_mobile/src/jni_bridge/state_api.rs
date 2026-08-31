@@ -80,11 +80,18 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_setSaved
         Err(_) => return err_result("InternalError", "bridge lock poisoned"),
     };
     let node = ensure_node_or_return!(&mut guard);
-    let peers = payload
+    let peers = match payload
         .saved_peers
         .into_iter()
-        .map(to_saved_peer_record)
-        .collect();
+        .map(to_explicit_saved_peer_record)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(peers) => peers,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
     match node.set_saved_peers(peers) {
         Ok(_) => ok_result(),
         Err(err) => {

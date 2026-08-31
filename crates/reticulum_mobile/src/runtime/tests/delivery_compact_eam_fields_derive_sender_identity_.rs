@@ -286,6 +286,7 @@ fn event_projection_from_trimmed_fields_uses_lxmf_body_content() {
         &bytes,
         Some(b"P01"),
         None,
+        None,
         Some("Pixel"),
         1_700_000_000_000,
     )

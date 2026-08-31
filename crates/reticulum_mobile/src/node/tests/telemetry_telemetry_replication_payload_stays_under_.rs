@@ -56,6 +56,7 @@ fn build_message() -> MessageRecord {
         last_wire_message_id_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
         title: Some("check-in".to_string()),
         body_utf8: "Hello world".to_string(),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Queued {},
         transport_state: TransportDeliveryState::Queued {},
@@ -143,6 +144,8 @@ fn sample_app_settings() -> AppSettingsRecord {
         teams: crate::types::TeamSettingsRecord::default(),
         checklists: crate::types::ChecklistSettingsRecord::default(),
         rnode: crate::types::RnodeSettingsRecord::default(),
+        community: crate::types::CommunitySettingsRecord::default(),
+        power: crate::types::PowerPolicyRecord::default(),
     }
 }
 
@@ -157,6 +160,7 @@ fn sample_saved_peer() -> SavedPeerRecord {
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     }
 }
 
@@ -224,6 +228,7 @@ fn sample_message() -> MessageRecord {
         last_wire_message_id_hex: Some("msg-1".to_string()),
         title: Some("Hello".to_string()),
         body_utf8: "hello from pre-start".to_string(),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Queued {},
         transport_state: TransportDeliveryState::Queued {},

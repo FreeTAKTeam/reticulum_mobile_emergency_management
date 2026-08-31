@@ -6,6 +6,7 @@ fn build_event_replication_targets(
 ) -> Vec<MissionReplicationTarget> {
     let saved_destinations = saved_peers
         .iter()
+        .filter(|peer| matches!(peer.circle_tier, CircleTier::Inner {}))
         .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();
@@ -347,6 +348,9 @@ fn build_runtime_checklist_replication_targets(
             );
         }
     }
+    targets.retain(|target| {
+        !peer_is_outer_saved(saved_peers, target.app_destination_hex.as_str())
+    });
     Ok(targets)
 }
 

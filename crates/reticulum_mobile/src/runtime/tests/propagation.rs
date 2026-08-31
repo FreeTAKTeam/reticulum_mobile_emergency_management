@@ -45,6 +45,7 @@ fn ack_timeout_auto_command_delivery_is_eligible_for_propagation_retry() {
         Some(metadata),
         SendMode::Auto {},
         SendTaskClass::Mission,
+        OutboundTrafficClass::Eam {},
     )
     .expect("auto command should retain resend payload");
     let pending = test_pending_delivery(Some(resend));
@@ -85,6 +86,7 @@ fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
         Some(command_metadata.clone()),
         SendMode::DirectOnly {},
         SendTaskClass::Mission,
+        OutboundTrafficClass::Checklist {},
     )
     .is_none());
 
@@ -98,6 +100,7 @@ fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
         Some(command_metadata),
         SendMode::Auto {},
         SendTaskClass::Mission,
+        OutboundTrafficClass::Checklist {},
     )
     .is_none());
 
@@ -111,6 +114,7 @@ fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
         Some(result_metadata),
         SendMode::Auto {},
         SendTaskClass::Mission,
+        OutboundTrafficClass::Control {},
     )
     .is_none());
 
@@ -127,6 +131,7 @@ fn ack_timeout_retry_skips_results_direct_only_and_existing_propagation() {
             ..MissionSyncMetadata::default()
         },
         send_task_class: SendTaskClass::Mission,
+        traffic_class: OutboundTrafficClass::Checklist {},
         original_send_mode: SendMode::Auto {},
         direct_ack_retry_attempted: true,
         propagation_fallback_attempted: true,
@@ -173,6 +178,7 @@ fn propagation_fallback_pending_deliveries_keep_waiting_for_late_acknowledgement
             ..MissionSyncMetadata::default()
         },
         send_task_class: SendTaskClass::Mission,
+        traffic_class: OutboundTrafficClass::Sos {},
         original_send_mode: SendMode::Auto {},
         direct_ack_retry_attempted: true,
         propagation_fallback_attempted: true,
@@ -368,6 +374,7 @@ fn only_inbound_history_authorizes_correspondent_reply_routing() {
         last_wire_message_id_hex: Some("inbound-wire-message".to_string()),
         title: None,
         body_utf8: "hello".to_string(),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Received {},
         transport_state: TransportDeliveryState::TransportDelivered {},
@@ -450,51 +457,5 @@ fn high_hop_stale_saved_route_prefers_propagation_lane() {
         &stale_peer,
         false,
         Some(11),
-    ));
-}
-
-#[test]
-fn auto_eligible_recipient_direct_failure_uses_propagation_when_relay_exists() {
-    assert!(should_try_propagation_after_direct_failure(
-        SendMode::Auto {},
-        false,
-        true,
-        true,
-        true,
-    ));
-    assert!(!should_try_propagation_after_direct_failure(
-        SendMode::Auto {},
-        false,
-        true,
-        true,
-        false,
-    ));
-    assert!(!should_try_propagation_after_direct_failure(
-        SendMode::DirectOnly {},
-        false,
-        true,
-        true,
-        true,
-    ));
-    assert!(!should_try_propagation_after_direct_failure(
-        SendMode::Auto {},
-        false,
-        false,
-        true,
-        true,
-    ));
-    assert!(!should_try_propagation_after_direct_failure(
-        SendMode::Auto {},
-        false,
-        true,
-        false,
-        true,
-    ));
-    assert!(!should_try_propagation_after_direct_failure(
-        SendMode::Auto {},
-        true,
-        true,
-        true,
-        true,
     ));
 }

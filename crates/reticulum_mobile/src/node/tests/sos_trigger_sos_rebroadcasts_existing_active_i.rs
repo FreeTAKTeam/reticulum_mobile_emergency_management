@@ -51,6 +51,7 @@ fn trigger_sos_rebroadcasts_existing_active_incident() {
         bytes,
         fields_bytes,
         send_mode,
+        resp,
         ..
     } = command
     {
@@ -68,6 +69,7 @@ fn trigger_sos_rebroadcasts_existing_active_incident() {
             command.trigger_source,
             SosTriggerSource::Manual {}
         ));
+        resp.send(Ok(())).expect("complete sos send");
     } else {
         panic!("expected SendBytes command");
     }
@@ -115,7 +117,11 @@ fn trigger_sos_uses_priority_command_lane_when_available() {
     let command = priority_rx
         .try_recv()
         .expect("expected sos send command on priority lane");
-    assert!(matches!(command, Command::SendBytes { .. }));
+    if let Command::SendBytes { resp, .. } = command {
+        resp.send(Ok(())).expect("complete priority sos send");
+    } else {
+        panic!("expected SendBytes command");
+    }
     assert!(normal_rx.try_recv().is_err());
 }
 
@@ -236,12 +242,14 @@ fn trigger_sos_fans_out_to_all_current_saved_peers() {
             destination_hex,
             fields_bytes,
             send_mode,
+            resp,
             ..
         } = command
         {
             destinations.insert(destination_hex);
             assert!(fields_bytes.is_some());
             assert!(matches!(send_mode, SendMode::Auto {}));
+            resp.send(Ok(())).expect("complete sos send");
         } else {
             panic!("expected SendBytes command");
         }

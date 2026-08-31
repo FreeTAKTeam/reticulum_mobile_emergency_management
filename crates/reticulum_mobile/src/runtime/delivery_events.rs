@@ -359,6 +359,28 @@ async fn snapshot_peer_records(state: &NodeRuntimeState) -> Vec<PeerRecord> {
         .into_iter()
         .map(from_sdk_peer_record)
         .collect::<Vec<_>>();
+    {
+        let known_destinations = state.known_destinations.lock().await;
+        for peer in &mut peers {
+            let route_hex = peer
+                .lxmf_destination_hex
+                .as_deref()
+                .unwrap_or(peer.destination_hex.as_str());
+            let Some(desc) = parse_address_hash(route_hex)
+                .ok()
+                .and_then(|route| known_destinations.get(&route))
+            else {
+                continue;
+            };
+            peer.destination_hex = SingleOutputDestination::new(
+                desc.identity,
+                DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
+            )
+            .desc
+            .address_hash
+            .to_hex_string();
+        }
+    }
     let hub_directory_snapshot = state
         .hub_directory_snapshot
         .lock()

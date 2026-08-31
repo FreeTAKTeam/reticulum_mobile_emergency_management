@@ -163,6 +163,7 @@ fn build_mission_replication_targets(
 ) -> Vec<MissionReplicationTarget> {
     let saved_destinations = saved_peers
         .iter()
+        .filter(|peer| matches!(peer.circle_tier, CircleTier::Inner {}))
         .filter_map(saved_peer_target_destination)
         .collect::<Vec<_>>();
     let saved_destination_set = saved_destinations.iter().cloned().collect::<HashSet<_>>();

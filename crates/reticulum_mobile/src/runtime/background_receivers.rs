@@ -167,9 +167,19 @@ fn spawn_delivery_tracking_tasks(
                 let mut expired = Vec::<PendingLxmfDelivery>::new();
                 {
                     let mut guard = state.pending_lxmf_deliveries.lock().await;
+                    let saver_active = *state.power_saver_rx.borrow();
                     let expired_keys = guard
                         .iter()
-                        .filter(|(_, pending)| pending_ack_timeout_elapsed(pending, now))
+                        .filter(|(_, pending)| {
+                            pending_ack_timeout_elapsed(pending, now)
+                                && (!saver_active
+                                    || pending
+                                        .resend
+                                        .as_ref()
+                                        .is_some_and(|resend| {
+                                            resend.traffic_class.allowed_in_power_saver()
+                                        }))
+                        })
                         .map(|(key, _)| key.clone())
                         .collect::<Vec<_>>();
                     for key in expired_keys {

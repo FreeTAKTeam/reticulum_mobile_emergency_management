@@ -1,4 +1,4 @@
-import { type ApplicationAckState, type ConversationRecord, type LogLevel, type LxmfDeliveryEvent, type LxmfDeliveryMethod, type LxmfDeliveryRepresentation, type LxmfDeliveryStatus, type LxmfFallbackStage, type MessageDirection, type MessageMethod, type MessageRecord, type MessageState, type NodeErrorEvent, type NodeLogEvent, type NodeOperationalNoticeEvent, type PacketReceivedEvent, type PacketSentEvent, type PeerRecord, type ProjectionInvalidationEvent, type ProjectionScope, type SyncPhase, type SyncStatus, type TransportDeliveryState } from "./contracts";
+import { type ApplicationAckState, type ConversationRecord, type LogLevel, type LxmfDeliveryEvent, type LxmfDeliveryMethod, type LxmfDeliveryRepresentation, type LxmfDeliveryStatus, type LxmfFallbackStage, type MessageDirection, type MessageMethod, type MessageRecord, type MessageState, type NodeErrorEvent, type NodeLogEvent, type NodeOperationalNoticeEvent, type OutboundTrafficClass, type PacketReceivedEvent, type PacketSentEvent, type PeerRecord, type ProjectionInvalidationEvent, type ProjectionScope, type SyncPhase, type SyncStatus, type TransportDeliveryState } from "./contracts";
 import { toOptionalNumber } from "./converters";
 import { decodeBase64ToBytes, enumVariantName, hasValue, normalizeHex, pluginRecord, toOptionalBoolean, toOptionalHex, toPeerState, toSavedFlag, toSendOutcome } from "./runtime-converters";
 
@@ -287,6 +287,15 @@ export function toMessageDirection(raw: unknown, record?: Record<string, unknown
   return state === "received" || (hasReceivedAt && !hasSentAt) ? "Inbound" : "Outbound";
 }
 
+function toOutboundTrafficClass(raw: unknown): OutboundTrafficClass {
+  const value = String(raw ?? "").trim().toLowerCase();
+  const allowed: OutboundTrafficClass[] = [
+    "sos", "telemetry", "community_status", "chat", "eam",
+    "event", "checklist", "plugin", "raw", "control",
+  ];
+  return allowed.includes(value as OutboundTrafficClass) ? value as OutboundTrafficClass : "chat";
+}
+
 export function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
   return {
     messageIdHex: normalizeHex(String(raw.messageIdHex ?? raw.message_id_hex ?? "")),
@@ -314,6 +323,7 @@ export function toMessageRecord(raw: Record<string, unknown>): MessageRecord {
         ? raw.title
         : undefined,
     bodyUtf8: String(raw.bodyUtf8 ?? raw.body_utf8 ?? ""),
+    trafficClass: toOutboundTrafficClass(raw.trafficClass ?? raw.traffic_class),
     method: toMessageMethod(raw.method),
     state: toMessageState(raw.state),
     transportState: toTransportDeliveryState(raw.transportState ?? raw.transport_state),

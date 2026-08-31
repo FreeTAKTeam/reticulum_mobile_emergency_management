@@ -13,17 +13,14 @@ const transpiled = ts.transpileModule(source, {
 }).outputText.replaceAll('"@reticulum/node-client"', `"${nodeClientMock}"`);
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(transpiled).toString("base64")}`;
 const {
-  MAX_LOCAL_TEAM_QR_MEMBERS,
-  encodeLocalTeamExchange,
-  encodeLocalTeamQrExchange,
   parseLocalTeamExchange,
 } = await import(moduleUrl);
 
-test("local team exchange round-trips canonical membership without a local alias", () => {
+test("legacy local team import accepts canonical membership without retaining local alias", () => {
   const destination = "ab".repeat(16);
-  const encoded = encodeLocalTeamExchange(RED, "RED", [
-    { destination: destination.toUpperCase(), label: " Friend " },
-  ]);
+  const encoded = JSON.stringify({ schemaVersion: 1, type: "rem.local-team", team: {
+    uid: RED, color: "RED", members: [{ destination: destination.toUpperCase(), label: " Friend " }],
+  } });
   assert.equal(encoded.includes("Friends"), false);
   assert.deepEqual(parseLocalTeamExchange(encoded), {
     teamUid: RED,
@@ -40,21 +37,15 @@ test("local team exchange rejects malformed and noncanonical input", () => {
   })), /unsupported color/);
 });
 
-test("local team QR exchange is compact and excludes local names and labels", () => {
+test("legacy compact QR payload remains import-compatible", () => {
   const destination = "cd".repeat(16);
-  const encoded = encodeLocalTeamQrExchange(RED, [destination]);
+  const encoded = JSON.stringify({ schemaVersion: 1, type: "rem.local-team", team: {
+    uid: RED, members: [{ destination }],
+  } });
   assert.equal(encoded.includes("Friends"), false);
   assert.equal(encoded.includes("label"), false);
   assert.deepEqual(parseLocalTeamExchange(encoded), {
     teamUid: RED,
     members: [{ destination }],
   });
-});
-
-test("local team QR exchange rejects oversized rosters", () => {
-  const members = Array.from(
-    { length: MAX_LOCAL_TEAM_QR_MEMBERS + 1 },
-    (_, index) => index.toString(16).padStart(32, "0"),
-  );
-  assert.throws(() => encodeLocalTeamQrExchange(RED, members), /at most 40/);
 });

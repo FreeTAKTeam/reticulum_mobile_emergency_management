@@ -103,5 +103,7 @@ fn app_settings_with_due_step(default_task_due_step_minutes: u32) -> AppSettings
             default_task_due_step_minutes,
         },
         rnode: crate::types::RnodeSettingsRecord::default(),
+        community: crate::types::CommunitySettingsRecord::default(),
+        power: crate::types::PowerPolicyRecord::default(),
     }
 }

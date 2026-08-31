@@ -77,15 +77,8 @@ async fn delete_conversation_records(
 async fn message_records_snapshot(
     state: &NodeRuntimeState,
     conversation_id: Option<&str>,
-) -> Vec<MessageRecord> {
-    state
-        .messaging
-        .lock()
-        .await
-        .list_messages(conversation_id)
-        .into_iter()
-        .map(from_sdk_message_record)
-        .collect()
+) -> Result<Vec<MessageRecord>, NodeError> {
+    state.app_state.list_messages(conversation_id)
 }
 
 async fn conversation_records_snapshot(state: &NodeRuntimeState) -> Vec<ConversationRecord> {
@@ -121,6 +114,7 @@ pub enum Command {
         bytes: Vec<u8>,
         fields_bytes: Option<Vec<u8>>,
         send_mode: SendMode,
+        traffic_class: OutboundTrafficClass,
         resp: cb::Sender<Result<(), NodeError>>,
     },
     BroadcastBytes {
@@ -133,11 +127,13 @@ pub enum Command {
     },
     SendLxmf {
         request: SendLxmfRequest,
+        requested_destination_hex: String,
         fields_bytes: Vec<u8>,
         resp: cb::Sender<Result<String, NodeError>>,
     },
     RetryLxmf {
         message_id_hex: String,
+        delivery_destination_hex: String,
         resp: cb::Sender<Result<(), NodeError>>,
     },
     CancelLxmf {
@@ -212,6 +208,7 @@ struct NodeRuntimeState {
     ignored_peer_destinations: Arc<TokioMutex<HashSet<String>>>,
     send_task_permits: SendTaskPermits,
     mission_destination_locks: MissionDestinationLocks,
+    power_saver_rx: watch::Receiver<bool>,
 }
 
 fn prune_expired_buffered_acknowledgements(

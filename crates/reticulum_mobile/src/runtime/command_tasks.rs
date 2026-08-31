@@ -201,7 +201,9 @@ fn spawn_saved_peer_projection_command(
     let state = state.clone();
     let bus = bus.clone();
     executor.spawn(lane, RuntimeCommandClass::Control, resp, async move {
-        apply_saved_peer_management_projection(&state, &bus, &peers).await
+        apply_saved_peer_management_projection(&state, &bus, &peers).await?;
+        refresh_peer_snapshot(&state).await;
+        Ok(())
     });
 }
 
@@ -321,4 +323,13 @@ fn spawn_broadcast_command(
             Err(error)
         }
     });
+}
+fn mark_runtime_stopped(status: &Arc<Mutex<NodeStatus>>, bus: &EventBus) {
+    if let Ok(mut guard) = status.lock() {
+        guard.running = false;
+        guard.refresh_readiness();
+        bus.emit(NodeEvent::StatusChanged {
+            status: guard.clone(),
+        });
+    }
 }

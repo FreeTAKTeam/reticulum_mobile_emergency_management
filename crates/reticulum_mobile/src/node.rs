@@ -6,11 +6,15 @@ use std::time::Duration;
 
 use crossbeam_channel as cb;
 use flate2::{write::ZlibEncoder, Compression};
-use reticulum::transport::destination::{DestinationName, SingleInputDestination};
+use reticulum::transport::destination::{
+    DestinationName, SingleInputDestination, SingleOutputDestination,
+};
 use rmpv::Value as MsgPackValue;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::announce_metadata::has_capability_token;
 use crate::app_state::{
@@ -32,21 +36,26 @@ use crate::sos_detector::SosTriggerDetector;
 use crate::sos_fields::{build_sos_fields, SosCommand};
 use crate::types::{
     canonical_team_color_for_uid, AnnounceRecord, AppSettingsRecord, ApplicationAckState,
+    BlockNetworkSettings, BlockOnboardingDraft, BlockOnboardingImportRequest,
+    BlockOnboardingImportResult, BlockOnboardingInspection, BlockRadioSettings,
     ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest, ChecklistDeleteRequest,
     ChecklistListActiveRequest, ChecklistRecord, ChecklistTaskCellSetRequest,
     ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
     ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateListRequest,
-    ChecklistTemplateRecord, ChecklistUpdateRequest, ConversationRecord, DiscoveredPluginRecord,
+    ChecklistTemplateRecord, ChecklistUpdateRequest, CircleTier, CommunitySettingsRecord,
+    CommunityStatusProjectionRecord, ConversationRecord, DiscoveredPluginRecord,
     EamProjectionRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord,
-    EventProjectionRecord, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
+    EventProjectionRecord, HouseholdStatus, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
     LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
     NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary,
-    PeerRecord, PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest,
-    PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation, ProjectionScope,
-    RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode, SosAlertRecord,
-    SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord,
-    SosState, SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord,
-    TelemetryPositionRecord, TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
+    OutboundTrafficClass, PeerRecord, PluginCapabilityRecord, PluginEventRecord,
+    PluginLxmfSendRequest, PluginSensorRecord, PluginSensorSampleRequest, PowerPolicyRecord,
+    PowerStateRecord, PreferredMapLayer, ProjectionInvalidation, ProjectionScope,
+    RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode,
+    SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord,
+    SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord,
+    SosTriggerSource, SyncStatus, TeamSettingsRecord, TelemetryPositionRecord,
+    TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
 };
 
 const APP_DESTINATION_NAME: (&str, &str) = ("r3akt", "emergency");
@@ -99,6 +108,11 @@ struct NodeInner {
     hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     sos_device_telemetry: Arc<Mutex<Option<SosDeviceTelemetryRecord>>>,
     sos_detector: Arc<Mutex<SosTriggerDetector>>,
+    power_state: PowerStateRecord,
+    power_saver_tx: watch::Sender<bool>,
+    next_telemetry_publish_at_ms: Option<u64>,
+    deferred_announce_capabilities: Option<String>,
+    community_status_sent_in_saver: bool,
     active_config: Option<NodeConfigFingerprint>,
     runtime: Option<Runtime>,
     cmd_tx: Option<mpsc::Sender<Command>>,
@@ -147,6 +161,25 @@ impl NodeConfigFingerprint {
             hub_refresh_interval_seconds: config.hub_refresh_interval_seconds,
             rnode: config.rnode.clone(),
         })
+    }
+
+    fn to_config(&self) -> NodeConfig {
+        NodeConfig {
+            name: self.name.clone(),
+            storage_dir: self.storage_dir.clone(),
+            tcp_clients: self.tcp_clients.clone(),
+            broadcast: self.broadcast,
+            transport_node_enabled: self.transport_node_enabled,
+            announce_interval_seconds: self.announce_interval_seconds,
+            stale_after_minutes: self.stale_after_minutes,
+            announce_capabilities: self.announce_capabilities.clone(),
+            hub_mode: self.hub_mode,
+            hub_identity_hash: self.hub_identity_hash.clone(),
+            hub_api_base_url: self.hub_api_base_url.clone(),
+            hub_api_key: self.hub_api_key.clone(),
+            hub_refresh_interval_seconds: self.hub_refresh_interval_seconds,
+            rnode: self.rnode.clone(),
+        }
     }
 }
 
@@ -246,20 +279,29 @@ include!("node/replication_planning.rs");
 include!("node/replication_routing.rs");
 include!("node/wire_fields.rs");
 include!("node/checklist_payloads.rs");
+include!("node/checklist_task_args.rs");
 include!("node/mission_payloads.rs");
 include!("node/sos_fanout.rs");
+include!("node/community.rs");
+include!("node/outbound_policy.rs");
+include!("node/block_onboarding.rs");
 
 pub struct Node {
     inner: Mutex<NodeInner>,
 }
 
 include!("node/lifecycle.rs");
+include!("node/status.rs");
 include!("node/messaging.rs");
+include!("node/messaging_policy.rs");
+include!("node/legacy.rs");
+include!("node/settings.rs");
 include!("node/checklist_queries.rs");
 include!("node/checklist_mutations.rs");
 include!("node/checklist_task_status.rs");
 include!("node/checklist_task_edits.rs");
 include!("node/eam.rs");
+include!("node/plugin_registry.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");
@@ -284,12 +326,17 @@ mod tests {
     include!("node/tests/lifecycle.rs");
     include!("node/tests/messaging_delivery.rs");
     include!("node/tests/peers_routes.rs");
+    include!("node/tests/peers_routes_capabilities.rs");
     include!("node/tests/chat_routing.rs");
     include!("node/tests/team_switch.rs");
     include!("node/tests/local_team_routing.rs");
     include!("node/tests/propagation.rs");
     include!("node/tests/sos_sos_targets_skip_unsaved_stale_stored_rout.rs");
+    include!("node/tests/sos_send_outcomes.rs");
     include!("node/tests/sos_trigger_sos_rebroadcasts_existing_active_i.rs");
     include!("node/tests/telemetry_connected_telemetry_destinations_route_onl.rs");
     include!("node/tests/telemetry_telemetry_replication_payload_stays_under_.rs");
+    include!("node/tests/community.rs");
+    include!("node/tests/outbound_policy.rs");
+    include!("node/tests/block_onboarding.rs");
 }

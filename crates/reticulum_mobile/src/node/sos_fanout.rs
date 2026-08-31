@@ -24,6 +24,67 @@ fn app_state_has_pending_sos_countdown(app_state: &AppStateStore, incident_id: &
     )
 }
 
+fn watch_sos_send_outcome(
+    app_state: AppStateStore,
+    bus: EventBus,
+    mut record: MessageRecord,
+    response: cb::Receiver<Result<(), NodeError>>,
+) {
+    std::thread::spawn(move || {
+        let (state, transport_state, detail) = match response.recv_timeout(SEND_COMMAND_TIMEOUT) {
+            Ok(Ok(())) if matches!(record.method, MessageMethod::Propagated {}) => (
+                MessageState::SentToPropagation {},
+                TransportDeliveryState::SentToPropagation {},
+                record.detail.clone(),
+            ),
+            Ok(Ok(())) => (
+                MessageState::SentDirect {},
+                TransportDeliveryState::SentDirect {},
+                record.detail.clone(),
+            ),
+            Ok(Err(error)) => (
+                MessageState::Failed {},
+                TransportDeliveryState::Failed {},
+                Some(format!("SOS send failed: {error}")),
+            ),
+            Err(cb::RecvTimeoutError::Timeout) => (
+                MessageState::TimedOut {},
+                TransportDeliveryState::TimedOut {},
+                Some("SOS send timed out".to_string()),
+            ),
+            Err(cb::RecvTimeoutError::Disconnected) => (
+                MessageState::Failed {},
+                TransportDeliveryState::Failed {},
+                Some("SOS send queue disconnected".to_string()),
+            ),
+        };
+        record.state = state;
+        record.transport_state = transport_state;
+        record.application_ack_state = if matches!(state, MessageState::Failed {} | MessageState::TimedOut {}) {
+            ApplicationAckState::Failed {}
+        } else {
+            ApplicationAckState::Waiting {}
+        };
+        record.detail = detail;
+        record.updated_at_ms = now_ms();
+        match app_state.upsert_message(&record) {
+            Ok(invalidations) => {
+                for invalidation in invalidations {
+                    emit_projection_invalidation(&bus, invalidation);
+                }
+                bus.emit(NodeEvent::MessageUpdated { message: record });
+            }
+            Err(error) => bus.emit(NodeEvent::Error {
+                code: "IoError".to_string(),
+                message: format!(
+                    "failed to persist sos send result destination={} reason={error}",
+                    record.destination_hex
+                ),
+            }),
+        }
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_sos_fanout(
     app_state: AppStateStore,
@@ -67,8 +128,13 @@ fn run_sos_fanout(
         });
     }
 
-    let body = compose_sos_body(&settings, kind, telemetry.as_ref());
     let team_uid = active_team_uid(hub_directory_snapshot.as_ref()).to_string();
+    let connected_mode = active_config.as_ref().is_some_and(|config| {
+        matches!(
+            effective_hub_mode(config.hub_mode, hub_directory_snapshot.as_ref()),
+            HubMode::Connected {}
+        )
+    });
     let mut targets = match build_runtime_mission_replication_targets(
         &status,
         peers.as_slice(),
@@ -102,6 +168,14 @@ fn run_sos_fanout(
     }
     for target in targets {
         let destination_hex = target.app_destination_hex.clone();
+        let target_telemetry = exact_telemetry_target_is_allowed(
+            &target,
+            saved_peers.as_slice(),
+            connected_mode,
+        )
+        .then_some(telemetry.as_ref())
+        .flatten();
+        let body = compose_sos_body(&settings, kind, target_telemetry);
         let command = SosCommand {
             state: kind,
             incident_id: incident_id.clone(),
@@ -109,7 +183,7 @@ fn run_sos_fanout(
             sent_at_ms: now,
             audio_id: None,
         };
-        let fields = match build_sos_fields(&command, telemetry.as_ref())
+        let fields = match build_sos_fields(&command, target_telemetry)
             .and_then(|fields| fields_with_active_team(Some(fields), &team_uid))
         {
             Ok(fields) => fields,
@@ -141,6 +215,7 @@ fn run_sos_fanout(
             last_wire_message_id_hex: Some(message_id_hex.clone()),
             title: Some("SOS Emergency".to_string()),
             body_utf8: body.clone(),
+            traffic_class: OutboundTrafficClass::Sos {},
             method: if matches!(target.send_mode, SendMode::PropagationOnly {}) {
                 MessageMethod::Propagated {}
             } else {
@@ -159,7 +234,9 @@ fn run_sos_fanout(
                 for invalidation in invalidations {
                     emit_projection_invalidation(&bus, invalidation);
                 }
-                bus.emit(NodeEvent::MessageUpdated { message: record });
+                bus.emit(NodeEvent::MessageUpdated {
+                    message: record.clone(),
+                });
             }
             Err(error) => {
                 bus.emit(NodeEvent::Error {
@@ -171,7 +248,7 @@ fn run_sos_fanout(
             }
         }
 
-        let (resp_tx, _resp_rx) = cb::bounded(1);
+        let (resp_tx, resp_rx) = cb::bounded(1);
         if let Err(err) = dispatch_command(
             &tx,
             Command::SendBytes {
@@ -179,6 +256,7 @@ fn run_sos_fanout(
                 bytes: body.as_bytes().to_vec(),
                 fields_bytes: Some(fields),
                 send_mode: target.send_mode,
+                traffic_class: OutboundTrafficClass::Sos {},
                 resp: resp_tx,
             },
         ) {
@@ -189,6 +267,7 @@ fn run_sos_fanout(
                 ),
             });
         }
+        watch_sos_send_outcome(app_state.clone(), bus.clone(), record, resp_rx);
     }
 
     let next = if matches!(kind, SosMessageKind::Cancelled {}) {

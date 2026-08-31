@@ -52,6 +52,7 @@ export function createMessagingSendController(context: MessagingSendContext) {
     state: MessageRecord["state"],
     detail: string | undefined,
     sentAtMs: number,
+    trafficClass: MessageRecord["trafficClass"] = "chat",
   ): MessageRecord {
     const failed = state === "Failed" || state === "TimedOut";
     return {
@@ -62,6 +63,7 @@ export function createMessagingSendController(context: MessagingSendContext) {
       sourceHex: nodeStore.status.lxmfDestinationHex || undefined,
       title,
       bodyUtf8,
+      trafficClass,
       method,
       state,
       transportState: failed ? "Failed" : "Queued",
@@ -104,6 +106,7 @@ export function createMessagingSendController(context: MessagingSendContext) {
       "Queued",
       undefined,
       message.sentAtMs ?? Date.now(),
+      message.trafficClass,
     ));
     persistWeb();
 
@@ -200,6 +203,7 @@ export function createMessagingSendController(context: MessagingSendContext) {
       "Queued",
       undefined,
       message.sentAtMs ?? Date.now(),
+      message.trafficClass,
     ));
     persistWeb();
     try {
@@ -215,6 +219,7 @@ export function createMessagingSendController(context: MessagingSendContext) {
         "Failed",
         error instanceof Error ? error.message : "Retry failed",
         message.sentAtMs ?? Date.now(),
+        message.trafficClass,
       ));
       persistWeb();
     }

@@ -3,14 +3,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::*;
 use crate::types::{
     AnnounceClass, AnnounceRecord, AppSettingsRecord, ApplicationAckState, ChecklistCellRecord,
-    ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
+    ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest, CircleTier,
     ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSettingsRecord,
     ChecklistStatusCounts, ChecklistSystemColumnKey, ChecklistTaskCellSetRequest,
     ChecklistTaskRecord, ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest,
     ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus, ChecklistTaskStatusSetRequest,
     ChecklistTemplateImportCsvRequest, ChecklistUpdatePatch, ChecklistUpdateRequest,
     ChecklistUserTaskStatus, HubMode, HubSettingsRecord, MessageDirection, MessageMethod,
-    MessageState, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
+    MessageState, OutboundTrafficClass, ProjectionScope, SosAlertRecord, SosLocationRecord, SosMessageKind,
     TelemetrySettingsRecord, TransportDeliveryState,
 };
 use serde_json::json;

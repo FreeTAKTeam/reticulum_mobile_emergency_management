@@ -95,6 +95,7 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
     private ServiceEventCoordinator eventCoordinator;
     private NodeRuntimeLifecycleController runtimeController;
     private RNodeAndroidTransportManager rnodeTransportManager;
+    private BatteryPowerCoordinator batteryPowerCoordinator;
 
     @Override
     public void onCreate() {
@@ -106,6 +107,8 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
         NodeRuntimeLifecycleController.initializeStorage(
             configResolver.resolveStorageDir("").getAbsolutePath()
         );
+        batteryPowerCoordinator = BatteryPowerCoordinator.forContext(this, this::updateBatteryState);
+        batteryPowerCoordinator.start();
         notificationController = new ServiceNotificationController(
             this,
             mainHandler,
@@ -174,6 +177,10 @@ public final class ReticulumNodeService extends ReticulumBridgeServiceApi {
 
     @Override
     public void onDestroy() {
+        if (batteryPowerCoordinator != null) {
+            batteryPowerCoordinator.close();
+            batteryPowerCoordinator = null;
+        }
         if (rnodeTransportManager != null) {
             RNodeAndroidTransportManager.uninstall(rnodeTransportManager);
             rnodeTransportManager = null;

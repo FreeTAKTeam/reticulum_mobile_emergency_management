@@ -134,6 +134,8 @@ dependencies {
     implementation project(':rem-plugin-sdk')
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:20240303"
+    testImplementation "com.google.zxing:core:3.5.3"
+    testImplementation "org.robolectric:robolectric:4.14.1"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

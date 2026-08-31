@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, useTemplateRef } from "vue";
 import { useRouter } from "vue-router";
 
 import SettingsAboutPanel from "../components/settings/SettingsAboutPanel.vue";
+import SettingsBlockOnboardingPanel from "../components/settings/SettingsBlockOnboardingPanel.vue";
+import SettingsCommunityPanel from "../components/settings/SettingsCommunityPanel.vue";
 import SettingsHubPanel from "../components/settings/SettingsHubPanel.vue";
 import SettingsNodeConfigPanel from "../components/settings/SettingsNodeConfigPanel.vue";
 import SettingsNodeControlPanel from "../components/settings/SettingsNodeControlPanel.vue";
@@ -12,6 +14,7 @@ import SettingsTeamsPanel from "../components/settings/SettingsTeamsPanel.vue";
 import SosEmergencyCard from "../components/sos/SosEmergencyCard.vue";
 import { useNodeStore } from "../stores/nodeStore";
 import { ensureRequiredAnnounceCapabilities } from "../utils/peers";
+import { householdIdFromDestination } from "../utils/communityStatus";
 import {
   RNODE_FREQUENCY_MAX_HZ,
   RNODE_FREQUENCY_MIN_HZ,
@@ -52,7 +55,17 @@ const form = reactive({
   hubApiBaseUrl: nodeStore.settings.hub.apiBaseUrl,
   hubApiKey: nodeStore.settings.hub.apiKey,
   hubRefreshIntervalSeconds: nodeStore.settings.hub.refreshIntervalSeconds,
+  householdId: nodeStore.settings.community.householdId,
+  householdName: nodeStore.settings.community.householdName,
+  adults: nodeStore.settings.community.adults,
+  children: nodeStore.settings.community.children,
+  pets: nodeStore.settings.community.pets,
+  roleBadgesText: nodeStore.settings.community.roleBadges.join(", "),
+  preferredMapLayer: nodeStore.settings.community.preferredMapLayer,
+  powerEnabled: nodeStore.settings.power.enabled,
+  powerThresholdPercent: nodeStore.settings.power.thresholdPercent,
 });
+const initialFormSnapshot = JSON.stringify(form);
 
 const runtimeFeedback = ref("");
 const nodeControlPanel = useTemplateRef<{ openPanel: () => void }>("nodeControlPanel");
@@ -91,6 +104,10 @@ const persistedTcpClients = computed(() =>
     ),
   ],
 );
+const effectivePersistedHouseholdId = computed(() =>
+  nodeStore.settings.community.householdId
+  || householdIdFromDestination(nodeStore.status.appDestinationHex),
+);
 
 function normalizeTelemetryPublishIntervalSeconds(value: number | string | undefined | null): number {
   const parsed = Number(value ?? 60);
@@ -126,7 +143,16 @@ const hasMainSettingsChanges = computed(() =>
   || form.hubApiBaseUrl.trim() !== nodeStore.settings.hub.apiBaseUrl
   || form.hubApiKey.trim() !== nodeStore.settings.hub.apiKey
   || Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600))
-    !== nodeStore.settings.hub.refreshIntervalSeconds,
+    !== nodeStore.settings.hub.refreshIntervalSeconds
+  || form.householdId.trim().toLowerCase() !== effectivePersistedHouseholdId.value
+  || form.householdName.trim() !== nodeStore.settings.community.householdName
+  || form.adults !== nodeStore.settings.community.adults
+  || form.children !== nodeStore.settings.community.children
+  || form.pets !== nodeStore.settings.community.pets
+  || form.roleBadgesText !== nodeStore.settings.community.roleBadges.join(", ")
+  || form.preferredMapLayer !== nodeStore.settings.community.preferredMapLayer
+  || form.powerEnabled !== nodeStore.settings.power.enabled
+  || form.powerThresholdPercent !== nodeStore.settings.power.thresholdPercent,
 );
 
 const hasUnsavedSettings = computed(
@@ -163,11 +189,25 @@ function syncSettingsForm(): void {
   form.hubApiBaseUrl = nodeStore.settings.hub.apiBaseUrl;
   form.hubApiKey = nodeStore.settings.hub.apiKey;
   form.hubRefreshIntervalSeconds = nodeStore.settings.hub.refreshIntervalSeconds;
+  form.householdId = nodeStore.settings.community.householdId
+    || householdIdFromDestination(nodeStore.status.appDestinationHex);
+  form.householdName = nodeStore.settings.community.householdName;
+  form.adults = nodeStore.settings.community.adults;
+  form.children = nodeStore.settings.community.children;
+  form.pets = nodeStore.settings.community.pets;
+  form.roleBadgesText = nodeStore.settings.community.roleBadges.join(", ");
+  form.preferredMapLayer = nodeStore.settings.community.preferredMapLayer;
+  form.powerEnabled = nodeStore.settings.power.enabled;
+  form.powerThresholdPercent = nodeStore.settings.power.thresholdPercent;
 }
 
 onMounted(() => {
   void nodeStore.init()
-    .then(syncSettingsForm)
+    .then(() => {
+      if (JSON.stringify(form) === initialFormSnapshot) {
+        syncSettingsForm();
+      }
+    })
     .catch((error: unknown) => {
       const message = `Settings initialization failed: ${error instanceof Error ? error.message : String(error)}`;
       nodeStore.setLastError(message);
@@ -223,6 +263,20 @@ async function applySettings(): Promise<void> {
         apiBaseUrl: form.hubApiBaseUrl.trim(),
         apiKey: form.hubApiKey.trim(),
         refreshIntervalSeconds: Math.max(30, Number(form.hubRefreshIntervalSeconds || 3600)),
+      },
+      community: {
+        ...nodeStore.settings.community,
+        householdId: form.householdId.trim().toLowerCase(),
+        householdName: form.householdName.trim(),
+        adults: Math.min(20, Math.max(0, Number(form.adults))),
+        children: Math.min(20, Math.max(0, Number(form.children))),
+        pets: Math.min(20, Math.max(0, Number(form.pets))),
+        roleBadges: [...new Set(form.roleBadgesText.split(",").map((role) => role.trim()).filter(Boolean))].slice(0, 5),
+        preferredMapLayer: form.preferredMapLayer,
+      },
+      power: {
+        enabled: form.powerEnabled,
+        thresholdPercent: form.powerThresholdPercent,
       },
     });
     await sosCardRef.value?.saveSettings();
@@ -362,6 +416,10 @@ function openNodeControlPanel(): void {
     />
 
     <SettingsTelemetryPanel :form="form" />
+
+    <SettingsCommunityPanel :form="form" />
+
+    <SettingsBlockOnboardingPanel />
 
     <SettingsPluginsPanel />
 

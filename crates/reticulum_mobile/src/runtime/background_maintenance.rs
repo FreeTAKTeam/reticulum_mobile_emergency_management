@@ -1,14 +1,21 @@
-fn spawn_peer_maintenance_tasks(state: &NodeRuntimeState, bus: &EventBus) {
+fn spawn_peer_maintenance_tasks(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    power_saver_rx: watch::Receiver<bool>,
+) {
     // Peer freshness/relay maintenance.
     {
         let bus = bus.clone();
         let state = state.clone();
+        let power_saver_rx = power_saver_rx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
                 refresh_peer_snapshot(&state).await;
-                sync_auto_propagation_node(&state, &bus).await;
+                if !*power_saver_rx.borrow() {
+                    sync_auto_propagation_node(&state, &bus).await;
+                }
             }
         });
     }
@@ -19,11 +26,15 @@ fn spawn_peer_maintenance_tasks(state: &NodeRuntimeState, bus: &EventBus) {
     {
         let bus = bus.clone();
         let state = state.clone();
+        let power_saver_rx = power_saver_rx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SAVED_PEER_ROUTE_REFRESH_INTERVAL);
             interval.tick().await;
             loop {
                 interval.tick().await;
+                if *power_saver_rx.borrow() {
+                    continue;
+                }
                 let destinations = {
                     let messaging = state.messaging.lock().await;
                     saved_peer_destinations_needing_route_refresh(&messaging)
@@ -49,17 +60,24 @@ fn spawn_peer_maintenance_tasks(state: &NodeRuntimeState, bus: &EventBus) {
     {
         let bus = bus.clone();
         let state = state.clone();
+        let power_saver_rx = power_saver_rx.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(SAVED_PEER_LINK_MAINTENANCE_INTERVAL);
             loop {
                 interval.tick().await;
-                maintain_managed_peer_links_once(&state, &bus).await;
+                if !*power_saver_rx.borrow() {
+                    maintain_managed_peer_links_once(&state, &bus).await;
+                }
             }
         });
     }
 }
 
-fn spawn_propagation_maintenance_task(state: &NodeRuntimeState, bus: &EventBus) {
+fn spawn_propagation_maintenance_task(
+    state: &NodeRuntimeState,
+    bus: &EventBus,
+    power_saver_rx: watch::Receiver<bool>,
+) {
     // Propagation receive maintenance. Relay sends are store-and-forward, so
     // receivers must poll the selected relay even when nobody taps Sync.
     let bus = bus.clone();
@@ -68,6 +86,9 @@ fn spawn_propagation_maintenance_task(state: &NodeRuntimeState, bus: &EventBus) 
         let mut interval = tokio::time::interval(AUTO_PROPAGATION_SYNC_INTERVAL);
         loop {
             interval.tick().await;
+            if *power_saver_rx.borrow() {
+                continue;
+            }
             // Automatic relay polling can fan out across several candidates.
             // Do not put that background workload on an RNode-only LoRa link;
             // explicit propagation sync and direct sends remain available; a
@@ -124,7 +145,7 @@ fn spawn_receipt_listener(
                     last_wire_message_id_hex: None,
                     updated_at_ms: now_ms(),
                 })
-                .map(from_sdk_message_record);
+                .map(|record| from_sdk_message_record_with_persisted(&state, record));
 
             if let Some(record) = maybe_record {
                 sdk.record_delivery_acknowledged(

@@ -134,6 +134,14 @@ h1 {
   padding: 0.9rem;
 }
 
+.community-panel { display: grid; gap: .7rem; }
+.community-heading { align-items: start; display: flex; justify-content: space-between; }
+.community-heading .eyebrow { color: #38bdf8; font-family: var(--font-ui); font-size: .66rem; font-weight: 800; letter-spacing: .13em; margin: 0 0 .2rem; }
+.status-instruction, .community-feedback { color: #8faecc; font-size: .82rem; margin: 0; }
+.community-feedback { color: #9ce4ff; }
+.nearby-households { border-top: 1px solid rgb(74 120 193 / 25%); display: grid; gap: .55rem; padding-top: .65rem; }
+.nearby-households summary { color: #8fcaff; cursor: pointer; font-family: var(--font-ui); font-size: .75rem; font-weight: 700; }
+
 .ring-card:focus-visible,
 .summary-metric:focus-visible,
 .activity-item:focus-visible,

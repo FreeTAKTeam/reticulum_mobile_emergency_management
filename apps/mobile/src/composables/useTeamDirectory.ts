@@ -1,5 +1,5 @@
 import { computed } from "vue";
-import { CANONICAL_TEAMS, YELLOW_TEAM_UID } from "@reticulum/node-client";
+import { CANONICAL_TEAMS, YELLOW_TEAM_UID, type CircleTier } from "@reticulum/node-client";
 
 import { useNodeStore } from "../stores/nodeStore";
 import type {
@@ -7,7 +7,7 @@ import type {
   HubTeamRecord,
   LocalTeamRecord,
 } from "../types/domain";
-import { encodeLocalTeamExchange, parseLocalTeamExchange } from "../utils/localTeamExchange";
+import { parseLocalTeamExchange } from "../utils/localTeamExchange";
 
 export interface TeamPeerRow {
   destination: string;
@@ -15,6 +15,7 @@ export interface TeamPeerRow {
   localSaved: boolean;
   localMember: boolean;
   member?: HubTeamMemberRecord;
+  circleTier: CircleTier;
 }
 
 export interface TeamDirectorySection {
@@ -136,6 +137,7 @@ export function useTeamDirectory() {
           || "No label",
         localSaved: true,
         localMember: true,
+        circleTier: peer.circleTier ?? "inner",
       });
     }
     for (const member of nodeStore.hubDirectorySnapshot?.members ?? []) {
@@ -148,6 +150,7 @@ export function useTeamDirectory() {
         localSaved: current?.localSaved ?? false,
         localMember: current?.localMember ?? false,
         member,
+        circleTier: current?.circleTier ?? "outer",
       });
     }
     return [...rows.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -280,19 +283,6 @@ export function useTeamDirectory() {
     return nodeStore.savedPeers.filter((peer) => !members.has(peer.destination.toLowerCase()));
   }
 
-  function exportLocalTeamText(teamUid: string): string {
-    const team = localTeams.value.find((item) => item.teamUid === teamUid);
-    if (!team) throw new Error("Only local teams can be exported.");
-    return encodeLocalTeamExchange(
-      teamUid,
-      canonicalTeam(teamUid).color,
-      team.memberDestinations.map((destination) => ({
-        destination,
-        label: nodeStore.savedByDestination[destination]?.label,
-      })),
-    );
-  }
-
   async function importLocalTeamPayload(payload: string): Promise<string> {
     const imported = parseLocalTeamExchange(payload);
     const previouslySaved = new Set(Object.keys(nodeStore.savedByDestination));
@@ -335,7 +325,6 @@ export function useTeamDirectory() {
     connectionStatus,
     createLocalTeam,
     deleteLocalTeam,
-    exportLocalTeamText,
     importLocalTeamPayload,
     localAlias,
     localTeams,

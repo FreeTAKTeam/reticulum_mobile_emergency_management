@@ -102,6 +102,11 @@ export function createNodeProjectionController(context: NodeProjectionContext) {
     settings.telemetry = { ...next.telemetry };
     settings.checklists = { ...next.checklists };
     settings.hub = { ...next.hub };
+    settings.community = {
+      ...next.community,
+      roleBadges: [...next.community.roleBadges],
+    };
+    settings.power = { ...next.power };
     settings.teams = normalizeTeamPreferences(next.teams);
     settings.rnode = normalizeRnodeSettings(next.rnode);
     applyUiSettingsProjection(toUiSettingsProjection(next));

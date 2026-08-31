@@ -6,25 +6,23 @@ import {
   PhLockSimple as LockSimple,
   PhPlus as Plus,
   PhQrCode as QrCode,
-  PhShareNetwork as ShareNetwork,
   PhX as X,
 } from "@phosphor-icons/vue";
 import { YELLOW_TEAM_UID } from "@reticulum/node-client";
 import { useRoute, useRouter } from "vue-router";
 
 import TeamQrExchange from "../components/TeamQrExchange.vue";
+import SettingsBlockOnboardingPanel from "../components/settings/SettingsBlockOnboardingPanel.vue";
 import {
   teamColorHex,
   teamColorLabel,
   useTeamDirectory,
 } from "../composables/useTeamDirectory";
 import { notifyOperationalUpdate } from "../services/notifications";
-import { copyToClipboard, shareText } from "../services/peerExchange";
 import { useNodeStore } from "../stores/nodeStore";
 
 interface TeamQrExchangeHandle {
   scanQrCode: () => Promise<void>;
-  showQrCode: (teamUid?: string) => Promise<void>;
 }
 
 const route = useRoute();
@@ -38,9 +36,7 @@ const {
   availableLocalTeams,
   createLocalTeam,
   deleteLocalTeam,
-  exportLocalTeamText,
   importLocalTeamPayload,
-  localTeams,
   removeLocalMember,
   saveTeamAlias,
   teamSections,
@@ -61,15 +57,6 @@ const rchOnlyTeams = computed(() => teamSections.value.filter((section) => !sect
 const selectedSection = computed(() => (
   teamSections.value.find((section) => section.team.uid === selectedTeamUid.value)
 ));
-const qrTeams = computed(() => localTeams.value.map((team) => {
-  const section = teamSections.value.find((candidate) => candidate.team.uid === team.teamUid);
-  return {
-    teamUid: team.teamUid,
-    label: section?.label || teamColorLabel(section?.team.color || "Team"),
-    memberDestinations: [...team.memberDestinations],
-  };
-}));
-
 watch(selectedSection, (section) => {
   aliasDraft.value = section?.label ?? "";
   addMemberDraft.value = "";
@@ -179,27 +166,6 @@ async function removeTeam(): Promise<void> {
   if (removed) closeTeam();
 }
 
-async function exportTeam(teamUid: string): Promise<void> {
-  await runAction(async () => {
-    const payload = exportLocalTeamText(teamUid);
-    const section = teamSections.value.find((candidate) => candidate.team.uid === teamUid);
-    const [copied, shared] = await Promise.allSettled([
-      copyToClipboard(payload),
-      shareText(`${section?.label || "REM"} team`, payload),
-    ]);
-    if (copied.status === "rejected" && shared.status === "rejected") {
-      throw new AggregateError(
-        [copied.reason, shared.reason],
-        "Team export and clipboard copy failed.",
-      );
-    }
-  }, "Local team exported.", "export team");
-}
-
-async function showTeamQr(teamUid: string): Promise<void> {
-  await qrExchange.value?.showQrCode(teamUid);
-}
-
 async function scanTeamQr(): Promise<void> {
   await qrExchange.value?.scanQrCode();
 }
@@ -229,7 +195,7 @@ async function importTeamJson(): Promise<void> {
         <ArrowLeft :size="22" aria-hidden="true" />
         <span>{{ route.query.from === "peers" ? "Back to peers" : "Back to settings" }}</span>
       </button>
-      <p>Local teams can be edited and shared. Hub membership is read-only.</p>
+      <p>Local teams can be edited. Signed neighbor onboarding is available below.</p>
     </header>
 
     <div class="primary-actions">
@@ -239,7 +205,7 @@ async function importTeamJson(): Promise<void> {
       </button>
       <button type="button" :disabled="busy" @click="scanTeamQr">
         <QrCode :size="24" aria-hidden="true" />
-        Scan QR
+        Import legacy QR
       </button>
     </div>
 
@@ -268,14 +234,6 @@ async function importTeamJson(): Promise<void> {
               <small>{{ sourceLabel(section) }}</small>
             </span>
             <CaretRight :size="22" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            class="qr-row-action"
-            :aria-label="`Show ${section.label} team QR code`"
-            @click="showTeamQr(section.team.uid)"
-          >
-            <QrCode :size="24" aria-hidden="true" />
           </button>
         </article>
       </div>
@@ -311,9 +269,10 @@ async function importTeamJson(): Promise<void> {
 
     <p class="hub-note"><LockSimple :size="17" aria-hidden="true" /> RCH membership is managed by the hub.</p>
 
+    <SettingsBlockOnboardingPanel />
+
     <TeamQrExchange
       ref="qrExchange"
-      :teams="qrTeams"
       :show-launcher="false"
       @error="feedback = $event"
       @import="handleQrImport"
@@ -385,15 +344,6 @@ async function importTeamJson(): Promise<void> {
           </div>
           <small>Alias stays on this device.</small>
         </label>
-
-        <div v-if="selectedSection.local" class="detail-actions">
-          <button type="button" @click="showTeamQr(selectedSection.team.uid)">
-            <QrCode :size="20" aria-hidden="true" /> Share QR
-          </button>
-          <button type="button" @click="exportTeam(selectedSection.team.uid)">
-            <ShareNetwork :size="20" aria-hidden="true" /> Export
-          </button>
-        </div>
 
         <section class="member-section">
           <h3>Members <span>{{ selectedSection.total }}</span></h3>

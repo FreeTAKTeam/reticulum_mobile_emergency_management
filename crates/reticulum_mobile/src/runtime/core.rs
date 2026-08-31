@@ -62,7 +62,7 @@ use rns_transport::iface::{IfaceRole, InterfaceMode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tokio::net::{lookup_host, TcpStream};
-use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, watch, Mutex as TokioMutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 #[path = "../runtime_projection.rs"]
 mod runtime_projection;
@@ -76,6 +76,7 @@ use crate::event_bus::EventBus;
 use crate::sdk_bridge::{RuntimeLxmfSdk, SdkTransportState};
 use crate::types::{
     AnnounceClass, AnnounceRecord, ApplicationAckState, ChecklistCellRecord, ChecklistColumnRecord,
+    CircleTier,
     ChecklistColumnType, ChecklistRecord, ChecklistSyncState, ChecklistSystemColumnKey,
     ChecklistTaskRecord, ChecklistTaskStatus, ChecklistUserTaskStatus, ConversationRecord,
     EamProjectionRecord, EamSourceRecord, EventProjectionRecord, HubCallerMembershipRecord,
@@ -83,7 +84,7 @@ use crate::types::{
     InterfaceStatusRecord, LogLevel, LxmfDeliveryMethod,
     LxmfDeliveryRepresentation, LxmfDeliveryStatus, LxmfDeliveryUpdate, LxmfFallbackStage,
     MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
-    NodeStatus, OperationalNotice, PeerChange, PeerRecord, PeerState, ProjectionScope,
+    NodeStatus, OperationalNotice, OutboundTrafficClass, PeerChange, PeerRecord, PeerState, ProjectionScope,
     RnodeConnectionMode, RnodeSettingsRecord, RuntimeReadinessState, SavedPeerRecord,
     SendLxmfRequest, SendMode, SendOutcome, SosDeviceTelemetryRecord, SosMessageKind, SyncPhase,
     SyncStatus, TelemetryPositionRecord, TransportDeliveryState, YELLOW_TEAM_UID,

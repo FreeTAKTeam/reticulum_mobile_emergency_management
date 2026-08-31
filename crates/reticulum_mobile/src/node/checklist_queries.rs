@@ -124,8 +124,12 @@ impl Node {
         let mut scheduled_sends = Vec::<ScheduledMissionSend>::new();
         let mut delayed_sends = Vec::<ScheduledMissionSend>::new();
         let mut cmd_tx = None;
-        let bus = {
+        let (bus, power_saver_rx) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            ensure_outbound_admitted(
+                inner.power_state.saver_active,
+                OutboundTrafficClass::Checklist {},
+            )?;
             let status = inner
                 .status
                 .lock()
@@ -264,7 +268,7 @@ impl Node {
                 }
             }
 
-            inner.bus.clone()
+            (inner.bus.clone(), inner.power_saver_tx.subscribe())
         };
 
         let Some(tx) = cmd_tx else {
@@ -273,7 +277,9 @@ impl Node {
 
         for send in scheduled_sends {
             let destination_hex = send.0.clone();
-            if let Err(err) = dispatch_scheduled_mission_send(&tx, send) {
+            if let Err(err) =
+                dispatch_scheduled_mission_send(&tx, send, *power_saver_rx.borrow())
+            {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
                     message: format!(
@@ -290,7 +296,9 @@ impl Node {
                 for send in delayed_sends {
                     std::thread::sleep(CHECKLIST_INITIAL_TASK_SEND_INTERVAL);
                     let destination_hex = send.0.clone();
-                    if let Err(err) = dispatch_scheduled_mission_send(&tx, send) {
+                    if let Err(err) =
+                        dispatch_scheduled_mission_send(&tx, send, *power_saver_rx.borrow())
+                    {
                         bus.emit(NodeEvent::Error {
                             code: "NotRunning".to_string(),
                             message: format!(
@@ -421,7 +429,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Checklist {},
+                )
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),

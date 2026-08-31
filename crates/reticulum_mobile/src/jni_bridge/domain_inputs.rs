@@ -70,6 +70,7 @@ struct MessageRecordInput {
     last_wire_message_id_hex: Option<String>,
     title: Option<String>,
     body_utf8: String,
+    traffic_class: Option<String>,
     method: String,
     state: String,
     transport_state: Option<String>,

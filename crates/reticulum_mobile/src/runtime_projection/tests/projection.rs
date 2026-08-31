@@ -5,7 +5,7 @@ use super::{
 use crate::event_bus::EventBus;
 use crate::types::{
     ApplicationAckState, MessageDirection, MessageMethod, MessageRecord, MessageState,
-    PeerRecord, PeerState, ProjectionScope, TransportDeliveryState,
+    OutboundTrafficClass, PeerRecord, PeerState, ProjectionScope, TransportDeliveryState,
 };
 
 fn temporary_projection_path(name: &str) -> std::path::PathBuf {
@@ -60,6 +60,7 @@ fn build_message(
         last_wire_message_id_hex: Some(message_id_hex.to_string()),
         title: Some("chat".to_string()),
         body_utf8: format!("body {message_id_hex}"),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Received {},
         transport_state: TransportDeliveryState::TransportDelivered {},

@@ -272,6 +272,9 @@ async fn resolve_peer_route(
     bus: &EventBus,
     destination_hex: &str,
 ) -> Result<(), NodeError> {
+    if *state.power_saver_rx.borrow() {
+        return Ok(());
+    }
     let destination = parse_address_hash(destination_hex)?;
     let attempted_at_ms = now_ms();
     {
@@ -310,11 +313,13 @@ async fn resolve_peer_route(
     };
     emit_peer_changed(state, bus, destination_hex).await;
     emit_peer_resolved_for_destination(state, bus, destination_hex).await;
-    if let Some(target) = desired_link_target {
+    if !*state.power_saver_rx.borrow() {
+        if let Some(target) = desired_link_target {
         add_desired_managed_peer_link_and_schedule(state, bus, target, "saved-peer-resolution")
             .await;
+        }
+        sync_auto_propagation_node(state, bus).await;
     }
-    sync_auto_propagation_node(state, bus).await;
     Ok(())
 }
 
@@ -332,6 +337,14 @@ fn spawn_managed_peer_resolution(state: NodeRuntimeState, bus: EventBus, destina
 
         let retry_delays_secs = [0_u64, 3, 8, 15, 30];
         for delay_secs in retry_delays_secs {
+            if *state.power_saver_rx.borrow() {
+                state
+                    .peer_resolution_inflight
+                    .lock()
+                    .await
+                    .remove(destination_hex.as_str());
+                return;
+            }
             if delay_secs > 0 {
                 tokio::time::sleep(Duration::from_secs(delay_secs)).await;
             }

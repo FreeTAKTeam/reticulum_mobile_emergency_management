@@ -34,6 +34,12 @@ public final class ReticulumBridge {
     public static native int importLegacyStateJson(String payloadJson);
     public static native String getAppSettingsJson();
     public static native int setAppSettingsJson(String payloadJson);
+    public static native int updateBatteryState(int percent, boolean charging);
+    public static native String getPowerStateJson();
+    public static native String publishCommunityStatusJson();
+    public static native String createBlockOnboardingCodeJson(String payloadJson);
+    public static native String inspectBlockOnboardingCodeJson(String payloadJson);
+    public static native String importBlockOnboardingCodeJson(String payloadJson);
     public static native String getSavedPeersJson();
     public static native int setSavedPeersJson(String payloadJson);
     public static native String getOperationalSummaryJson();
@@ -59,6 +65,7 @@ public final class ReticulumBridge {
     public static native String getEamTeamSummaryJson(String payloadJson);
     public static native String getEamReadinessSummaryJson();
     public static native String getEventsJson();
+    public static native String getCommunityStatusesJson();
     public static native int upsertEventJson(String payloadJson);
     public static native int deleteEventJson(String payloadJson);
     public static native String getTelemetryPositionsJson();

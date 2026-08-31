@@ -144,10 +144,11 @@ fn expand_event_wire_content(content: &str) -> String {
     }
 }
 
-fn event_projection_from_fields(
+pub(crate) fn event_projection_from_fields(
     fields_bytes: &[u8],
     content_bytes: Option<&[u8]>,
     source_identity_fallback: Option<&str>,
+    verified_source_identity: Option<&str>,
     source_display_name_fallback: Option<&str>,
     received_at_ms: u64,
 ) -> Option<EventProjectionRecord> {
@@ -169,11 +170,11 @@ fn event_projection_from_fields(
         {
             continue;
         }
-        let command_type =
+        let mut command_type =
             command_type.unwrap_or_else(|| "mission.registry.log_entry.upsert".to_string());
         let args = msgpack_get_named(command_map, &["args", "a"]).and_then(msgpack_map_entries)?;
         let source = msgpack_get_named(command_map, &["source", "s"]).and_then(msgpack_map_entries);
-        let uid = msgpack_get_named(args, &["entry_uid", "u"]).and_then(msgpack_event_uid)?;
+        let mut uid = msgpack_get_named(args, &["entry_uid", "u"]).and_then(msgpack_event_uid)?;
         let mission_uid = msgpack_get_named(args, &["mission_uid", "m"])
             .and_then(msgpack_mission_uid)
             .unwrap_or_else(|| DEFAULT_R3AKT_MISSION_UID.to_string());
@@ -215,20 +216,31 @@ fn event_projection_from_fields(
                 msgpack_get_named(command_map, &["command_id", "i"]).and_then(msgpack_string)
             })
             .unwrap_or_else(|| format!("log-entry-{uid}"));
-        let source_identity = msgpack_get_named(args, &["source_identity", "si"])
-            .and_then(msgpack_string)
-            .or_else(|| {
-                source.and_then(|source_map| {
-                    msgpack_get_named(source_map, &["rns_identity", "r"])
-                        .and_then(msgpack_hex_or_string)
+        let is_community = mission_uid == crate::node::COMMUNITY_MISSION_UID
+            && content.starts_with(crate::node::COMMUNITY_PREFIX);
+        let source_identity = if is_community {
+            verified_source_identity
+                .and_then(normalize_hex_32)
+                .inspect(|identity| {
+                    uid = format!("rem-community-status-v1:{identity}");
+                    command_type = "event.create".to_string();
                 })
-            })
-            .or_else(|| {
-                source_identity_fallback
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-            })?;
+        } else {
+            msgpack_get_named(args, &["source_identity", "si"])
+                .and_then(msgpack_string)
+                .or_else(|| {
+                    source.and_then(|source_map| {
+                        msgpack_get_named(source_map, &["rns_identity", "r"])
+                            .and_then(msgpack_hex_or_string)
+                    })
+                })
+                .or_else(|| {
+                    source_identity_fallback
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+        }?;
         if uid.trim().is_empty()
             || mission_uid.trim().is_empty()
             || content.trim().is_empty()
@@ -390,21 +402,23 @@ async fn persist_received_event_if_present(
     content_bytes: Option<&[u8]>,
     source_identity_fallback: Option<&str>,
 ) -> bool {
-    let source_display_name = if let Some(source_hex) = source_identity_fallback {
-        state
-            .messaging
-            .lock()
-            .await
-            .peer_by_destination(source_hex)
-            .and_then(|peer| peer.display_name)
+    let source_peer = if let Some(source_hex) = source_identity_fallback {
+        state.messaging.lock().await.peer_by_destination(source_hex)
     } else {
         None
     };
+    let source_display_name = source_peer
+        .as_ref()
+        .and_then(|peer| peer.display_name.clone());
+    let verified_source_identity = source_peer
+        .as_ref()
+        .and_then(|peer| peer.identity_hex.as_deref());
     let parsed_from_fields = fields_bytes.and_then(|value| {
         event_projection_from_fields(
             value,
             content_bytes,
             source_identity_fallback,
+            verified_source_identity,
             source_display_name.as_deref(),
             now_ms(),
         )

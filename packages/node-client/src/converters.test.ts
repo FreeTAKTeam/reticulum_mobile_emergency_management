@@ -5,6 +5,8 @@ import {
   parseRnodeConnectionMode,
   toAppSettingsRecord,
 } from "./converters";
+import { toMessageRecord } from "./message-converters";
+import { toSavedPeerRecord } from "./projection-converters";
 
 describe("RNode settings conversion", () => {
   it("defaults missing legacy modes to BLE", () => {
@@ -54,6 +56,50 @@ describe("RNode settings conversion", () => {
 });
 
 describe("app settings conversion", () => {
+  it("supplies migration-safe community and power defaults", () => {
+    expect(toAppSettingsRecord({ displayName: "Legacy" })).toMatchObject({
+      community: {
+        householdId: "",
+        householdName: "",
+        adults: 0,
+        children: 0,
+        pets: 0,
+        roleBadges: [],
+        status: "all_home",
+        preferredMapLayer: "base",
+      },
+      power: { enabled: true, thresholdPercent: 20 },
+    });
+  });
+
+  it("normalizes current community and power boundary values", () => {
+    expect(toAppSettingsRecord({
+      displayName: "Current",
+      community: {
+        household_id: " ABCDEF0123456789 ",
+        household_name: " North Block ",
+        adults: 99,
+        children: -1,
+        pets: 2,
+        role_badges: [" Medic ", "Medic", "Radio"],
+        status: "needs_help",
+        preferred_map_layer: "satellite",
+      },
+      power: { enabled: false, threshold_percent: 30 },
+    })).toMatchObject({
+      community: {
+        householdId: "abcdef0123456789",
+        householdName: "North Block",
+        adults: 20,
+        children: 0,
+        pets: 2,
+        roleBadges: ["Medic", "Radio"],
+        status: "needs_help",
+        preferredMapLayer: "satellite",
+      },
+      power: { enabled: false, thresholdPercent: 30 },
+    });
+  });
   it("normalizes nested plugin records without changing defaults", () => {
     expect(toAppSettingsRecord({
       settings: {
@@ -165,5 +211,21 @@ describe("app settings conversion", () => {
       hub: { refreshIntervalSeconds: 60 },
       checklists: { defaultTaskDueStepMinutes: 30 },
     });
+  });
+});
+
+describe("migration-safe projection contracts", () => {
+  it("maps legacy peers to the Inner Circle and honors explicit Outer Circle", () => {
+    expect(toSavedPeerRecord({ destination: "A".repeat(32) }).circleTier).toBe("inner");
+    expect(toSavedPeerRecord({ destination: "A".repeat(32), circle_tier: "outer" }).circleTier)
+      .toBe("outer");
+  });
+
+  it("defaults legacy and malformed message traffic classes to chat", () => {
+    expect(toMessageRecord({ message_id_hex: "A".repeat(32) }).trafficClass).toBe("chat");
+    expect(toMessageRecord({ message_id_hex: "A".repeat(32), traffic_class: "telemetry" }).trafficClass)
+      .toBe("telemetry");
+    expect(toMessageRecord({ message_id_hex: "A".repeat(32), traffic_class: "unknown" }).trafficClass)
+      .toBe("chat");
   });
 });
