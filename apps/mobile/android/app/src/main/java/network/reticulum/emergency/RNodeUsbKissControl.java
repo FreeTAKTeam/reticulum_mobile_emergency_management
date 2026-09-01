@@ -8,11 +8,15 @@ final class RNodeUsbKissControl {
     static final byte TFEND = (byte) 0xDC;
     static final byte TFESC = (byte) 0xDD;
     static final byte CMD_BT_CTRL = 0x46;
+    static final byte CMD_STAT_RX = 0x21;
+    static final byte CMD_STAT_TX = 0x22;
+    static final byte CMD_RESET = 0x55;
     static final byte CMD_BT_PIN = 0x62;
 
     private static final byte BT_CTRL_DISABLE = 0x00;
     private static final byte BT_CTRL_ENABLE = 0x01;
     private static final byte BT_CTRL_PAIRING_MODE = 0x02;
+    private static final byte RESET_ESP32 = (byte) 0xF8;
 
     private RNodeUsbKissControl() {}
 
@@ -26,6 +30,18 @@ final class RNodeUsbKissControl {
 
     static byte[] bluetoothEnableFrame() {
         return commandFrame(CMD_BT_CTRL, BT_CTRL_ENABLE);
+    }
+
+    static byte[] hardResetFrame() {
+        return commandFrame(CMD_RESET, RESET_ESP32);
+    }
+
+    static byte[] statRxFrame() {
+        return commandFrame(CMD_STAT_RX, (byte) 0x00);
+    }
+
+    static byte[] statTxFrame() {
+        return commandFrame(CMD_STAT_TX, (byte) 0x00);
     }
 
     static String decodeBluetoothPin(byte[] payload) {

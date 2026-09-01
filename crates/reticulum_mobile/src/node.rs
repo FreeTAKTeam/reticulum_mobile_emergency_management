@@ -260,6 +260,7 @@ include!("node/checklist_mutations.rs");
 include!("node/checklist_task_status.rs");
 include!("node/checklist_task_edits.rs");
 include!("node/eam.rs");
+include!("node/events_api.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");
@@ -279,6 +280,7 @@ mod tests {
     include!("node/tests/eam_repeated_eam_updates_with_same_callsign_re.rs");
     include!("node/tests/eam_upsert_eam_replicates_to_native_peer_proje.rs");
     include!("node/tests/events_delete_event_replicates_to_native_peer_pro.rs");
+    include!("node/tests/events_replication_failures.rs");
     include!("node/tests/events_event_replication_payload_uses_compact_mec.rs");
     include!("node/tests/events_event_route_priority_puts_low_hop_live_pee.rs");
     include!("node/tests/lifecycle.rs");

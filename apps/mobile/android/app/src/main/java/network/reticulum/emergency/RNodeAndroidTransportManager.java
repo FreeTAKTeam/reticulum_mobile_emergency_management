@@ -8,10 +8,12 @@ import android.bluetooth.BluetoothManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
 import java.io.IOException;
+import org.json.JSONObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @SuppressLint("MissingPermission")
 public final class RNodeAndroidTransportManager implements AutoCloseable {
+    private static final String TAG = "RNodeAndroidTransport";
     private static final AtomicReference<RNodeAndroidTransportManager> INSTALLED =
         new AtomicReference<>();
 
@@ -75,6 +78,48 @@ public final class RNodeAndroidTransportManager implements AutoCloseable {
         }
     }
 
+    public static String status() {
+        final JSONObject result = new JSONObject();
+        final RNodeAndroidTransportManager manager = INSTALLED.get();
+        try {
+            result.put("installed", manager != null);
+            if (manager == null) {
+                result.put("session", JSONObject.NULL);
+                return result.toString();
+            }
+            final RNodeAndroidSession session = manager.current;
+            result.put("latestGeneration", manager.latestGeneration.get());
+            result.put(
+                "session",
+                session == null ? JSONObject.NULL : new JSONObject(session.statusJson())
+            );
+            return result.toString();
+        } catch (Exception error) {
+            return "{\"installed\":true,\"statusError\":\""
+                + error.getClass().getSimpleName()
+                + "\"}";
+        }
+    }
+
+    static void resetRNodeForTest() throws Exception {
+        final RNodeAndroidTransportManager manager = requireInstalled();
+        final RNodeAndroidSession session = manager.current;
+        if (session == null || session.closed.get()) {
+            throw new IOException("RNode Android transport session is unavailable");
+        }
+        session.write(RNodeUsbKissControl.hardResetFrame(), 5_000L);
+    }
+
+    static void queryRNodeStatsForTest() throws Exception {
+        final RNodeAndroidTransportManager manager = requireInstalled();
+        final RNodeAndroidSession session = manager.current;
+        if (session == null || session.closed.get()) {
+            throw new IOException("RNode Android transport session is unavailable");
+        }
+        session.write(RNodeUsbKissControl.statRxFrame(), 5_000L);
+        session.write(RNodeUsbKissControl.statTxFrame(), 5_000L);
+    }
+
     private static RNodeAndroidTransportManager requireInstalled() {
         final RNodeAndroidTransportManager manager = INSTALLED.get();
         if (manager == null) {
@@ -108,8 +153,21 @@ public final class RNodeAndroidTransportManager implements AutoCloseable {
             if (!isCurrent(session)) {
                 throw new IOException("RNode connection was superseded by a newer attempt");
             }
-            return session.openResultJson();
+            final String openResult = session.openResultJson();
+            Log.i(
+                TAG,
+                "opened generation=" + generation
+                    + " mode=" + mode
+                    + " negotiatedMtu=" + session.negotiatedMtu()
+            );
+            return openResult;
         } catch (Exception error) {
+            Log.w(
+                TAG,
+                "open failed generation=" + generation
+                    + " mode=" + mode
+                    + " reason=" + error.getMessage()
+            );
             closeGeneration(generation);
             throw error;
         }
@@ -162,6 +220,7 @@ public final class RNodeAndroidTransportManager implements AutoCloseable {
             current = null;
         }
         session.close();
+        Log.i(TAG, "closed generation=" + generation + " status=" + session.statusJson());
     }
 
     @Override

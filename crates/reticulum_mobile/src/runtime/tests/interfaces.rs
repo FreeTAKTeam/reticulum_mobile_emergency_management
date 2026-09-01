@@ -12,6 +12,47 @@ fn tcp_endpoint_connect_addr_accepts_plain_and_tcp_urls() {
 }
 
 #[test]
+fn rnode_startup_evidence_contains_radio_invariants_without_endpoint() {
+    let snapshot = serde_json::json!({
+        "endpoint": "ble://AA:BB:CC:DD:EE:FF",
+        "startup_validated": true,
+        "startup_compatibility_warning": null,
+        "probe_status": {
+            "detected": true,
+            "firmware_version": { "label": "1.83" },
+            "platform": 128,
+            "mcu": 1,
+        },
+        "configured": {
+            "frequency_hz": 915_000_000,
+            "bandwidth_hz": 250_000,
+            "spreading_factor": 11,
+            "coding_rate": 5,
+            "tx_power_dbm": 17,
+            "max_payload_bytes": 508,
+        },
+        "radio_status": {
+            "frequency_hz": 915_000_000,
+            "bandwidth_hz": 250_000,
+            "spreading_factor": 11,
+            "coding_rate": 5,
+            "tx_power_dbm": 17,
+            "radio_state": 1,
+        },
+        "reported_bitrate_bps": 2148.4375,
+    });
+
+    let evidence = rnode_startup_evidence(&snapshot);
+
+    assert_eq!(evidence["startup_validated"], true);
+    assert_eq!(evidence["probe"]["firmware_version"], "1.83");
+    assert_eq!(evidence["configured"]["frequency_hz"], 915_000_000);
+    assert_eq!(evidence["reported"]["frequency_hz"], 915_000_000);
+    assert!(evidence.get("endpoint").is_none());
+    assert!(!evidence.to_string().contains("AA:BB:CC:DD:EE:FF"));
+}
+
+#[test]
 fn configured_tcp_client_endpoints_trim_strip_and_deduplicate() {
     let endpoints = configured_tcp_client_endpoints(&[
         " tcp://rns.beleth.net:4242 ".to_string(),
@@ -166,16 +207,25 @@ fn rnode_runtime_readiness_requires_detected_online_radio() {
     let connecting = serde_json::json!({
         "probe_status": { "detected": false },
         "online": false,
+        "startup_validated": false,
         "last_command_error": null,
     });
     let detected_but_offline = serde_json::json!({
         "probe_status": { "detected": true },
         "online": false,
+        "startup_validated": false,
+        "last_command_error": null,
+    });
+    let online_but_unvalidated = serde_json::json!({
+        "probe_status": { "detected": true },
+        "online": true,
+        "startup_validated": false,
         "last_command_error": null,
     });
     let ready = serde_json::json!({
         "probe_status": { "detected": true },
         "online": true,
+        "startup_validated": true,
         "last_command_error": null,
     });
 
@@ -185,6 +235,10 @@ fn rnode_runtime_readiness_requires_detected_online_radio() {
     );
     assert_eq!(
         rnode_runtime_interface_state(&detected_but_offline, false),
+        ("connecting", None)
+    );
+    assert_eq!(
+        rnode_runtime_interface_state(&online_but_unvalidated, false),
         ("connecting", None)
     );
     assert_eq!(
@@ -208,6 +262,7 @@ fn rnode_runtime_readiness_preserves_command_failure() {
     let failed = serde_json::json!({
         "probe_status": { "detected": true },
         "online": true,
+        "startup_validated": true,
         "last_command_error": "radio configuration rejected",
     });
 
@@ -264,6 +319,7 @@ fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert_eq!(wiring.kiss.max_write_len, 20);
     assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
+    assert!(wiring.kiss.kiss.flow_control);
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
     assert!(!wiring.kiss.shutdown_frames.is_empty());

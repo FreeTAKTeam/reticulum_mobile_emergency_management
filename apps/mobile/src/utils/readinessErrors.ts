@@ -41,8 +41,11 @@ const DELIVERY_ERROR_LOG_PATTERNS = [
   /\bsend_bytes failed\b/i,
   /\bsend_bytes failed\b.*\breason=invalid config\b/i,
   /\bbroadcast_bytes failed\b/i,
-  /\b(?:event|event delete|checklist|eam|eam delete|telemetry|sos) replication enqueue failed\b/i,
+  /\b(?:event|event delete|checklist|eam|eam delete|telemetry|sos) replication (?:enqueue|delivery) failed\b/i,
 ];
+
+const PER_DESTINATION_REPLICATION_FAILURE_PATTERN =
+  /\b(?:event|event delete|checklist|eam|eam delete|telemetry|sos) replication (?:enqueue|delivery) failed\b.*\bdestination=[0-9a-f]{32}\b/i;
 
 const PROPAGATION_RELAY_ERROR_LOG_PATTERNS = [
   /\bpropagation send relay attempt failed\b/i,
@@ -151,6 +154,10 @@ export function logIndicatesReadinessError(message: string): boolean {
 
 export function nodeErrorIndicatesTcpInterfaceReadinessError(event: NodeErrorEvent): boolean {
   return logIndicatesTcpInterfaceReadinessError(`${event.code}: ${event.message}`);
+}
+
+export function nodeErrorIndicatesPerDestinationDeliveryFailure(event: NodeErrorEvent): boolean {
+  return PER_DESTINATION_REPLICATION_FAILURE_PATTERN.test(event.message);
 }
 
 export function nodeErrorIndicatesReadinessError(event: NodeErrorEvent): boolean {

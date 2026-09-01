@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 abstract class RNodeAndroidSession implements AutoCloseable {
     static final int MAX_CHUNK_BYTES = 4 * 1024;
@@ -16,6 +18,11 @@ abstract class RNodeAndroidSession implements AutoCloseable {
     final long generation;
     final LinkedBlockingQueue<ReadEvent> inbound = new LinkedBlockingQueue<>(INBOUND_CAPACITY);
     final AtomicBoolean closed = new AtomicBoolean(false);
+    final AtomicLong inboundChunks = new AtomicLong();
+    final AtomicLong inboundBytes = new AtomicLong();
+    final AtomicLong outboundChunks = new AtomicLong();
+    final AtomicLong outboundBytes = new AtomicLong();
+    final AtomicReference<String> lastError = new AtomicReference<>();
 
     RNodeAndroidSession(long generation) {
         this.generation = generation;
@@ -52,6 +59,30 @@ abstract class RNodeAndroidSession implements AutoCloseable {
         return result.toString();
     }
 
+    String statusJson() {
+        try {
+            final JSONObject result = new JSONObject();
+            result.put("generation", generation);
+            result.put("kind", mode());
+            result.put("negotiatedMtu", negotiatedMtu());
+            result.put("closed", closed.get());
+            result.put("inboundChunks", inboundChunks.get());
+            result.put("inboundBytes", inboundBytes.get());
+            result.put("outboundChunks", outboundChunks.get());
+            result.put("outboundBytes", outboundBytes.get());
+            final String error = lastError.get();
+            result.put("lastError", error == null ? JSONObject.NULL : error);
+            return result.toString();
+        } catch (JSONException error) {
+            return "{\"generation\":" + generation + ",\"statusError\":\"json\"}";
+        }
+    }
+
+    void recordWrite(byte[] payload) {
+        outboundChunks.incrementAndGet();
+        outboundBytes.addAndGet(payload.length);
+    }
+
     void offerBytes(byte[] payload) {
         if (payload == null || payload.length == 0 || payload.length > MAX_CHUNK_BYTES) {
             if (payload != null && payload.length > MAX_CHUNK_BYTES) {
@@ -61,10 +92,14 @@ abstract class RNodeAndroidSession implements AutoCloseable {
         }
         if (!inbound.offer(ReadEvent.data(Arrays.copyOf(payload, payload.length)))) {
             fail("RNode inbound queue is full");
+            return;
         }
+        inboundChunks.incrementAndGet();
+        inboundBytes.addAndGet(payload.length);
     }
 
     void fail(String message) {
+        lastError.compareAndSet(null, message);
         close();
         inbound.clear();
         inbound.offer(ReadEvent.error(message));
