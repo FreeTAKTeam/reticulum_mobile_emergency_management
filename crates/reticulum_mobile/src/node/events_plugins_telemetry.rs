@@ -1,10 +1,3 @@
-fn emit_replication_delivery_failure(bus: &EventBus, message: String, err: &NodeError) {
-    bus.emit(NodeEvent::Error {
-        code: crate::error_context::node_error_code(err).to_string(),
-        message,
-    });
-}
-
 impl Node {
     fn upsert_event_with_destination(
         &self,
@@ -113,14 +106,11 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                emit_replication_delivery_failure(
-                    &bus,
-                    format!(
-                        "event replication delivery failed destination={} uid={} reason={}",
-                        destination_hex, record.uid, err
-                    ),
-                    &err,
+                let message = format!(
+                    "event replication delivery failed destination={} uid={} reason={}",
+                    destination_hex, record.uid, err
                 );
+                emit_replication_delivery_failure(&bus, message, &err);
                 if targeted_send {
                     return Err(err);
                 }
@@ -234,13 +224,10 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                emit_replication_delivery_failure(
-                    &bus,
-                    format!(
-                        "event delete replication delivery failed destination={destination_hex} uid={uid} reason={err}"
-                    ),
-                    &err,
+                let message = format!(
+                    "event delete replication delivery failed destination={destination_hex} uid={uid} reason={err}"
                 );
+                emit_replication_delivery_failure(&bus, message, &err);
             }
         }
 
@@ -483,14 +470,11 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                emit_replication_delivery_failure(
-                    &bus,
-                    format!(
-                        "telemetry replication delivery failed destination={} callsign={} reason={}",
-                        destination_hex, position.callsign, err
-                    ),
-                    &err,
+                let message = format!(
+                    "telemetry replication delivery failed destination={} callsign={} reason={}",
+                    destination_hex, position.callsign, err
                 );
+                emit_replication_delivery_failure(&bus, message, &err);
             }
         }
 

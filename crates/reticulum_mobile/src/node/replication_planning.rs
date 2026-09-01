@@ -1,24 +1,13 @@
-fn node_error_code(err: NodeError) -> &'static str {
-    match err {
-        NodeError::InvalidConfig {} => "InvalidConfig",
-        NodeError::IoError {} => "IoError",
-        NodeError::NetworkError {} => "NetworkError",
-        NodeError::ReticulumError {} => "ReticulumError",
-        NodeError::AlreadyRunning {} => "AlreadyRunning",
-        NodeError::NotRunning {} => "NotRunning",
-        NodeError::Timeout {} => "Timeout",
-        NodeError::LxmfWireEncodeError {} => "LxmfWireEncodeError",
-        NodeError::LxmfMessageIdParseError {} => "LxmfMessageIdParseError",
-        NodeError::LxmfPacketTooLarge {} => "LxmfPacketTooLarge",
-        NodeError::LxmfPacketBuildError {} => "LxmfPacketBuildError",
-        NodeError::EventStreamClosed {} => "EventStreamClosed",
-        NodeError::InternalError {} => "InternalError",
-    }
+fn emit_replication_delivery_failure(bus: &EventBus, message: String, err: &NodeError) {
+    bus.emit(NodeEvent::Error {
+        code: crate::error_context::node_error_code(err).to_string(),
+        message,
+    });
 }
 
 fn emit_replication_planning_error(bus: &EventBus, operation: &str, detail: &str, err: NodeError) {
     bus.emit(NodeEvent::Error {
-        code: node_error_code(err).to_string(),
+        code: crate::error_context::node_error_code(&err).to_string(),
         message: format!("{operation} replication planning skipped {detail} reason={err}"),
     });
 }
