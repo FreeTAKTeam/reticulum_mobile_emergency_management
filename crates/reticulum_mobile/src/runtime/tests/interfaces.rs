@@ -319,6 +319,7 @@ fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert_eq!(wiring.kiss.max_write_len, 20);
     assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
+    assert!(wiring.kiss.kiss.flow_control);
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
     assert!(!wiring.kiss.shutdown_frames.is_empty());

@@ -161,6 +161,13 @@ fn rnode_ble_wiring_from_settings(
         initial_frames: lora.probe_frames(),
         deferred_frames: lora.radio_config_frames(),
         shutdown_frames: lora.shutdown_frames(),
+        // RNode firmware reports queue admission only in response to CMD_READY.
+        // The shared runtime polls that state between data frames so BLE cannot
+        // overrun the firmware transmit queue during Resource transfers.
+        kiss: rns_transport::iface::kiss::KissConfig {
+            flow_control: true,
+            ..rns_transport::iface::kiss::KissConfig::default()
+        },
         ..RnodeBleKissConfig::default()
     };
 
