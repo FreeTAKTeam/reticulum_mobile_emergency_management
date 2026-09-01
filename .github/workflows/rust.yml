@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Immutable LXMF-rs single-owner read and RNode queue-admission repair revision.
-  LXMF_RS_REF: a30657b67f35f81a95f04358837963c6766e9e7a
+  LXMF_RS_REF: b3b67c1bf4d3fc6697c83860d2e3304c696f25cd
 
 jobs:
   web:

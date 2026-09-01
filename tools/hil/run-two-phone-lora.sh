@@ -12,11 +12,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LXMF_ROOT="$(cd "$REPO_ROOT/../LXMF-rs" && pwd)"
 
 usage() {
-  echo "usage: $0 --phone-a SERIAL --phone-b SERIAL --app-destination-a HEX --app-destination-b HEX --lxmf-destination-a HEX --lxmf-destination-b HEX [--output DIR]"
+  echo "usage: $0 --phone-a SERIAL --phone-b SERIAL --app-destination-a HEX --app-destination-b HEX --lxmf-destination-a HEX --lxmf-destination-b HEX --apk FILE --signer-sha256 HEX [--output DIR]"
 }
 
 PHONE_A="" PHONE_B="" APP_DESTINATION_A="" APP_DESTINATION_B=""
-LXMF_DESTINATION_A="" LXMF_DESTINATION_B="" OUTPUT=""
+LXMF_DESTINATION_A="" LXMF_DESTINATION_B="" APK="" EXPECTED_SIGNER_SHA256="" OUTPUT=""
 while (($#)); do
   case "$1" in
     --phone-a) PHONE_A="$2"; shift 2 ;;
@@ -25,34 +25,86 @@ while (($#)); do
     --app-destination-b) APP_DESTINATION_B="$2"; shift 2 ;;
     --lxmf-destination-a) LXMF_DESTINATION_A="$2"; shift 2 ;;
     --lxmf-destination-b) LXMF_DESTINATION_B="$2"; shift 2 ;;
+    --apk) APK="$2"; shift 2 ;;
+    --signer-sha256) EXPECTED_SIGNER_SHA256="$2"; shift 2 ;;
     --output) OUTPUT="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-for tool in adb jq git base64; do
+for tool in adb jq git base64 sha256sum find sort awk sed tr wc mktemp; do
   command -v "$tool" >/dev/null || { echo "required tool not found: $tool" >&2; exit 2; }
 done
 if [[ -z "$PHONE_A" || -z "$PHONE_B" || -z "$APP_DESTINATION_A" \
-  || -z "$APP_DESTINATION_B" || -z "$LXMF_DESTINATION_A" || -z "$LXMF_DESTINATION_B" ]]; then
+  || -z "$APP_DESTINATION_B" || -z "$LXMF_DESTINATION_A" || -z "$LXMF_DESTINATION_B" \
+  || -z "$APK" || -z "$EXPECTED_SIGNER_SHA256" ]]; then
   usage >&2
   exit 2
 fi
 [[ "$PHONE_A" != "$PHONE_B" ]] || { echo "phones must be distinct" >&2; exit 2; }
-[[ "$APP_DESTINATION_A" != "$APP_DESTINATION_B" \
-  && "$LXMF_DESTINATION_A" != "$LXMF_DESTINATION_B" ]] \
-  || { echo "each destination pair must be distinct" >&2; exit 2; }
 for destination in "$APP_DESTINATION_A" "$APP_DESTINATION_B" \
   "$LXMF_DESTINATION_A" "$LXMF_DESTINATION_B"; do
   [[ "$destination" =~ ^[0-9a-fA-F]{32}$ ]] \
     || { echo "destinations must be 32 hexadecimal characters" >&2; exit 2; }
 done
+APP_DESTINATION_A="${APP_DESTINATION_A,,}"
+APP_DESTINATION_B="${APP_DESTINATION_B,,}"
+LXMF_DESTINATION_A="${LXMF_DESTINATION_A,,}"
+LXMF_DESTINATION_B="${LXMF_DESTINATION_B,,}"
+[[ "$APP_DESTINATION_A" != "$APP_DESTINATION_B" \
+  && "$LXMF_DESTINATION_A" != "$LXMF_DESTINATION_B" ]] \
+  || { echo "each destination pair must be distinct" >&2; exit 2; }
+[[ -f "$APK" ]] || { echo "APK not found: $APK" >&2; exit 2; }
+APK="$(cd "$(dirname "$APK")" && pwd)/$(basename "$APK")"
+EXPECTED_SIGNER_SHA256="$(printf '%s' "$EXPECTED_SIGNER_SHA256" \
+  | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+[[ "$EXPECTED_SIGNER_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+  || { echo "signer SHA-256 must be 64 hexadecimal characters" >&2; exit 2; }
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" \
   || -n "$(git -C "$LXMF_ROOT" status --porcelain --untracked-files=normal)" ]]; then
   echo "HIL must run from committed, clean REM and LXMF worktrees" >&2
   exit 2
 fi
+
+find_android_build_tool() {
+  local name="$1" sdk_root candidate
+  if command -v "$name" >/dev/null; then
+    command -v "$name"
+    return
+  fi
+  sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+  [[ -n "$sdk_root" && -d "$sdk_root/build-tools" ]] \
+    || { echo "ANDROID_SDK_ROOT or ANDROID_HOME must identify the Android SDK" >&2; return 1; }
+  candidate="$(find "$sdk_root/build-tools" -mindepth 2 -maxdepth 2 -type f -name "$name" \
+    | sort -V | tail -n 1)"
+  [[ -n "$candidate" ]] || { echo "Android build tool not found: $name" >&2; return 1; }
+  printf '%s\n' "$candidate"
+}
+
+APKSIGNER="$(find_android_build_tool apksigner)"
+AAPT="$(find_android_build_tool aapt)"
+REM_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+LXMF_SHA="$(git -C "$LXMF_ROOT" rev-parse HEAD)"
+REM_TREE="$(git -C "$REPO_ROOT" rev-parse HEAD^{tree})"
+LXMF_TREE="$(git -C "$LXMF_ROOT" rev-parse HEAD^{tree})"
+APK_SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+APK_BADGING="$("$AAPT" dump badging "$APK" | sed -n '1p')"
+APK_PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$APK_BADGING")"
+APK_VERSION_CODE="$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$APK_BADGING")"
+APK_VERSION_NAME="$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$APK_BADGING")"
+APK_SIGNER_SHA256="$("$APKSIGNER" verify --print-certs "$APK" \
+  | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+  | sed -n '1p' | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+[[ "$APK_PACKAGE" == "$PACKAGE" ]] \
+  || { echo "APK package mismatch: expected $PACKAGE, got $APK_PACKAGE" >&2; exit 2; }
+[[ -n "$APK_VERSION_CODE" && -n "$APK_VERSION_NAME" ]] \
+  || { echo "could not read APK version metadata" >&2; exit 2; }
+[[ "$APK_VERSION_NAME" == *"${REM_SHA:0:7}"* \
+  && "$APK_VERSION_NAME" == *"${LXMF_SHA:0:7}"* ]] \
+  || { echo "APK version does not identify current REM and LXMF revisions: $APK_VERSION_NAME" >&2; exit 2; }
+[[ "$APK_SIGNER_SHA256" == "$EXPECTED_SIGNER_SHA256" ]] \
+  || { echo "APK signer mismatch: expected $EXPECTED_SIGNER_SHA256, got $APK_SIGNER_SHA256" >&2; exit 2; }
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RFC3339_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -61,6 +113,7 @@ OUTPUT="${OUTPUT:-$REPO_ROOT/target/lora-regression/$TIMESTAMP}"
 mkdir -p "$OUTPUT/$PHONE_A" "$OUTPUT/$PHONE_B"
 RESULT_FILE="$OUTPUT/result.txt"
 echo "FAIL: runner did not reach all acceptance assertions" >"$RESULT_FILE"
+CAPTURE_RADIO_FAILURE=0
 
 adb_for() { local serial="$1"; shift; adb -s "$serial" "$@"; }
 b64() { base64 | tr -d '\r\n'; }
@@ -70,6 +123,48 @@ broadcast() {
 }
 logcat_raw() { adb_for "$1" logcat -d -v raw -s ReticulumAdbTest:I '*:S'; }
 service_logcat_raw() { adb_for "$1" logcat -d -v raw -s ReticulumNodeService:I '*:S'; }
+
+verify_installed_apk() {
+  local serial="$1" package_output package_path pull_dir pulled_apk installed_sha256
+  local version_output installed_version_code installed_version_name
+  package_output="$(adb_for "$serial" shell pm path "$PACKAGE" | tr -d '\r')"
+  printf '%s\n' "$package_output" >"$OUTPUT/$serial/package-path.txt"
+  package_path="$(sed -n 's/^package://p' <<<"$package_output")"
+  [[ -n "$package_path" && "$(wc -l <<<"$package_path")" -eq 1 ]] \
+    || { echo "expected one installed base APK on $serial" >&2; return 1; }
+
+  pull_dir="$(mktemp -d)"
+  pulled_apk="$pull_dir/installed.apk"
+  if ! adb_for "$serial" pull "$package_path" "$pulled_apk" >/dev/null; then
+    rm -f "$pulled_apk"
+    rmdir "$pull_dir"
+    echo "failed to pull installed APK from $serial" >&2
+    return 1
+  fi
+  installed_sha256="$(sha256sum "$pulled_apk" | awk '{print $1}')"
+  rm -f "$pulled_apk"
+  rmdir "$pull_dir"
+  [[ "$installed_sha256" == "$APK_SHA256" ]] \
+    || { echo "installed APK digest mismatch on $serial" >&2; return 1; }
+
+  version_output="$(adb_for "$serial" shell dumpsys package "$PACKAGE" \
+    | grep -E 'versionCode=|versionName=' | tr -d '\r')"
+  printf '%s\n' "$version_output" >"$OUTPUT/$serial/package-version.txt"
+  installed_version_code="$(sed -n 's/.*versionCode=\([^ ]*\).*/\1/p' <<<"$version_output" | head -n 1)"
+  installed_version_name="$(sed -n 's/.*versionName=\([^[:space:]]*\).*/\1/p' <<<"$version_output" | head -n 1)"
+  [[ "$installed_version_code" == "$APK_VERSION_CODE" \
+    && "$installed_version_name" == "$APK_VERSION_NAME" ]] \
+    || { echo "installed APK version mismatch on $serial" >&2; return 1; }
+
+  cat >"$OUTPUT/$serial/apk-verification.txt" <<EOF
+apk_sha256=$installed_sha256
+signer_sha256=$APK_SIGNER_SHA256
+version_code=$installed_version_code
+version_name=$installed_version_name
+rem_sha=$REM_SHA
+lxmf_sha=$LXMF_SHA
+EOF
+}
 
 latest_json() {
   local serial="$1" action="$2" prefix="$3" line
@@ -128,11 +223,13 @@ capture_failure() {
   local exit_code=$?
   if ((exit_code != 0)); then
     set +e
-    broadcast "$PHONE_A" ADB_RNODE_STATS
-    broadcast "$PHONE_B" ADB_RNODE_STATS
-    sleep 2
-    snapshot "$PHONE_A" failure
-    snapshot "$PHONE_B" failure
+    if ((CAPTURE_RADIO_FAILURE)); then
+      broadcast "$PHONE_A" ADB_RNODE_STATS
+      broadcast "$PHONE_B" ADB_RNODE_STATS
+      sleep 2
+      snapshot "$PHONE_A" failure
+      snapshot "$PHONE_B" failure
+    fi
     echo "FAIL: acceptance stopped with exit code $exit_code" >"$RESULT_FILE"
   fi
   return "$exit_code"
@@ -258,17 +355,22 @@ app_destination_a=$APP_DESTINATION_A
 app_destination_b=$APP_DESTINATION_B
 lxmf_destination_a=$LXMF_DESTINATION_A
 lxmf_destination_b=$LXMF_DESTINATION_B
-rem_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)
-lxmf_sha=$(git -C "$LXMF_ROOT" rev-parse HEAD)
-rem_tree=$(git -C "$REPO_ROOT" rev-parse HEAD^{tree})
-lxmf_tree=$(git -C "$LXMF_ROOT" rev-parse HEAD^{tree})
+rem_sha=$REM_SHA
+lxmf_sha=$LXMF_SHA
+rem_tree=$REM_TREE
+lxmf_tree=$LXMF_TREE
+apk_sha256=$APK_SHA256
+apk_signer_sha256=$APK_SIGNER_SHA256
+apk_version_code=$APK_VERSION_CODE
+apk_version_name=$APK_VERSION_NAME
 EOF
 
 for serial in "$PHONE_A" "$PHONE_B"; do
   adb_for "$serial" get-state | grep -qx device
-  adb_for "$serial" shell pm path "$PACKAGE" >"$OUTPUT/$serial/package-path.txt"
-  adb_for "$serial" shell dumpsys package "$PACKAGE" \
-    | grep -E 'versionCode=|versionName=' >"$OUTPUT/$serial/package-version.txt"
+  verify_installed_apk "$serial"
+done
+CAPTURE_RADIO_FAILURE=1
+for serial in "$PHONE_A" "$PHONE_B"; do
   adb_for "$serial" logcat -c
   adb_for "$serial" shell am force-stop "$PACKAGE"
   adb_for "$serial" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 >/dev/null
