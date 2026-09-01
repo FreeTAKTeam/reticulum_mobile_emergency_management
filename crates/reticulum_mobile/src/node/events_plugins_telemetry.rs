@@ -1,9 +1,17 @@
+fn emit_replication_delivery_failure(bus: &EventBus, message: String, err: &NodeError) {
+    bus.emit(NodeEvent::Error {
+        code: crate::error_context::node_error_code(err).to_string(),
+        message,
+    });
+}
+
 impl Node {
     fn upsert_event_with_destination(
         &self,
         record: EventProjectionRecord,
         requested_destination_hex: Option<String>,
     ) -> Result<(), NodeError> {
+        let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
@@ -105,13 +113,17 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "event replication enqueue failed destination={} uid={} reason={}",
+                emit_replication_delivery_failure(
+                    &bus,
+                    format!(
+                        "event replication delivery failed destination={} uid={} reason={}",
                         destination_hex, record.uid, err
                     ),
-                });
+                    &err,
+                );
+                if targeted_send {
+                    return Err(err);
+                }
             }
         }
 
@@ -222,12 +234,13 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "event delete replication enqueue failed destination={destination_hex} uid={uid} reason={err}"
+                emit_replication_delivery_failure(
+                    &bus,
+                    format!(
+                        "event delete replication delivery failed destination={destination_hex} uid={uid} reason={err}"
                     ),
-                });
+                    &err,
+                );
             }
         }
 
@@ -470,13 +483,14 @@ impl Node {
             if let Err(err) =
                 self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "telemetry replication enqueue failed destination={} callsign={} reason={}",
+                emit_replication_delivery_failure(
+                    &bus,
+                    format!(
+                        "telemetry replication delivery failed destination={} callsign={} reason={}",
                         destination_hex, position.callsign, err
                     ),
-                });
+                    &err,
+                );
             }
         }
 

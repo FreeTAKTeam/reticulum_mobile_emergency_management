@@ -21,6 +21,7 @@ import type {
 } from "../types/domain";
 import {
   logIndicatesReadinessError,
+  nodeErrorIndicatesPerDestinationDeliveryFailure,
   nodeErrorIndicatesReadinessError,
 } from "../utils/readinessErrors";
 import { nativeLogShouldAppendToUi } from "../utils/nativeUiBackpressure";
@@ -258,7 +259,12 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
         }
       }),
       nodeClient.on("error", (event: NodeErrorEvent) => {
-        lastError.value = `${event.code}: ${event.message}`;
+        const message = `${event.code}: ${event.message}`;
+        if (nodeErrorIndicatesPerDestinationDeliveryFailure(event)) {
+          appendNodeControlEntry("Warn", message);
+          return;
+        }
+        lastError.value = message;
         if (nodeErrorIndicatesReadinessError(event)) {
           if (nodeErrorCanFallBackToConfiguredInterface(event)) {
             clearReadinessError();
