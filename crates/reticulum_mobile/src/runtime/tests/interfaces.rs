@@ -298,17 +298,6 @@ fn direct_delivery_readiness_requires_active_link() {
 
 #[cfg(target_os = "android")]
 #[test]
-fn rnode_kiss_config_uses_firmware_ready_flow_control() {
-    let lora = LoraConfig::us915_default();
-    let kiss = rnode_kiss_config(lora, 20);
-
-    assert!(kiss.kiss.flow_control);
-    assert_eq!(kiss.max_write_len, 20);
-    assert_eq!(kiss.mtu, usize::from(lora.max_payload_bytes));
-}
-
-#[cfg(target_os = "android")]
-#[test]
 fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     let settings = RnodeSettingsRecord {
         enabled: true,
@@ -329,7 +318,6 @@ fn rnode_ble_wiring_derives_shared_kiss_and_android_settings() {
     assert_eq!(wiring.lora.max_payload_bytes, 508);
     assert_eq!(wiring.kiss.mtu, usize::from(wiring.lora.max_payload_bytes));
     assert_eq!(wiring.kiss.max_write_len, 20);
-    assert!(wiring.kiss.kiss.flow_control);
     assert_eq!(wiring.kiss.read_frame_timeout, RNODE_BLE_READ_FRAME_TIMEOUT);
     assert!(!wiring.kiss.initial_frames.is_empty());
     assert!(!wiring.kiss.deferred_frames.is_empty());
@@ -378,7 +366,6 @@ fn rnode_classic_wiring_uses_spp_bearer_and_stream_write_limit() {
     assert_eq!(wiring.endpoint, "bluetooth-classic://AA:BB:CC:DD:EE:FF");
     assert_eq!(wiring.mode, AndroidRnodeMode::BluetoothClassic);
     assert_eq!(wiring.kiss.max_write_len, 4 * 1024);
-    assert!(wiring.kiss.kiss.flow_control);
 }
 
 #[cfg(target_os = "android")]
