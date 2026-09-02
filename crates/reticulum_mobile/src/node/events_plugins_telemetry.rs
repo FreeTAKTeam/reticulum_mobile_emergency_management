@@ -1,22 +1,29 @@
 impl Node {
-    pub fn get_events(&self) -> Result<Vec<EventProjectionRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        inner.app_state.get_events()
-    }
-
-    pub fn upsert_event(&self, record: EventProjectionRecord) -> Result<(), NodeError> {
-        self.upsert_event_with_class(record, OutboundTrafficClass::Event {})
-    }
-
     fn upsert_event_with_class(
         &self,
         record: EventProjectionRecord,
         traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
+        self.upsert_event_with_destination_and_class(record, None, traffic_class)
+    }
+
     fn upsert_event_with_destination(
         &self,
         record: EventProjectionRecord,
         requested_destination_hex: Option<String>,
+    ) -> Result<(), NodeError> {
+        self.upsert_event_with_destination_and_class(
+            record,
+            requested_destination_hex,
+            OutboundTrafficClass::Event {},
+        )
+    }
+
+    fn upsert_event_with_destination_and_class(
+        &self,
+        record: EventProjectionRecord,
+        requested_destination_hex: Option<String>,
+        traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
         let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
