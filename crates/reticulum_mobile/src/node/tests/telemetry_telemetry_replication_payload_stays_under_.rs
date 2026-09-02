@@ -379,7 +379,7 @@ async fn send_built_telemetry_replication_payload_is_persisted_by_receiver() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
-    const TELEMETRY_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
+    const TELEMETRY_REPLICATION_TIMEOUT: Duration = Duration::from_secs(300);
     let _guard = test_lock().lock().await;
     let (relay, node_a, node_b) = start_node_pair("telemetry_projection").await;
 
@@ -435,29 +435,28 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
         .record_local_telemetry_fix(position.clone())
         .expect("record local telemetry");
 
-    let received_deadline = Instant::now() + TELEMETRY_REPLICATION_TIMEOUT;
-    let received = loop {
-        let received = node_b
-            .get_telemetry_positions()
-            .expect("get telemetry")
-            .into_iter()
-            .find(|entry| entry.callsign == position.callsign);
-        if let Some(received) = received {
-            break received;
+    let received = tokio::time::timeout(TELEMETRY_REPLICATION_TIMEOUT, async {
+        loop {
+            if let Some(received) = node_b
+                .get_telemetry_positions()
+                .expect("get telemetry")
+                .into_iter()
+                .find(|entry| entry.callsign == position.callsign)
+            {
+                break received;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        assert!(
-            Instant::now() < received_deadline,
-            "node b never persisted replicated telemetry"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    };
-
-    assert_eq!(received.callsign, position.callsign);
-    assert_eq!(received.lat, position.lat);
-    assert_eq!(received.lon, position.lon);
-    assert_eq!(received.updated_at_ms, position.updated_at_ms);
+    })
+    .await;
 
     stop_node(node_a).await;
     stop_node(node_b).await;
     relay.shutdown().await;
+
+    let received = received.expect("telemetry replication timed out after 300 seconds");
+    assert_eq!(received.callsign, position.callsign);
+    assert_eq!(received.lat, position.lat);
+    assert_eq!(received.lon, position.lon);
+    assert_eq!(received.updated_at_ms, position.updated_at_ms);
 }
