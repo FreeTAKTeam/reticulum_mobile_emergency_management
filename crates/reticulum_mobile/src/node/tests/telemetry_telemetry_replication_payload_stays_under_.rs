@@ -379,11 +379,25 @@ async fn send_built_telemetry_replication_payload_is_persisted_by_receiver() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
-    const TELEMETRY_REPLICATION_TIMEOUT: Duration = Duration::from_secs(300);
+    const TELEMETRY_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
     let _guard = test_lock().lock().await;
     let (relay, node_a, node_b) = start_node_pair("telemetry_projection").await;
 
     let node_b_status = node_b.get_status();
+    node_a
+        .set_saved_peers(vec![SavedPeerRecord {
+            destination_hex: node_b_status.app_destination_hex.clone(),
+            label: Some("peer-b".to_string()),
+            saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: Some(node_b_status.lxmf_destination_hex.clone()),
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
+            circle_tier: CircleTier::Inner {},
+        }])
+        .expect("save peer b");
     node_a
         .connect_peer(node_b_status.app_destination_hex.clone())
         .expect("connect peer b");
@@ -409,13 +423,35 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
             .expect("list peers")
             .into_iter()
             .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-            .is_some_and(|peer| peer.active_link);
+            .is_some_and(|peer| {
+                peer.saved
+                    && peer.active_link
+                    && peer.lxmf_destination_hex.as_deref()
+                        == Some(node_b_status.lxmf_destination_hex.as_str())
+            });
         if peer_ready {
             break;
         }
         assert!(
             Instant::now() < peer_ready_deadline,
             "peer b never became telemetry-ready"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let telemetry_ready_deadline = Instant::now() + TEST_TIMEOUT;
+    loop {
+        let telemetry_ready = node_a
+            .list_telemetry_destinations()
+            .expect("list telemetry destinations")
+            .into_iter()
+            .any(|destination| destination == node_b_status.app_destination_hex);
+        if telemetry_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < telemetry_ready_deadline,
+            "peer b never became an eligible direct telemetry destination"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -454,7 +490,7 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
     stop_node(node_b).await;
     relay.shutdown().await;
 
-    let received = received.expect("telemetry replication timed out after 300 seconds");
+    let received = received.expect("telemetry replication timed out after 75 seconds");
     assert_eq!(received.callsign, position.callsign);
     assert_eq!(received.lat, position.lat);
     assert_eq!(received.lon, position.lon);
