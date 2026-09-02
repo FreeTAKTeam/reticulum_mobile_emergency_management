@@ -589,6 +589,7 @@ Ownership split:
 - TypeScript owns only setup/settings drafts and persists the selected RNode connection mode, identifier, display name, region, and profile.
 - LXMF-rs owns KISS framing, RNode probe/configuration, radio state, flow control, MTU validation, and packet validation through `RnodeBearerBackend` and the shared bearer KISS runtime. Daemon-native btleplug BLE remains behind `rnode-ble`; REM does not compile or invoke it.
 - A bearer read owns its complete bounded wait. The REM Android backend waits on the generation-scoped Java notification queue, and the LXMF-rs interface does not wrap that wait in a shorter timeout that could leave a second native reader competing for the next notification.
+- Android RNode payload writes use host-polled firmware queue admission: LXMF-rs sends one KISS data frame, queries `CMD_READY`, and admits the next frame only after the firmware reports available queue capacity. A bounded re-probe handles a full queue because RNode firmware does not emit an unsolicited ready event when the queue drains.
 
 Mode behavior:
 - `ble` is the legacy-compatible default. Android opens Nordic UART GATT, enables notifications with bounded deadlines, and treats MTU negotiation as best effort after the default data path is ready.

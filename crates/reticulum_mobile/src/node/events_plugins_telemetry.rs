@@ -13,6 +13,12 @@ impl Node {
         record: EventProjectionRecord,
         traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
+    fn upsert_event_with_destination(
+        &self,
+        record: EventProjectionRecord,
+        requested_destination_hex: Option<String>,
+    ) -> Result<(), NodeError> {
+        let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
@@ -90,6 +96,12 @@ impl Node {
                     &route_hops,
                 );
                 for target in replication_targets {
+                    if requested_destination_hex
+                        .as_deref()
+                        .is_some_and(|requested| requested != target.app_destination_hex)
+                    {
+                        continue;
+                    }
                     match build_event_replication_payload(&status, &record, &target) {
                         Ok((body, fields)) => {
                             scheduled_sends.push((
@@ -112,6 +124,10 @@ impl Node {
                 }
             }
 
+            if requested_destination_hex.is_some() && scheduled_sends.is_empty() {
+                return Err(NodeError::InvalidConfig {});
+            }
+
             inner.bus.clone()
         };
 
@@ -125,13 +141,14 @@ impl Node {
                     traffic_class,
                 )
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "event replication enqueue failed destination={} uid={} reason={}",
-                        destination_hex, record.uid, err
-                    ),
-                });
+                let message = format!(
+                    "event replication delivery failed destination={} uid={} reason={}",
+                    destination_hex, record.uid, err
+                );
+                emit_replication_delivery_failure(&bus, message, &err);
+                if targeted_send {
+                    return Err(err);
+                }
             }
         }
 
@@ -248,12 +265,10 @@ impl Node {
                     OutboundTrafficClass::Event {},
                 )
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "event delete replication enqueue failed destination={destination_hex} uid={uid} reason={err}"
-                    ),
-                });
+                let message = format!(
+                    "event delete replication delivery failed destination={destination_hex} uid={uid} reason={err}"
+                );
+                emit_replication_delivery_failure(&bus, message, &err);
             }
         }
 
@@ -441,13 +456,11 @@ impl Node {
                     OutboundTrafficClass::Telemetry {},
                 )
             {
-                bus.emit(NodeEvent::Error {
-                    code: "NotRunning".to_string(),
-                    message: format!(
-                        "telemetry replication enqueue failed destination={} callsign={} reason={}",
-                        destination_hex, position.callsign, err
-                    ),
-                });
+                let message = format!(
+                    "telemetry replication delivery failed destination={} callsign={} reason={}",
+                    destination_hex, position.callsign, err
+                );
+                emit_replication_delivery_failure(&bus, message, &err);
             }
         }
 

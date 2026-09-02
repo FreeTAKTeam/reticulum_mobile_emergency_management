@@ -328,7 +328,7 @@ async fn send_built_event_replication_payload_acknowledges_after_persistence() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn upsert_event_replicates_to_native_peer_projection() {
+async fn targeted_upsert_event_replicates_to_native_peer_projection() {
     const EVENT_REPLICATION_TIMEOUT: Duration = Duration::from_secs(75);
     let _guard = test_lock().lock().await;
     let (relay, node_a, node_b) = start_node_pair("event_projection").await;
@@ -426,8 +426,11 @@ async fn upsert_event_replicates_to_native_peer_projection() {
     };
 
     node_a
-        .upsert_event(record.clone())
-        .expect("upsert local event");
+        .upsert_event_to_destination(
+            record.clone(),
+            node_b_status.app_destination_hex.clone(),
+        )
+        .expect("upsert local event for the selected peer");
 
     let received_deadline = Instant::now() + EVENT_REPLICATION_TIMEOUT;
     let received = loop {

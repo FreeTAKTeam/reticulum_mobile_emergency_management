@@ -16,6 +16,7 @@ include!("jni_bridge/state_api.rs");
 include!("jni_bridge/community_power_onboarding_api.rs");
 include!("jni_bridge/checklist_api.rs");
 include!("jni_bridge/mission_plugin_api.rs");
+include!("jni_bridge/hil_api.rs");
 include!("jni_bridge/sos_telemetry_api.rs");
 include!("jni_bridge/plugin_host_api.rs");
 include!("jni_bridge/plugin_decode_api.rs");

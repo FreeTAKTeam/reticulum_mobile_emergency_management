@@ -1,7 +1,7 @@
 # REM Developer Examples
 
 These examples target `@reticulum/node-client` as shipped with REM
-`1.3.1`. Existing asynchronous client methods are unchanged; native
+`1.4`. Existing asynchronous client methods are unchanged; native
 rejections are now consistently classifiable.
 
 ## Classify A Node Error

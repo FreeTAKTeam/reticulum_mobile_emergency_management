@@ -141,6 +141,13 @@ fn rnode_ble_wiring_from_settings(
         initial_frames: lora.probe_frames(),
         deferred_frames: lora.radio_config_frames(),
         shutdown_frames: lora.shutdown_frames(),
+        // RNode firmware reports queue admission only in response to CMD_READY.
+        // The shared runtime polls that state between data frames so BLE cannot
+        // overrun the firmware transmit queue during Resource transfers.
+        kiss: rns_transport::iface::kiss::KissConfig {
+            flow_control: true,
+            ..rns_transport::iface::kiss::KissConfig::default()
+        },
         ..RnodeBleKissConfig::default()
     };
 
@@ -167,6 +174,10 @@ fn rnode_runtime_interface_state(
         .get("online")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let startup_validated = snapshot
+        .get("startup_validated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let last_error = snapshot
         .get("last_command_error")
         .and_then(serde_json::Value::as_str)
@@ -174,7 +185,7 @@ fn rnode_runtime_interface_state(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    if detected && online && last_error.is_none() {
+    if detected && online && startup_validated && last_error.is_none() {
         ("connected", None)
     } else if let Some(error) = last_error {
         ("failed", Some(error))

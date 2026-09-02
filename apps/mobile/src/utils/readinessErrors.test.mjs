@@ -15,6 +15,7 @@ const {
   hasConfiguredNonTcpInterface,
   summarizeRnodeInterfaceState,
   logIndicatesReadinessError,
+  nodeErrorIndicatesPerDestinationDeliveryFailure,
   nodeErrorIndicatesTcpInterfaceReadinessError,
   nodeErrorIndicatesReadinessError,
 } = await import(moduleUrl);
@@ -127,12 +128,24 @@ test("per-announce persistence failures do not mark transport readiness failed",
   );
 });
 
-test("per-peer event replication enqueue failures do not mark the node not ready", () => {
+test("per-peer event replication delivery failures stay destination-scoped", () => {
+  const event = {
+    code: "NetworkError",
+    message:
+      "event replication delivery failed destination=e3f1c3f63adef0c0d771ddff8b0eeed5 uid=evt-550b463e-f236-421a-aa23-cdde407b0a52 reason=network error",
+  };
+  assert.equal(nodeErrorIndicatesPerDestinationDeliveryFailure(event), true);
   assert.equal(
-    nodeErrorIndicatesReadinessError({
-      code: "NotRunning",
-      message:
-        "event replication enqueue failed destination=e3f1c3f63adef0c0d771ddff8b0eeed5 uid=evt-550b463e-f236-421a-aa23-cdde407b0a52 reason=network error",
+    nodeErrorIndicatesReadinessError(event),
+    false,
+  );
+});
+
+test("replication failures without a destination are not treated as destination-scoped", () => {
+  assert.equal(
+    nodeErrorIndicatesPerDestinationDeliveryFailure({
+      code: "NetworkError",
+      message: "event replication delivery failed reason=network error",
     }),
     false,
   );

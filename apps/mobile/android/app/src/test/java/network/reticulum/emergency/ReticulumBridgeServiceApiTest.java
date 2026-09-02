@@ -1,8 +1,10 @@
 package network.reticulum.emergency;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import org.junit.Test;
 
@@ -21,6 +23,16 @@ public class ReticulumBridgeServiceApiTest {
         assertInherited("refreshHubDirectory");
         assertInherited("getHubDirectorySnapshotJson");
         assertInherited("setActiveTeamJson", String.class);
+    }
+
+    @Test
+    public void targetedEventTestControlUsesANativeBridgeBoundary() throws Exception {
+        final Method method = ReticulumBridge.class.getDeclaredMethod(
+            "upsertEventToDestinationJson",
+            String.class,
+            String.class
+        );
+        assertTrue(Modifier.isNative(method.getModifiers()));
     }
 
     private void assertInherited(String name, Class<?>... parameterTypes) throws Exception {
