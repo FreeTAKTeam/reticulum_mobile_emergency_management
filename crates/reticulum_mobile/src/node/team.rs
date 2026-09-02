@@ -108,6 +108,10 @@ impl Node {
     pub fn refresh_hub_directory(&self) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            ensure_outbound_admitted(
+                inner.power_state.saver_active,
+                OutboundTrafficClass::Control {},
+            )?;
             inner.cmd_tx.clone().ok_or(NodeError::NotRunning {})?
         };
         let (resp_tx, resp_rx) = cb::bounded(1);

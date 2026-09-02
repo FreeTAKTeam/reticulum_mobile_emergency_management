@@ -13,8 +13,9 @@ This manual uses plain language. It focuses on what each screen is for, what you
 ## Quick Start
 
 - Open **Settings** and confirm your call sign.
+- Add your household profile and choose the battery-saver threshold.
 - Open **Peers** and save the people you trust.
--Use **Chat** for direct messages.
+- Mark each saved peer **Inner** or **Outer**. Use **Chat** for Inner peers.
 - Use **Action Emergency Messages** to report team status.
 - Use **Events** to add short timeline updates.
 - Use **Checklists** to track shared tasks.
@@ -54,10 +55,15 @@ The Dashboard gives a quick team picture.
 
 Use it to see:
 
+- your household composition, status freshness, circle, and battery-saver state
 - readiness across security, capability, preparedness, medical, mobility, and communications
 - checklist totals
 - action message and event totals
 - quick **Announce** and **Sync** controls
+
+The four household buttons publish **All Home**, **One Missing**,
+**Evacuated**, or **Needs Help** as a compact B04 community update. A household
+update is not an Action Message and does not change the Action Message rings.
 
 The status rings come from Action Messages. If there are no Action Messages yet, the rings stay at zero.
 
@@ -75,6 +81,8 @@ Use it to:
 - open SOS positions on the Map when an emergency message includes location
 
 If the page is empty, discover and save peers first, or wait for an incoming message.
+Only saved **Inner** peers can receive chat. Chat and Retry are unavailable for
+Outer peers and while native battery saver is active.
 
 ## Action Messages
 
@@ -225,12 +233,17 @@ Use the Peers page to:
 - connect or disconnect saved peers
 - search peer names or destination text
 - review hub directory entries when hub support is in use
+- mark each saved peer **Inner** or **Outer**
 - announce your presence
 - select the active color team from the menu beside **Announce**
 - search and connect peers in the active roster
 - open **Manage Teams** for local aliases, membership, and sharing
 
 Discovery does not mean trust. Save only the peers you want to work with.
+Inner peers are eligible for direct chat and exact direct telemetry. Outer peers
+remain visible for community coordination but cannot receive those private
+flows. Connected Hub mode never receives exact GPS until the Hub provides a
+recipient policy.
 
 In **Semi-autonomous** RCH mode, REM downloads the TEAM-scoped peer directory
 at the configured hub refresh interval and keeps the latest successful result
@@ -266,13 +279,11 @@ membership can be added or removed in REM, but ask the RCH operator to change
 RCH membership. Removing a saved peer removes it from every local team without
 changing RCH.
 
-Use the QR action beside a local team to display its code. On the other REM
-client, open **Manage Teams**, tap **Scan QR**, and point the camera at the
-code. Import creates any missing saved-peer records and merges the roster into
-the matching color; it does not replace an existing local alias. QR codes
-contain the canonical color and at most 40 member destinations; local aliases
-and peer labels stay private. For a larger roster, open the team detail and use
-**Export**, then open **Add Team → Import team JSON** on the other device.
+Legacy local-team QR codes are import-only. Open **Manage Teams**, tap
+**Scan legacy team QR**, and point the camera at an existing code. Import creates
+missing saved-peer records and merges the roster into the matching color; it
+does not replace an existing local alias. For new onboarding, use the signed
+Block Code flow in Settings. For a larger legacy roster, import its team JSON.
 
 If the selected roster is missing or empty, REM deliberately sends to nobody
 rather than falling back to every discovered peer. In Connected mode, non-Yellow
@@ -287,6 +298,9 @@ Settings is where you prepare the app before field use.
 Use it to configure:
 
 - call sign
+- household name, adult/child/pet counts, role badges, status, and map preference
+- Inner/Outer peer tiers
+- native battery-saver policy and its 10, 20, or 30 percent threshold
 - Reticulum network access
 - announce behavior
 - telemetry sharing
@@ -295,6 +309,29 @@ Use it to configure:
 - peer list import and export
 - SOS emergency options
 - node start, stop, and restart controls
+
+### Signed Block Code onboarding
+
+Use **Create Block Code** to package reviewed network settings, trusted
+destinations, and map preference. Rust signs the code with the current
+Reticulum identity. The code never contains the Reticulum private key, Hub API
+key, household profile, or your peer-tier choices.
+
+On the receiving device, scan or paste the code and review the signer
+fingerprint, expiry, network values, and every imported peer. Enter the
+fingerprint exactly and choose Inner or Outer for every peer before importing.
+REM verifies the signature and commits the network, household, and complete
+tier map together; if any check fails, none of those settings are changed.
+
+### Native battery saver
+
+Saver mode activates at or below the selected threshold and remains active
+until the battery recovers three percentage points above it. Charging turns
+saver off. SOS stays available, while chat, retry, Action Messages, ordinary
+events, checklists, plugins, and node-control sends pause. Exact telemetry stays
+limited to Inner peers over a direct route, and announce/telemetry cadence is
+never more frequent than five minutes. The saver badge reflects native state,
+including updates received while the app screen is not open.
 
 ## SOS Emergency
 
@@ -361,7 +398,8 @@ USB-assisted pairing, firmware guidance, verification, and troubleshooting.
 
 1. On both phones, open **Peers** and tap **Announce**.
 2. Confirm each call sign appears with REM/LXMF capability evidence.
-3. Save the other phone on both devices. Discovery alone does not grant trust.
+3. Save the other phone on both devices and mark it **Inner**. Discovery alone
+   does not grant trust, and Outer peers cannot receive chat.
 4. Tap **Connect** and wait for **Connected**. **Reachable** means a route is
    known, but it is not the same as an active direct link.
 5. Open **Chat**, select the saved peer, send `CHAT-TEST-01`, and confirm it is
@@ -376,11 +414,10 @@ USB-assisted pairing, firmware guidance, verification, and troubleshooting.
    canonical color, optionally enter a private local name such as `Family`,
    and tap **Create team**. Open the new team and add one or more saved peers;
    the same peer may belong to several local teams.
-2. To share by QR, tap the QR action beside the local team. On the other phone,
-   open **Manage Teams**, tap **Scan QR**, allow camera access if prompted, and
-   scan the code. The color membership merges, but your local name and peer
-   labels are not transmitted. Up to 40 peers fit in one team QR.
-3. For a larger roster or a non-camera transfer, open the team detail and tap
+2. Existing legacy team QR codes can be imported from **Manage Teams → Scan
+   legacy team QR**. New QR onboarding uses a signed Block Code from Settings;
+   review and confirm its signer fingerprint before import.
+3. For a legacy roster or a non-camera transfer, open the team detail and tap
    **Export**. On the other device, open **Add Team → Import team JSON**, paste
    the payload, and tap **Import team**.
 4. For RCH teams, ask the operator to assign both REM clients to canonical

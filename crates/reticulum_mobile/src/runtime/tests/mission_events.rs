@@ -114,7 +114,7 @@ fn event_projection_from_verbose_fields_remains_compatible() {
     )]);
     let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
 
-    let record = event_projection_from_fields(&bytes, None, None, None, 1_700_000_000_000)
+    let record = event_projection_from_fields(&bytes, None, None, None, None, 1_700_000_000_000)
         .expect("event projection");
 
     assert_eq!(record.uid, "evt-1");
@@ -144,6 +144,7 @@ fn event_projection_from_minimal_compact_fields_uses_lxmf_fallbacks() {
         &bytes,
         Some(b"P01 RC1TCPMECP1853"),
         Some("a1c8126d7cb806e6bde086d582b6cb0d"),
+        None,
         None,
         1_784_498_570_531,
     )
@@ -208,7 +209,7 @@ fn event_projection_from_fields_preserves_tombstone_timestamp() {
     )]);
     let bytes = rmp_serde::to_vec(&fields).expect("msgpack");
 
-    let record = event_projection_from_fields(&bytes, None, None, None, 1_700_000_060_000)
+    let record = event_projection_from_fields(&bytes, None, None, None, None, 1_700_000_060_000)
         .expect("event");
 
     assert_eq!(record.uid, "evt-1");

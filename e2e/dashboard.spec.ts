@@ -112,7 +112,7 @@ test("renders dashboard readiness metrics from stored action messages", async ({
   const panelHeadings = await page.locator(".panel h2").evaluateAll((headings) =>
     headings.map((heading) => heading.textContent?.trim() ?? ""),
   );
-  expect(panelHeadings).toEqual(["Team Status", "Activity"]);
+  expect(panelHeadings).toEqual(["Community status", "Team Status", "Activity"]);
   await expect(page.getByRole("link", { name: "Open Threads" })).toHaveCount(0);
 
   await expect(page.locator(".activity-grid")).toContainText("2");

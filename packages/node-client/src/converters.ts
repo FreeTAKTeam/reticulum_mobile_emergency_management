@@ -3,11 +3,17 @@ import {
   YELLOW_TEAM_UID,
   type TeamAliasRecord,
   type AppSettingsRecord,
+  type HouseholdStatus,
   type HubMode,
   type RnodeConnectionMode,
   type RnodeProfileId,
   type RnodeRegion,
   type RnodeSettingsRecord,
+  type PreferredMapLayer,
+  type BlockNetworkSettings,
+  type BlockOnboardingInspection,
+  type BlockOnboardingImportResult,
+  type PowerStateRecord,
 } from "./contracts";
 
 export function toOptionalNumber(value: unknown): number | undefined {
@@ -48,6 +54,24 @@ function finiteInteger(
   return Number.isFinite(parsed)
     ? Math.min(maximum, Math.max(minimum, parsed))
     : fallback;
+}
+
+function householdStatus(value: unknown): HouseholdStatus {
+  switch (String(value ?? "").trim().toLowerCase()) {
+    case "one_missing": return "one_missing";
+    case "evacuated": return "evacuated";
+    case "needs_help": return "needs_help";
+    default: return "all_home";
+  }
+}
+
+function preferredMapLayer(value: unknown): PreferredMapLayer {
+  return String(value ?? "").trim().toLowerCase() === "satellite" ? "satellite" : "base";
+}
+
+function powerThreshold(value: unknown): 10 | 20 | 30 {
+  const parsed = Number(value);
+  return parsed === 10 || parsed === 30 ? parsed : 20;
 }
 
 function strictBoolean(value: unknown, fallback: boolean): boolean {
@@ -92,6 +116,69 @@ function normalizeHubMode(value: unknown): HubMode {
     default:
       return "Autonomous";
   }
+}
+
+export function toPowerStateRecord(raw: Record<string, unknown>): PowerStateRecord {
+  const batteryPercent = toOptionalNumber(raw.batteryPercent ?? raw.battery_percent);
+  return {
+    batteryPercent: batteryPercent === undefined
+      ? undefined
+      : Math.min(100, Math.max(0, Math.trunc(batteryPercent))),
+    charging: strictBoolean(raw.charging, false),
+    saverActive: strictBoolean(raw.saverActive ?? raw.saver_active, false),
+    updatedAtMs: finiteInteger(raw.updatedAtMs ?? raw.updated_at_ms, 0, 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function toBlockNetworkSettings(raw: unknown): BlockNetworkSettings {
+  const record = asRecord(raw) ?? {};
+  const radio = asRecord(record.radio);
+  return {
+    tcpClients: normalizeTcpClients(record.tcpClients ?? record.tcp_clients),
+    broadcast: strictBoolean(record.broadcast, false),
+    hubMode: normalizeHubMode(record.hubMode ?? record.hub_mode),
+    hubIdentityHash: stringValue(record.hubIdentityHash ?? record.hub_identity_hash) || undefined,
+    hubApiBaseUrl: stringValue(record.hubApiBaseUrl ?? record.hub_api_base_url) || undefined,
+    hubRefreshIntervalSeconds: finiteInteger(
+      record.hubRefreshIntervalSeconds ?? record.hub_refresh_interval_seconds,
+      3600,
+      0,
+    ),
+    radio: radio
+      ? {
+          region: stringValue(radio.region),
+          profile: stringValue(radio.profile),
+          frequencyHz: finiteInteger(radio.frequencyHz ?? radio.frequency_hz, 0, 0, Number.MAX_SAFE_INTEGER),
+        }
+      : undefined,
+  };
+}
+
+export function toBlockOnboardingInspection(
+  raw: Record<string, unknown>,
+): BlockOnboardingInspection {
+  return {
+    issuerPublicIdentityHex: stringValue(raw.issuerPublicIdentityHex ?? raw.issuer_public_identity_hex),
+    issuerAppDestinationHex: stringValue(raw.issuerAppDestinationHex ?? raw.issuer_app_destination_hex),
+    issuerLxmfDestinationHex: stringValue(raw.issuerLxmfDestinationHex ?? raw.issuer_lxmf_destination_hex),
+    signerFingerprint: stringValue(raw.signerFingerprint ?? raw.signer_fingerprint),
+    issuedAtMs: finiteInteger(raw.issuedAtMs ?? raw.issued_at_ms, 0, 0, Number.MAX_SAFE_INTEGER),
+    expiresAtMs: finiteInteger(raw.expiresAtMs ?? raw.expires_at_ms, 0, 0, Number.MAX_SAFE_INTEGER),
+    network: toBlockNetworkSettings(raw.network),
+    trustedDestinationHashes: unknownArray(
+      raw.trustedDestinationHashes ?? raw.trusted_destination_hashes,
+    ).filter((value): value is string => typeof value === "string"),
+    preferredMapLayer: preferredMapLayer(raw.preferredMapLayer ?? raw.preferred_map_layer),
+  };
+}
+
+export function toBlockOnboardingImportResult(
+  raw: Record<string, unknown>,
+): BlockOnboardingImportResult {
+  return {
+    importedPeerCount: finiteInteger(raw.importedPeerCount ?? raw.imported_peer_count, 0, 0),
+    settingsUpdated: strictBoolean(raw.settingsUpdated ?? raw.settings_updated, false),
+  };
 }
 
 const RNODE_REGION_DEFAULT_FREQUENCY_HZ: Record<RnodeRegion, number> = {
@@ -221,6 +308,8 @@ export function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRe
   const telemetry = asRecord(current.telemetry) ?? {};
   const hub = asRecord(current.hub) ?? {};
   const checklists = asRecord(current.checklists) ?? {};
+  const community = asRecord(current.community) ?? {};
+  const power = asRecord(current.power) ?? {};
   const teams = asRecord(current.teams) ?? {};
   const activeTeamUid = stringValue(teams.activeTeamUid ?? teams.active_team_uid)
     .trim()
@@ -292,5 +381,25 @@ export function toAppSettingsRecord(raw: Record<string, unknown>): AppSettingsRe
       defaultTaskDueStepMinutes: finiteInteger(checklists.defaultTaskDueStepMinutes, 30, 1),
     },
     rnode: normalizeRnodeSettings(current.rnode),
+    community: {
+      householdId: stringValue(community.householdId ?? community.household_id).trim().toLowerCase(),
+      householdName: stringValue(community.householdName ?? community.household_name).trim().slice(0, 64),
+      adults: finiteInteger(community.adults, 0, 0, 20),
+      children: finiteInteger(community.children, 0, 0, 20),
+      pets: finiteInteger(community.pets, 0, 0, 20),
+      roleBadges: unknownArray(community.roleBadges ?? community.role_badges)
+        .map((value) => stringValue(value).trim().slice(0, 24))
+        .filter(Boolean)
+        .filter((value, index, all) => all.indexOf(value) === index)
+        .slice(0, 5),
+      status: householdStatus(community.status),
+      preferredMapLayer: preferredMapLayer(
+        community.preferredMapLayer ?? community.preferred_map_layer,
+      ),
+    },
+    power: {
+      enabled: strictBoolean(power.enabled, true),
+      thresholdPercent: powerThreshold(power.thresholdPercent ?? power.threshold_percent),
+    },
   };
 }

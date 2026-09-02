@@ -449,3 +449,26 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getEvent
         }
     }
 }
+
+#[jni_boundary]
+#[no_mangle]
+pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_getCommunityStatusesJson(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let mut guard = match bridge_state().lock() {
+        Ok(value) => value,
+        Err(_) => {
+            set_last_error("InternalError", "bridge lock poisoned");
+            return ptr::null_mut();
+        }
+    };
+    let node = ensure_node_or_return!(&mut guard);
+    match node.get_community_statuses() {
+        Ok(items) => ok_json_result(&mut env, &json!({ "items": items })),
+        Err(error) => {
+            set_last_node_error(error);
+            ptr::null_mut()
+        }
+    }
+}

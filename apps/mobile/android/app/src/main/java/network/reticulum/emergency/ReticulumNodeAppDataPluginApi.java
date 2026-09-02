@@ -276,6 +276,60 @@ public abstract class ReticulumNodeAppDataPluginApi extends ReticulumNodeTranspo
     }
 
     @PluginMethod
+    public void getPowerState(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get native power state.",
+            "Native power state JSON parse failed.",
+            ReticulumNodeService::getPowerStateJson
+        );
+    }
+
+    @PluginMethod
+    public void publishCommunityStatus(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to publish community status.",
+            "Native community event JSON parse failed.",
+            ReticulumNodeService::publishCommunityStatusJson
+        );
+    }
+
+    @PluginMethod
+    public void createBlockOnboardingCode(PluginCall call) {
+        final JSObject draft = call.getObject("draft", new JSObject());
+        runStringServiceCall(
+            call,
+            "Failed to create Block Code.",
+            "Native Block Code envelope JSON parse failed.",
+            service -> service.createBlockOnboardingCodeJson(draft.toString())
+        );
+    }
+
+    @PluginMethod
+    public void inspectBlockOnboardingCode(PluginCall call) {
+        final JSObject payload = new JSObject();
+        payload.put("encodedText", call.getString("encodedText", ""));
+        runStringServiceCall(
+            call,
+            "Failed to inspect Block Code.",
+            "Native Block Code inspection JSON parse failed.",
+            service -> service.inspectBlockOnboardingCodeJson(payload.toString())
+        );
+    }
+
+    @PluginMethod
+    public void importBlockOnboardingCode(PluginCall call) {
+        final JSObject request = call.getObject("request", new JSObject());
+        runStringServiceCall(
+            call,
+            "Failed to import Block Code.",
+            "Native Block Code import result JSON parse failed.",
+            service -> service.importBlockOnboardingCodeJson(request.toString())
+        );
+    }
+
+    @PluginMethod
     public void getSavedPeers(PluginCall call) {
         runStringServiceCall(
             call,

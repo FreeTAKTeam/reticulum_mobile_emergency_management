@@ -7,6 +7,7 @@ import type { createNodePeerSelectors } from "./nodePeerSelectors";
 import type { createNodeProjectionController } from "./nodeProjectionController";
 import type { NodeStoreState } from "./nodeStoreState";
 import type { createNodeTransportController } from "./nodeTransportController";
+import type { createNodeCommunityController } from "./nodeCommunityController";
 
 export function createNodeStoreApi(
   state: NodeStoreState,
@@ -18,6 +19,7 @@ export function createNodeStoreApi(
   lifecycle: ReturnType<typeof createNodeLifecycleController>,
   actions: ReturnType<typeof createNodeActionsController>,
   transport: ReturnType<typeof createNodeTransportController>,
+  community: ReturnType<typeof createNodeCommunityController>,
 ) {
   return {
     settings: state.settings,
@@ -62,6 +64,7 @@ export function createNodeStoreApi(
     bestPropagationNodeHex: selectors.bestPropagationNodeHex,
     telemetryDestinations: state.telemetryDestinations,
     plugins: state.plugins,
+    powerState: state.powerState,
     pluginSensors: state.pluginSensors,
     savedDestinations: selectors.savedDestinations,
     initialized: state.initialized,
@@ -95,6 +98,7 @@ export function createNodeStoreApi(
     removePeer: actions.removePeer,
     unsavePeer: actions.unsavePeer,
     setPeerLabel: actions.setPeerLabel,
+    setPeerTier: actions.setPeerTier,
     updateSettings: actions.updateSettings,
     getSavedPeerList: actions.getSavedPeerList,
     importPeerList: actions.importPeerList,
@@ -130,5 +134,10 @@ export function createNodeStoreApi(
     setLastError: logging.setLastError,
     assertReadyForOutbound: transport.assertReadyForOutbound,
     assertHubRoutingReadyForOutbound: transport.assertHubRoutingReadyForOutbound,
+    publishCommunityStatus: community.publishCommunityStatus,
+    refreshPowerState: community.refreshPowerState,
+    createBlockOnboardingCode: community.createBlockOnboardingCode,
+    inspectBlockOnboardingCode: community.inspectBlockOnboardingCode,
+    importBlockOnboardingCode: community.importBlockOnboardingCode,
   };
 }

@@ -297,6 +297,7 @@ fn restore_saved_peer_management_marks_saved_peers_managed() {
                 display_name: None,
                 last_route_seen_at_ms: None,
                 last_hops: None,
+                circle_tier: CircleTier::Inner {},
             },
             crate::types::SavedPeerRecord {
                 destination_hex: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
@@ -308,6 +309,7 @@ fn restore_saved_peer_management_marks_saved_peers_managed() {
                 display_name: None,
                 last_route_seen_at_ms: None,
                 last_hops: None,
+                circle_tier: CircleTier::Inner {},
             },
             crate::types::SavedPeerRecord {
                 destination_hex: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
@@ -319,6 +321,7 @@ fn restore_saved_peer_management_marks_saved_peers_managed() {
                 display_name: None,
                 last_route_seen_at_ms: None,
                 last_hops: None,
+                circle_tier: CircleTier::Inner {},
             },
         ],
     );

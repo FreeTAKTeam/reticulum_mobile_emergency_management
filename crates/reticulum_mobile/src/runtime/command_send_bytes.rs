@@ -3,6 +3,7 @@ struct SendBytesCommand {
     bytes: Vec<u8>,
     fields_bytes: Option<Vec<u8>>,
     send_mode: SendMode,
+    traffic_class: OutboundTrafficClass,
     resp: cb::Sender<Result<(), NodeError>>,
 }
 
@@ -20,6 +21,7 @@ fn spawn_send_bytes_command(
         bytes,
         fields_bytes,
         send_mode,
+        traffic_class,
         resp,
     } = command;
     let state = state.clone();
@@ -118,6 +120,7 @@ fn spawn_send_bytes_command(
                     metadata.clone(),
                     send_mode,
                     send_task_class,
+                    traffic_class,
                 );
                 if let Some(registered) =
                     register_pending_lxmf_delivery(&state, report, resend, None).await

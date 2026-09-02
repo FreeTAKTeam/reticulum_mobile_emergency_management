@@ -1,52 +1,3 @@
-fn tcp_endpoint_connect_addr(endpoint: &str) -> &str {
-    endpoint
-        .trim()
-        .strip_prefix("tcp://")
-        .unwrap_or_else(|| endpoint.trim())
-}
-
-fn configured_tcp_client_endpoints(endpoints: &[String]) -> Vec<String> {
-    let mut normalized = Vec::new();
-    for endpoint in endpoints {
-        let connect_addr = tcp_endpoint_connect_addr(endpoint).trim();
-        if connect_addr.is_empty() || normalized.iter().any(|value| value == connect_addr) {
-            continue;
-        }
-        normalized.push(connect_addr.to_string());
-    }
-    normalized
-}
-
-fn tcp_endpoint_host(connect_addr: &str) -> &str {
-    connect_addr
-        .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(connect_addr)
-        .trim_matches(['[', ']'])
-        .trim()
-}
-
-fn tcp_endpoint_is_loopback(connect_addr: &str) -> bool {
-    let host = tcp_endpoint_host(connect_addr).to_ascii_lowercase();
-    host == "localhost" || host == "::1" || host.starts_with("127.")
-}
-
-fn tcp_readiness_monitor_endpoints(endpoints: &[String]) -> Vec<String> {
-    endpoints
-        .iter()
-        .filter(|endpoint| !tcp_endpoint_is_loopback(endpoint))
-        .cloned()
-        .collect()
-}
-
-fn tcp_data_path_unavailable_message(endpoints: &[String]) -> String {
-    format!(
-        "transport startup failed: no reachable Reticulum TCP interface endpoints={}",
-        endpoints.join(",")
-    )
-}
-
-#[cfg(target_os = "android")]
 fn normalized_rnode_region(region: &str) -> Result<&'static str, String> {
     match region.trim().to_ascii_uppercase().as_str() {
         "US915" => Ok("US915"),
@@ -60,9 +11,38 @@ fn normalized_rnode_region(region: &str) -> Result<&'static str, String> {
     }
 }
 
+pub(crate) fn validate_shared_radio_settings(
+    region: &str,
+    profile: &str,
+    frequency_hz: u64,
+    allow_region_default_frequency: bool,
+) -> Result<&'static str, String> {
+    let region = normalized_rnode_region(region)?;
+    if !matches!(
+        profile.trim(),
+        "REM-MF-URBAN-v1" | "REM-LF-RURAL-v1" | "REM-LM-EXTREME-v1"
+    ) {
+        return Err(format!("unsupported RNode LoRa profile: {}", profile.trim()));
+    }
+    if frequency_hz == 0 && allow_region_default_frequency {
+        return Ok(region);
+    }
+    if !(137_000_000..=3_000_000_000).contains(&frequency_hz) {
+        return Err(format!(
+            "RNode frequency is outside the supported 137 MHz-3 GHz range: {frequency_hz}"
+        ));
+    }
+    Ok(region)
+}
+
 #[cfg(target_os = "android")]
 fn rnode_lora_config(settings: &RnodeSettingsRecord) -> Result<LoraConfig, String> {
-    let region = normalized_rnode_region(&settings.region)?;
+    let region = validate_shared_radio_settings(
+        &settings.region,
+        &settings.profile,
+        u64::from(settings.frequency_hz),
+        true,
+    )?;
     let mut config = LoraConfig::for_region(region)
         .into_lora_config_option()
         .ok_or_else(|| format!("unsupported RNode LoRa region: {region}"))?;

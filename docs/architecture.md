@@ -16,6 +16,77 @@ Current mobile behavior differs from the older store-centric sketch below in two
 - RCH compatibility is mode-driven. `Autonomous` preserves local discovery/direct fanout. `SemiAutonomous` periodically refreshes a TEAM-scoped hub directory by sending `rem.registry.team_peers.list` in LXMF `FIELD_COMMANDS (0x09)` to the selected RCH. The latest successful directory is a local membership allowlist: routing intersects it with locally observed announce/link state instead of trusting hub presence labels or querying the hub during each send. Refresh failures retain the last successful directory; a node that has never received a valid directory still fails closed for RCH-owned recipients. In `Connected`, local members still use their direct routes while the same-color RCH roster is sent through the selected hub; an `effective_connected_mode=true` hub response temporarily applies that split routing to `SemiAutonomous`.
 - SOS uses the same numeric LXMF command slot in this repo: `FIELD_COMMANDS (0x09)`. The shared Rust constants are the source of truth, and the runtime separates SOS from RCH by envelope keys (`sos_state` / `incident_id` vs `command_type` / `command_id`). The earlier SOS note that said `FIELD_COMMANDS (0x06)` is stale for the current REM/RCH wire contract.
 
+## Community Foundation Contracts
+
+Rust owns the household, circle, onboarding, and power-policy rules. Android and
+the node-client carry typed values across the boundary; Vue renders native
+projections and invokes native commands. They do not sign onboarding data,
+canonicalize its wire representation, decide whether an outbound class is
+allowed, or reinterpret a community record as an Emergency Action Message.
+
+### Household status and B04
+
+A household profile contains a stable 16-hex-character household ID, a display
+name, adult/child/pet counts, up to five role badges, one of `all_home`,
+`one_missing`, `evacuated`, or `needs_help`, and a preferred map layer. A status
+publish creates one Rust-owned `event.create` projection in mission
+`rem-community`, with topic `rem.community-status.v1` and a stable UID derived
+from the sender identity. Its body starts with `MECP/2/B04`, carries a matching
+`#HH_<household-id>` tag, and contains the canonical `REMCS1` payload. B04 is a
+community beacon/event record; it is not an EAM and never enters EAM storage.
+
+The receiver rejects malformed tags, unsupported versions, records more than
+five minutes in the future, records older than seven days, and same-or-older
+replays for the stable sender UID. Newer records replace older records. Because
+the projection is persisted as an event, the existing event replay/sync path
+also makes the latest accepted household state available to a late joiner.
+
+### Inner and Outer circles
+
+Every saved peer has a persisted `inner` or `outer` tier; migrated peers default
+to Inner to preserve existing trusted-peer behavior. Chat send and retry are
+admitted by Rust only for saved Inner peers. Exact telemetry is stricter: it is
+sent only to a saved Inner peer over a current direct route. It never uses a
+propagation route, and Connected Hub mode fails closed because RCH does not yet
+provide a recipient policy for exact location. Outer peers can still appear in
+the directory and receive non-private community status through the normal
+mission routing rules.
+
+### Signed Block Codes
+
+A Block Code is a `REMBC1` envelope whose canonical JSON content and Reticulum
+identity signature are created and verified in Rust. The signed allowlist is
+limited to TCP client endpoints, broadcast mode, Hub mode/identity/base URL and
+refresh interval, an optional validated RNode region/profile/frequency, trusted
+destination hashes, preferred map layer, issue time, and expiry. It excludes
+the Reticulum private key, Hub API key, household profile, and circle tiers.
+Endpoints, URLs, hashes, radio values, duplicate entries, expiry, issuer-derived
+destinations, signature, and the 1,999-byte encoded limit (the largest
+representable `REMBC1:` URL-safe-unpadded-Base64 envelope below the 2,000-byte
+product ceiling) are validated before
+review. The importer requires the operator to confirm the displayed signer
+fingerprint and provide a complete tier choice for every imported peer, then
+commits network settings, household profile, and peers in one AppState
+transaction. A failed validation or persistence step commits nothing. Legacy
+team QR codes remain import-only and do not become trusted Block Codes.
+
+### Battery saver
+
+The Android foreground service observes battery percentage and charging state
+and sends each update directly through JNI, even when no WebView is attached.
+Rust activates saver mode at or below the configured 10, 20, or 30 percent
+threshold, keeps it active until the battery reaches threshold plus three
+percentage points, and disables it while charging. The native
+`PowerStateChanged` event is the UI source of truth.
+
+Saver mode admits only SOS, exact Inner/direct telemetry, and one community
+status transition publish. It rejects chat (including retry), EAM, ordinary
+events, checklists, plugins, raw packets, and control traffic at native command
+admission. Announce and telemetry cadence becomes
+`max(configured_seconds, 300)`; capability changes are deferred until saver
+mode ends. The outbound traffic class is persisted with each message so a
+retry cannot be reclassified into a more permissive lane.
+
 ## Local And RCH Multi-Team Routing
 
 RCH owns shared TEAM membership. Its version 2 `rem.registry.team_peers.list`
@@ -42,15 +113,12 @@ state. Connected mode sends local members directly and sends the RCH-owned
 portion through the configured hub after validating caller membership. An
 empty merged roster fails closed.
 
-Local teams can be exported as versioned JSON and imported on another REM
-client. Import merges membership by canonical color UID, creates saved peer
-records as needed, and never overwrites the receiving device's local alias.
-The QR path carries a compact form of the same version 1 JSON envelope, limited
-to 40 member destinations so one code remains reliably scannable. It excludes
-local aliases and peer labels. The receiving client scans only QR format,
-validates the schema, canonical UID, member count, and every destination, then
-uses the same merge path as pasted JSON. Android scanning uses the offline
-ZXing backend and requires API 26 or newer.
+Legacy versioned local-team JSON and QR records remain import-only. Import
+merges membership by canonical color UID, creates saved peer records as needed,
+and never overwrites the receiving device's local alias. New onboarding exports
+use a Rust-signed Block Code after native allowlist validation; the receiving
+client reviews and verifies that envelope before its atomic import. Android QR
+scanning uses the offline ZXing backend and requires API 26 or newer.
 
 Every team-scoped mission, checklist, telemetry, chat, EAM, and SOS send carries
 the canonical team UID in LXMF `FIELD_GROUP (0x0B)`. RCH validates the caller's
@@ -127,7 +195,12 @@ sequenceDiagram
     end
 ```
 
-This diagram shows the end-to-end mobile telemetry replication flow. Telemetry routing is mode-aware: in `Autonomous` it uses peers that advertise the `Telemetry` capability in their REM-capable `lxmf.delivery` announce, in `SemiAutonomous` it can target the latest hub-directory peers returned by RCH, and in `Connected` it sends only to the selected RCH.
+This diagram shows the historical shape of the end-to-end mobile telemetry
+flow. The current recipient decision is native: Autonomous and
+Semi-autonomous modes require a saved Inner peer with a current direct route;
+Connected mode returns no exact-location destinations until RCH supplies an
+explicit recipient policy. The UI no longer selects a hub or propagation target
+for exact telemetry.
 
 ```mermaid
 sequenceDiagram
@@ -181,7 +254,9 @@ sequenceDiagram
 
 ## Flow Differences
 
-- Telemetry routes from `telemetryDestinations`; in `Autonomous` that list is announce-driven, in `SemiAutonomous` it is the intersection of the cached TEAM-scoped directory and locally current peers, and in `Connected` it collapses to the selected hub destination.
+- `telemetryDestinations` is a native projection of saved Inner peers with a
+  current direct route. Connected mode is empty by policy; exact telemetry does
+  not collapse to the selected hub and does not use propagation.
 - Event direct sends can be local-peer fanout (`Autonomous`), hub-directory fanout (`SemiAutonomous`), or single-hop-to-RCH (`Connected`).
 - Telemetry sends compact telemetry fields directly and the receiver parses them immediately from `packetReceived`; events send Community Hub-style `mission.registry.log_entry.*` LXMF messages.
 - Standard LXMF transport proofs transition direct packet deliveries to `Delivered`. Telemetry has no additional application acknowledgement requirement; event and mission commands still depend on a `FIELD_RESULTS (0x0A)` result/event reply to transition from transport-delivered to application `Acknowledged`.

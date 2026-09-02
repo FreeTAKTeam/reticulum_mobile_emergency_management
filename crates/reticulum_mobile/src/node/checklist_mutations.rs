@@ -90,7 +90,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Checklist {},
+                )
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -186,7 +192,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Checklist {},
+                )
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -263,7 +275,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Checklist {},
+                )
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),
@@ -369,7 +387,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Checklist {},
+                )
             {
                 bus.emit(NodeEvent::Error {
                     code: "NotRunning".to_string(),

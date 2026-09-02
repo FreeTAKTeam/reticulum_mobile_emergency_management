@@ -109,6 +109,9 @@ async fn send_operational_ack_if_needed(
     if !persisted {
         return;
     }
+    if *state.power_saver_rx.borrow() {
+        return;
+    }
     let Some(ack) = operational_ack_from_metadata(source_hex, metadata) else {
         return;
     };
@@ -214,7 +217,7 @@ async fn acknowledge_chat_delivery(
             last_wire_message_id_hex: None,
             updated_at_ms: now_ms(),
         })
-        .map(from_sdk_message_record);
+        .map(|record| from_sdk_message_record_with_persisted(state, record));
 
     if let Some(record) = maybe_record {
         record_peer_link_state(state, bus, source_hex, true).await;
@@ -248,6 +251,9 @@ async fn send_chat_delivery_ack_if_needed(
     message_id_hex: &str,
     body_utf8: &str,
 ) {
+    if *state.power_saver_rx.borrow() {
+        return;
+    }
     if parse_chat_delivery_ack_body(body_utf8).is_some() {
         return;
     }

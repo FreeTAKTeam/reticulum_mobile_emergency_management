@@ -1,4 +1,4 @@
-import type { EventProjectionRecord, ProjectionInvalidationEvent } from "@reticulum/node-client";
+import type { CommunityStatusProjectionRecord, EventProjectionRecord, ProjectionInvalidationEvent } from "@reticulum/node-client";
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 
@@ -32,6 +32,7 @@ const getProjectionClient = createProjectionClientAccessor("events");
 export const useEventsStore = defineStore("events", () => {
   const nodeStore = useNodeStore();
   const byUid = ref<Record<string, EventProjectionRecord>>({});
+  const nativeCommunityRecords = ref<CommunityStatusProjectionRecord[]>([]);
   const initialized = ref(false);
   const replicationInitialized = ref(false);
   const notificationsPrimed = ref(false);
@@ -86,13 +87,18 @@ export const useEventsStore = defineStore("events", () => {
   async function refreshFromNative(): Promise<void> {
     if (!supportsNativeNodeRuntime || !nodeStore.status.running) return;
     await projectionRefreshCoordinator.run("events", async () => {
-      const records = await getProjectionClient(nodeStore.settings.clientMode).getEvents();
+      const client = getProjectionClient(nodeStore.settings.clientMode);
+      const [records, communities] = await Promise.all([
+        client.getEvents(),
+        client.getCommunityStatuses(),
+      ]);
       const next: Record<string, EventProjectionRecord> = {};
       for (const record of records) {
         const normalized = normalizeEvent(record);
         next[getEventUid(normalized)] = normalized;
       }
       byUid.value = next;
+      nativeCommunityRecords.value = communities;
       await notifyForInboundEvents(next);
     });
   }
@@ -239,5 +245,9 @@ export const useEventsStore = defineStore("events", () => {
     .sort((left, right) => getEventUpdatedAt(right) - getEventUpdatedAt(left))
     .map((entry) => toTimelineRecord(entry)));
 
-  return { records, init, initReplication, upsertLocal, deleteLocal };
+  const communityRecords = computed(() => nativeCommunityRecords.value
+    .filter((entry) => Date.now() - entry.updatedAtMs <= 7 * 24 * 60 * 60_000)
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs));
+
+  return { records, communityRecords, init, initReplication, upsertLocal, deleteLocal };
 });

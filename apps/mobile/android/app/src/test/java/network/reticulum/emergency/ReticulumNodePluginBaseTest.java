@@ -45,6 +45,12 @@ public class ReticulumNodePluginBaseTest {
             ReticulumNodePlugin.class.getMethod("refreshPlugins", PluginCall.class).getDeclaringClass()
         );
         assertEquals(
+            ReticulumNodeAppDataPluginApi.class,
+            ReticulumNodePlugin.class
+                .getMethod("createBlockOnboardingCode", PluginCall.class)
+                .getDeclaringClass()
+        );
+        assertEquals(
             ReticulumNodeChecklistPluginApi.class,
             ReticulumNodePlugin.class.getMethod("getChecklists", PluginCall.class).getDeclaringClass()
         );
@@ -60,6 +66,6 @@ public class ReticulumNodePluginBaseTest {
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(97L, methodCount);
+        assertEquals(103L, methodCount);
     }
 }

@@ -16,7 +16,9 @@ use crate::node::{EventSubscription, Node};
 use crate::delivery_policy::normalize_hex_32;
 use crate::runtime::now_ms;
 use crate::types::{
-    AppSettingsRecord, ApplicationAckState, ChecklistCreateFromTemplateRequest,
+    AppSettingsRecord, ApplicationAckState, CircleTier, CommunitySettingsRecord,
+    HouseholdStatus, OutboundTrafficClass, PowerPolicyRecord, PreferredMapLayer,
+    ChecklistCreateFromTemplateRequest,
     ChecklistCreateOnlineRequest, ChecklistDeleteRequest, ChecklistListActiveRequest,
     ChecklistRecord, ChecklistSettingsRecord, ChecklistTaskCellSetRequest,
     ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
@@ -324,6 +326,31 @@ struct AppSettingsInput {
     checklists: ChecklistSettingsInput,
     #[serde(default)]
     rnode: RnodeSettingsInput,
+    #[serde(default)]
+    community: CommunitySettingsInput,
+    #[serde(default)]
+    power: PowerPolicyInput,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommunitySettingsInput {
+    household_id: Option<String>,
+    household_name: Option<String>,
+    adults: Option<u8>,
+    children: Option<u8>,
+    pets: Option<u8>,
+    #[serde(default)]
+    role_badges: Vec<String>,
+    status: Option<String>,
+    preferred_map_layer: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PowerPolicyInput {
+    enabled: Option<bool>,
+    threshold_percent: Option<u8>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -401,4 +428,5 @@ struct SavedPeerInput {
     display_name: Option<String>,
     last_route_seen_at_ms: Option<u64>,
     last_hops: Option<u8>,
+    circle_tier: Option<String>,
 }

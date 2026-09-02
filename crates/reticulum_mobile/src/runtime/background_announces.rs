@@ -4,16 +4,21 @@ fn spawn_announce_tasks(
     bus: &EventBus,
     app_destination: &Arc<TokioMutex<SingleInputDestination>>,
     announce_capabilities: &Arc<TokioMutex<AnnounceProfile>>,
+    power_saver_rx: watch::Receiver<bool>,
 ) {
     {
         let transport = state.transport.clone();
         let app_destination = app_destination.clone();
         let lxmf_destination = state.lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
+        let power_saver_rx = power_saver_rx.clone();
         tokio::spawn(async move {
             for delay_secs in STARTUP_ANNOUNCE_DELAYS_SECS {
                 if delay_secs > 0 {
                     tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                }
+                if *power_saver_rx.borrow() {
+                    continue;
                 }
                 announce_destinations(
                     &transport,
@@ -32,20 +37,33 @@ fn spawn_announce_tasks(
         let app_destination = app_destination.clone();
         let lxmf_destination = state.lxmf_destination.clone();
         let announce_capabilities = announce_capabilities.clone();
-        let interval_secs = effective_announce_interval_seconds(config.announce_interval_seconds);
+        let normal_interval_secs =
+            effective_announce_interval_seconds(config.announce_interval_seconds);
+        let mut power_saver_rx = power_saver_rx;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(u64::from(interval_secs)));
-            interval.tick().await;
             loop {
-                interval.tick().await;
-                announce_destinations(
-                    &transport,
-                    &app_destination,
-                    &lxmf_destination,
-                    &announce_capabilities,
-                    "periodic",
-                )
-                .await;
+                let saver_active = *power_saver_rx.borrow_and_update();
+                let delay = Duration::from_secs(u64::from(crate::node::effective_power_cadence_seconds(
+                    normal_interval_secs,
+                    saver_active,
+                )));
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {
+                        announce_destinations(
+                            &transport,
+                            &app_destination,
+                            &lxmf_destination,
+                            &announce_capabilities,
+                            if saver_active { "power-saver-periodic" } else { "periodic" },
+                        )
+                        .await;
+                    }
+                    changed = power_saver_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                }
             }
         });
     }

@@ -16,6 +16,8 @@ import type {
   EventProjectionRecord, TelemetryPositionRecord, SosSettingsRecord, SosDeviceTelemetryRecord, SosStatusRecord, SosAlertRecord, SosLocationRecord, SosAudioRecord,
   LegacyImportPayload, ProjectionInvalidationEvent, OperationalSummary, HubDirectoryUpdatedEvent, NodeLogEvent, NodeOperationalNoticeEvent,
   NodeErrorEvent, NodeClientEvents,
+  BlockOnboardingDraft, SignedBlockOnboardingEnvelope, BlockOnboardingInspection,
+  BlockOnboardingImportRequest, BlockOnboardingImportResult, CommunityStatusProjectionRecord, PowerStateRecord,
 } from "./contracts-domain";
 
 export type ChecklistDeleteOptions = {
@@ -68,6 +70,11 @@ export interface ReticulumNodeClient {
   importLegacyState(payload: LegacyImportPayload): Promise<void>;
   getAppSettings(): Promise<AppSettingsRecord | null>;
   setAppSettings(settings: AppSettingsRecord): Promise<void>;
+  getPowerState(): Promise<PowerStateRecord>;
+  publishCommunityStatus(): Promise<EventProjectionRecord>;
+  createBlockOnboardingCode(draft: BlockOnboardingDraft): Promise<SignedBlockOnboardingEnvelope>;
+  inspectBlockOnboardingCode(encodedText: string): Promise<BlockOnboardingInspection>;
+  importBlockOnboardingCode(request: BlockOnboardingImportRequest): Promise<BlockOnboardingImportResult>;
   getSavedPeers(): Promise<SavedPeerRecord[]>;
   setSavedPeers(peers: SavedPeerRecord[]): Promise<void>;
   getOperationalSummary(): Promise<OperationalSummary>;
@@ -154,6 +161,7 @@ export interface ReticulumNodeClient {
   getEamTeamSummary(teamUid: string): Promise<EamTeamSummaryRecord | null>;
   getEamReadinessSummary(): Promise<EamReadinessSummaryRecord>;
   getEvents(): Promise<EventProjectionRecord[]>;
+  getCommunityStatuses(): Promise<CommunityStatusProjectionRecord[]>;
   upsertEvent(event: EventProjectionRecord): Promise<void>;
   deleteEvent(uid: string, deletedAtMs?: number): Promise<void>;
   getTelemetryPositions(): Promise<TelemetryPositionRecord[]>;

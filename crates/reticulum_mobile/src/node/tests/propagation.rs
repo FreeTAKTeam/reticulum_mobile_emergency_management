@@ -120,6 +120,8 @@ fn build_app_settings() -> AppSettingsRecord {
         teams: crate::types::TeamSettingsRecord::default(),
         checklists: crate::types::ChecklistSettingsRecord::default(),
         rnode: crate::types::RnodeSettingsRecord::default(),
+        community: crate::types::CommunitySettingsRecord::default(),
+        power: crate::types::PowerPolicyRecord::default(),
     }
 }
 
@@ -138,6 +140,7 @@ fn build_saved_peer_for(destination_hex: &str) -> SavedPeerRecord {
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     }
 }
 
@@ -155,6 +158,7 @@ fn build_saved_peer_with_lxmf_route(
         display_name: Some("Routable saved peer".to_string()),
         last_route_seen_at_ms: Some(1_700_000_000_000),
         last_hops: Some(2),
+        circle_tier: CircleTier::Inner {},
     }
 }
 
@@ -332,6 +336,7 @@ fn mission_replication_targets_use_direct_link_then_relay_for_saved_stored_route
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let relay_saved_peer = SavedPeerRecord {
         destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
@@ -343,6 +348,7 @@ fn mission_replication_targets_use_direct_link_then_relay_for_saved_stored_route
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let direct_peer = build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

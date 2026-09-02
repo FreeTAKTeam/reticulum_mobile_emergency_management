@@ -17,6 +17,7 @@ async fn upsert_eam_replicates_to_native_peer_projection() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a
@@ -182,6 +183,7 @@ async fn upsert_eam_defaults_and_replicates_to_native_peer_projection() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a
@@ -308,6 +310,7 @@ async fn delete_eam_replicates_to_native_peer_projection() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a

@@ -43,6 +43,7 @@ fn event_route_priority_puts_low_hop_live_peers_before_high_hop_saved_routes() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         })
         .collect::<Vec<_>>();
     let announces = vec![

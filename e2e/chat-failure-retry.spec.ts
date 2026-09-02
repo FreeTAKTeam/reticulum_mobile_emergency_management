@@ -8,6 +8,7 @@ test("failed chat text remains visible and can be retried", async ({ page }) => 
   const now = Date.now();
   await seedAppStorage(page, {
     settings: defaultSettings,
+    savedPeers: [{ destination: peerDestination, savedAt: now, circleTier: "inner" }],
     inboxMessages: [
       {
         messageIdHex: "inbound-77",
@@ -52,6 +53,11 @@ test("failed chat text remains visible and can be retried", async ({ page }) => 
     name: "Retry message: Reply text must not disappear",
   });
   await expect(retry).toBeVisible();
+  await page.evaluate(async (destination) => {
+    const { useNodeStore } = await import("/src/stores/nodeStore.ts");
+    await useNodeStore().setPeerTier(destination, "inner");
+  }, peerDestination);
+  await expect(retry).toBeEnabled();
   await retry.click();
 
   await expect(page.getByText("Reply text must not disappear")).toBeVisible();

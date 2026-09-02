@@ -122,15 +122,41 @@ impl AppStateStore {
         &self,
         record: &EventProjectionRecord,
     ) -> Result<ProjectionInvalidation, NodeError> {
+        let mut normalized = record.clone();
+        if record.mission_uid == crate::node::COMMUNITY_MISSION_UID
+            || record.content.starts_with(crate::node::COMMUNITY_PREFIX)
+        {
+            let existing = self
+                .get_events()?
+                .into_iter()
+                .find(|candidate| candidate.uid == record.uid);
+            match crate::node::community_event_is_newer(existing.as_ref(), record, now_ms()) {
+                Ok(false) => {
+                    return self.bump_projection_revision(
+                        ProjectionScope::Events {},
+                        Some(record.uid.clone()),
+                        Some("community-replay-ignored".to_string()),
+                    );
+                }
+                Ok(true) => {}
+                Err(_) => {
+                    normalized.uid = format!("generic:{}:{}", record.uid, record.updated_at_ms);
+                    normalized.mission_uid = "r3akt-default-mission".to_string();
+                    normalized
+                        .topics
+                        .retain(|topic| topic != crate::node::COMMUNITY_TOPIC);
+                }
+            }
+        }
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
-        self.write_event_tx(&transaction, record)?;
+        self.write_event_tx(&transaction, &normalized)?;
         let invalidation = self.bump_projection_revision_tx(
             &transaction,
             ProjectionScope::Events {},
-            Some(record.uid.clone()),
+            Some(normalized.uid.clone()),
             Some("event-upserted".to_string()),
         )?;
         transaction.commit().map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;

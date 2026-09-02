@@ -1,9 +1,80 @@
 use super::{
     ChecklistColumnType, ChecklistMode, ChecklistOriginType, ChecklistSystemColumnKey,
     ChecklistTaskStatus, ChecklistUserTaskStatus, HubMode, InterfaceStatusRecord, NodeError,
-    RnodeConnectionMode, RuntimeInterfaceReadinessRecord, RuntimeReadinessSnapshot,
-    RuntimeReadinessState,
+    BlockNetworkSettings, CircleTier, CommunitySettingsRecord, OutboundTrafficClass,
+    PowerPolicyRecord, RnodeConnectionMode, RuntimeInterfaceReadinessRecord,
+    RuntimeReadinessSnapshot, RuntimeReadinessState, SavedPeerRecord,
 };
+
+#[test]
+fn community_contracts_preserve_legacy_defaults_and_explicit_tiers() {
+    let community = serde_json::from_str::<CommunitySettingsRecord>("{}")
+        .expect("legacy community defaults");
+    assert_eq!(community, CommunitySettingsRecord::default());
+    let power = serde_json::from_str::<PowerPolicyRecord>("{}")
+        .expect("legacy power defaults");
+    assert_eq!(power, PowerPolicyRecord::default());
+
+    let legacy_peer = serde_json::from_value::<SavedPeerRecord>(serde_json::json!({
+        "destination_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "label": null,
+        "saved_at_ms": 1
+    }))
+    .expect("legacy peer");
+    assert_eq!(legacy_peer.circle_tier, CircleTier::Inner {});
+
+    let outer_peer = serde_json::from_value::<SavedPeerRecord>(serde_json::json!({
+        "destination_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "label": null,
+        "saved_at_ms": 2,
+        "circle_tier": "outer"
+    }))
+    .expect("current peer");
+    assert_eq!(outer_peer.circle_tier, CircleTier::Outer {});
+    assert!(serde_json::from_value::<SavedPeerRecord>(serde_json::json!({
+        "destination_hex": "cccccccccccccccccccccccccccccccc",
+        "label": null,
+        "saved_at_ms": 3,
+        "circle_tier": "trusted"
+    }))
+    .is_err());
+}
+
+#[test]
+fn traffic_class_and_block_network_contracts_are_closed() {
+    assert_eq!(OutboundTrafficClass::default(), OutboundTrafficClass::Chat {});
+    assert!(serde_json::from_str::<OutboundTrafficClass>("\"unknown\"").is_err());
+
+    let network = BlockNetworkSettings {
+        tcp_clients: vec!["mesh.example:4242".to_string()],
+        broadcast: true,
+        hub_mode: HubMode::Autonomous {},
+        hub_identity_hash: None,
+        hub_api_base_url: None,
+        hub_refresh_interval_seconds: 3600,
+        radio: None,
+    };
+    let serialized = serde_json::to_value(network).expect("network settings");
+    for excluded in [
+        "api_key",
+        "private_key",
+        "storage_dir",
+        "transport_node_enabled",
+        "announce_capabilities",
+        "display_name",
+        "name",
+        "rnode",
+        "enabled",
+        "connection_mode",
+        "peripheral_id",
+        "bluetooth_device_id",
+        "usb_device_id",
+        "pairing_data",
+        "filesystem_path",
+    ] {
+        assert!(serialized.get(excluded).is_none(), "unexpected field {excluded}");
+    }
+}
 
 #[test]
 fn hub_mode_deserialize_migrates_legacy_values() {

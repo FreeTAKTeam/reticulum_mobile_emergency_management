@@ -85,7 +85,7 @@ fn startup_history_lists_persisted_messages_without_runtime() {
     let storage_dir = test_storage_dir("startup-history");
     let store =
         AppStateStore::new(Some(storage_dir.to_string_lossy().as_ref())).expect("create store");
-    let outbound = message(
+    let mut outbound = message(
         "persisted-1",
         "old-thread",
         MessageDirection::Outbound {},
@@ -93,6 +93,7 @@ fn startup_history_lists_persisted_messages_without_runtime() {
         Some("LOCAL"),
         30,
     );
+    outbound.traffic_class = OutboundTrafficClass::Telemetry {};
     store.upsert_message(&outbound).expect("persist message");
 
     let restarted =
@@ -109,6 +110,7 @@ fn startup_history_lists_persisted_messages_without_runtime() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].message_id_hex, "persisted-1");
     assert_eq!(messages[0].conversation_id, "peer-1");
+    assert_eq!(messages[0].traffic_class, OutboundTrafficClass::Telemetry {});
 }
 
 #[test]

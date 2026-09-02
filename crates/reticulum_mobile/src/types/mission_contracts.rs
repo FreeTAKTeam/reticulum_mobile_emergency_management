@@ -15,6 +15,8 @@ pub struct SavedPeerRecord {
     pub last_route_seen_at_ms: Option<u64>,
     #[serde(default)]
     pub last_hops: Option<u8>,
+    #[serde(default)]
+    pub circle_tier: CircleTier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -114,7 +114,8 @@ fn saved_peer_json(peer: &SavedPeerRecord) -> serde_json::Value {
         "appData": peer.app_data,
         "displayName": peer.display_name,
         "lastRouteSeenAtMs": peer.last_route_seen_at_ms,
-        "lastHops": peer.last_hops
+        "lastHops": peer.last_hops,
+        "circleTier": peer.circle_tier.as_str()
     })
 }
 

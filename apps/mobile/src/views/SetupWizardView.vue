@@ -2,6 +2,7 @@
 import { onMounted } from "vue";
 import WizardProgress from "../components/setup/WizardProgress.vue";
 import SetupWelcomeStep from "../components/setup/SetupWelcomeStep.vue";
+import SetupCommunityProfile from "../components/setup/SetupCommunityProfile.vue";
 import { useSetupWizard } from "../composables/useSetupWizard";
 import logoUrl from "../assets/rem-logo.png";
 import { RNODE_FREQUENCY_MAX_HZ, RNODE_FREQUENCY_MIN_HZ } from "../utils/rnodeProfiles";
@@ -12,10 +13,7 @@ const tcpServerOptions = TCP_COMMUNITY_SERVERS.map((server) => ({
   endpoint: toTcpEndpoint(server),
   isBootstrap: Boolean(server.isBootstrap),
 }));
-
-onMounted(() => {
-  wizard.open();
-});
+onMounted(() => { wizard.open(); });
 </script>
 <template>
   <section class="setup-view" data-testid="setup-wizard">
@@ -73,6 +71,7 @@ onMounted(() => {
             <strong>{{ wizard.normalizedDisplayName.value || "Unset" }}</strong>
             <small>Node identity will populate after runtime startup.</small>
           </div>
+          <SetupCommunityProfile :community="wizard.draft.community" :power="wizard.draft.power" />
         </section>
 
         <section v-else-if="wizard.activeStep.value.id === 'tcp'" class="wizard-section">

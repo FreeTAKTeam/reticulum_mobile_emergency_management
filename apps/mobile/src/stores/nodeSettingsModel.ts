@@ -69,6 +69,20 @@ export const DEFAULT_SETTINGS: NodeUiSettings = {
     localTeams: [],
     localTeamsInitialized: false,
   },
+  community: {
+    householdId: "",
+    householdName: "",
+    adults: 0,
+    children: 0,
+    pets: 0,
+    roleBadges: [],
+    status: "all_home",
+    preferredMapLayer: "base",
+  },
+  power: {
+    enabled: true,
+    thresholdPercent: 20,
+  },
 };
 export const RCH_HUB_DIRECTORY_ENABLED = true;
 export function normalizeClientMode(value: unknown): NodeUiSettings["clientMode"] {
@@ -171,6 +185,11 @@ export function cloneDefaultSettings(): NodeUiSettings {
       localTeamsInitialized: DEFAULT_SETTINGS.teams.localTeamsInitialized,
     },
     rnode: { ...DEFAULT_SETTINGS.rnode },
+    community: {
+      ...DEFAULT_SETTINGS.community,
+      roleBadges: [...DEFAULT_SETTINGS.community.roleBadges],
+    },
+    power: { ...DEFAULT_SETTINGS.power },
   };
 }
 
@@ -210,6 +229,11 @@ export function toAppSettingsRecord(settings: NodeUiSettings): AppSettingsRecord
       localTeamsInitialized: settings.teams.localTeamsInitialized,
     },
     rnode: normalizeRnodeSettings(settings.rnode),
+    community: {
+      ...settings.community,
+      roleBadges: [...settings.community.roleBadges],
+    },
+    power: { ...settings.power },
   };
 }
 
@@ -285,6 +309,15 @@ export function normalizeAppSettingsRecord(
       mode: normalizeHubMode(runtimeSettings.hub?.mode),
     },
     teams: normalizeTeamPreferences(runtimeSettings.teams),
+    community: {
+      ...DEFAULT_SETTINGS.community,
+      ...runtimeSettings.community,
+      roleBadges: [...(runtimeSettings.community?.roleBadges ?? [])],
+    },
+    power: {
+      ...DEFAULT_SETTINGS.power,
+      ...runtimeSettings.power,
+    },
   };
 }
 
@@ -307,6 +340,7 @@ export function toSavedPeerRecords(savedPeers: Record<string, SavedPeer>): Saved
     lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
       ? peer.lastHops
       : undefined,
+    circleTier: peer.circleTier ?? "outer",
   }));
 }
 
@@ -335,6 +369,7 @@ export function fromSavedPeerRecords(records: SavedPeerRecord[]): Record<string,
       lastHops: typeof peer.lastHops === "number" && Number.isFinite(peer.lastHops)
         ? peer.lastHops
         : undefined,
+      circleTier: peer.circleTier ?? "inner",
     };
   }
   return out;

@@ -1,10 +1,10 @@
-import type { AppSettingsRecord, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, SavedPeerRecord, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
+import type { AppSettingsRecord, BlockOnboardingDraft, BlockOnboardingImportRequest, BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistDeleteOptions, ChecklistRecord, ChecklistTemplateRecord, ChecklistUserTaskStatus, CommunityStatusProjectionRecord, ConversationRecord, EamProjectionRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, InstalledPluginRecord, LegacyImportPayload, MessageRecord, OperationalSummary, PeerRecord, PluginCapabilityRecord, PluginSensorRecord, PowerStateRecord, SavedPeerRecord, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord, SosLocationRecord, SosSettingsRecord, SosStatusRecord, SosTriggerSource, SyncStatus, TelemetryPositionRecord } from "./contracts";
 import { type ReticulumNodePlugin } from "./capacitor-plugin";
 import { sosAudioToPlugin, sosSettingsToPlugin, toOperationalSummary, toSosAlertRecord, toSosAudioRecord, toSosLocationRecord, toSosSettingsRecord, toSosStatusRecord } from "./client-config-converters";
 import { toChecklistRecord, toChecklistTemplateRecord } from "./checklist-converters";
-import { toAppSettingsRecord } from "./converters";
+import { toAppSettingsRecord, toBlockOnboardingImportResult, toBlockOnboardingInspection, toPowerStateRecord } from "./converters";
 import { toConversationRecord, toMessageRecord, toPeerRecord, toSyncStatus } from "./message-converters";
-import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImportPayloadToPlugin, toEamProjectionRecord, toEamReadinessSummaryRecord, toEamTeamSummaryRecord, toEventProjectionRecord, toSavedPeerRecord, toTelemetryPositionRecord } from "./projection-converters";
+import { eamProjectionRecordToPlugin, eventProjectionRecordToPlugin, legacyImportPayloadToPlugin, toCommunityStatusProjectionRecord, toEamProjectionRecord, toEamReadinessSummaryRecord, toEamTeamSummaryRecord, toEventProjectionRecord, toSavedPeerRecord, toTelemetryPositionRecord } from "./projection-converters";
 import { normalizeHex, pluginRecord, toInstalledPlugin, toPluginSensor } from "./runtime-converters";
 
 export abstract class CapacitorProjectionClient {
@@ -110,6 +110,40 @@ export abstract class CapacitorProjectionClient {
   async setAppSettings(settings: AppSettingsRecord): Promise<void> {
     await this.ready();
     await this.plugin.setAppSettings({ settings: settings as unknown as Record<string, unknown> });
+  }
+
+  async getPowerState(): Promise<PowerStateRecord> {
+    await this.ready();
+    return toPowerStateRecord(await this.plugin.getPowerState());
+  }
+
+  async publishCommunityStatus(): Promise<EventProjectionRecord> {
+    await this.ready();
+    return toEventProjectionRecord(await this.plugin.publishCommunityStatus());
+  }
+
+  async createBlockOnboardingCode(
+    draft: BlockOnboardingDraft,
+  ): Promise<SignedBlockOnboardingEnvelope> {
+    await this.ready();
+    const result = await this.plugin.createBlockOnboardingCode({ draft });
+    return { encodedText: String(result.encodedText ?? result.encoded_text ?? "") };
+  }
+
+  async inspectBlockOnboardingCode(encodedText: string): Promise<BlockOnboardingInspection> {
+    await this.ready();
+    return toBlockOnboardingInspection(
+      await this.plugin.inspectBlockOnboardingCode({ encodedText }),
+    );
+  }
+
+  async importBlockOnboardingCode(
+    request: BlockOnboardingImportRequest,
+  ): Promise<BlockOnboardingImportResult> {
+    await this.ready();
+    return toBlockOnboardingImportResult(
+      await this.plugin.importBlockOnboardingCode({ request }),
+    );
   }
 
   async getSavedPeers(): Promise<SavedPeerRecord[]> {
@@ -311,6 +345,14 @@ export abstract class CapacitorProjectionClient {
     await this.ready();
     const result = await this.plugin.getEvents();
     return Array.isArray(result.items) ? result.items.map(toEventProjectionRecord) : [];
+  }
+
+  async getCommunityStatuses(): Promise<CommunityStatusProjectionRecord[]> {
+    await this.ready();
+    const result = await this.plugin.getCommunityStatuses();
+    return Array.isArray(result.items)
+      ? result.items.map(toCommunityStatusProjectionRecord)
+      : [];
   }
 
   async upsertEvent(event: EventProjectionRecord): Promise<void> {

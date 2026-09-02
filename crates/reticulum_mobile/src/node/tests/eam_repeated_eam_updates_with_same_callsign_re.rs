@@ -17,6 +17,7 @@ async fn repeated_eam_updates_with_same_callsign_replicate_latest_projection() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a
@@ -350,6 +351,7 @@ fn eam_replication_targets_use_propagation_for_saved_stored_route_without_discov
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let mut saved_relay_peer = build_peer_record(
         "cccccccccccccccccccccccccccccccc",
@@ -426,6 +428,7 @@ fn eam_replication_targets_include_saved_reachable_peer_without_active_link_when
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let peers = vec![build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

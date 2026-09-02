@@ -102,6 +102,16 @@ public class ReticulumNodePlugin extends ReticulumNodeChecklistPluginApi {
     }
 
     @PluginMethod
+    public void getCommunityStatuses(PluginCall call) {
+        runStringServiceCall(
+            call,
+            "Failed to get community statuses.",
+            "Native community status JSON parse failed.",
+            ReticulumNodeService::getCommunityStatusesJson
+        );
+    }
+
+    @PluginMethod
     public void upsertEvent(PluginCall call) {
         final JSObject payload = call.getObject("event", new JSObject());
         runIntServiceCall(

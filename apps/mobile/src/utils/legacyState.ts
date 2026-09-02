@@ -14,7 +14,6 @@ import type {
   TelemetryPositionRecord,
   TransportDeliveryState,
 } from "@reticulum/node-client";
-
 import type { NodeUiSettings } from "../types/domain";
 import {
   asRecord,
@@ -55,7 +54,6 @@ import {
 } from "./tcpCommunityServers";
 import { DEFAULT_RNODE_SETTINGS, normalizeRnodeSettings } from "./rnodeProfiles";
 import { normalizeTeamPreferences } from "./teamSettings";
-
 export {
   LEGACY_EAM_STORAGE_KEY,
   LEGACY_EVENT_STORAGE_KEY,
@@ -65,18 +63,14 @@ export {
   LEGACY_TELEMETRY_STORAGE_KEY,
   UI_SETTINGS_STORAGE_KEY,
 } from "./legacyStorage";
-
 export interface NodeUiPreferences {
   clientMode: NodeUiSettings["clientMode"];
 }
-
 export interface LegacyProjectionState {
   payload: LegacyImportPayload;
   uiSettings: NodeUiPreferences;
 }
-
 const HUB_MODES = new Set<string>(["Autonomous", "SemiAutonomous", "Connected", "Disabled", "RchLxmf", "RchHttp"]);
-
 function normalizeClientMode(
   value: unknown,
   fallback: NodeUiSettings["clientMode"],
@@ -87,7 +81,6 @@ function normalizeClientMode(
   }
   return requested;
 }
-
 function normalizeTelemetrySettings(
   telemetry: Partial<NodeUiSettings["telemetry"]> | undefined,
   defaults: NodeUiSettings["telemetry"],
@@ -115,7 +108,6 @@ function normalizeTelemetrySettings(
     expireAfterMinutes,
   };
 }
-
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -124,7 +116,6 @@ function normalizeStringArray(value: unknown): string[] {
     .map((entry) => asTrimmedString(entry))
     .filter((entry) => entry.length > 0);
 }
-
 function normalizeUiPreferences(
   value: Partial<NodeUiSettings> | Partial<NodeUiPreferences> | null,
   defaults: Pick<NodeUiSettings, "clientMode">,
@@ -133,7 +124,6 @@ function normalizeUiPreferences(
     clientMode: normalizeClientMode(value?.clientMode, defaults.clientMode),
   };
 }
-
 function normalizeRuntimeSettings(
   value: Partial<NodeUiSettings>,
   defaults: NodeUiSettings,
@@ -183,9 +173,17 @@ function normalizeRuntimeSettings(
       ),
     },
     rnode: normalizeRnodeSettings(value.rnode ?? defaults.rnode ?? DEFAULT_RNODE_SETTINGS),
+    community: {
+      ...defaults.community,
+      ...value.community,
+      roleBadges: [...(value.community?.roleBadges ?? defaults.community.roleBadges)],
+    },
+    power: {
+      ...defaults.power,
+      ...value.power,
+    },
   };
 }
-
 function normalizeSavedPeers(): SavedPeerRecord[] {
   const parsed = readJson<Array<{ destination?: unknown; label?: unknown; savedAt?: unknown }>>(
     LEGACY_SAVED_STORAGE_KEY,
@@ -203,6 +201,7 @@ function normalizeSavedPeers(): SavedPeerRecord[] {
       destination,
       label: asTrimmedString(peer.label) || undefined,
       savedAt: optionalNumber(peer.savedAt) ?? nowMs(),
+      circleTier: "inner",
     });
   }
   return out;
@@ -391,6 +390,7 @@ function normalizeLegacyInboxMessages(): MessageRecord[] {
       ) || undefined,
       title: asTrimmedString(record.title) || undefined,
       bodyUtf8: typeof record.bodyUtf8 === "string" ? record.bodyUtf8 : "",
+      trafficClass: "chat",
       method: MESSAGE_METHODS.has(method) ? method : "Direct",
       state: normalizedState,
       transportState: TRANSPORT_DELIVERY_STATES.has(transportState)

@@ -234,6 +234,7 @@ export class WebReticulumNodeClient extends InMemoryProjectionClient implements 
       lastWireMessageIdHex: messageIdHex,
       title: request.title,
       bodyUtf8: request.bodyUtf8,
+      trafficClass: "chat",
       method: "Direct",
       state: this.connected.has(destinationHex) ? "Delivered" : "Failed",
       transportState: this.connected.has(destinationHex) ? "TransportDelivered" : "Failed",
@@ -343,6 +344,7 @@ export class WebReticulumNodeClient extends InMemoryProjectionClient implements 
         destination,
         label: peer.label,
         savedAt: peer.savedAt,
+        circleTier: peer.circleTier ?? "outer",
       });
     }
   }

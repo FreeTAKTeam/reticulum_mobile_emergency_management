@@ -7,6 +7,9 @@ async fn retry_pending_ack_timeout_via_propagation(
     let Some(mut resend) = pending.resend.clone() else {
         return Ok(false);
     };
+    if *state.power_saver_rx.borrow() && !resend.traffic_class.allowed_in_power_saver() {
+        return Ok(false);
+    }
     if should_retry_pending_ack_timeout_via_direct(pending) {
         resend.direct_ack_retry_attempted = true;
         info!(

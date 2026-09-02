@@ -1,5 +1,5 @@
 import { registerPlugin } from "@capacitor/core";
-import type { ChecklistUserTaskStatus, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
+import type { BlockOnboardingDraft, BlockOnboardingImportRequest, ChecklistUserTaskStatus, LogLevel, PluginCapabilityRecord, RnodeBleDeviceRecord, RnodeBluetoothDeviceRecord, RnodeBluetoothMode, RnodeUsbDeviceRecord, SendMode, SosTriggerSource } from "./contracts";
 
 export type PluginListenerHandle = {
   remove: () => Promise<void>;
@@ -67,6 +67,11 @@ export interface ReticulumNodePlugin {
   importLegacyState(options: { payload: Record<string, unknown> }): Promise<void>;
   getAppSettings(): Promise<Record<string, unknown>>;
   setAppSettings(options: { settings: Record<string, unknown> }): Promise<void>;
+  getPowerState(): Promise<Record<string, unknown>>;
+  publishCommunityStatus(): Promise<Record<string, unknown>>;
+  createBlockOnboardingCode(options: { draft: BlockOnboardingDraft }): Promise<Record<string, unknown>>;
+  inspectBlockOnboardingCode(options: { encodedText: string }): Promise<Record<string, unknown>>;
+  importBlockOnboardingCode(options: { request: BlockOnboardingImportRequest }): Promise<Record<string, unknown>>;
   getSavedPeers(): Promise<{ items: Record<string, unknown>[] }>;
   setSavedPeers(options: { savedPeers: Record<string, unknown>[] }): Promise<void>;
   getOperationalSummary(): Promise<Record<string, unknown>>;
@@ -147,6 +152,7 @@ export interface ReticulumNodePlugin {
   getEamTeamSummary(options: { teamUid: string }): Promise<Record<string, unknown>>;
   getEamReadinessSummary(): Promise<Record<string, unknown>>;
   getEvents(): Promise<{ items: Record<string, unknown>[] }>;
+  getCommunityStatuses(): Promise<{ items: Record<string, unknown>[] }>;
   upsertEvent(options: { event: Record<string, unknown> }): Promise<void>;
   deleteEvent(options: { uid: string; deletedAtMs?: number }): Promise<void>;
   getTelemetryPositions(): Promise<{ items: Record<string, unknown>[] }>;

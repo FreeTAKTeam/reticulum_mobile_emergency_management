@@ -17,6 +17,7 @@ async fn delete_event_replicates_to_native_peer_projection() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("save peer b");
     node_a
@@ -214,6 +215,7 @@ fn event_replication_targets_try_saved_reachable_peer_without_active_link_when_n
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let peers = vec![build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -255,6 +257,7 @@ fn event_replication_targets_use_relay_for_fresh_route_without_active_link_when_
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let peers = vec![build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -324,6 +327,7 @@ fn event_replication_targets_use_direct_link_then_relay_for_saved_stored_routes(
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let relay_saved_peer = SavedPeerRecord {
         destination_hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
@@ -335,6 +339,7 @@ fn event_replication_targets_use_direct_link_then_relay_for_saved_stored_routes(
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let direct_peer = build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -395,6 +400,7 @@ fn event_replication_targets_use_propagation_for_saved_stored_route_without_disc
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let mut saved_relay_peer = build_peer_record(
         "cccccccccccccccccccccccccccccccc",

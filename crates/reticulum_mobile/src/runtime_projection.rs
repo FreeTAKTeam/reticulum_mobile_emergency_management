@@ -12,7 +12,7 @@ use crate::event_bus::EventBus;
 use crate::runtime::now_ms;
 use crate::types::{
     ApplicationAckState, MessageDirection, MessageMethod, MessageRecord, MessageState, NodeEvent,
-    PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
+    OutboundTrafficClass, PeerRecord, PeerState, ProjectionInvalidation, ProjectionScope, SyncPhase, SyncStatus,
     TransportDeliveryState,
 };
 
@@ -59,6 +59,8 @@ struct PersistedMessageRecord {
     last_wire_message_id_hex: Option<String>,
     title: Option<String>,
     body_utf8: String,
+    #[serde(default)]
+    traffic_class: OutboundTrafficClass,
     method: String,
     state: String,
     #[serde(default)]

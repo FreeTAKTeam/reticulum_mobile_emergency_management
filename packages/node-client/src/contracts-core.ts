@@ -49,6 +49,17 @@ export type MessageState =
   | "Cancelled"
   | "Received";
 export type MessageDirection = "Inbound" | "Outbound";
+export type OutboundTrafficClass =
+  | "sos"
+  | "telemetry"
+  | "community_status"
+  | "chat"
+  | "eam"
+  | "event"
+  | "checklist"
+  | "plugin"
+  | "raw"
+  | "control";
 export type ClientMode = "auto" | "capacitor";
 export type ProjectionScope =
   | "AppSettings"
@@ -358,6 +369,7 @@ export interface MessageRecord {
   lastWireMessageIdHex?: string;
   title?: string;
   bodyUtf8: string;
+  trafficClass: OutboundTrafficClass;
   method: MessageMethod;
   state: MessageState;
   transportState: TransportDeliveryState;

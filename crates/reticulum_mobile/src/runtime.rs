@@ -24,6 +24,7 @@ include!("runtime/ack_handlers.rs");
 include!("runtime/hub_team_selection.rs");
 include!("runtime/hub.rs");
 include!("runtime/rnode_status.rs");
+include!("runtime/tcp_interface_config.rs");
 include!("runtime/interface_config.rs");
 include!("runtime/network_interfaces.rs");
 include!("runtime/background_maintenance.rs");
@@ -48,6 +49,7 @@ pub async fn run_node(
     sync_status_snapshot: Arc<Mutex<SyncStatus>>,
     hub_directory_snapshot: Arc<Mutex<Option<HubDirectorySnapshot>>>,
     bus: EventBus,
+    power_saver_rx: watch::Receiver<bool>,
     mut cmd_rx: mpsc::Receiver<Command>,
     mut priority_cmd_rx: mpsc::Receiver<Command>,
 ) {
@@ -126,20 +128,12 @@ pub async fn run_node(
         status.clone(),
     );
 
-    let _legacy_app_destination_hex = app_destination
+    let app_destination_hex = app_destination
         .lock()
         .await
         .desc
         .address_hash
         .to_hex_string();
-    let lxmf_destination_hex = lxmf_destination
-        .lock()
-        .await
-        .desc
-        .address_hash
-        .to_hex_string();
-    let app_destination_hex = lxmf_destination_hex.clone();
-
     let announce_capabilities = Arc::new(TokioMutex::new(AnnounceProfile::new(
         config.name.as_str(),
         config.announce_capabilities.as_str(),
@@ -227,6 +221,7 @@ pub async fn run_node(
         ignored_peer_destinations: ignored_peer_destinations.clone(),
         send_task_permits: send_task_permits.clone(),
         mission_destination_locks: mission_destination_locks.clone(),
+        power_saver_rx: power_saver_rx.clone(),
     };
 
     if let Some(snapshot) = projection_journal.load_snapshot() {
@@ -262,7 +257,10 @@ pub async fn run_node(
     }
 
     refresh_peer_snapshot(&state).await;
-    sync_auto_propagation_node(&state, &bus).await;
+    let saver_active_at_start = *power_saver_rx.borrow();
+    if !saver_active_at_start {
+        sync_auto_propagation_node(&state, &bus).await;
+    }
     if !restored_saved_management.pruned_destinations.is_empty() {
         info!(
             "[peers] pruned restored saved peers with non-rem lxmf announce evidence destinations={}",
@@ -283,15 +281,17 @@ pub async fn run_node(
                 .join(","),
         );
     }
-    for target in restored_saved_management.link_targets {
-        add_desired_managed_peer_link_and_schedule(&state, &bus, target, "saved-peer-restore")
-            .await;
-    }
-    for destination_hex in restored_saved_management.route_request_destinations {
-        if let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) {
-            if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
-                transport.request_path(&destination, None, None).await;
-                spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
+    if !saver_active_at_start {
+        for target in restored_saved_management.link_targets {
+            add_desired_managed_peer_link_and_schedule(&state, &bus, target, "saved-peer-restore")
+                .await;
+        }
+        for destination_hex in restored_saved_management.route_request_destinations {
+            if let Some(destination_hex) = normalize_hex_32(destination_hex.as_str()) {
+                if let Ok(destination) = parse_address_hash(destination_hex.as_str()) {
+                    transport.request_path(&destination, None, None).await;
+                    spawn_managed_peer_resolution(state.clone(), bus.clone(), destination_hex);
+                }
             }
         }
     }
@@ -311,8 +311,8 @@ pub async fn run_node(
         bus.clone(),
     );
 
-    spawn_peer_maintenance_tasks(&state, &bus);
-    spawn_propagation_maintenance_task(&state, &bus);
+    spawn_peer_maintenance_tasks(&state, &bus, power_saver_rx.clone());
+    spawn_propagation_maintenance_task(&state, &bus, power_saver_rx.clone());
     spawn_receipt_listener(&state, &bus, receipt_rx);
     spawn_announce_tasks(
         &config,
@@ -320,11 +320,12 @@ pub async fn run_node(
         &bus,
         &app_destination,
         &announce_capabilities,
+        power_saver_rx.clone(),
     );
     spawn_payload_receivers(&state, &bus);
     spawn_delivery_tracking_tasks(&state, &bus, &receipt_message_ids);
-    spawn_link_event_listener(&state, &bus);
-    spawn_periodic_hub_refresh(&config, &state, &bus);
+    spawn_link_event_listener(&state, &bus, power_saver_rx.clone());
+    spawn_periodic_hub_refresh(&config, &state, &bus, power_saver_rx.clone());
     let command_executor = RuntimeCommandExecutor::new();
 
     include!("runtime/command_loop.rs");
@@ -358,5 +359,6 @@ mod tests {
     include!("runtime/tests/peers_routes_lxmf_delivery_announce_mapping_uses_lxmf_s.rs");
     include!("runtime/tests/peers_routes_rem_lxmf_announce_path_response_keeps_capa.rs");
     include!("runtime/tests/propagation.rs");
+    include!("runtime/tests/propagation_fallback.rs");
     include!("runtime/tests/sos.rs");
 }

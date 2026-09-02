@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { storeToRefs } from "pinia";
 import { computed, onMounted, onUnmounted, shallowRef } from "vue";
+import type { HouseholdStatus } from "@reticulum/node-client";
 
+import CommunityPeerSummary from "../components/CommunityPeerSummary.vue";
+import CommunityStatusPicker from "../components/CommunityStatusPicker.vue";
+import PowerSaverBadge from "../components/PowerSaverBadge.vue";
 import {
   listNotificationActivity,
   subscribeNotificationActivity,
@@ -21,6 +25,8 @@ const messagesStore = useMessagesStore();
 const messagingStore = useMessagingStore();
 const nodeStore = useNodeStore();
 const notificationActivities = shallowRef<NotificationActivityRecord[]>(listNotificationActivity());
+const communityFeedback = shallowRef("");
+const publishingCommunity = shallowRef(false);
 let unsubscribeNotificationActivity: (() => void) | null = null;
 const dashboardActionTitle = computed(() =>
   nodeStore.ready
@@ -55,6 +61,17 @@ async function requestSync(): Promise<void> {
   } catch {
     // current runtime reports sync failure through store state
   }
+}
+
+async function publishCommunityStatus(status: HouseholdStatus): Promise<void> {
+  publishingCommunity.value = true;
+  communityFeedback.value = "";
+  try {
+    await nodeStore.publishCommunityStatus(status);
+    communityFeedback.value = `${nodeStore.settings.community.householdName || "Household"} status published.`;
+  } catch (error: unknown) {
+    communityFeedback.value = error instanceof Error ? error.message : String(error);
+  } finally { publishingCommunity.value = false; }
 }
 
 const ringMetrics = computed(() =>
@@ -213,6 +230,37 @@ onUnmounted(() => {
         </button>
       </div>
     </header>
+
+    <section class="panel community-panel" aria-labelledby="community-heading">
+      <div class="community-heading">
+        <div><p class="eyebrow">HOUSEHOLD BEACON</p><h2 id="community-heading">Community status</h2></div>
+        <PowerSaverBadge :active="nodeStore.powerState.saverActive" :battery-percent="nodeStore.powerState.batteryPercent" />
+      </div>
+      <CommunityPeerSummary
+        :household-name="nodeStore.settings.community.householdName || 'Set up your household'"
+        :adults="nodeStore.settings.community.adults"
+        :children="nodeStore.settings.community.children"
+        :pets="nodeStore.settings.community.pets"
+        :status="nodeStore.settings.community.status"
+        :updated-at-ms="nodeStore.powerState.updatedAtMs || Date.now()"
+        :saver-active="nodeStore.powerState.saverActive"
+      />
+      <p class="status-instruction">Publish a GPS-free update to your community.</p>
+      <CommunityStatusPicker
+        :model-value="nodeStore.settings.community.status"
+        :disabled="publishingCommunity || !nodeStore.ready"
+        @update:model-value="publishCommunityStatus"
+      />
+      <p v-if="communityFeedback" class="community-feedback" role="status">{{ communityFeedback }}</p>
+      <details v-if="eventsStore.communityRecords.length" class="nearby-households">
+        <summary>{{ eventsStore.communityRecords.length }} nearby household updates</summary>
+        <CommunityPeerSummary
+          v-for="record in eventsStore.communityRecords"
+          :key="record.sourceIdentity"
+          v-bind="record"
+        />
+      </details>
+    </section>
 
     <section class="panel">
       <h2>Team Status</h2>

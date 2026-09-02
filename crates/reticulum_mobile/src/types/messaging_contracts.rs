@@ -139,6 +139,8 @@ pub struct MessageRecord {
     pub last_wire_message_id_hex: Option<String>,
     pub title: Option<String>,
     pub body_utf8: String,
+    #[serde(default)]
+    pub traffic_class: OutboundTrafficClass,
     pub method: MessageMethod,
     pub state: MessageState,
     #[serde(default)]
@@ -401,6 +403,10 @@ pub struct AppSettingsRecord {
     pub checklists: ChecklistSettingsRecord,
     #[serde(default)]
     pub rnode: RnodeSettingsRecord,
+    #[serde(default)]
+    pub community: CommunitySettingsRecord,
+    #[serde(default)]
+    pub power: PowerPolicyRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

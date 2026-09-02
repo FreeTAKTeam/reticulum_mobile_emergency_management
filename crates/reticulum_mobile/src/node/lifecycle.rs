@@ -5,6 +5,7 @@ impl Node {
 
     pub(crate) fn with_storage_dir(storage_dir: Option<&str>) -> Result<Self, NodeError> {
         NodeLogger::install();
+        let (power_saver_tx, _) = watch::channel(false);
 
         let initial = NodeStatus {
             running: false,
@@ -33,6 +34,11 @@ impl Node {
                 hub_directory_snapshot: Arc::new(Mutex::new(None)),
                 sos_device_telemetry: Arc::new(Mutex::new(None)),
                 sos_detector: Arc::new(Mutex::new(SosTriggerDetector::new())),
+                power_state: PowerStateRecord::default(),
+                power_saver_tx,
+                next_telemetry_publish_at_ms: None,
+                deferred_announce_capabilities: None,
+                community_status_sent_in_saver: false,
                 active_config: None,
                 runtime: None,
                 cmd_tx: None,
@@ -62,7 +68,7 @@ impl Node {
 
         let identity = load_or_create_identity(config.storage_dir.as_deref(), &config.name)?;
 
-        let _legacy_app_hash = SingleInputDestination::new(
+        let app_hash = SingleInputDestination::new(
             identity.clone(),
             DestinationName::new(APP_DESTINATION_NAME.0, APP_DESTINATION_NAME.1),
         )
@@ -80,7 +86,7 @@ impl Node {
                 running: false,
                 name: config.name.clone(),
                 identity_hex: identity.address_hash().to_hex_string(),
-                app_destination_hex: lxmf_hash.to_hex_string(),
+                app_destination_hex: app_hash.to_hex_string(),
                 lxmf_destination_hex: lxmf_hash.to_hex_string(),
                 readiness: RuntimeReadinessSnapshot::for_config(&config)?,
                 interfaces: Vec::new(),
@@ -148,6 +154,7 @@ impl Node {
             inner.sync_status_snapshot.clone(),
             inner.hub_directory_snapshot.clone(),
             inner.bus.clone(),
+            inner.power_saver_tx.subscribe(),
             cmd_rx,
             priority_cmd_rx,
         ));
@@ -177,7 +184,9 @@ impl Node {
             self.stop()?;
         }
 
-        self.start_fresh(config, config_fingerprint)
+        self.start_fresh(config, config_fingerprint)?;
+        let _ = self.publish_community_status();
+        Ok(())
     }
 
     pub fn stop(&self) -> Result<(), NodeError> {
@@ -250,38 +259,10 @@ impl Node {
         self.start(config)
     }
 
-    pub fn get_status(&self) -> NodeStatus {
-        let inner = self.inner.lock().ok();
-        let Some(inner) = inner else {
-            return NodeStatus {
-                running: false,
-                name: String::new(),
-                identity_hex: String::new(),
-                app_destination_hex: String::new(),
-                lxmf_destination_hex: String::new(),
-                readiness: RuntimeReadinessSnapshot::default(),
-                interfaces: Vec::new(),
-            };
-        };
-
-        inner
-            .status
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or(NodeStatus {
-                running: false,
-                name: String::new(),
-                identity_hex: String::new(),
-                app_destination_hex: String::new(),
-                lxmf_destination_hex: String::new(),
-                readiness: RuntimeReadinessSnapshot::default(),
-                interfaces: Vec::new(),
-            })
-    }
-
     pub fn connect_peer(&self, destination_hex: String) -> Result<(), NodeError> {
         let tx = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            ensure_outbound_admitted(inner.power_state.saver_active, OutboundTrafficClass::Control {})?;
             inner
                 .priority_cmd_tx
                 .clone()
@@ -332,8 +313,33 @@ impl Node {
         fields_bytes: Option<Vec<u8>>,
         send_mode: SendMode,
     ) -> Result<(), NodeError> {
+        self.send_bytes_with_class(
+            destination_hex,
+            bytes,
+            fields_bytes,
+            send_mode,
+            OutboundTrafficClass::Raw {},
+        )
+    }
+
+    fn send_bytes_with_class(
+        &self,
+        destination_hex: String,
+        bytes: Vec<u8>,
+        fields_bytes: Option<Vec<u8>>,
+        send_mode: SendMode,
+        traffic_class: OutboundTrafficClass,
+    ) -> Result<(), NodeError> {
         let (tx, active_config, hub_directory_snapshot) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            ensure_outbound_admitted(inner.power_state.saver_active, traffic_class)?;
+            if !matches!(
+                traffic_class,
+                OutboundTrafficClass::Sos {} | OutboundTrafficClass::CommunityStatus {}
+            ) && peer_is_outer_saved(&inner.app_state.get_saved_peers()?, &destination_hex)
+            {
+                return Err(NodeError::InvalidConfig {});
+            }
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()
@@ -367,6 +373,7 @@ impl Node {
                 bytes,
                 fields_bytes,
                 send_mode,
+                traffic_class,
                 resp: resp_tx,
             },
         )?;
@@ -385,6 +392,7 @@ impl Node {
             active_propagation_node_hex,
         ) = {
             let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            ensure_outbound_admitted(inner.power_state.saver_active, OutboundTrafficClass::Raw {})?;
             let hub_directory_snapshot = inner
                 .hub_directory_snapshot
                 .lock()

@@ -2,6 +2,7 @@ import type {
   AnnounceRecord,
   InstalledPluginRecord,
   NodeStatus,
+  PowerStateRecord,
   PluginSensorRecord,
   ReticulumNodeClient,
   SyncStatus,
@@ -48,6 +49,7 @@ export function createNodeStoreState() {
   const telemetryDestinations = ref<string[]>([]);
   const plugins = ref<InstalledPluginRecord[]>([]);
   const pluginSensors = ref<PluginSensorRecord[]>([]);
+  const powerState = ref<PowerStateRecord>({ charging: false, saverActive: false, updatedAtMs: 0 });
   const linkage = loadHubRegistryLinkage() ?? undefined;
   const hubRegistration = reactive<HubRegistrationSnapshot>({
     status: hubModeUsesRch(settings.hub.mode) ? "pending" : "disabled",
@@ -79,6 +81,7 @@ export function createNodeStoreState() {
     operationalSummary,
     pluginSensors,
     plugins,
+    powerState,
     presenceNow,
     readinessError,
     removedByDestination,

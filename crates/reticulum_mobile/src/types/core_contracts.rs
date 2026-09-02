@@ -56,6 +56,12 @@ impl<'de> Deserialize<'de> for HubMode {
     }
 }
 
+impl Default for HubMode {
+    fn default() -> Self {
+        Self::Autonomous {}
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PeerState {
     Connecting {},

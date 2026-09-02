@@ -9,6 +9,25 @@ enum LogLevel { "Trace", "Debug", "Info", "Warn", "Error" };
 
 enum HubMode { "Autonomous", "SemiAutonomous", "Connected" };
 
+enum CircleTier { "Inner", "Outer" };
+
+enum HouseholdStatus { "AllHome", "OneMissing", "Evacuated", "NeedsHelp" };
+
+enum PreferredMapLayer { "Base", "Satellite" };
+
+enum OutboundTrafficClass {
+  "Sos",
+  "Telemetry",
+  "CommunityStatus",
+  "Chat",
+  "Eam",
+  "Event",
+  "Checklist",
+  "Plugin",
+  "Raw",
+  "Control"
+};
+
 enum PeerState { "Connecting", "Connected", "Disconnected" };
 
 enum AnnounceClass { "PeerApp", "RchHubServer", "PropagationNode", "LxmfDelivery", "Other" };
@@ -329,6 +348,7 @@ dictionary MessageRecord {
   string? last_wire_message_id_hex;
   string? title;
   string body_utf8;
+  OutboundTrafficClass traffic_class;
   MessageMethod method;
   MessageState state;
   TransportDeliveryState transport_state;
@@ -433,6 +453,85 @@ dictionary RnodeSettingsRecord {
   u64 frequency_hz;
 };
 
+dictionary CommunitySettingsRecord {
+  string household_id;
+  string household_name;
+  u8 adults;
+  u8 children;
+  u8 pets;
+  sequence<string> role_badges;
+  HouseholdStatus status;
+  PreferredMapLayer preferred_map_layer;
+};
+
+dictionary PowerPolicyRecord {
+  boolean enabled;
+  u8 threshold_percent;
+};
+
+dictionary PowerStateRecord {
+  u8? battery_percent;
+  boolean charging;
+  boolean saver_active;
+  u64 updated_at_ms;
+};
+
+dictionary BlockRadioSettings {
+  string region;
+  string profile;
+  u64 frequency_hz;
+};
+
+dictionary BlockNetworkSettings {
+  sequence<string> tcp_clients;
+  boolean broadcast;
+  HubMode hub_mode;
+  string? hub_identity_hash;
+  string? hub_api_base_url;
+  u32 hub_refresh_interval_seconds;
+  BlockRadioSettings? radio;
+};
+
+dictionary BlockOnboardingDraft {
+  BlockNetworkSettings network;
+  sequence<string> trusted_destination_hashes;
+  PreferredMapLayer preferred_map_layer;
+  u64 expires_at_ms;
+};
+
+dictionary SignedBlockOnboardingEnvelope {
+  string encoded_text;
+};
+
+dictionary BlockOnboardingInspection {
+  string issuer_public_identity_hex;
+  string issuer_app_destination_hex;
+  string issuer_lxmf_destination_hex;
+  string signer_fingerprint;
+  u64 issued_at_ms;
+  u64 expires_at_ms;
+  BlockNetworkSettings network;
+  sequence<string> trusted_destination_hashes;
+  PreferredMapLayer preferred_map_layer;
+};
+
+dictionary BlockPeerTierRecord {
+  string destination_hex;
+  CircleTier circle_tier;
+};
+
+dictionary BlockOnboardingImportRequest {
+  string encoded_text;
+  string confirmed_signer_fingerprint;
+  CommunitySettingsRecord community;
+  sequence<BlockPeerTierRecord> peer_tiers;
+};
+
+dictionary BlockOnboardingImportResult {
+  u32 imported_peer_count;
+  boolean settings_updated;
+};
+
 dictionary AppSettingsRecord {
   string display_name;
   boolean auto_connect_saved;
@@ -446,6 +545,8 @@ dictionary AppSettingsRecord {
   TeamSettingsRecord teams;
   ChecklistSettingsRecord checklists;
   RnodeSettingsRecord rnode;
+  CommunitySettingsRecord community;
+  PowerPolicyRecord power;
 };
 
 dictionary TeamAliasRecord {
@@ -475,6 +576,7 @@ dictionary SavedPeerRecord {
   string? display_name;
   u64? last_route_seen_at_ms;
   u8? last_hops;
+  CircleTier circle_tier;
 };
 
 dictionary EamSourceRecord {
@@ -561,6 +663,19 @@ dictionary EventProjectionRecord {
   u64? deleted_at_ms;
   string? correlation_id;
   sequence<string> topics;
+};
+
+dictionary CommunityStatusProjectionRecord {
+  string household_id;
+  string household_name;
+  u8 adults;
+  u8 children;
+  u8 pets;
+  sequence<string> role_badges;
+  HouseholdStatus status;
+  boolean saver_active;
+  u64 updated_at_ms;
+  string source_identity;
 };
 
 dictionary ChecklistStatusCounts {
@@ -882,6 +997,7 @@ interface NodeEvent {
   MessageUpdated(MessageRecord message);
   SyncUpdated(SyncStatus status);
   HubDirectoryUpdated(HubDirectorySnapshot snapshot);
+  PowerStateChanged(PowerStateRecord state);
   OperationalNotice(OperationalNotice notice);
   ProjectionInvalidated(ProjectionInvalidation invalidation);
   PluginEventPublished(PluginEventRecord event);
@@ -966,6 +1082,18 @@ interface Node {
   [Throws=NodeError]
   void set_saved_peers(sequence<SavedPeerRecord> peers);
   [Throws=NodeError]
+  EventProjectionRecord publish_community_status();
+  [Throws=NodeError]
+  PowerStateRecord update_battery_state(u8 battery_percent, boolean charging);
+  [Throws=NodeError]
+  PowerStateRecord get_power_state();
+  [Throws=NodeError]
+  SignedBlockOnboardingEnvelope create_block_onboarding_code(BlockOnboardingDraft draft);
+  [Throws=NodeError]
+  BlockOnboardingInspection inspect_block_onboarding_code(SignedBlockOnboardingEnvelope envelope);
+  [Throws=NodeError]
+  BlockOnboardingImportResult import_block_onboarding_code(BlockOnboardingImportRequest request);
+  [Throws=NodeError]
   OperationalSummary get_operational_summary();
   [Throws=NodeError]
   sequence<EamProjectionRecord> get_eams();
@@ -979,6 +1107,8 @@ interface Node {
   EamReadinessSummaryRecord get_eam_readiness_summary();
   [Throws=NodeError]
   sequence<EventProjectionRecord> get_events();
+  [Throws=NodeError]
+  sequence<CommunityStatusProjectionRecord> get_community_statuses();
   [Throws=NodeError]
   void upsert_event(EventProjectionRecord record);
   [Throws=NodeError]

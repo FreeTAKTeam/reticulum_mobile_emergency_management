@@ -49,6 +49,9 @@ pub enum NodeEvent {
     HubDirectoryUpdated {
         snapshot: HubDirectorySnapshot,
     },
+    PowerStateChanged {
+        state: PowerStateRecord,
+    },
     OperationalNotice {
         notice: OperationalNotice,
     },

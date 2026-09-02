@@ -19,6 +19,7 @@ fn eam_replication_targets_include_saved_direct_peer_without_lxmf_snapshot() {
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let peer = PeerRecord {
         destination_hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
@@ -69,6 +70,7 @@ fn eam_replication_targets_keep_direct_peer_when_relay_is_active_before_lxmf_rou
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let mut peer = build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

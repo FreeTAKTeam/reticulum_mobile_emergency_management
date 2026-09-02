@@ -382,14 +382,22 @@ pub extern "system" fn Java_network_reticulum_emergency_ReticulumBridge_importLe
             return RESULT_ERR;
         }
     };
+    let saved_peers = match payload
+        .saved_peers
+        .unwrap_or_default()
+        .into_iter()
+        .map(to_saved_peer_record)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(peers) => peers,
+        Err(error) => {
+            set_last_node_error(error);
+            return RESULT_ERR;
+        }
+    };
     let legacy = LegacyImportPayload {
         settings,
-        saved_peers: payload
-            .saved_peers
-            .unwrap_or_default()
-            .into_iter()
-            .map(to_saved_peer_record)
-            .collect(),
+        saved_peers,
         eams: payload
             .eams
             .unwrap_or_default()

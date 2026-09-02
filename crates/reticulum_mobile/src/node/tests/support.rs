@@ -3,8 +3,8 @@ use crate::types::AnnounceClass;
 
 use crate::mission_sync::parse_mission_sync_metadata;
 use crate::types::{
-    ChecklistTaskRecord, EamSourceRecord, HubSettingsRecord, MessageDirection, MessageMethod,
-    MessageState, SyncPhase, TelemetrySettingsRecord,
+    BlockPeerTierRecord, ChecklistTaskRecord, CircleTier, EamSourceRecord, HubSettingsRecord,
+    MessageDirection, MessageMethod, MessageState, SyncPhase, TelemetrySettingsRecord,
 };
 use crate::HubMode;
 use rmpv::Value as MsgPackValue;

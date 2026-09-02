@@ -421,3 +421,26 @@ fn rnode_lora_config_rejects_unknown_region_and_profile() {
     };
     assert!(rnode_lora_config(&bad_profile).is_err());
 }
+
+#[test]
+fn shared_radio_validator_is_platform_neutral_and_exact() {
+    assert_eq!(
+        validate_shared_radio_settings(
+            "us915",
+            "REM-MF-URBAN-v1",
+            915_000_000,
+            false
+        )
+        .expect("valid shared settings"),
+        "US915"
+    );
+    assert!(validate_shared_radio_settings(
+        "US915",
+        "REM-TYPO-v1",
+        915_000_000,
+        false
+    )
+    .is_err());
+    assert!(validate_shared_radio_settings("US915", "REM-MF-URBAN-v1", 0, false).is_err());
+    assert!(validate_shared_radio_settings("US915", "REM-MF-URBAN-v1", 0, true).is_ok());
+}

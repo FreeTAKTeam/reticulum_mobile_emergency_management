@@ -1,8 +1,29 @@
 impl Node {
+    fn upsert_event_with_class(
+        &self,
+        record: EventProjectionRecord,
+        traffic_class: OutboundTrafficClass,
+    ) -> Result<(), NodeError> {
+        self.upsert_event_with_destination_and_class(record, None, traffic_class)
+    }
+
     fn upsert_event_with_destination(
         &self,
         record: EventProjectionRecord,
         requested_destination_hex: Option<String>,
+    ) -> Result<(), NodeError> {
+        self.upsert_event_with_destination_and_class(
+            record,
+            requested_destination_hex,
+            OutboundTrafficClass::Event {},
+        )
+    }
+
+    fn upsert_event_with_destination_and_class(
+        &self,
+        record: EventProjectionRecord,
+        requested_destination_hex: Option<String>,
+        traffic_class: OutboundTrafficClass,
     ) -> Result<(), NodeError> {
         let targeted_send = requested_destination_hex.is_some();
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
@@ -33,8 +54,13 @@ impl Node {
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
-                let saved_peers =
+                let mut saved_peers =
                     saved_peers_for_replication(&inner.app_state, &inner.bus, "event-upsert");
+                if matches!(traffic_class, OutboundTrafficClass::CommunityStatus {}) {
+                    for peer in &mut saved_peers {
+                        peer.circle_tier = CircleTier::Inner {};
+                    }
+                }
                 let route_hops =
                     route_hops_for_replication(&inner.app_state, &inner.bus, "event-upsert");
                 let sync_status = inner
@@ -42,14 +68,24 @@ impl Node {
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
-                let mut replication_targets = match build_runtime_event_replication_targets(
-                    &status,
-                    peers.as_slice(),
-                    saved_peers.as_slice(),
-                    sync_status.active_propagation_node_hex.as_deref(),
-                    inner.active_config.as_ref(),
-                    hub_directory_snapshot.as_ref(),
-                ) {
+                let target_result = if matches!(traffic_class, OutboundTrafficClass::CommunityStatus {}) {
+                    Ok(build_event_replication_targets(
+                        &status,
+                        peers.as_slice(),
+                        saved_peers.as_slice(),
+                        sync_status.active_propagation_node_hex.as_deref(),
+                    ))
+                } else {
+                    build_runtime_event_replication_targets(
+                        &status,
+                        peers.as_slice(),
+                        saved_peers.as_slice(),
+                        sync_status.active_propagation_node_hex.as_deref(),
+                        inner.active_config.as_ref(),
+                        hub_directory_snapshot.as_ref(),
+                    )
+                };
+                let mut replication_targets = match target_result {
                     Ok(targets) => targets,
                     Err(err) => {
                         emit_replication_planning_error(
@@ -104,7 +140,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    traffic_class,
+                )
             {
                 let message = format!(
                     "event replication delivery failed destination={} uid={} reason={}",
@@ -222,7 +264,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Event {},
+                )
             {
                 let message = format!(
                     "event delete replication delivery failed destination={destination_hex} uid={uid} reason={err}"
@@ -237,93 +285,6 @@ impl Node {
     pub fn get_telemetry_positions(&self) -> Result<Vec<TelemetryPositionRecord>, NodeError> {
         let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
         inner.app_state.get_telemetry_positions()
-    }
-
-    pub fn list_plugins(&self) -> Result<Vec<InstalledPluginRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        inner.app_state.list_plugins()
-    }
-
-    pub fn sync_discovered_plugins(
-        &self,
-        plugins: Vec<DiscoveredPluginRecord>,
-    ) -> Result<Vec<InstalledPluginRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner
-            .app_state
-            .sync_discovered_plugins(plugins.as_slice())?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        inner.app_state.list_plugins()
-    }
-
-    pub fn approve_plugin_publisher(
-        &self,
-        plugin_id: &str,
-        display_name: Option<&str>,
-    ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner
-            .app_state
-            .approve_plugin_publisher(plugin_id, display_name)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(())
-    }
-
-    pub fn revoke_plugin_publisher(&self, fingerprint: &str) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner.app_state.revoke_plugin_publisher(fingerprint)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(())
-    }
-
-    pub fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner.app_state.set_plugin_enabled(plugin_id, enabled)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(())
-    }
-
-    pub fn grant_plugin_capabilities(
-        &self,
-        plugin_id: &str,
-        capabilities: PluginCapabilityRecord,
-    ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner
-            .app_state
-            .grant_plugin_capabilities(plugin_id, capabilities)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(())
-    }
-
-    pub fn set_plugin_runtime_state(
-        &self,
-        plugin_id: &str,
-        state: &str,
-        diagnostic: Option<String>,
-    ) -> Result<(), NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let invalidation = inner
-            .app_state
-            .set_plugin_runtime_state(plugin_id, state, diagnostic)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(())
-    }
-
-    pub fn list_plugin_sensors(&self) -> Result<Vec<PluginSensorRecord>, NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        inner.app_state.list_plugin_sensors()
-    }
-
-    pub fn record_plugin_sensor(
-        &self,
-        plugin_id: &str,
-        sample: PluginSensorSampleRequest,
-    ) -> Result<PluginSensorRecord, NodeError> {
-        let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
-        let (record, invalidation) = inner.app_state.record_plugin_sensor(plugin_id, sample)?;
-        emit_projection_invalidation(&inner.bus, invalidation);
-        Ok(record)
     }
 
     pub fn publish_plugin_event(&self, plugin_id: &str, event: JsonValue) -> Result<(), NodeError> {
@@ -370,11 +331,12 @@ impl Node {
                 request.payload.clone(),
             )?
         };
-        self.send_bytes(
+        self.send_bytes_with_class(
             request.destination_hex,
             request.body_utf8.into_bytes(),
             Some(fields_bytes),
             request.send_mode,
+            OutboundTrafficClass::Plugin {},
         )
     }
 
@@ -406,7 +368,7 @@ impl Node {
     ) -> Result<(), NodeError> {
         let mut scheduled_sends = Vec::<(String, Vec<u8>, Vec<u8>, SendMode)>::new();
         let bus = {
-            let inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
+            let mut inner = self.inner.lock().map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?;
             let status = inner
                 .status
                 .lock()
@@ -421,7 +383,22 @@ impl Node {
             )?;
             emit_projection_invalidation(&inner.bus, summary);
 
-            if inner.cmd_tx.is_some() {
+            let now = now_ms();
+            let telemetry_due = inner
+                .next_telemetry_publish_at_ms
+                .is_none_or(|deadline| now >= deadline);
+            if inner.cmd_tx.is_some() && telemetry_due {
+                let normal_cadence = inner
+                    .app_state
+                    .get_app_settings()?
+                    .map(|settings| settings.telemetry.publish_interval_seconds)
+                    .unwrap_or(60);
+                let cadence = effective_power_cadence_seconds(
+                    normal_cadence,
+                    inner.power_state.saver_active,
+                );
+                inner.next_telemetry_publish_at_ms =
+                    Some(now.saturating_add(u64::from(cadence).saturating_mul(1_000)));
                 let peers = inner
                     .peers_snapshot
                     .lock()
@@ -437,13 +414,23 @@ impl Node {
                     .lock()
                     .map_err(|error| crate::error_context::contextual_node_error(NodeError::InternalError {}, error))?
                     .clone();
-                let telemetry_destinations = build_runtime_telemetry_destinations(
+                let mut telemetry_destinations = build_runtime_telemetry_destinations(
                     &status,
                     peers.as_slice(),
                     sync_status.active_propagation_node_hex.as_deref(),
                     inner.active_config.as_ref(),
                     hub_directory_snapshot.as_ref(),
                 )?;
+                let saved_peers = inner.app_state.get_saved_peers()?;
+                let connected_mode = inner.active_config.as_ref().is_some_and(|config| {
+                    matches!(
+                        effective_hub_mode(config.hub_mode, hub_directory_snapshot.as_ref()),
+                        HubMode::Connected {}
+                    )
+                });
+                telemetry_destinations.retain(|target| {
+                    exact_telemetry_target_is_allowed(target, &saved_peers, connected_mode)
+                });
                 for target in telemetry_destinations {
                     match build_telemetry_replication_payload(&position, &target) {
                         Ok((body, fields)) => scheduled_sends.push((
@@ -468,7 +455,13 @@ impl Node {
 
         for (destination_hex, body, fields_bytes, send_mode) in scheduled_sends {
             if let Err(err) =
-                self.send_bytes(destination_hex.clone(), body, Some(fields_bytes), send_mode)
+                self.send_bytes_with_class(
+                    destination_hex.clone(),
+                    body,
+                    Some(fields_bytes),
+                    send_mode,
+                    OutboundTrafficClass::Telemetry {},
+                )
             {
                 let message = format!(
                     "telemetry replication delivery failed destination={} callsign={} reason={}",

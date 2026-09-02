@@ -29,6 +29,7 @@ fn checklist_delete_replication_respects_local_only_flag() {
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     };
     let peers = vec![build_peer_record(
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

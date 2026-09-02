@@ -250,7 +250,12 @@ export interface SavedPeer {
   displayName?: string;
   lastRouteSeenAtMs?: number;
   lastHops?: number;
+  circleTier?: CircleTier;
 }
+
+export type CircleTier = "inner" | "outer";
+export type HouseholdStatus = "all_home" | "one_missing" | "evacuated" | "needs_help";
+export type PreferredMapLayer = "base" | "satellite";
 
 export type HubMode = "Autonomous" | "SemiAutonomous" | "Connected";
 
@@ -359,6 +364,20 @@ export interface NodeUiSettings {
   rnode: RnodeSettings;
   checklists: {
     defaultTaskDueStepMinutes: number;
+  };
+  community: {
+    householdId: string;
+    householdName: string;
+    adults: number;
+    children: number;
+    pets: number;
+    roleBadges: string[];
+    status: HouseholdStatus;
+    preferredMapLayer: PreferredMapLayer;
+  };
+  power: {
+    enabled: boolean;
+    thresholdPercent: 10 | 20 | 30;
   };
 }
 

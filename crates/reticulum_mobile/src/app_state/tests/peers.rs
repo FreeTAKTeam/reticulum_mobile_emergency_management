@@ -47,6 +47,7 @@ fn upsert_saved_peer_persists_selected_lxmf_route() {
             display_name: Some("Peer".to_string()),
             last_route_seen_at_ms: Some(42),
             last_hops: Some(2),
+            circle_tier: CircleTier::Outer {},
         })
         .expect("insert saved peer");
     store
@@ -60,6 +61,7 @@ fn upsert_saved_peer_persists_selected_lxmf_route() {
             display_name: Some("Updated Peer".to_string()),
             last_route_seen_at_ms: Some(84),
             last_hops: Some(1),
+            circle_tier: CircleTier::Outer {},
         })
         .expect("update saved peer");
 
@@ -79,6 +81,7 @@ fn upsert_saved_peer_persists_selected_lxmf_route() {
     );
     assert_eq!(restored[0].label.as_deref(), Some("Updated"));
     assert_eq!(restored[0].last_route_seen_at_ms, Some(84));
+    assert_eq!(restored[0].circle_tier, CircleTier::Outer {});
 }
 
 #[test]
@@ -100,6 +103,7 @@ fn legacy_saved_peers_migrate_once_into_local_yellow() {
             display_name: None,
             last_route_seen_at_ms: None,
             last_hops: None,
+            circle_tier: CircleTier::Inner {},
         }])
         .expect("saved peer");
 
@@ -136,6 +140,7 @@ fn message(
         last_wire_message_id_hex: Some(id.to_string()),
         title: Some("chat".to_string()),
         body_utf8: format!("body {id}"),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Received {},
         transport_state: TransportDeliveryState::TransportDelivered {},

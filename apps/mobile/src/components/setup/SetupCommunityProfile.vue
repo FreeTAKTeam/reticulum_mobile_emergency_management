@@ -1,0 +1,15 @@
+<script setup lang="ts">
+import type { CommunitySettingsRecord, PowerPolicyRecord } from "@reticulum/node-client";
+defineProps<{ community: CommunitySettingsRecord; power: PowerPolicyRecord }>();
+</script>
+<template>
+  <section class="setup-community" aria-labelledby="setup-community-heading">
+    <div class="section-heading"><p class="eyebrow">Community identity</p><h2 id="setup-community-heading">Your household</h2><p>This GPS-free profile can be shared as a community status.</p></div>
+    <div class="fields"><label class="wide"><span>Household name</span><input v-model="community.householdName" maxlength="64" placeholder="Harbour House" /></label><label class="wide"><span>Household ID</span><input v-model="community.householdId" maxlength="16" pattern="[0-9a-fA-F]{16}" placeholder="16 hex characters" /></label><label><span>Adults</span><input v-model.number="community.adults" type="number" min="0" max="20" /></label><label><span>Children</span><input v-model.number="community.children" type="number" min="0" max="20" /></label><label><span>Pets</span><input v-model.number="community.pets" type="number" min="0" max="20" /></label></div>
+    <label class="field-block"><span>Role badges</span><input :value="community.roleBadges.join(', ')" maxlength="128" placeholder="Medic, radio operator" @input="community.roleBadges = [...new Set(($event.target as HTMLInputElement).value.split(',').map((role) => role.trim()).filter(Boolean))].slice(0, 5)" /></label>
+    <div class="policy-row"><label><span>Preferred map</span><select v-model="community.preferredMapLayer"><option value="base">Base</option><option value="satellite">Satellite</option></select></label><label class="toggle-card"><input v-model="power.enabled" type="checkbox" /><span><strong>Automatic power saver</strong><small>Preserves emergency traffic.</small></span></label><label><span>Battery threshold</span><select v-model.number="power.thresholdPercent" :disabled="!power.enabled"><option :value="10">10%</option><option :value="20">20%</option><option :value="30">30%</option></select></label></div>
+  </section>
+</template>
+<style scoped>
+.setup-community { border-top: 1px solid rgb(84 145 207 / 25%); display: grid; gap: .7rem; margin-top: 1rem; padding-top: 1rem; }.fields { display: grid; gap: .6rem; grid-template-columns: repeat(3, 1fr); }.wide { grid-column: span 3; }label { display: grid; gap: .25rem; }label > span { color: #92afd0; font-size: .7rem; font-weight: 700; text-transform: uppercase; }input, select { background: #06162f; border: 1px solid rgb(75 142 204 / 36%); border-radius: 9px; color: #e2f2ff; min-height: 40px; padding: 0 .65rem; }.policy-row { align-items: end; display: grid; gap: .6rem; grid-template-columns: 1fr 2fr 1fr; }.toggle-card { align-items: center; display: flex; }.toggle-card input { min-height: auto; }.toggle-card span { display: grid; }.toggle-card small { color: #7f9bb8; text-transform: none; }@media (max-width: 620px) { .policy-row { align-items: stretch; grid-template-columns: 1fr; } }
+</style>

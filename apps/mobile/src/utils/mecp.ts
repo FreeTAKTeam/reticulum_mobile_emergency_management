@@ -1,5 +1,4 @@
 export type MecpSeverity = 0 | 1 | 2 | 3;
-
 export type MecpCategoryCode =
   | "M"
   | "T"
@@ -245,6 +244,7 @@ export const MECP_EVENT_CODES: Record<MecpCategoryCode, MecpEventCode[]> = {
     { code: "B01", label: "Automated distress beacon active" },
     { code: "B02", label: "Beacon acknowledged" },
     { code: "B03", label: "Cancel beacon - I am OK" },
+    { code: "B04", label: "Household / community status" },
   ],
 };
 

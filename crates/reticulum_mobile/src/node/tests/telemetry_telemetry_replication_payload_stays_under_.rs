@@ -56,6 +56,7 @@ fn build_message() -> MessageRecord {
         last_wire_message_id_hex: Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()),
         title: Some("check-in".to_string()),
         body_utf8: "Hello world".to_string(),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Queued {},
         transport_state: TransportDeliveryState::Queued {},
@@ -143,6 +144,8 @@ fn sample_app_settings() -> AppSettingsRecord {
         teams: crate::types::TeamSettingsRecord::default(),
         checklists: crate::types::ChecklistSettingsRecord::default(),
         rnode: crate::types::RnodeSettingsRecord::default(),
+        community: crate::types::CommunitySettingsRecord::default(),
+        power: crate::types::PowerPolicyRecord::default(),
     }
 }
 
@@ -157,6 +160,7 @@ fn sample_saved_peer() -> SavedPeerRecord {
         display_name: None,
         last_route_seen_at_ms: None,
         last_hops: None,
+        circle_tier: CircleTier::Inner {},
     }
 }
 
@@ -224,6 +228,7 @@ fn sample_message() -> MessageRecord {
         last_wire_message_id_hex: Some("msg-1".to_string()),
         title: Some("Hello".to_string()),
         body_utf8: "hello from pre-start".to_string(),
+        traffic_class: OutboundTrafficClass::Chat {},
         method: MessageMethod::Direct {},
         state: MessageState::Queued {},
         transport_state: TransportDeliveryState::Queued {},
@@ -380,6 +385,20 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
 
     let node_b_status = node_b.get_status();
     node_a
+        .set_saved_peers(vec![SavedPeerRecord {
+            destination_hex: node_b_status.app_destination_hex.clone(),
+            label: Some("peer-b".to_string()),
+            saved_at_ms: now_ms(),
+            identity_hex: None,
+            lxmf_destination_hex: Some(node_b_status.lxmf_destination_hex.clone()),
+            app_data: None,
+            display_name: None,
+            last_route_seen_at_ms: None,
+            last_hops: None,
+            circle_tier: CircleTier::Inner {},
+        }])
+        .expect("save peer b");
+    node_a
         .connect_peer(node_b_status.app_destination_hex.clone())
         .expect("connect peer b");
 
@@ -404,13 +423,35 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
             .expect("list peers")
             .into_iter()
             .find(|peer| peer.destination_hex == node_b_status.app_destination_hex)
-            .is_some_and(|peer| peer.active_link);
+            .is_some_and(|peer| {
+                peer.saved
+                    && peer.active_link
+                    && peer.lxmf_destination_hex.as_deref()
+                        == Some(node_b_status.lxmf_destination_hex.as_str())
+            });
         if peer_ready {
             break;
         }
         assert!(
             Instant::now() < peer_ready_deadline,
             "peer b never became telemetry-ready"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    let telemetry_ready_deadline = Instant::now() + TEST_TIMEOUT;
+    loop {
+        let telemetry_ready = node_a
+            .list_telemetry_destinations()
+            .expect("list telemetry destinations")
+            .into_iter()
+            .any(|destination| destination == node_b_status.app_destination_hex);
+        if telemetry_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < telemetry_ready_deadline,
+            "peer b never became an eligible direct telemetry destination"
         );
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -430,29 +471,28 @@ async fn record_local_telemetry_fix_replicates_to_native_peer_projection() {
         .record_local_telemetry_fix(position.clone())
         .expect("record local telemetry");
 
-    let received_deadline = Instant::now() + TELEMETRY_REPLICATION_TIMEOUT;
-    let received = loop {
-        let received = node_b
-            .get_telemetry_positions()
-            .expect("get telemetry")
-            .into_iter()
-            .find(|entry| entry.callsign == position.callsign);
-        if let Some(received) = received {
-            break received;
+    let received = tokio::time::timeout(TELEMETRY_REPLICATION_TIMEOUT, async {
+        loop {
+            if let Some(received) = node_b
+                .get_telemetry_positions()
+                .expect("get telemetry")
+                .into_iter()
+                .find(|entry| entry.callsign == position.callsign)
+            {
+                break received;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        assert!(
-            Instant::now() < received_deadline,
-            "node b never persisted replicated telemetry"
-        );
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    };
-
-    assert_eq!(received.callsign, position.callsign);
-    assert_eq!(received.lat, position.lat);
-    assert_eq!(received.lon, position.lon);
-    assert_eq!(received.updated_at_ms, position.updated_at_ms);
+    })
+    .await;
 
     stop_node(node_a).await;
     stop_node(node_b).await;
     relay.shutdown().await;
+
+    let received = received.expect("telemetry replication timed out after 75 seconds");
+    assert_eq!(received.callsign, position.callsign);
+    assert_eq!(received.lat, position.lat);
+    assert_eq!(received.lon, position.lon);
+    assert_eq!(received.updated_at_ms, position.updated_at_ms);
 }

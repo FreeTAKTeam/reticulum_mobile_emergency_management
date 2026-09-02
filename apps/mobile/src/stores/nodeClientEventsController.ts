@@ -8,6 +8,7 @@ import {
   type NodeStatus,
   type PeerChangedEvent,
   type PeerRecord,
+  type PowerStateRecord,
   type ProjectionInvalidationEvent,
   type ReticulumNodeClient,
   type SyncStatus,
@@ -73,6 +74,7 @@ interface NodeClientEventsContext {
   telemetryDestinations: Ref<string[]>;
   unsubscribeClientEvents: Ref<Array<() => void>>;
   presenceNow: Ref<number>;
+  powerState: Ref<PowerStateRecord>;
   upsertResolvedPeer: (peer: PeerRecord) => void;
   upsertNativeAnnounceRecord: (record: AnnounceRecord) => void;
 }
@@ -110,6 +112,7 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
     telemetryDestinations,
     unsubscribeClientEvents,
     presenceNow,
+    powerState,
     upsertResolvedPeer,
     upsertNativeAnnounceRecord,
   } = context;
@@ -136,6 +139,9 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
   function bindClientEvents(nodeClient: ReticulumNodeClient): void {
     resetClientEventBindings();
     unsubscribeClientEvents.value = [
+      nodeClient.on("powerStateChanged", (state: PowerStateRecord) => {
+        powerState.value = { ...state };
+      }),
       nodeClient.on("statusChanged", (event: StatusChangedEvent) => {
         status.value = normalizeNodeStatus(event.status);
         const statusError = asTrimmedString(status.value.lastError);
@@ -312,6 +318,9 @@ export function createNodeClientEventsController(context: NodeClientEventsContex
       appendLog("Debug", `[startup] native runtime snapshot idle after ${reason}.`);
       return;
     }
+
+    powerState.value = await client.value?.getPowerState().catch(() => powerState.value)
+      ?? powerState.value;
 
     await refreshMessagingState();
     await refreshAnnounceState();

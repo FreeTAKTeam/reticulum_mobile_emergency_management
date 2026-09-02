@@ -1,6 +1,5 @@
 import { computed, reactive, shallowRef } from "vue";
 import { useRouter } from "vue-router";
-
 import { useNodeStore } from "../stores/nodeStore";
 import { useSosStore } from "../stores/sosStore";
 import { normalizeDisplayName } from "../utils/peers";
@@ -58,7 +57,6 @@ export {
   normalizeWizardTelemetryPublishIntervalSeconds,
 } from "./setupWizardConfig";
 export type { SetupWizardStep, SetupWizardStepId } from "./setupWizardConfig";
-
 export function useSetupWizard() {
   const nodeStore = useNodeStore();
   const sosStore = useSosStore();
@@ -79,7 +77,6 @@ export function useSetupWizard() {
     notifications: "prompt",
     bluetooth: "prompt",
   });
-
   const draft = reactive({
     displayName: nodeStore.settings.displayName,
     tcpClients: [...nodeStore.settings.tcpClients],
@@ -87,8 +84,9 @@ export function useSetupWizard() {
     telemetryEnabled: nodeStore.settings.telemetry.enabled,
     telemetryPublishIntervalSeconds: nodeStore.settings.telemetry.publishIntervalSeconds,
     sosEnabled: sosStore.settings.enabled,
+    community: { ...nodeStore.settings.community, roleBadges: [...nodeStore.settings.community.roleBadges] },
+    power: { ...nodeStore.settings.power },
   });
-
   const steps = SETUP_STEPS;
   const activeStep = computed(() => steps[activeIndex.value]);
   const normalizedDisplayName = computed(() => normalizeDisplayName(draft.displayName) ?? "");
@@ -431,6 +429,8 @@ export function useSetupWizard() {
           publishIntervalSeconds: normalizedTelemetryPublishIntervalSeconds.value,
         },
         rnode: normalizeRnodeSettings(draft.rnode),
+        community: { ...draft.community, householdId: draft.community.householdId.trim().toLowerCase(), householdName: draft.community.householdName.trim(), roleBadges: [...draft.community.roleBadges] },
+        power: { ...draft.power },
       });
       await sosStore.saveSettings({
         ...sosStore.settings,

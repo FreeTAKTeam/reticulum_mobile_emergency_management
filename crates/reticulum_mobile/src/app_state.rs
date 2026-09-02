@@ -9,20 +9,22 @@ use serde::Serialize;
 use crate::runtime::now_ms;
 use crate::sos_fields::sos_kind_from_text;
 use crate::types::{
-    AnnounceClass, AnnounceRecord, AppSettingsRecord, ChecklistCellRecord, ChecklistColumnRecord,
-    ChecklistColumnType, ChecklistCreateFromTemplateRequest, ChecklistCreateOnlineRequest,
-    ChecklistMode, ChecklistOriginType, ChecklistRecord, ChecklistSyncState,
-    ChecklistTaskCellSetRequest, ChecklistTaskRecord, ChecklistTaskRowAddRequest,
-    ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest, ChecklistTaskStatus,
-    ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest, ChecklistTemplateRecord,
-    ChecklistUpdateRequest, ChecklistUserTaskStatus, ConversationRecord, DiscoveredPluginRecord,
-    EamProjectionRecord, EamReadinessMessageRecord, EamReadinessStatusMetricRecord,
-    EamReadinessSummaryRecord, EamTeamSummaryRecord, EventProjectionRecord, HubDirectorySnapshot,
-    InstalledPluginRecord, LegacyImportPayload, LocalTeamRecord, MessageDirection, MessageRecord,
-    NodeError, PluginCapabilityRecord, PluginSensorRecord, PluginSensorSampleRequest,
-    ProjectionInvalidation, ProjectionScope, SavedPeerRecord, SosAlertRecord, SosAudioRecord,
-    SosLocationRecord, SosSettingsRecord, SosStatusRecord, TelemetryPositionRecord,
-    TrustedPluginPublisherRecord, DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES, YELLOW_TEAM_UID,
+    AnnounceClass, AnnounceRecord, AppSettingsRecord, BlockOnboardingImportRequest,
+    BlockOnboardingImportResult, BlockOnboardingInspection, ChecklistCellRecord,
+    ChecklistColumnRecord, ChecklistColumnType, ChecklistCreateFromTemplateRequest,
+    ChecklistCreateOnlineRequest, ChecklistMode, ChecklistOriginType, ChecklistRecord,
+    ChecklistSyncState, ChecklistTaskCellSetRequest, ChecklistTaskRecord,
+    ChecklistTaskRowAddRequest, ChecklistTaskRowDeleteRequest, ChecklistTaskRowStyleSetRequest,
+    ChecklistTaskStatus, ChecklistTaskStatusSetRequest, ChecklistTemplateImportCsvRequest,
+    ChecklistTemplateRecord, ChecklistUpdateRequest, ChecklistUserTaskStatus, CircleTier,
+    ConversationRecord, DiscoveredPluginRecord, EamProjectionRecord, EamReadinessMessageRecord,
+    EamReadinessStatusMetricRecord, EamReadinessSummaryRecord, EamTeamSummaryRecord,
+    EventProjectionRecord, HubDirectorySnapshot, InstalledPluginRecord, LegacyImportPayload,
+    LocalTeamRecord, MessageDirection, MessageRecord, NodeError, PluginCapabilityRecord,
+    PluginSensorRecord, PluginSensorSampleRequest, ProjectionInvalidation, ProjectionScope,
+    SavedPeerRecord, SosAlertRecord, SosAudioRecord, SosLocationRecord, SosSettingsRecord,
+    SosStatusRecord, TelemetryPositionRecord, TrustedPluginPublisherRecord,
+    DEFAULT_CHECKLIST_TASK_DUE_STEP_MINUTES, YELLOW_TEAM_UID,
 };
 
 fn initialize_local_team_settings(
@@ -295,6 +297,7 @@ include!("app_state/settings.rs");
 include!("app_state/plugins.rs");
 include!("app_state/hub_directory.rs");
 include!("app_state/peers.rs");
+include!("app_state/block_onboarding.rs");
 include!("app_state/mission.rs");
 include!("app_state/checklist_lifecycle.rs");
 include!("app_state/checklist_tasks.rs");

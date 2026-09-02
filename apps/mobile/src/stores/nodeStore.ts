@@ -6,6 +6,7 @@ import { runtimeProfile } from "../utils/runtimeProfile";
 import { createNodeActionsController } from "./nodeActionsController";
 import { createNodeAnnounceController } from "./nodeAnnounceController";
 import { createNodeClientEventsController } from "./nodeClientEventsController";
+import { createNodeCommunityController } from "./nodeCommunityController";
 import { createNodeHubController } from "./nodeHubController";
 import { createNodeLifecycleController } from "./nodeLifecycleController";
 import { createNodeLoggingController } from "./nodeLoggingController";
@@ -24,7 +25,7 @@ export const useNodeStore = defineStore("node", () => {
     hubDirectorySnapshot, hubRegistration, initialized, lastError, lastHubRefreshAt,
     liveLxmfPresenceByIdentity, livePresenceByDestination, logs, lxmfDestinationByIdentity,
     nodeConfigRestartRequired, nodeControlEntries, operationalSummary, pluginSensors, plugins,
-    presenceNow, readinessError, removedByDestination, savedByDestination, settings,
+    presenceNow, powerState, readinessError, removedByDestination, savedByDestination, settings,
     startupSettling, status, syncStatus, telemetryDestinations, unsubscribeClientEvents,
   } = state;
 
@@ -211,6 +212,7 @@ export const useNodeStore = defineStore("node", () => {
     telemetryDestinations,
     unsubscribeClientEvents,
     presenceNow,
+    powerState,
     upsertResolvedPeer,
     upsertNativeAnnounceRecord,
   });
@@ -335,7 +337,17 @@ export const useNodeStore = defineStore("node", () => {
     settings,
     status,
   });
+  const community = createNodeCommunityController({
+    client,
+    init,
+    powerState,
+    publishSettings: actions.updateSettings,
+    refreshSavedPeersProjection: projections.refreshSavedPeersProjection,
+    refreshSettingsProjection: projections.refreshSettingsProjection,
+    settings,
+    status,
+  });
   return createNodeStoreApi(
-    state, logging, peers, projections, hub, selectors, lifecycle, actions, transport,
+    state, logging, peers, projections, hub, selectors, lifecycle, actions, transport, community,
   );
 });
