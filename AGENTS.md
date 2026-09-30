@@ -12,6 +12,15 @@ Guidance for coding agents working in `reticulum_mobile_emergency_management`.
   - `e2e`: Playwright end-to-end coverage
 - Primary product focus is emergency coordination over Reticulum mesh networking, including peer discovery, action messages, event replication, and telemetry.
 
+## Frontend Engineering
+
+Read and apply [Frontend engineering principles](FRONTEND_ENGINEERING_PRINCIPLES.md)
+before JavaScript/TypeScript UI design, implementation, refactoring, or review.
+Its repository appendix gives the reviewed source boundaries and local checks.
+Business/domain authority stays in the designated backend or native runtime;
+stores, hooks, composables, and frontend services are not alternative owners.
+This supplements the existing architecture, safety, toolchain, and workflow rules.
+
 ## Working Rules
 
 - Start from the repo root unless a package-specific command clearly belongs elsewhere.
@@ -25,8 +34,8 @@ Guidance for coding agents working in `reticulum_mobile_emergency_management`.
 
 - `apps/mobile/src/views`: route-level screens
 - `apps/mobile/src/components`: reusable UI pieces
-- `apps/mobile/src/stores`: Pinia stores; most app behavior lives here
-- `apps/mobile/src/utils`: protocol helpers, peer parsing, replication helpers, mission sync helpers
+- `apps/mobile/src/stores`: Pinia UI state, runtime projections, and request coordination
+- `apps/mobile/src/utils`: presentation helpers and existing legacy adapters; do not extend protocol/domain authority here
 - `apps/mobile/src/services`: platform-facing helpers such as sharing, notifications, telemetry helpers
 - `apps/mobile/src/types/domain.ts`: shared app domain types
 - `packages/node-client/src/index.ts`: TS client boundary for the native bridge
@@ -59,9 +68,9 @@ On Windows, broad recursive directory scans can fail inside Android build interm
 
 - Vue code is written with Vue 3 Composition API and `<script setup lang="ts">`.
 - TypeScript is `strict` in both the app and `packages/node-client`.
-- Pinia stores hold most stateful behavior. Keep business logic in stores and utilities, not inside view templates.
+- Pinia stores own UI state, runtime projections, and request coordination. Business rules, authoritative transitions, replication/conflict decisions, and delivery semantics belong in the native runtime or designated service, not stores, composables, utilities, or templates.
 - Reuse existing domain types from `apps/mobile/src/types/domain.ts` before inventing near-duplicates.
-- Keep wire/protocol helpers centralized in `apps/mobile/src/utils` and Rust runtime files rather than scattering message-shape logic across components.
+- Keep API/native payload translation behind `packages/node-client`; keep protocol semantics in the Rust runtime and compiled libraries. Trace callers of legacy `utils` codecs before migrating/removing them; do not add a second protocol implementation.
 - App-wide button press feedback is defined on global `button` rules in `apps/mobile/src/styles.css`; component buttons should set the existing CSS custom properties rather than adding one-off `:active` behavior.
 - Maintain the existing style conventions in touched files:
   - double quotes
@@ -96,10 +105,12 @@ Use this map to decide where a change belongs:
 - UI layout, forms, route behavior:
   - `apps/mobile/src/views`
   - `apps/mobile/src/components`
-- Persisted app state, peer lists, message/event/telemetry workflows:
-  - `apps/mobile/src/stores`
-- Wire format, mission sync, peer parsing, announce capability logic:
-  - `apps/mobile/src/utils`
+- UI preferences, cached runtime projections, peer-list display, pending requests:
+  - `apps/mobile/src/stores` and feature composables
+- Presentation mapping and immediate input feedback:
+  - focused helpers in `apps/mobile/src/utils`
+- Authoritative message/event/telemetry workflows, mission sync/replication policy, wire formats, and announce semantics:
+  - `crates/reticulum_mobile` and its compiled libraries, exposed through `packages/node-client`
 - Capacitor-facing TypeScript API surface:
   - `packages/node-client/src/index.ts`
 - Native runtime behavior, packet/LXMF handling, delivery tracking:
@@ -147,6 +158,13 @@ Run the narrowest command set that proves the change:
   - The shell script does not have the same fallback: it skips Kotlin binding generation without `uniffi-bindgen` on `PATH` and fails for Swift.
 - Android release artifacts:
   - From `apps/mobile/android`: `cmd /c gradlew.bat assembleRelease bundleRelease`
+
+On revisions containing the existing source-size/unit scripts, also use
+`npm run check:source-size` and the relevant `npm run test:unit` /
+`npm run test:node-client` checks. Preserve the 500-line source/class gate;
+do not raise limits or compress code to pass it. Inspect the active revision
+before assuming newer scripts exist. Documentation-only policy edits need
+document/link/diff checks, not app/native builds or dependency installation.
 
 There is no dedicated root lint script at the moment. For most app changes, `typecheck` + the relevant build + the closest Playwright spec is the minimum useful validation.
 
