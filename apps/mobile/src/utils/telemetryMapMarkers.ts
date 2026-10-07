@@ -1,4 +1,5 @@
-import maplibregl, { type Map as MapLibreMap, type Marker } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import type { Map as MapLibreMap, Marker } from "maplibre-gl";
 
 import type { TelemetryCluster } from "./telemetryMapModel";
 

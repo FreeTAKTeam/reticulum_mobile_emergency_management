@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import maplibregl, {
+import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+import {
   Marker,
   type LngLatLike,
   type Map as MapLibreMap,
@@ -33,6 +35,9 @@ import {
   ensureMarkerLabelElement,
   syncTelemetryClusterMarkers,
 } from "../utils/telemetryMapMarkers";
+
+// Bundle MapLibre's ESM worker for both Vite development and packaged builds.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 const route = useRoute();
 const sosStore = useSosStore();

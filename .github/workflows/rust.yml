@@ -23,8 +23,12 @@ env:
 
 jobs:
   web:
-    name: Web and TypeScript
+    name: Web / ${{ matrix.check }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [source-size, typecheck, source-size-tests, app-unit, node-client-tests, node-client-build, web-build, mobile-build]
 
     steps:
       - name: Check out mobile app
@@ -43,33 +47,41 @@ jobs:
         working-directory: rem
         run: npm ci
 
-      - name: Enforce first-party source size
+      - name: Run independent web check
         working-directory: rem
-        run: npm run check:source-size
+        env:
+          WEB_CHECK: ${{ matrix.check }}
+        run: |
+          case "$WEB_CHECK" in
+            source-size) npm run check:source-size ;;
+            typecheck) npm --workspace apps/mobile run typecheck ;;
+            source-size-tests) npm run test:source-size ;;
+            app-unit) npm run test:app-unit ;;
+            node-client-tests) npm run test:node-client ;;
+            node-client-build) npm run node-client:build ;;
+            web-build) npm run web:build ;;
+            mobile-build) npm run mobile:build ;;
+            *) exit 1 ;;
+          esac
 
+  npm-security:
+    name: npm dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: rem
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: rem/package-lock.json
+      - name: Install locked dependencies
+        working-directory: rem
+        run: npm ci
       - name: Audit npm dependencies
         working-directory: rem
         run: npm audit --audit-level=moderate
-
-      - name: Build node client
-        working-directory: rem
-        run: npm run node-client:build
-
-      - name: Run app unit tests
-        working-directory: rem
-        run: npm run test:unit
-
-      - name: Typecheck mobile app
-        working-directory: rem
-        run: npm --workspace apps/mobile run typecheck
-
-      - name: Build web app
-        working-directory: rem
-        run: npm run web:build
-
-      - name: Build mobile app
-        working-directory: rem
-        run: npm run mobile:build
 
   e2e:
     name: Playwright Matrix
@@ -101,10 +113,22 @@ jobs:
         env:
           CHOKIDAR_USEPOLLING: "1"
         run: npm run test:e2e
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rem-playwright-${{ github.sha }}
+          path: |
+            rem/playwright-report/
+            rem/test-results/
 
   rust:
-    name: Rust Runtime (pinned LXMF)
+    name: Rust / ${{ matrix.check }} (pinned LXMF)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [fmt, clippy, tests, audit]
 
     steps:
       - name: Check out mobile app
@@ -129,33 +153,37 @@ jobs:
         working-directory: rem
         run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml --locked
 
-      - name: Check Rust formatting
-        working-directory: rem
-        run: |
-          cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
-          cargo fmt --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all -- --check
-
-      - name: Run clippy
-        working-directory: rem
-        run: |
-          cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run Rust tests
-        working-directory: rem
-        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose
-
       - name: Install cargo-audit
+        if: matrix.check == 'audit'
         run: cargo install cargo-audit --locked
 
-      - name: Audit Rust dependencies
+      - name: Run independent Rust check
         working-directory: rem
-        run: cargo audit --file crates/reticulum_mobile/Cargo.lock
+        env:
+          RUST_CHECK: ${{ matrix.check }}
+        run: |
+          case "$RUST_CHECK" in
+            fmt)
+              cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml -- --check
+              cargo fmt --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all -- --check
+              ;;
+            clippy)
+              cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --locked --all-targets -- -D warnings
+              cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
+              ;;
+            tests) cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose ;;
+            audit) cargo audit --file crates/reticulum_mobile/Cargo.lock ;;
+            *) exit 1 ;;
+          esac
 
   rust-current-lxmf:
-    name: Rust Runtime (current LXMF main)
+    name: Rust / ${{ matrix.check }} (current LXMF main)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [clippy, tests]
 
     steps:
       - name: Check out mobile app
@@ -184,18 +212,16 @@ jobs:
         working-directory: rem
         run: cargo fetch --manifest-path crates/reticulum_mobile/Cargo.toml
 
-      - name: Check Rust formatting
+      - name: Run independent current-main compatibility check
         working-directory: rem
+        env:
+          COMPATIBILITY_CHECK: ${{ matrix.check }}
         run: |
-          cargo fmt --manifest-path crates/reticulum_mobile/Cargo.toml --all -- --check
-          cargo fmt --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all -- --check
-
-      - name: Run clippy
-        working-directory: rem
-        run: |
-          cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run Rust tests
-        working-directory: rem
-        run: cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --verbose
+          case "$COMPATIBILITY_CHECK" in
+            clippy)
+              cargo clippy --manifest-path crates/reticulum_mobile/Cargo.toml --locked --all-targets -- -D warnings
+              cargo clippy --manifest-path crates/reticulum_mobile/jni-boundary-macro/Cargo.toml --all-targets -- -D warnings
+              ;;
+            tests) cargo test --manifest-path crates/reticulum_mobile/Cargo.toml --locked --verbose ;;
+            *) exit 1 ;;
+          esac
