@@ -122,6 +122,13 @@ fn spawn_payload_receivers(state: &NodeRuntimeState, bus: &EventBus) {
                                 hex::encode(event.hash.as_slice()),
                             );
                         }
+                        ResourceEventKind::OutboundRejected => {
+                            warn!(
+                                "[lxmf][events] resource outbound rejected link_id={} hash={}",
+                                address_hash_to_hex(&event.link_id),
+                                hex::encode(event.hash.as_slice()),
+                            );
+                        }
                         ResourceEventKind::OutboundCancelled => {
                             info!(
                                 "[lxmf][events] resource outbound cancelled link_id={} hash={}",

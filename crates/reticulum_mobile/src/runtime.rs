@@ -70,7 +70,7 @@ pub async fn run_node(
         path.push("ratchets.dat");
         transport_cfg.set_ratchet_store_path(path);
     }
-    let mut transport = Transport::new(transport_cfg);
+    let transport = Transport::new(transport_cfg);
     let receipt_message_ids =
         Arc::new(Mutex::new(HashMap::<String, ReceiptMessageTracking>::new()));
     let (receipt_tx, receipt_rx) = mpsc::unbounded_channel::<String>();

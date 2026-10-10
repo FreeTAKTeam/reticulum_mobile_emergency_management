@@ -8,8 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Immutable LXMF-rs single-owner read and RNode queue-admission repair revision.
-  LXMF_RS_REF: 56ea9f06c474426b2245739e9cb5e2c325cdb1e2
+  # Immutable LXMF-rs v0.13.0 release commit (scoped Reticulum 1.5.5 update).
+  LXMF_RS_REF: fbc75b86e15550722923b366398f0a4116182894
 
 jobs:
   plugin-system:

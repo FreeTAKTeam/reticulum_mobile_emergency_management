@@ -9,9 +9,10 @@ It answers two urgent questions:
 
 REM is built around simple pages for team status, chat, checklists, map positions, peer discovery, and event logs. It can work directly with trusted peers over Reticulum mesh networking, and it can also use Reticulum Community Hub support when a team chooses that setup.
 
-The current Android source version is `1.4`, built against the LXMF-rs
-`0.10.1`-compatible RNode repair revision
-`b3b67c1bf4d3fc6697c83860d2e3304c696f25cd`.
+The current Android source version is `1.4.1`, built against LXMF-rs `v0.13.0`
+at immutable release revision
+`fbc75b86e15550722923b366398f0a4116182894`. This includes selected Reticulum
+1.5.5 updates and does not claim full Reticulum 1.5.5 parity.
 Automated validation and the two-phone TCP matrix are release gates; the
 remaining physical LoRa and mixed-interface rows are documented preview scope
 in the [manual release matrix](docs/rem-1.2-manual-release-gate.md).

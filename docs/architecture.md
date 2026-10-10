@@ -697,3 +697,12 @@ The repo now carries a local workspace runner for UniFFI CLI generation:
    - `cargo run -p reticulum_mobile_uniffi_bindgen -- generate --language <swift|kotlin> ...`
 
 This avoids relying on a globally installed `uniffi-bindgen` executable, which is not always present with the UniFFI `0.28.x` crate layout used by this repo.
+
+## REM 1.4.1 networking dependency
+
+The compiled networking stack is pinned to LXMF-rs `v0.13.0` at
+`fbc75b86e15550722923b366398f0a4116182894`. REM logs the upstream
+`OutboundRejected` Resource event distinctly from local cancellation and
+transfer failure. Delivery outcome handling remains in the compiled LXMF
+runtime. This release includes selected Reticulum 1.5.5 changes and does not
+claim full 1.5.5 parity.
