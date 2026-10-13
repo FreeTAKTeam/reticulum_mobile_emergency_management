@@ -361,6 +361,9 @@ async fn persist_received_telemetry_if_present(
         return false;
     }
 
+    if fields_bytes.is_some_and(is_marker_telemetry) {
+        return false;
+    }
     let Some(record) =
         fields_bytes.and_then(|value| telemetry_position_from_fields(value, now_ms()))
     else {

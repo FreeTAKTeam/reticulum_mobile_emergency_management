@@ -78,7 +78,7 @@ Point markers ("PLEs") are shared map objects using the RCH symbol catalog from 
 - **Pick a symbol**: a bottom sheet lists a "Recent" row first, then every catalog symbol grouped by its RCH category, each with icon and label. Search matches catalog labels and RCH aliases (for example "car", "hospital", "uav"). Icons are the catalog's MDI names, so REM and RCH show the same symbol for the same key.
 - **Place**: a fixed crosshair pin sits at the map center; the user drags the map under it, sees live coordinates, and confirms with a verb button ("Place fire"). Long-press on the map is a shortcut that places the most recent symbol at the pressed point.
 - **No form on create**: names default to the symbol label with a running number ("Fire 3"). Rename later from the details sheet.
-- **Inspect and edit**: tapping a marker opens a details sheet (name, category, age, origin: local or RCH) with three large actions: Rename, Move (reuses the crosshair), Delete (with confirmation).
+- **Inspect and edit**: tapping a marker opens a details sheet (name, category, age, origin: Local or Shared) with three large actions: Rename, Move (reuses the crosshair), Delete (with confirmation).
 - **Visibility**: the layer menu has a markers on/off switch. Marker pins use bordered tactical styling distinct from telemetry and SOS markers; state is never conveyed by color alone.
 - **Touch**: all marker controls are at least 44px; sheets close by drag or an explicit Cancel.
 - Symbols cannot change after creation (shared RCH rule): delete and re-add instead.

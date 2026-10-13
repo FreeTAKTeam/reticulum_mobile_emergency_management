@@ -28,41 +28,64 @@ impl Node {
         &self,
         request: MapMarkerCreateRequest,
     ) -> Result<MapMarkerCreateResult, NodeError> {
-        self.with_app_state(|app_state, bus| {
+        let (result, record) = self.with_app_state(|app_state, bus| {
             let (result, invalidation) = app_state.create_map_marker(&request)?;
             emit_projection_invalidation(bus, invalidation);
-            Ok(result)
-        })
+            let record = app_state.map_marker_core_record(&result.marker.object_destination_hash)?;
+            Ok((result, record))
+        })?;
+        // A replayed idempotent create was already replicated the first time.
+        if let Some(record) = record.filter(|_| result.created) {
+            self.replicate_map_marker_change(&MapMarkerChange::created(record));
+        }
+        Ok(result)
     }
 
     pub fn rename_map_marker(
         &self,
         request: MapMarkerRenameRequest,
     ) -> Result<MapMarkerRecord, NodeError> {
-        self.with_app_state(|app_state, bus| {
+        let (marker, record) = self.with_app_state(|app_state, bus| {
             let (marker, invalidation) = app_state.rename_map_marker(&request)?;
             emit_projection_invalidation(bus, invalidation);
-            Ok(marker)
-        })
+            let record = app_state.map_marker_core_record(&marker.object_destination_hash)?;
+            Ok((marker, record))
+        })?;
+        if let Some(record) = record {
+            self.replicate_map_marker_change(&MapMarkerChange::renamed(record));
+        }
+        Ok(marker)
     }
 
     pub fn move_map_marker(&self, request: MapMarkerMoveRequest) -> Result<MapMarkerRecord, NodeError> {
-        self.with_app_state(|app_state, bus| {
+        let (marker, record) = self.with_app_state(|app_state, bus| {
             let (marker, invalidation) = app_state.move_map_marker(&request)?;
             emit_projection_invalidation(bus, invalidation);
-            Ok(marker)
-        })
+            let record = app_state.map_marker_core_record(&marker.object_destination_hash)?;
+            Ok((marker, record))
+        })?;
+        if let Some(record) = record {
+            self.replicate_map_marker_change(&MapMarkerChange::moved(record));
+        }
+        Ok(marker)
     }
 
     /// Returns `false` when the marker did not exist.
     pub fn delete_map_marker(&self, object_destination_hash: String) -> Result<bool, NodeError> {
-        self.with_app_state(|app_state, bus| {
+        let removed = self.with_app_state(|app_state, bus| {
+            let record = app_state.map_marker_core_record(&object_destination_hash)?;
             let invalidation = app_state.delete_map_marker(&object_destination_hash)?;
-            let deleted = invalidation.is_some();
-            if let Some(invalidation) = invalidation {
+            Ok(invalidation.map(|invalidation| {
                 emit_projection_invalidation(bus, invalidation);
-            }
-            Ok(deleted)
-        })
+                record
+            }))
+        })?;
+        let Some(record) = removed else {
+            return Ok(false);
+        };
+        if let Some(record) = record {
+            self.replicate_map_marker_change(&MapMarkerChange::deleted(record));
+        }
+        Ok(true)
     }
 }

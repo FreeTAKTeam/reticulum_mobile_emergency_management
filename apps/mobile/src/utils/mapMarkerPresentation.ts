@@ -108,5 +108,5 @@ export function markerAgeLabel(updatedAtMs: number, nowMs: number): string {
 }
 
 export function markerOriginLabel(marker: MapMarkerRecord): string {
-  return marker.originRch ? "RCH" : "Local";
+  return marker.originRch ? "Shared" : "Local";
 }
