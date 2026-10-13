@@ -167,6 +167,9 @@ impl AppStateStore {
                 ",
             )
             .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
+        // Marker tables use the shared RCH layout owned by r3akt-map-core.
+        r3akt_map_core::sqlite::ensure_schema(&connection)
+            .map_err(|error| crate::error_context::contextual_node_error(NodeError::IoError {}, error))?;
         self.repair_message_conversations(&connection, &ConversationPeerResolver::default())?;
         Ok(())
     }

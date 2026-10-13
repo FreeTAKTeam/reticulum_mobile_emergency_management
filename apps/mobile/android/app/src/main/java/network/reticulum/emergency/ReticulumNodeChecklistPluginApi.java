@@ -4,7 +4,7 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 
-public abstract class ReticulumNodeChecklistPluginApi extends ReticulumNodeAppDataPluginApi {
+public abstract class ReticulumNodeChecklistPluginApi extends ReticulumNodeMapMarkerPluginApi {
 
     @PluginMethod
     public void getChecklists(PluginCall call) {

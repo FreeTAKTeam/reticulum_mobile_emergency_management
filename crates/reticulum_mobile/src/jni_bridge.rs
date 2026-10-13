@@ -20,6 +20,7 @@ include!("jni_bridge/hil_api.rs");
 include!("jni_bridge/sos_telemetry_api.rs");
 include!("jni_bridge/plugin_host_api.rs");
 include!("jni_bridge/plugin_decode_api.rs");
+include!("jni_bridge/map_markers_api.rs");
 
 #[cfg(test)]
 mod rnode_config_tests {

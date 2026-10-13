@@ -719,3 +719,25 @@ SQL; update the pin deliberately and together with RCH. Because the crate and
 LXMF-rs both bundle SQLite through `libsqlite3-sys`, REM, LXMF-rs and the
 pinned RCH revision must agree on one `rusqlite` minor version (currently
 0.40). The crate is EPL-2.0.
+
+### Map markers (native service)
+
+Markers live in the shared `rch_markers` / `rch_command_results` tables inside
+`app_state.db`, created by `r3akt_map_core::sqlite::ensure_schema`. The native
+service (`app_state/map_markers.rs`, `node/map_markers.rs`) is a thin adapter:
+
+- create follows the RCH HTTP route rules (type and symbol must be catalog
+  keys after alias normalization, the category defaults to the symbol, the
+  name to "Marker"); an optional idempotency key uses the shared
+  `create_once` replay/conflict rules;
+- rename, move and delete use the shared record operations and SQL;
+- every change bumps the `MapMarkers` projection scope, which reaches the UI
+  as a `projectionInvalidated` event;
+- validation messages are the shared crate's RCH strings, carried as the
+  `InvalidConfig` error cause.
+
+Telemetry positions, SOS locations and markers remain separate models. The
+JNI surface is `listMapMarkerSymbolsJson`, `listMapMarkersJson`,
+`createMapMarkerJson`, `renameMapMarkerJson`, `moveMapMarkerJson` and
+`deleteMapMarkerJson` (camelCase JSON). Network replication of markers is not
+part of this service yet ([#280](https://github.com/FreeTAKTeam/reticulum_mobile_emergency_management/issues/280)).

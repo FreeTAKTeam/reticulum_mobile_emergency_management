@@ -154,7 +154,8 @@ enum ProjectionScope {
   "Telemetry",
   "Sos",
   "Plugins",
-  "PluginSensors"
+  "PluginSensors",
+  "MapMarkers"
 };
 
 // Error surface.
@@ -939,6 +940,56 @@ dictionary LegacyImportPayload {
   sequence<TelemetryPositionRecord> telemetry_positions;
 };
 
+dictionary MapMarkerRecord {
+  string object_destination_hash;
+  string origin_rch;
+  string marker_type;
+  string symbol;
+  string name;
+  string category;
+  f64 lat;
+  f64 lon;
+  string? notes;
+  u64 created_at_ms;
+  u64 updated_at_ms;
+};
+
+dictionary MapMarkerSymbolRecord {
+  string id;
+  string set;
+  string? mdi;
+  string description;
+  string? tak;
+  string category;
+};
+
+dictionary MapMarkerCreateRequest {
+  string? idempotency_key;
+  string marker_type;
+  string symbol;
+  string? name;
+  string? category;
+  f64 lat;
+  f64 lon;
+  string? notes;
+};
+
+dictionary MapMarkerCreateResult {
+  MapMarkerRecord marker;
+  boolean created;
+};
+
+dictionary MapMarkerRenameRequest {
+  string object_destination_hash;
+  string name;
+};
+
+dictionary MapMarkerMoveRequest {
+  string object_destination_hash;
+  f64 lat;
+  f64 lon;
+};
+
 dictionary ProjectionInvalidation {
   ProjectionScope scope;
   string? key;
@@ -1093,6 +1144,20 @@ interface Node {
   BlockOnboardingInspection inspect_block_onboarding_code(SignedBlockOnboardingEnvelope envelope);
   [Throws=NodeError]
   BlockOnboardingImportResult import_block_onboarding_code(BlockOnboardingImportRequest request);
+
+  sequence<MapMarkerSymbolRecord> list_map_marker_symbols();
+  [Throws=NodeError]
+  sequence<MapMarkerRecord> list_map_markers();
+  [Throws=NodeError]
+  MapMarkerRecord? get_map_marker(string object_destination_hash);
+  [Throws=NodeError]
+  MapMarkerCreateResult create_map_marker(MapMarkerCreateRequest request);
+  [Throws=NodeError]
+  MapMarkerRecord rename_map_marker(MapMarkerRenameRequest request);
+  [Throws=NodeError]
+  MapMarkerRecord move_map_marker(MapMarkerMoveRequest request);
+  [Throws=NodeError]
+  boolean delete_map_marker(string object_destination_hash);
   [Throws=NodeError]
   OperationalSummary get_operational_summary();
   [Throws=NodeError]

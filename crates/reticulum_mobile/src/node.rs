@@ -46,15 +46,16 @@ use crate::types::{
     CommunityStatusProjectionRecord, ConversationRecord, DiscoveredPluginRecord,
     EamProjectionRecord, EamReadinessSummaryRecord, EamSourceRecord, EamTeamSummaryRecord,
     EventProjectionRecord, HouseholdStatus, HubDirectorySnapshot, HubMode, InstalledPluginRecord,
-    LegacyImportPayload, LogLevel, MessageDirection, MessageMethod, MessageRecord, MessageState,
-    NodeConfig, NodeError, NodeEvent, NodeStatus, OperationalNotice, OperationalSummary,
-    OutboundTrafficClass, PeerRecord, PluginCapabilityRecord, PluginEventRecord,
-    PluginLxmfSendRequest, PluginSensorRecord, PluginSensorSampleRequest, PowerPolicyRecord,
-    PowerStateRecord, PreferredMapLayer, ProjectionInvalidation, ProjectionScope,
-    RuntimeReadinessSnapshot, SavedPeerRecord, SendLxmfRequest, SendMode,
-    SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord, SosDeviceTelemetryRecord,
-    SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState, SosStatusRecord,
-    SosTriggerSource, SyncStatus, TeamSettingsRecord, TelemetryPositionRecord,
+    LegacyImportPayload, LogLevel, MapMarkerCreateRequest, MapMarkerCreateResult,
+    MapMarkerMoveRequest, MapMarkerRecord, MapMarkerRenameRequest, MapMarkerSymbolRecord,
+    MessageDirection, MessageMethod, MessageRecord, MessageState, NodeConfig, NodeError, NodeEvent,
+    NodeStatus, OperationalNotice, OperationalSummary, OutboundTrafficClass, PeerRecord,
+    PluginCapabilityRecord, PluginEventRecord, PluginLxmfSendRequest, PluginSensorRecord,
+    PluginSensorSampleRequest, PowerPolicyRecord, PowerStateRecord, PreferredMapLayer,
+    ProjectionInvalidation, ProjectionScope, RuntimeReadinessSnapshot, SavedPeerRecord,
+    SendLxmfRequest, SendMode, SignedBlockOnboardingEnvelope, SosAlertRecord, SosAudioRecord,
+    SosDeviceTelemetryRecord, SosLocationRecord, SosMessageKind, SosSettingsRecord, SosState,
+    SosStatusRecord, SosTriggerSource, SyncStatus, TeamSettingsRecord, TelemetryPositionRecord,
     TransportDeliveryState, HUB_DIRECTORY_SCHEMA_VERSION, YELLOW_TEAM_UID,
 };
 
@@ -303,6 +304,7 @@ include!("node/checklist_task_edits.rs");
 include!("node/eam.rs");
 include!("node/plugin_registry.rs");
 include!("node/events_api.rs");
+include!("node/map_markers.rs");
 include!("node/events_plugins_telemetry.rs");
 include!("node/sos.rs");
 include!("node/team.rs");
