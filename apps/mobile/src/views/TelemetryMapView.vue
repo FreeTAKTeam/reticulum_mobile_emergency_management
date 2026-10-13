@@ -11,6 +11,8 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute } from "vue-router";
 
+import MapMarkerChip from "../components/map/MapMarkerChip.vue";
+import MapMarkerLayer from "../components/map/MapMarkerLayer.vue";
 import { useTelemetryMapActions } from "../composables/useTelemetryMapActions";
 import { useTelemetryRouteTargets } from "../composables/useTelemetryRouteTargets";
 import type { TelemetryPosition } from "../types/domain";
@@ -52,6 +54,7 @@ const {
 
 const mapHost = ref<HTMLElement | null>(null);
 let map: MapLibreMap | null = null;
+const markerMap = shallowRef<MapLibreMap | null>(null);
 let stopWatch: (() => void) | null = null;
 let stopSosWatch: (() => void) | null = null;
 let stopTelemetryFocusWatch: (() => void) | null = null;
@@ -344,7 +347,9 @@ onMounted(() => {
     zoom: 3,
   });
 
-  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+  // Bottom-right is the marker add button's thumb zone.
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+  markerMap.value = map;
   map.on("load", syncSosTrails);
   map.on("zoomend", syncCurrentTelemetryMarkers);
 
@@ -414,6 +419,7 @@ onBeforeUnmount(() => {
   telemetryClusterElementsByKey.clear();
   sosMarkersByKey.clear();
   sosMarkerElementsByKey.clear();
+  markerMap.value = null;
   map?.remove();
   map = null;
 });
@@ -449,6 +455,7 @@ onBeforeUnmount(() => {
             <path d="M12 16h.01" />
           </svg>
         </span>
+        <MapMarkerChip />
         <div class="layer-control">
           <button
             class="map-chip layer-chip"
@@ -480,6 +487,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <MapMarkerLayer :map="markerMap" />
     </div>
   </section>
 </template>

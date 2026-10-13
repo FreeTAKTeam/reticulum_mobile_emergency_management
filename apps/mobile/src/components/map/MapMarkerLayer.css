@@ -1,0 +1,209 @@
+.map-marker-layer {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
+}
+
+.map-marker-layer > * {
+  pointer-events: auto;
+}
+
+.marker-add-button {
+  --btn-color: #def1ff;
+  align-items: center;
+  background: var(--btn-bg);
+  border: 1px solid rgb(100 190 255 / 70%);
+  border-radius: 50%;
+  bottom: calc(2.6rem + env(safe-area-inset-bottom, 0px));
+  box-shadow: var(--btn-shadow);
+  color: var(--btn-color);
+  display: inline-flex;
+  height: 3.5rem;
+  justify-content: center;
+  position: absolute;
+  right: 1rem;
+  width: 3.5rem;
+}
+
+.marker-add-button svg {
+  height: 1.75rem;
+  width: 1.75rem;
+}
+
+.marker-sheet {
+  background:
+    linear-gradient(160deg, rgb(9 25 55 / 97%), rgb(7 16 37 / 98%)),
+    radial-gradient(circle at 12% 0%, rgb(100 190 255 / 16%), transparent 42%);
+  border: 1px solid rgb(74 133 207 / 55%);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  bottom: 0;
+  box-shadow: 0 -12px 32px rgb(0 0 0 / 42%);
+  color: #def1ff;
+  font-family: var(--font-body);
+  left: 0;
+  padding: 0.85rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
+  position: absolute;
+  right: 0;
+}
+
+.marker-sheet h2 {
+  font-family: var(--font-headline);
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.marker-sheet-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.marker-sheet-close {
+  border: 1px solid var(--btn-border);
+  border-radius: 10px;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  min-height: 2.75rem;
+  padding: 0 0.9rem;
+}
+
+.marker-sheet-note,
+.marker-aim-hint {
+  color: #9cb3d6;
+  font-size: 0.9rem;
+  margin: 0.4rem 0;
+}
+
+.marker-aim-hint span {
+  color: #def1ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.marker-sheet-error {
+  color: #ffb4ab;
+  font-size: 0.9rem;
+  margin: 0.4rem 0;
+}
+
+.marker-actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.marker-actions.two {
+  grid-template-columns: 1fr 2fr;
+}
+
+.marker-actions.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.marker-actions button,
+.marker-sheet-close,
+.marker-symbol-option {
+  background: var(--btn-bg);
+  color: var(--btn-color);
+}
+
+.marker-actions button {
+  border: 1px solid var(--btn-border);
+  border-radius: 12px;
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  font-weight: 700;
+  min-height: 3rem;
+}
+
+.marker-actions .marker-primary {
+  --btn-bg: linear-gradient(180deg, rgb(100 190 255 / 92%), rgb(56 152 230 / 92%));
+  --btn-color: #042541;
+}
+
+.marker-actions .marker-danger {
+  --btn-border: rgb(255 180 171 / 55%);
+  --btn-color: #ffb4ab;
+}
+
+.marker-crosshair {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  left: 50%;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -100%);
+}
+
+.marker-crosshair-pin {
+  align-items: center;
+  background: rgb(7 25 54 / 92%);
+  border: 2px solid #64beff;
+  border-radius: 50%;
+  color: #64beff;
+  display: inline-flex;
+  height: 2.6rem;
+  justify-content: center;
+  width: 2.6rem;
+}
+
+.marker-crosshair-pin svg {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+.marker-crosshair-stem {
+  background: #64beff;
+  height: 0.75rem;
+  width: 2px;
+}
+
+.map-marker-pin {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.map-marker-pin-icon {
+  align-items: center;
+  background: rgb(7 25 54 / 92%);
+  border: 2px solid #64beff;
+  border-radius: 8px;
+  color: #64beff;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  width: 2.2rem;
+}
+
+.map-marker-pin-icon svg {
+  height: 1.35rem;
+  width: 1.35rem;
+}
+
+.map-marker-pin.is-selected .map-marker-pin-icon {
+  background: #64beff;
+  border-color: #def1ff;
+  color: #042541;
+}
+
+.map-marker-pin-label {
+  background: rgb(2 7 16 / 78%);
+  border-radius: 6px;
+  color: #def1ff;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
+  max-width: 8rem;
+  overflow: hidden;
+  padding: 0 0.3rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
