@@ -182,6 +182,7 @@ pub enum ProjectionScope {
     Sos {},
     Plugins {},
     PluginSensors {},
+    MapMarkers {},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

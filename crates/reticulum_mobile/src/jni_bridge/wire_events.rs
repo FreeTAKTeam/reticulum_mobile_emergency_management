@@ -148,6 +148,7 @@ fn projection_scope_to_str(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Sos {} => "Sos",
         ProjectionScope::Plugins {} => "Plugins",
         ProjectionScope::PluginSensors {} => "PluginSensors",
+        ProjectionScope::MapMarkers {} => "MapMarkers",
     }
 }
 

@@ -55,6 +55,7 @@ include!("types/community_contracts.rs");
 include!("types/messaging_contracts.rs");
 include!("types/mission_contracts.rs");
 include!("types/plugin_contracts.rs");
+include!("types/map_marker_contracts.rs");
 include!("types/node_events.rs");
 
 #[cfg(test)]

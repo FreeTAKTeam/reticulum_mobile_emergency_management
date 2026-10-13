@@ -310,4 +310,28 @@ public abstract class ReticulumBridgeServiceApi extends Service {
     public String takeLastErrorJson() {
         return ReticulumBridge.takeLastErrorJson();
     }
+
+    public String listMapMarkerSymbolsJson() {
+        return ReticulumBridge.listMapMarkerSymbolsJson();
+    }
+
+    public String listMapMarkersJson() {
+        return ReticulumBridge.listMapMarkersJson();
+    }
+
+    public String createMapMarkerJson(String payloadJson) {
+        return ReticulumBridge.createMapMarkerJson(payloadJson);
+    }
+
+    public String renameMapMarkerJson(String payloadJson) {
+        return ReticulumBridge.renameMapMarkerJson(payloadJson);
+    }
+
+    public String moveMapMarkerJson(String payloadJson) {
+        return ReticulumBridge.moveMapMarkerJson(payloadJson);
+    }
+
+    public String deleteMapMarkerJson(String payloadJson) {
+        return ReticulumBridge.deleteMapMarkerJson(payloadJson);
+    }
 }

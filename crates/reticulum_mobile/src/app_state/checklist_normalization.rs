@@ -16,6 +16,7 @@ fn projection_scope_name(scope: ProjectionScope) -> &'static str {
         ProjectionScope::Sos {} => "Sos",
         ProjectionScope::Plugins {} => "Plugins",
         ProjectionScope::PluginSensors {} => "PluginSensors",
+        ProjectionScope::MapMarkers {} => "MapMarkers",
     }
 }
 

@@ -335,6 +335,7 @@ final class ServiceEventCoordinator {
             "Sos",
             "Plugins",
             "PluginSensors",
+            "MapMarkers",
         }) {
             final JSObject payload = new JSObject();
             payload.put("scope", scope);

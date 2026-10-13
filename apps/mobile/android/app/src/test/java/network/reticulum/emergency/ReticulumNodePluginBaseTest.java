@@ -17,8 +17,12 @@ public class ReticulumNodePluginBaseTest {
             ReticulumNodePlugin.class.getSuperclass()
         );
         assertEquals(
-            ReticulumNodeAppDataPluginApi.class,
+            ReticulumNodeMapMarkerPluginApi.class,
             ReticulumNodeChecklistPluginApi.class.getSuperclass()
+        );
+        assertEquals(
+            ReticulumNodeAppDataPluginApi.class,
+            ReticulumNodeMapMarkerPluginApi.class.getSuperclass()
         );
         assertEquals(
             ReticulumNodeTransportPluginApi.class,
@@ -51,6 +55,10 @@ public class ReticulumNodePluginBaseTest {
                 .getDeclaringClass()
         );
         assertEquals(
+            ReticulumNodeMapMarkerPluginApi.class,
+            ReticulumNodePlugin.class.getMethod("createMapMarker", PluginCall.class).getDeclaringClass()
+        );
+        assertEquals(
             ReticulumNodeChecklistPluginApi.class,
             ReticulumNodePlugin.class.getMethod("getChecklists", PluginCall.class).getDeclaringClass()
         );
@@ -66,6 +74,6 @@ public class ReticulumNodePluginBaseTest {
             .filter(method -> method.isAnnotationPresent(PluginMethod.class))
             .count();
 
-        assertEquals(103L, methodCount);
+        assertEquals(109L, methodCount);
     }
 }

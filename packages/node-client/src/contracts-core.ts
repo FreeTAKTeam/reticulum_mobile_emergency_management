@@ -77,7 +77,8 @@ export type ProjectionScope =
   | "ChecklistDetail"
   | "Sos"
   | "Plugins"
-  | "PluginSensors";
+  | "PluginSensors"
+  | "MapMarkers";
 
 export type PluginState =
   | "Discovered"
